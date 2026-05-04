@@ -1,0 +1,66 @@
+# ScienceKG Phase 1 Configuration
+# Harvester, Storage, and Deduplication Setup
+
+harvester:
+  # ArXiv API
+  arxiv:
+    base_url: "https://export.arxiv.org/api/query"
+    requests_per_second: 0.333  # 3 second pause between requests (arXiv recommendation)
+    timeout_seconds: 30
+    max_papers_per_search: 100
+
+  # Semantic Scholar API
+  semantic_scholar:
+    api_key: null  # Set via environment variable or config
+    base_url_graph: "https://api.semanticscholar.org/graph/v1"
+    base_url_recommendations: "https://api.semanticscholar.org/recommendations/v1"
+    requests_per_second: 10.0
+    timeout_seconds: 30
+    bubble_extension: true  # Enable automatic recommended papers discovery
+    bubble_extension_count: 30  # How many recommended papers to fetch
+
+  # OpenAlex API
+  openalex:
+    api_key: null  # Free tier; set for higher limits
+    base_url: "https://api.openalex.org"
+    requests_per_second: 10.0
+    timeout_seconds: 30
+
+  # Unpaywall API
+  unpaywall:
+    email: "your-email@example.com"  # Required for Unpaywall API
+    base_url: "https://api.unpaywall.org/v2"
+    timeout_seconds: 30
+
+  # Papers with Code
+  papers_with_code:
+    # This API may have limited availability; kept for reference
+    timeout_seconds: 30
+    token: null
+
+storage:
+  # PDF Storage
+  pdf_base_dir: "data/pdfs"
+  
+  # Metadata Database
+  duckdb_path: "data/metadata.duckdb"
+  vocabulary_path: "data/vocabulary.json"
+
+deduplication:
+  # Deduplication strategy
+  by_doi: true  # Exact DOI match
+  by_normalized_title: true  # Normalized title matching
+  keep_highest_version: true  # When duplicates exist, keep the one with highest version
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/sciencekg.log"
+
+# Rate Limiting & Throttling
+rate_limits:
+  # Global concurrency limit for API requests
+  max_concurrent_requests: 5
+  # Respect API rate limits per service
+  respect_rate_limits: true

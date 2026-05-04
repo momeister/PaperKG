@@ -1,0 +1,36 @@
+# Core HTTP & Async
+httpx[http2]==0.27.0
+aiofiles==24.1.0
+
+# Data Processing
+pandas==2.2.3
+numpy==1.26.4
+
+# PDF & Parsing
+feedparser==6.0.11
+
+# Database
+duckdb==1.5.2
+
+# Configuration
+pyyaml==6.0.1
+python-dotenv==1.0.0
+
+# Logging
+python-json-logger==2.0.7
+
+# Testing
+pytest==8.2.2
+pytest-asyncio==0.24.0
+pytest-cov==5.0.0
+
+# Type Checking
+mypy==1.11.2
+types-pyyaml==6.0.12.20240917
+types-aiofiles==24.1.0.20241221
+
+# Code Quality
+black==24.4.2
+flake8==7.1.1
+isort==5.13.2
+ruff==0.5.7
