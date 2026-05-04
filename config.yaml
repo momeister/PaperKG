@@ -64,3 +64,109 @@ rate_limits:
   max_concurrent_requests: 5
   # Respect API rate limits per service
   respect_rate_limits: true
+
+# ScienceKG Phase 3 Configuration
+# LLM Configuration for Entity Extraction and Analysis
+
+llm:
+  # Default provider for all LLM operations
+  default_provider: "ollama"
+
+  # Supported providers: ollama, lm_studio, openai, openai_compatible
+  providers:
+    # Ollama - Local open-source models
+    ollama:
+      provider_type: "ollama"
+      base_url: "http://localhost:11434"
+      api_key: null  # Ollama doesn't require API key
+      timeout_seconds: 300
+      models:
+        - "qwen3.6:35b"
+        - "llama3.1:8b"
+        - "mistral-small:latest"
+      
+      # Model and Generation Settings
+      model: "qwen3.6:35b"
+      temperature: 0.2          # Lower = more deterministic
+      top_p: 0.95               # Nucleus sampling
+      max_tokens: 2048          # Max output tokens
+      context_size: 32768       # Max input context
+      repeat_penalty: 1.05      # Penalize repeated tokens
+      seed: null                # null = random, or specify for reproducibility
+
+    # LM Studio - Alternative local inference
+    lm_studio:
+      provider_type: "openai_compatible"
+      base_url: "http://localhost:1234/v1"
+      api_key: null  # LM Studio doesn't require API key
+      timeout_seconds: 300
+      models:
+        - "qwen3.6-35b"
+        - "llama-3.1-8b-instruct"
+        - "mistral-small-3.1"
+      
+      model: "qwen3.6-35b"      # Model name in LM Studio
+      temperature: 0.2
+      top_p: 0.95
+      max_tokens: 2048
+      context_size: 32768
+      repeat_penalty: 1.05
+      seed: null
+
+    # OpenAI API - Cloud-based GPT models
+    openai:
+      provider_type: "openai_compatible"
+      base_url: "https://api.openai.com/v1"
+      api_key_env: "OPENAI_API_KEY"  # Load from environment variable
+      timeout_seconds: 60
+      models:
+        - "gpt-4.1-mini"
+        - "gpt-4.1"
+        - "gpt-4o"
+      
+      model: "gpt-4o"
+      temperature: 0.3
+      top_p: 0.95
+      max_tokens: 4096
+      context_size: 128000
+      repeat_penalty: null  # OpenAI doesn't support repeat_penalty
+
+    # Generic OpenAI-compatible API (e.g., Ollama exposed via proxy, DeepSeek, etc.)
+    custom_api:
+      provider_type: "openai_compatible"
+      base_url: "https://custom-api.example.com/v1"
+      api_key_env: "CUSTOM_API_KEY"
+      timeout_seconds: 120
+      models:
+        - "custom-model"
+      
+      model: "custom-model"
+      temperature: 0.2
+      top_p: 0.95
+      max_tokens: 2048
+      context_size: 16384
+      repeat_penalty: 1.05
+
+  # Entity Extraction
+  entity_extraction:
+    # Use detailed prompts for better concept extraction
+    detailed_prompts: true
+    # Link concepts to OpenAlex by default
+    link_to_knowledge_base: true
+    # Generate embeddings for extracted concepts
+    embed_concepts: true
+
+  # Conflict Detection
+  conflict_detection:
+    enabled: true
+    confidence_threshold: 0.7  # Only report conflicts with >= 0.7 confidence
+
+  # Batch Processing
+  batch_processing:
+    # Process papers in batches to optimize API calls
+    batch_size: 10
+    # Number of parallel jobs (for Celery integration)
+    parallel_jobs: 4
+    # Retry failed extractions
+    max_retries: 2
+    retry_delay_seconds: 10

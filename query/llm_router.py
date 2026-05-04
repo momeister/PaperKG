@@ -1,0 +1,295 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import httpx
+import yaml
+
+
+@dataclass
+class GenerationSettings:
+	model: str
+	temperature: float = 0.2
+	top_p: float = 0.95
+	max_tokens: int = 2048
+	context_size: int = 32768
+	repeat_penalty: float | None = 1.05
+	seed: int | None = None
+	extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ProviderConfig:
+	provider_type: str
+	base_url: str
+	api_key: str | None = None
+	timeout_seconds: float = 120.0
+	settings: GenerationSettings | None = None
+	available_models: list[str] = field(default_factory=list)
+
+
+class LLMRouter:
+	"""
+	Unified router for Ollama, LM Studio and OpenAI-compatible cloud endpoints.
+	"""
+
+	def __init__(
+		self,
+		providers: dict[str, ProviderConfig],
+		default_provider: str,
+		client: httpx.Client | None = None,
+	) -> None:
+		if default_provider not in providers:
+			raise ValueError(f"Unknown default provider: {default_provider}")
+		self.providers = providers
+		self.default_provider = default_provider
+		self._client = client
+
+	@classmethod
+	def from_config_file(cls, config_path: str | Path = "config.yaml") -> "LLMRouter":
+		path = Path(config_path)
+		with path.open("r", encoding="utf-8") as fh:
+			config = yaml.safe_load(fh) or {}
+
+		llm_cfg = config.get("llm") or {}
+		default_provider = llm_cfg.get("default_provider", "ollama")
+
+		providers: dict[str, ProviderConfig] = {}
+		for name, raw in (llm_cfg.get("providers") or {}).items():
+			# Handle None values for optional float fields
+			repeat_penalty_val = raw.get("repeat_penalty")
+			repeat_penalty = float(repeat_penalty_val) if repeat_penalty_val is not None else None
+			available_models = [str(model) for model in (raw.get("models") or []) if model]
+			
+			settings = GenerationSettings(
+				model=raw.get("model", ""),
+				temperature=float(raw.get("temperature", 0.2)) if raw.get("temperature") is not None else 0.2,
+				top_p=float(raw.get("top_p", 0.95)) if raw.get("top_p") is not None else 0.95,
+				max_tokens=int(raw.get("max_tokens", 2048)) if raw.get("max_tokens") is not None else 2048,
+				context_size=int(raw.get("context_size", 32768)) if raw.get("context_size") is not None else 32768,
+				repeat_penalty=repeat_penalty,
+				seed=raw.get("seed"),
+				extra=dict(raw.get("extra_options") or {}),
+			)
+
+			api_key = raw.get("api_key")
+			env_name = raw.get("api_key_env")
+			if env_name:
+				api_key = os.getenv(env_name, api_key)
+
+			providers[name] = ProviderConfig(
+				provider_type=str(raw.get("provider_type", "ollama")),
+				base_url=str(raw.get("base_url", "http://localhost:11434")),
+				api_key=api_key,
+				timeout_seconds=float(raw.get("timeout_seconds", 120.0)),
+				settings=settings,
+				available_models=available_models,
+			)
+
+		if not providers:
+			# Safe fallback when no llm section exists yet.
+			providers = {
+				"ollama": ProviderConfig(
+					provider_type="ollama",
+					base_url="http://localhost:11434",
+					settings=GenerationSettings(model="qwen3.6-35b"),
+					available_models=["qwen3.6-35b"],
+				)
+			}
+			default_provider = "ollama"
+
+		return cls(providers=providers, default_provider=default_provider)
+
+	def available_providers(self) -> list[str]:
+		return sorted(self.providers.keys())
+
+	def provider_config(self, provider: str | None = None) -> ProviderConfig:
+		provider_name = provider or self.default_provider
+		if provider_name not in self.providers:
+			raise ValueError(f"Unknown provider: {provider_name}")
+		return self.providers[provider_name]
+
+	def provider_settings(self, provider: str | None = None) -> GenerationSettings:
+		cfg = self.provider_config(provider)
+		return cfg.settings or GenerationSettings(model="qwen3.6-35b")
+
+	def discover_provider_models(self, provider: str | None = None) -> list[str]:
+		cfg = self.provider_config(provider)
+		client = self._client_for(cfg.timeout_seconds)
+		models: list[str] = []
+
+		try:
+			if cfg.provider_type == "ollama":
+				response = client.get(f"{cfg.base_url.rstrip('/')}/api/tags")
+				response.raise_for_status()
+				payload = response.json()
+				models = [str(item.get("name")) for item in payload.get("models", []) if item.get("name")]
+			elif cfg.provider_type in {"openai_compatible", "lm_studio", "openai"}:
+				headers = {"Content-Type": "application/json"}
+				if cfg.api_key:
+					headers["Authorization"] = f"Bearer {cfg.api_key}"
+				response = client.get(f"{cfg.base_url.rstrip('/')}/models", headers=headers)
+				response.raise_for_status()
+				payload = response.json()
+				models = [
+					str(item.get("id") or item.get("name"))
+					for item in payload.get("data", [])
+					if item.get("id") or item.get("name")
+				]
+		except Exception:
+			models = []
+
+		return models
+
+	def provider_model_options(self, provider: str | None = None, refresh: bool = False) -> list[str]:
+		cfg = self.provider_config(provider)
+		models = self.discover_provider_models(provider) if refresh else []
+		models.extend([model for model in cfg.available_models if model])
+		if cfg.settings and cfg.settings.model and cfg.settings.model not in models:
+			models.insert(0, cfg.settings.model)
+		if not models:
+			models = [cfg.settings.model if cfg.settings and cfg.settings.model else "qwen3.6-35b"]
+		seen: set[str] = set()
+		unique_models: list[str] = []
+		for model in models:
+			if model not in seen:
+				seen.add(model)
+				unique_models.append(model)
+		return unique_models
+
+	def provider_default_model(self, provider: str | None = None) -> str:
+		return self.provider_settings(provider).model
+
+	def chat(
+		self,
+		messages: list[dict[str, str]],
+		provider: str | None = None,
+		overrides: dict[str, Any] | None = None,
+	) -> str:
+		provider_name = provider or self.default_provider
+		cfg = self.provider_config(provider_name)
+		settings = self._merged_settings(cfg.settings, overrides)
+
+		if cfg.provider_type == "ollama":
+			return self._chat_ollama(cfg, messages, settings)
+		if cfg.provider_type in {"openai_compatible", "lm_studio", "openai"}:
+			return self._chat_openai_compatible(cfg, messages, settings)
+
+		raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
+
+	def chat_json(
+		self,
+		messages: list[dict[str, str]],
+		provider: str | None = None,
+		overrides: dict[str, Any] | None = None,
+	) -> dict[str, Any]:
+		response_text = self.chat(messages=messages, provider=provider, overrides=overrides)
+		return self._extract_json(response_text)
+
+	def _client_for(self, timeout_seconds: float) -> httpx.Client:
+		if self._client is not None:
+			return self._client
+		return httpx.Client(timeout=timeout_seconds)
+
+	@staticmethod
+	def _merged_settings(base: GenerationSettings | None, overrides: dict[str, Any] | None) -> GenerationSettings:
+		base = base or GenerationSettings(model="qwen3.6-35b")
+		if not overrides:
+			return base
+
+		repeat_penalty_override = overrides.get("repeat_penalty", base.repeat_penalty)
+		repeat_penalty = float(repeat_penalty_override) if repeat_penalty_override is not None else None
+
+		return GenerationSettings(
+			model=str(overrides.get("model", base.model)),
+			temperature=float(overrides.get("temperature", base.temperature)),
+			top_p=float(overrides.get("top_p", base.top_p)),
+			max_tokens=int(overrides.get("max_tokens", base.max_tokens)),
+			context_size=int(overrides.get("context_size", base.context_size)),
+			repeat_penalty=repeat_penalty,
+			seed=overrides.get("seed", base.seed),
+			extra={**base.extra, **dict(overrides.get("extra", {}))},
+		)
+
+	def _chat_ollama(
+		self,
+		cfg: ProviderConfig,
+		messages: list[dict[str, str]],
+		settings: GenerationSettings,
+	) -> str:
+		payload: dict[str, Any] = {
+			"model": settings.model,
+			"messages": messages,
+			"stream": False,
+			"options": {
+				"temperature": settings.temperature,
+				"top_p": settings.top_p,
+				"num_ctx": settings.context_size,
+				"num_predict": settings.max_tokens,
+				"repeat_penalty": settings.repeat_penalty,
+				**settings.extra,
+			},
+		}
+		if settings.seed is not None:
+			payload["options"]["seed"] = settings.seed
+
+		client = self._client_for(cfg.timeout_seconds)
+		response = client.post(f"{cfg.base_url.rstrip('/')}/api/chat", json=payload)
+		response.raise_for_status()
+		data = response.json()
+		message = data.get("message") or {}
+		return str(message.get("content", "")).strip()
+
+	def _chat_openai_compatible(
+		self,
+		cfg: ProviderConfig,
+		messages: list[dict[str, str]],
+		settings: GenerationSettings,
+	) -> str:
+		payload: dict[str, Any] = {
+			"model": settings.model,
+			"messages": messages,
+			"temperature": settings.temperature,
+			"top_p": settings.top_p,
+			"max_tokens": settings.max_tokens,
+			"extra_body": {
+				"num_ctx": settings.context_size,
+				"repeat_penalty": settings.repeat_penalty,
+				**settings.extra,
+			},
+		}
+		if settings.seed is not None:
+			payload["seed"] = settings.seed
+
+		headers = {"Content-Type": "application/json"}
+		if cfg.api_key:
+			headers["Authorization"] = f"Bearer {cfg.api_key}"
+
+		endpoint = f"{cfg.base_url.rstrip('/')}/chat/completions"
+		client = self._client_for(cfg.timeout_seconds)
+		response = client.post(endpoint, headers=headers, json=payload)
+		response.raise_for_status()
+		data = response.json()
+		choices = data.get("choices") or []
+		if not choices:
+			return ""
+		message = choices[0].get("message") or {}
+		return str(message.get("content", "")).strip()
+
+	@staticmethod
+	def _extract_json(raw: str) -> dict[str, Any]:
+		raw = raw.strip()
+		try:
+			return json.loads(raw)
+		except json.JSONDecodeError:
+			pass
+
+		start = raw.find("{")
+		end = raw.rfind("}")
+		if start == -1 or end == -1 or end <= start:
+			raise ValueError("No JSON object found in model response.")
+		return json.loads(raw[start : end + 1])

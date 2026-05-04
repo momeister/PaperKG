@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Runtime data (local only)
+data/pdfs/
+data/graphs/project_kgs/
+data/graphs/global_kg/
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Streamlit / UI artifacts
+.streamlit/
+*.html
+
+# dotenv / secrets
+.env
+.env.*
+!.env.example

@@ -68,6 +68,24 @@ class MetadataDB:
             )
         """)
 
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS extraction_results (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_dedup_id'),
+                paper_id VARCHAR NOT NULL,
+                extraction_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                llm_provider VARCHAR NOT NULL,
+                llm_model VARCHAR NOT NULL,
+                extraction_status VARCHAR DEFAULT 'pending',
+                concepts JSON,
+                methods JSON,
+                claims JSON,
+                cross_domain_hints JSON,
+                raw_response VARCHAR,
+                error_message VARCHAR,
+                extraction_duration_seconds FLOAT
+            )
+        """)
+
     def insert_paper(self, record: dict[str, Any]) -> None:
         """
         Insert or update a paper record.
@@ -152,6 +170,98 @@ class MetadataDB:
             INSERT INTO dedup_log (kept_id, dropped_id, reason)
             VALUES (?, ?, ?)
         """, [kept_id, dropped_id, reason])
+
+    def save_extraction_result(
+        self,
+        paper_id: str,
+        llm_provider: str,
+        llm_model: str,
+        concepts: list[dict[str, Any]] | None = None,
+        methods: list[dict[str, Any]] | None = None,
+        claims: list[dict[str, Any]] | None = None,
+        cross_domain_hints: list[str] | None = None,
+        raw_response: str | None = None,
+        error_message: str | None = None,
+        duration_seconds: float | None = None,
+    ) -> int:
+        """
+        Save extraction results to database. Returns the result ID.
+        """
+        status = "success" if error_message is None else "failed"
+        
+        result_id = self.conn.execute("""
+            INSERT INTO extraction_results
+            (paper_id, llm_provider, llm_model, extraction_status, concepts, methods, claims, 
+             cross_domain_hints, raw_response, error_message, extraction_duration_seconds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+        """, [
+            paper_id,
+            llm_provider,
+            llm_model,
+            status,
+            json.dumps(concepts or []),
+            json.dumps(methods or []),
+            json.dumps(claims or []),
+            json.dumps(cross_domain_hints or []),
+            raw_response,
+            error_message,
+            duration_seconds,
+        ]).fetchone()
+
+        return int(result_id[0]) if result_id else 0
+
+    def get_extraction_result(self, result_id: int) -> dict[str, Any] | None:
+        """
+        Retrieve an extraction result by ID.
+        """
+        result = self.conn.execute(
+            "SELECT * FROM extraction_results WHERE id = ?",
+            [result_id]
+        ).fetchone()
+        
+        if result is None:
+            return None
+        
+        cols = [desc[0] for desc in self.conn.description]
+        data = dict(zip(cols, result))
+        
+        # Parse JSON fields
+        for field in ["concepts", "methods", "claims", "cross_domain_hints"]:
+            if data.get(field):
+                try:
+                    data[field] = json.loads(data[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        
+        return data
+
+    def get_paper_extractions(self, paper_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        Get all extraction results for a specific paper.
+        """
+        results = self.conn.execute("""
+            SELECT * FROM extraction_results
+            WHERE paper_id = ?
+            ORDER BY extraction_timestamp DESC
+            LIMIT ?
+        """, [paper_id, limit]).fetchall()
+        
+        cols = [desc[0] for desc in self.conn.description]
+        data_list = []
+        
+        for row in results:
+            data = dict(zip(cols, row))
+            # Parse JSON fields
+            for field in ["concepts", "methods", "claims", "cross_domain_hints"]:
+                if data.get(field):
+                    try:
+                        data[field] = json.loads(data[field])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            data_list.append(data)
+        
+        return data_list
 
     def close(self) -> None:
         """
