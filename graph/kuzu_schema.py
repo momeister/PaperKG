@@ -145,6 +145,7 @@ class KuzuGraph:
 
 	def merge_citation(self, from_paper_id: str, to_paper_id: str) -> None:
 		conn = self.connection
+		self.merge_paper(_reference_stub(to_paper_id))
 		query = """
 		MATCH (a:Paper {id: $from_id}), (b:Paper {id: $to_id})
 		MERGE (a)-[:CITES]->(b)
@@ -179,3 +180,24 @@ def initialize_kuzu_schema(db_path: str = "data/graphs/global_kg") -> KuzuGraph:
 	graph = KuzuGraph(KuzuConfig(db_path=db_path))
 	graph.initialize_schema()
 	return graph
+
+
+def _reference_stub(reference_id: str) -> dict[str, Any]:
+	return {
+		"id": reference_id,
+		"title": "",
+		"year": None,
+		"version": 1,
+		"superseded_by": None,
+		"has_full_text": False,
+		"peer_reviewed": False,
+		"retracted": False,
+		"language_original": "unknown",
+		"citation_count": 0,
+		"confidence_score": 0.5,
+		"obsolescence_score": 0.0,
+		"conflict_flag": False,
+		"embedding_model": "",
+		"embedding_version": 0,
+		"source": "citation_reference",
+	}

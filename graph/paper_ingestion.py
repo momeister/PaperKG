@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from graph.citation_analysis import compute_obsolescence_score
+
 
 class GraphWriter(Protocol):
 	def merge_paper(self, paper: dict[str, Any]) -> None:
@@ -74,12 +76,40 @@ def to_phase2_paper_node(record: dict[str, Any]) -> dict[str, Any]:
 		"language_original": record.get("language_original") or "unknown",
 		"citation_count": int(record.get("citation_count") or len(citations)),
 		"confidence_score": float(record.get("confidence_score") or 0.5),
-		"obsolescence_score": float(record.get("obsolescence_score") or 0.0),
+		"obsolescence_score": float(
+			record.get("obsolescence_score")
+			if record.get("obsolescence_score") is not None
+			else compute_obsolescence_score(record.get("year"), int(record.get("citation_count") or len(citations)))
+		),
 		"conflict_flag": bool(record.get("conflict_flag", False)),
 		"embedding_model": record.get("embedding_model") or "",
 		"embedding_version": int(record.get("embedding_version") or 0),
 		"source": record.get("source") or "unknown",
 		"added_to_graph": record.get("added_to_graph") or now,
+		"last_updated": now,
+	}
+
+
+def to_reference_stub_paper_node(reference_id: str) -> dict[str, Any]:
+	now = datetime.now(UTC).isoformat(sep=" ", timespec="seconds")
+	return {
+		"id": reference_id,
+		"title": "",
+		"year": None,
+		"version": 1,
+		"superseded_by": None,
+		"has_full_text": False,
+		"peer_reviewed": False,
+		"retracted": False,
+		"language_original": "unknown",
+		"citation_count": 0,
+		"confidence_score": 0.5,
+		"obsolescence_score": 0.0,
+		"conflict_flag": False,
+		"embedding_model": "",
+		"embedding_version": 0,
+		"source": "citation_reference",
+		"added_to_graph": now,
 		"last_updated": now,
 	}
 
@@ -97,6 +127,7 @@ def ingest_records(graph: GraphWriter, records: list[dict[str, Any]]) -> Ingesti
 		for target_id in extract_citation_ids(record):
 			if target_id == source_id:
 				continue
+			graph.merge_paper(to_reference_stub_paper_node(target_id))
 			graph.merge_citation(source_id, target_id)
 			stats.citation_edges_written += 1
 

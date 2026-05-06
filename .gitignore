@@ -5,6 +5,9 @@ __pycache__/
 *.pyd
 *.so
 .pytest_cache/
+.pytest-tmp*/
+.tmp_pytest*/
+.tmp-pytest*/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -19,6 +22,7 @@ env/
 # IDE / OS
 .vscode/
 .idea/
+.codex/
 *.swp
 *.swo
 .DS_Store
@@ -30,22 +34,30 @@ logs/
 
 # Runtime data (local only)
 data/pdfs/
+data/graphs/
 data/graphs/project_kgs/
 data/graphs/global_kg/
+data/*.jsonl
+data/*.parquet
 *.duckdb
 *.duckdb.wal
 *.duckdb.tmp
+*.kuzu/
 
 # Build / packaging
 build/
 dist/
 *.egg-info/
 
-# Streamlit / UI artifacts
+# Generated knowledge/UI artifacts
 .streamlit/
+graphify-out/
 *.html
+GRAPH_TREE.html
 
 # dotenv / secrets
 .env
 .env.*
 !.env.example
+config.local.yaml
+secrets.toml

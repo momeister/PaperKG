@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from typing import BinaryIO
@@ -14,23 +15,59 @@ class FileManager:
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_storage_path(self, paper_id: str, version: int | None = None) -> Path:
+    @staticmethod
+    def safe_storage_id(
+        paper_id: str,
+        display_name: str | None = None,
+        source: str | None = None,
+    ) -> str:
+        """
+        Build a readable filesystem-safe identifier.
+        """
+        clean_parts = []
+        for index, part in enumerate([source, display_name, paper_id]):
+            text = str(part or "").strip()
+            if not text:
+                continue
+            colon_replacement = " " if index == 1 else "_"
+            text = text.replace("/", "_").replace("\\", "_").replace(":", colon_replacement)
+            text = re.sub(r"\s+", "-", text)
+            text = re.sub(r"[^A-Za-z0-9._-]+", "-", text)
+            text = re.sub(r"-{2,}", "-", text).strip("._-")
+            if text:
+                clean_parts.append(text)
+        raw = "__".join(clean_parts)
+        return (raw[:160].strip("._-") or "document").lower()
+
+    def get_storage_path(
+        self,
+        paper_id: str,
+        version: int | None = None,
+        display_name: str | None = None,
+        source: str | None = None,
+    ) -> Path:
         """
         Return the local filesystem path for a paper.
         Format: base_dir/{source}/{paper_id}/{paper_id}_v{version}.pdf
         """
         if version is None:
             version = 1
-        # Normalize paper_id for filesystem
-        safe_id = paper_id.replace("/", "_").replace(":", "_")
+        safe_id = self.safe_storage_id(paper_id, display_name=display_name, source=source)
         path = self.base_dir / safe_id / f"{safe_id}_v{version}.pdf"
         return path
 
-    def save_pdf(self, paper_id: str, content: bytes, version: int | None = None) -> Path:
+    def save_pdf(
+        self,
+        paper_id: str,
+        content: bytes,
+        version: int | None = None,
+        display_name: str | None = None,
+        source: str | None = None,
+    ) -> Path:
         """
         Save PDF content to disk.
         """
-        path = self.get_storage_path(paper_id, version)
+        path = self.get_storage_path(paper_id, version, display_name=display_name, source=source)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         return path

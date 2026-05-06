@@ -89,7 +89,7 @@ llm:
       model: "qwen3.6:35b"
       temperature: 0.2          # Lower = more deterministic
       top_p: 0.95               # Nucleus sampling
-      max_tokens: 2048          # Max output tokens
+      max_tokens: 8192          # Max output tokens for structured extraction
       context_size: 32768       # Max input context
       repeat_penalty: 1.05      # Penalize repeated tokens
       seed: null                # null = random, or specify for reproducibility
@@ -108,7 +108,7 @@ llm:
       model: "qwen3.6-35b"      # Model name in LM Studio
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 2048
+      max_tokens: 8192
       context_size: 32768
       repeat_penalty: 1.05
       seed: null
@@ -127,7 +127,7 @@ llm:
       model: "gpt-4o"
       temperature: 0.3
       top_p: 0.95
-      max_tokens: 4096
+      max_tokens: 8192
       context_size: 128000
       repeat_penalty: null  # OpenAI doesn't support repeat_penalty
 
@@ -143,7 +143,7 @@ llm:
       model: "custom-model"
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 2048
+      max_tokens: 8192
       context_size: 16384
       repeat_penalty: 1.05
 

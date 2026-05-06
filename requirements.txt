@@ -9,6 +9,7 @@ numpy==1.26.4
 # PDF & Parsing
 feedparser==6.0.11
 pypdf==5.9.0
+pdfplumber==0.11.4
 
 # Database
 duckdb==1.5.2
@@ -20,6 +21,11 @@ uvicorn==0.31.1
 streamlit==1.57.0
 pyvis==0.3.2
 networkx==3.3
+celery==5.4.0
+redis==5.0.8
+
+# Embeddings
+sentence-transformers==3.0.1
 
 # Configuration
 pyyaml==6.0.1

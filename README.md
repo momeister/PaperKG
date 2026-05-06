@@ -1,8 +1,8 @@
-# ScienceKG — Scientific Knowledge Graph System
+﻿# ScienceKG â€” Scientific Knowledge Graph System
 
-**Vollständig lokales, privacy-preserving System zur automatisierten wissenschaftlichen Paper-Analyse, Knowledge-Graph-Konstruktion und LLM-gestützten Forschungsassistenz.**
+**VollstÃ¤ndig lokales, privacy-preserving System zur automatisierten wissenschaftlichen Paper-Analyse, Knowledge-Graph-Konstruktion und LLM-gestÃ¼tzten Forschungsassistenz.**
 
-> **📖 Dokumentationsstruktur**: Siehe [DOCUMENTATION.md](DOCUMENTATION.md) für Übersicht. Für Phase 3 Quick-Start: [QUICKSTART_PHASE3.md](QUICKSTART_PHASE3.md)
+> Dokumentation: `README.md` ist die Hauptuebersicht. `QUICKSTART_PHASE3.md` ist die praktische Phase-3-Anleitung. `ScienceKG_Projektplan.md` beschreibt die Roadmap, `MEMORY.md` den aktuellen Implementierungsstand.
 
 ## Phase 1: Harvester & Storage Foundation
 
@@ -10,14 +10,14 @@ Diese Phase implementiert das automatisierte Paper-Harvesting und strukturierte 
 
 ### Features nach Phase 1
 
-- ✅ Automatisches Paper-Download von arXiv, Semantic Scholar, OpenAlex, Unpaywall
-- ✅ Duplikat-Erkennung via DOI-Fingerprinting + normalisiertem Titel
-- ✅ Versionsverwaltung (arXiv-Versionierungen korrekt erfasst)
-- ✅ Strukturierte Metadaten in DuckDB
-- ✅ Lokale PDF-Ablage mit Versionierung
-- ✅ Cross-Source-Linking (dieselbe Paper aus mehreren APIs)
-- ✅ Rate-Limiting für alle APIs
-- ✅ Async-First Architecture (schnelle Batch-Verarbeitung)
+- âœ… Automatisches Paper-Download von arXiv, Semantic Scholar, OpenAlex, Unpaywall
+- âœ… Duplikat-Erkennung via DOI-Fingerprinting + normalisiertem Titel
+- âœ… Versionsverwaltung (arXiv-Versionierungen korrekt erfasst)
+- âœ… Strukturierte Metadaten in DuckDB
+- âœ… Lokale PDF-Ablage mit Versionierung
+- âœ… Cross-Source-Linking (dieselbe Paper aus mehreren APIs)
+- âœ… Rate-Limiting fÃ¼r alle APIs
+- âœ… Async-First Architecture (schnelle Batch-Verarbeitung)
 
 ### Technologie-Stack Phase 1
 
@@ -45,7 +45,7 @@ Wenn du Phase 1 direkt ausprobieren willst, nutze das Demo-Script:
 python scripts/try_phase1.py "machine learning" --max-results 10
 ```
 
-Für einen vollständigen Phase-1-Durchlauf (alle Harvester + Dedup + Storage + optional Download):
+FÃ¼r einen vollstÃ¤ndigen Phase-1-Durchlauf (alle Harvester + Dedup + Storage + optional Download):
 
 ```bash
 python scripts/try_phase1.py "machine learning" --max-results 10 --full-phase1
@@ -54,7 +54,7 @@ python scripts/try_phase1.py "machine learning" --max-results 10 --full-phase1 -
 
 Das Script:
 - fragt arXiv nach Papers ab
-- kann zusätzlich Semantic Scholar, OpenAlex, PapersWithCode und Unpaywall prüfen
+- kann zusÃ¤tzlich Semantic Scholar, OpenAlex, PapersWithCode und Unpaywall prÃ¼fen
 - dedupliziert die Treffer
 - speichert die Metadaten in `data/metadata.duckdb`
 - zeigt dir die ersten Ergebnisse inkl. Speicherpfad
@@ -62,17 +62,17 @@ Das Script:
 
 ### Tests
 
-Automatisierte Tests für Phase 1 laufen mit `pytest`:
+Automatisierte Tests fÃ¼r Phase 1 laufen mit `pytest`:
 
 ```bash
 pytest -q
 ```
 
-Die Suite prüft u. a.:
+Die Suite prÃ¼ft u. a.:
 - Deduplication (DOI + Titel-Normalisierung)
 - FileManager (save/load/list/delete)
 - MetadataDB (Insert, Query, dedup_log, leere Placeholder-DB)
-- Demo-Flow mit gemockten Clients (vollständiger `--full-phase1`-Pfad)
+- Demo-Flow mit gemockten Clients (vollstÃ¤ndiger `--full-phase1`-Pfad)
 
 #### 1. Harvester initialisieren
 
@@ -142,7 +142,7 @@ doi             VARCHAR (nullable)
 pdf_url         VARCHAR (nullable)
 landing_page_url VARCHAR
 has_full_text   BOOLEAN
-version         INTEGER (für arXiv-Versionierung)
+version         INTEGER (fÃ¼r arXiv-Versionierung)
 added_timestamp TIMESTAMP
 updated_timestamp TIMESTAMP
 ```
@@ -152,7 +152,7 @@ updated_timestamp TIMESTAMP
 ```
 id              INTEGER (PRIMARY KEY)
 kept_id         VARCHAR (welche Paper behalten wurde)
-dropped_id      VARCHAR (welche Paper gelöscht wurde)
+dropped_id      VARCHAR (welche Paper gelÃ¶scht wurde)
 reason          VARCHAR (same_doi | same_title)
 timestamp       TIMESTAMP
 ```
@@ -161,16 +161,16 @@ timestamp       TIMESTAMP
 
 ```
 harvester/
-  ├── arxiv_client.py                  # arXiv API Wrapper
-  ├── semantic_scholar_client.py       # Semantic Scholar API Wrapper
-  ├── openalex_client.py               # OpenAlex API Wrapper
-  ├── unpaywall_client.py              # Unpaywall API Wrapper
-  ├── papers_with_code_client.py       # Papers with Code API (optional)
-  └── deduplication.py                 # DOI + Title-based Dedup
+  â”œâ”€â”€ arxiv_client.py                  # arXiv API Wrapper
+  â”œâ”€â”€ semantic_scholar_client.py       # Semantic Scholar API Wrapper
+  â”œâ”€â”€ openalex_client.py               # OpenAlex API Wrapper
+  â”œâ”€â”€ unpaywall_client.py              # Unpaywall API Wrapper
+  â”œâ”€â”€ papers_with_code_client.py       # Papers with Code API (optional)
+  â””â”€â”€ deduplication.py                 # DOI + Title-based Dedup
 
 storage/
-  ├── file_manager.py                  # Lokale PDF-Verwaltung
-  └── metadata_db.py                   # DuckDB Metadata Layer
+  â”œâ”€â”€ file_manager.py                  # Lokale PDF-Verwaltung
+  â””â”€â”€ metadata_db.py                   # DuckDB Metadata Layer
 
 config.yaml                             # Konfiguration (API Keys, Pfade)
 requirements.txt                        # Python Dependencies
@@ -180,11 +180,11 @@ requirements.txt                        # Python Dependencies
 
 | API | Limit | Implementiert |
 |---|---|---|
-| arXiv | 3 req/s (1 request all 3s) | ✅ |
-| Semantic Scholar | 100 req/s (mit API Key) | ✅ |
-| OpenAlex | 100,000 req/day | ✅ |
-| Unpaywall | 100,000 req/day | ✅ |
-| Papers with Code | Variabel | ✅ |
+| arXiv | 3 req/s (1 request all 3s) | âœ… |
+| Semantic Scholar | 100 req/s (mit API Key) | âœ… |
+| OpenAlex | 100,000 req/day | âœ… |
+| Unpaywall | 100,000 req/day | âœ… |
+| Papers with Code | Variabel | âœ… |
 
 ### Fehlerbehandlung
 
@@ -193,7 +193,7 @@ Alle Clients implementieren:
 - Timeouts (30s default)
 - Graceful Degradation bei fehlenden APIs
 
-### Nächste Schritte (Phase 2+)
+### NÃ¤chste Schritte (Phase 2+)
 
 1. **Phase 2**: Flacher Citation-Graph (Kuzu + Citation-Edges)
 2. **Phase 3**: PDF-Parsing + LLM-Extraktion (Marker, Qwen)
@@ -206,7 +206,7 @@ Alle Clients implementieren:
 
 ### 1) Graph aus Metadaten bauen (API)
 
-Hinweis: `kuzu` ist derzeit nur für Python < 3.14 als Wheel verfügbar. Unter Python 3.14 laufen alle anderen Module, aber der echte Kuzu-Graph-Build benötigt ein Python-Env mit 3.13 oder älter.
+Hinweis: `kuzu` ist derzeit nur fÃ¼r Python < 3.14 als Wheel verfÃ¼gbar. Unter Python 3.14 laufen alle anderen Module, aber der echte Kuzu-Graph-Build benÃ¶tigt ein Python-Env mit 3.13 oder Ã¤lter.
 
 One-command Runner (startet API + UI und triggert den Phase-2-Build):
 
@@ -230,13 +230,13 @@ python scripts/run_phase2.py --ui-only --skip-build
 uvicorn api.main:app --reload
 ```
 
-Danach Build-Endpoint ausführen:
+Danach Build-Endpoint ausfÃ¼hren:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/graph/phase2/build" -H "Content-Type: application/json" -d "{}"
 ```
 
-Optionale Vorschau für Co-Citation-Similarity:
+Optionale Vorschau fÃ¼r Co-Citation-Similarity:
 
 ```bash
 curl "http://127.0.0.1:8000/graph/co-citation?min_shared=2&min_score=0.25"
@@ -248,7 +248,7 @@ curl "http://127.0.0.1:8000/graph/co-citation?min_shared=2&min_score=0.25"
 streamlit run ui/graph_visualization.py
 ```
 
-### 3) Tests für Phase 1 + 2
+### 3) Tests fÃ¼r Phase 1 + 2
 
 ```bash
 python -m pytest -q
@@ -256,27 +256,27 @@ python -m pytest -q
 
 ---
 
-## Phase 3: PDF Parsing & LLM-gestützte Entityexttraktion
+## Phase 3: PDF Parsing & LLM-gestÃ¼tzte Entityexttraktion
 
 ### Features Phase 3
 
-- ✅ **Multi-Provider LLM Router**: Ollama, LM Studio, OpenAI, beliebige OpenAI-kompatible APIs
-- ✅ **Flexible LLM-Konfiguration**: Temperatur, Top-P, Max Tokens, Context Size pro Provider
-- ✅ **Intelligente PDF-Parsing**: Automatische Parser-Auswahl basierend auf PDF-Charakteristiken
-- ✅ **Entity Extraction**: LLM-basierte Konzept-, Methoden-, und Claims-Extraktion
-- ✅ **Entity Linking**: Automatische Verknüpfung zu OpenAlex Concepts
-- ✅ **Vocabulary Management**: Custom Entity-Normalisierung und Deduplication
-- ✅ **Embedding Generation**: BGE-M3 Embeddings für semantic similarity
-- ✅ **Conflict Detection**: LLM-basierte Widerspruchserkennung zwischen Claims
-- ✅ **Batch Processing**: Verarbeitung mehrerer Papers mit Fehlerhandling
-- ✅ **Phase 1 Harvest Tab**: Topic-Suche und PDF-Downloads direkt im Streamlit-Frontend
-- ✅ **Live Model Discovery**: Ollama- und OpenAI-kompatible Modelllisten können im UI aktualisiert werden
+- âœ… **Multi-Provider LLM Router**: Ollama, LM Studio, OpenAI, beliebige OpenAI-kompatible APIs
+- âœ… **Flexible LLM-Konfiguration**: Temperatur, Top-P, Max Tokens, Context Size pro Provider
+- âœ… **Intelligente PDF-Parsing**: Automatische Parser-Auswahl basierend auf PDF-Charakteristiken
+- âœ… **Entity Extraction**: LLM-basierte Konzept-, Methoden-, und Claims-Extraktion
+- âœ… **Entity Linking**: Automatische VerknÃ¼pfung zu OpenAlex Concepts
+- âœ… **Vocabulary Management**: Custom Entity-Normalisierung und Deduplication
+- âœ… **Embedding Generation**: BGE-M3 Embeddings fÃ¼r semantic similarity
+- âœ… **Conflict Detection**: LLM-basierte Widerspruchserkennung zwischen Claims
+- âœ… **Batch Processing**: Verarbeitung mehrerer Papers mit Fehlerhandling
+- âœ… **Phase 1 Harvest Tab**: Topic-Suche und PDF-Downloads direkt im Streamlit-Frontend
+- âœ… **Live Model Discovery**: Ollama- und OpenAI-kompatible Modelllisten kÃ¶nnen im UI aktualisiert werden
 
-Die Graphansicht bleibt bewusst in Phase 2 (`ui/graph_visualization.py`), während Phase 3 sich auf Parsing, Modellwahl, Kontextsteuerung und Entity Extraction konzentriert.
+Die Graphansicht bleibt bewusst in Phase 2 (`ui/graph_visualization.py`), wÃ¤hrend Phase 3 sich auf Parsing, Modellwahl, Kontextsteuerung und Entity Extraction konzentriert.
 
 ### LLM-Konfiguration
 
-Phase 3 wird über `config.yaml` konfiguriert:
+Phase 3 wird Ã¼ber `config.yaml` konfiguriert:
 
 ```yaml
 llm:
@@ -311,7 +311,7 @@ llm:
       context_size: 128000
 ```
 
-**Umgebungsvariablen**: API Keys können über `api_key_env: "ENV_VAR_NAME"` aus der Umgebung geladen werden.
+**Umgebungsvariablen**: API Keys kÃ¶nnen Ã¼ber `api_key_env: "ENV_VAR_NAME"` aus der Umgebung geladen werden.
 
 ### Verwendung Phase 3
 
@@ -349,10 +349,10 @@ result = pipeline.process(
     text=paper_text,
     provider="ollama",  # oder "lm_studio", "openai", etc.
     overrides={
-        "temperature": 0.1,  # Für diese Extraktion: niedrigere Temperatur
+        "temperature": 0.1,  # FÃ¼r diese Extraktion: niedrigere Temperatur
         "max_tokens": 4096
     },
-    link_concepts=True  # Automatische OpenAlex-Verknüpfung
+    link_concepts=True  # Automatische OpenAlex-VerknÃ¼pfung
 )
 
 print(f"Concepts: {len(result.concepts)}")
@@ -362,7 +362,7 @@ print(f"Claims: {len(result.claims)}")
 
 #### Parser Auswahl
 
-Das System wählt automatisch den besten Parser:
+Das System wÃ¤hlt automatisch den besten Parser:
 
 ```python
 from parsing.parser_router import ParserRouter, ParserType
@@ -371,9 +371,9 @@ router = ParserRouter()
 
 # Automatische Parser-Auswahl basierend auf PDF-Inhalt
 parsed = router.parse("/path/to/paper.pdf", "paper_id")
-# Nougat für formeln-schwere Papers
-# Table Transformer für tabellen-lastige Papers
-# VLM für diagramm-intensive Papers
+# Nougat fÃ¼r formeln-schwere Papers
+# Table Transformer fÃ¼r tabellen-lastige Papers
+# VLM fÃ¼r diagramm-intensive Papers
 # Fallback zu Marker
 
 # Oder explizit:
@@ -422,7 +422,7 @@ vocab.register(
 )
 
 # Normalisieren
-canonical = vocab.normalize("neural net")  # → "Neural Network"
+canonical = vocab.normalize("neural net")  # â†’ "Neural Network"
 
 # Deduplication
 vocab.merge_entries("Deep Learning", "Neural Network")
@@ -453,7 +453,7 @@ print(f"Confidence: {analysis.confidence}")  # 0.95
 claims = ["Claim A", "Claim B", "Claim C"]
 analyses = detector.analyze_claims_batch(claims)
 
-# Widersprüche filtern
+# WidersprÃ¼che filtern
 contradictions = detector.find_contradictions(analyses, confidence_threshold=0.7)
 ```
 
@@ -462,7 +462,7 @@ contradictions = detector.find_contradictions(analyses, confidence_threshold=0.7
 | Methode | Endpoint | Beschreibung |
 |---|---|---|
 | GET | `/health` | Health check |
-| GET | `/extraction/providers` | Verfügbare LLM-Provider |
+| GET | `/extraction/providers` | VerfÃ¼gbare LLM-Provider |
 | POST | `/extraction/extract` | Entity Extraction aus Text |
 | POST | `/extraction/batch` | Batch-Job starten |
 | GET | `/extraction/batch/{job_id}` | Job-Status abrufen |
@@ -487,3 +487,4 @@ python -m pytest -v
 ### Lizenz
 
 MIT
+

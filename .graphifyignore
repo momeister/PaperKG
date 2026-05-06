@@ -1,0 +1,7 @@
+# .graphifyignore
+databases/
+*.db
+*.sqlite
+knowledge_graphs/
+*.pdf
+docs/pdfs/

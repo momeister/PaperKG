@@ -164,6 +164,82 @@ class LLMRouter:
 	def provider_default_model(self, provider: str | None = None) -> str:
 		return self.provider_settings(provider).model
 
+	def recommended_settings(
+		self,
+		provider: str | None = None,
+		model: str | None = None,
+		refresh: bool = True,
+	) -> GenerationSettings:
+		"""
+		Return extraction-oriented defaults, enriched with provider model metadata when available.
+		"""
+		cfg = self.provider_config(provider)
+		base = self.provider_settings(provider)
+		settings = GenerationSettings(
+			model=model or base.model,
+			temperature=base.temperature,
+			top_p=base.top_p,
+			max_tokens=max(base.max_tokens, 8192),
+			context_size=base.context_size,
+			repeat_penalty=base.repeat_penalty,
+			seed=base.seed,
+			extra=dict(base.extra),
+		)
+
+		model_lower = settings.model.lower()
+		if "qwen" in model_lower:
+			settings.temperature = min(settings.temperature, 0.2)
+			settings.top_p = min(settings.top_p, 0.9)
+		elif "llama" in model_lower:
+			settings.temperature = min(settings.temperature, 0.2)
+			settings.top_p = min(settings.top_p, 0.9)
+		elif "mistral" in model_lower:
+			settings.temperature = min(settings.temperature, 0.15)
+			settings.top_p = min(settings.top_p, 0.9)
+
+		if refresh and cfg.provider_type == "ollama":
+			model_settings = self.discover_ollama_model_settings(cfg, settings.model)
+			if model_settings:
+				settings = self._merged_settings(settings, model_settings)
+				settings.max_tokens = max(settings.max_tokens, 8192)
+
+		return settings
+
+	def discover_ollama_model_settings(self, cfg: ProviderConfig, model: str) -> dict[str, Any]:
+		client = self._client_for(cfg.timeout_seconds)
+		try:
+			response = client.post(f"{cfg.base_url.rstrip('/')}/api/show", json={"model": model})
+			response.raise_for_status()
+			payload = response.json()
+		except Exception:
+			return {}
+
+		raw_parameters = payload.get("parameters") or ""
+		if isinstance(raw_parameters, list):
+			raw_parameters = "\n".join(str(item) for item in raw_parameters)
+		if not isinstance(raw_parameters, str):
+			return {}
+
+		mapping = {
+			"temperature": "temperature",
+			"top_p": "top_p",
+			"num_ctx": "context_size",
+			"num_predict": "max_tokens",
+			"repeat_penalty": "repeat_penalty",
+		}
+		settings: dict[str, Any] = {}
+		for line in raw_parameters.splitlines():
+			parts = line.strip().split(None, 1)
+			if len(parts) != 2 or parts[0] not in mapping:
+				continue
+			key = mapping[parts[0]]
+			value = parts[1].strip()
+			try:
+				settings[key] = int(value) if key in {"context_size", "max_tokens"} else float(value)
+			except ValueError:
+				continue
+		return settings
+
 	def chat(
 		self,
 		messages: list[dict[str, str]],
@@ -173,11 +249,12 @@ class LLMRouter:
 		provider_name = provider or self.default_provider
 		cfg = self.provider_config(provider_name)
 		settings = self._merged_settings(cfg.settings, overrides)
+		request_timeout_seconds = float((overrides or {}).get("timeout_seconds", cfg.timeout_seconds))
 
 		if cfg.provider_type == "ollama":
-			return self._chat_ollama(cfg, messages, settings)
+			return self._chat_ollama(cfg, messages, settings, request_timeout_seconds)
 		if cfg.provider_type in {"openai_compatible", "lm_studio", "openai"}:
-			return self._chat_openai_compatible(cfg, messages, settings)
+			return self._chat_openai_compatible(cfg, messages, settings, request_timeout_seconds)
 
 		raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
 
@@ -220,6 +297,7 @@ class LLMRouter:
 		cfg: ProviderConfig,
 		messages: list[dict[str, str]],
 		settings: GenerationSettings,
+		request_timeout_seconds: float,
 	) -> str:
 		payload: dict[str, Any] = {
 			"model": settings.model,
@@ -234,10 +312,11 @@ class LLMRouter:
 				**settings.extra,
 			},
 		}
+		payload["options"] = self._drop_none_values(payload["options"])
 		if settings.seed is not None:
 			payload["options"]["seed"] = settings.seed
 
-		client = self._client_for(cfg.timeout_seconds)
+		client = self._client_for(request_timeout_seconds)
 		response = client.post(f"{cfg.base_url.rstrip('/')}/api/chat", json=payload)
 		response.raise_for_status()
 		data = response.json()
@@ -249,6 +328,7 @@ class LLMRouter:
 		cfg: ProviderConfig,
 		messages: list[dict[str, str]],
 		settings: GenerationSettings,
+		request_timeout_seconds: float,
 	) -> str:
 		payload: dict[str, Any] = {
 			"model": settings.model,
@@ -262,6 +342,7 @@ class LLMRouter:
 				**settings.extra,
 			},
 		}
+		payload["extra_body"] = self._drop_none_values(payload["extra_body"])
 		if settings.seed is not None:
 			payload["seed"] = settings.seed
 
@@ -270,7 +351,7 @@ class LLMRouter:
 			headers["Authorization"] = f"Bearer {cfg.api_key}"
 
 		endpoint = f"{cfg.base_url.rstrip('/')}/chat/completions"
-		client = self._client_for(cfg.timeout_seconds)
+		client = self._client_for(request_timeout_seconds)
 		response = client.post(endpoint, headers=headers, json=payload)
 		response.raise_for_status()
 		data = response.json()
@@ -279,6 +360,10 @@ class LLMRouter:
 			return ""
 		message = choices[0].get("message") or {}
 		return str(message.get("content", "")).strip()
+
+	@staticmethod
+	def _drop_none_values(data: dict[str, Any]) -> dict[str, Any]:
+		return {key: value for key, value in data.items() if value is not None}
 
 	@staticmethod
 	def _extract_json(raw: str) -> dict[str, Any]:

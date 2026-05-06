@@ -1,1 +1,92 @@
-{}
+{
+  "Reinforcement Learning": {
+    "aliases": [
+      "reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Markov Decision Process": {
+    "aliases": [
+      "markov decision process"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Computational Emotion Models": {
+    "aliases": [
+      "computational emotion models"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Homeostasis": {
+    "aliases": [
+      "homeostasis"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Appraisal Theory": {
+    "aliases": [
+      "appraisal theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Intrinsic Motivation": {
+    "aliases": [
+      "intrinsic motivation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Model-based Reinforcement Learning": {
+    "aliases": [
+      "model-based reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Affective Modelling": {
+    "aliases": [
+      "affective modelling"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Human-Robot Interaction": {
+    "aliases": [
+      "human-robot interaction"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Grid-world Task": {
+    "aliases": [
+      "grid-world task"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  }
+}

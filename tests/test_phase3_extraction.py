@@ -90,6 +90,38 @@ llm:
 
         assert router.discover_provider_models("ollama") == ["qwen3.6-35b", "llama3.1:8b"]
 
+    def test_recommended_settings_reads_ollama_parameters(self):
+        tags_response = MagicMock()
+        tags_response.json.return_value = {"models": [{"name": "qwen3.6-35b"}]}
+        tags_response.raise_for_status.return_value = None
+        show_response = MagicMock()
+        show_response.json.return_value = {
+            "parameters": "temperature 0.1\ntop_p 0.8\nnum_ctx 65536\nnum_predict 4096\nrepeat_penalty 1.1"
+        }
+        show_response.raise_for_status.return_value = None
+        client = MagicMock()
+        client.post.return_value = show_response
+
+        router = LLMRouter(
+            providers={
+                "ollama": ProviderConfig(
+                    provider_type="ollama",
+                    base_url="http://localhost:11434",
+                    settings=GenerationSettings(model="qwen3.6-35b", max_tokens=2048),
+                )
+            },
+            default_provider="ollama",
+            client=client,
+        )
+
+        settings = router.recommended_settings("ollama", "qwen3.6-35b")
+
+        assert settings.temperature == 0.1
+        assert settings.top_p == 0.8
+        assert settings.context_size == 65536
+        assert settings.max_tokens == 8192
+        assert settings.repeat_penalty == 1.1
+
     def test_discover_provider_models_from_openai_compatible(self):
         response = MagicMock()
         response.json.return_value = {"data": [{"id": "gpt-4o"}, {"id": "gpt-4.1-mini"}]}
@@ -215,6 +247,22 @@ class TestEntityLinker:
 
         assert result is None
 
+    def test_openalx_linkage_strategy_matches_alias(self):
+        """Test strategy matches cached aliases."""
+        cache = {
+            "gradient descent": {
+                "id": "C456",
+                "display_name": "Gradient Descent",
+                "aliases": ["GD"],
+            }
+        }
+        strategy = OpenAlexLinkageStrategy(concept_cache=cache)
+
+        result = strategy.link({"label": "gd", "context": "...", "confidence": 0.9})
+
+        assert result is not None
+        assert result["openalx_id"] == "C456"
+
     def test_entity_linker_enriches_extraction(self):
         """Test linker enriches extraction results."""
         cache = {"neural network": {"id": "C123", "display_name": "Neural Network"}}
@@ -236,7 +284,15 @@ class TestEntityLinker:
 
     def test_extraction_pipeline_extract_and_link(self):
         """Test full extraction pipeline."""
-        mock_router = FakeLLMRouter()
+        mock_router = FakeLLMRouter(
+            response_json={
+                "concepts": [{"label": "neural network", "context": "model", "confidence": 0.9}],
+                "methods": [],
+                "claims": [],
+                "cross_domain_hints": [],
+                "language_detected": "en",
+            }
+        )
         cache = {"neural network": {"id": "C123", "display_name": "Neural Network"}}
         strategy = OpenAlexLinkageStrategy(concept_cache=cache)
         linker = EntityLinker(strategy=strategy)
@@ -250,6 +306,7 @@ class TestEntityLinker:
 
         assert result.paper_id == "p1"
         assert mock_router.last_messages is not None
+        assert result.concepts[0]["openalx_id"] == "C123"
 
 
 class TestVocabularyManager:
@@ -306,6 +363,7 @@ class TestEmbeddingEngine:
         assert result.entity_label == "neural network"
         assert len(result.vector) == engine.EMBEDDING_DIM
         assert result.dimension == engine.EMBEDDING_DIM
+        assert result.backend == "hash-fallback"
 
     def test_embedding_engine_batch_embed(self):
         """Test batch embedding."""
@@ -478,6 +536,29 @@ class TestParserRouter:
 
         assert selected == ParserType.MARKER
 
+    def test_parser_router_parse_uses_marker_preview_for_selection(self):
+        """Test automatic parse selection uses a Marker text probe."""
+        router = ParserRouter()
+        marker_result = MagicMock(
+            text="The equation $$E=mc^2$$ and \\alpha appear repeatedly.",
+            parser=ParserType.MARKER,
+        )
+        nougat_result = MagicMock(text="nougat output", parser=ParserType.NOUGAT)
+        mock_marker = MagicMock()
+        mock_marker.parse.return_value = marker_result
+        mock_nougat = MagicMock()
+        mock_nougat.parse.return_value = nougat_result
+
+        router.register_parser(ParserType.MARKER, mock_marker)
+        router.register_parser(ParserType.NOUGAT, mock_nougat)
+
+        result = router.parse("/fake.pdf", "paper_001")
+
+        assert result is nougat_result
+        assert result.parser == ParserType.NOUGAT
+        assert mock_marker.parse.called
+        assert mock_nougat.parse.called
+
 
 class TestParserImplementations:
     """Test actual parser fallbacks."""
@@ -543,6 +624,51 @@ class TestBatchProcessor:
         retrieved = processor.get_job_status("test_job")
         assert retrieved is not None
         assert retrieved.job_id == "test_job"
+
+    def test_batch_processor_persists_extraction_results(self, tmp_path):
+        """Test batch processor can persist successful extraction results."""
+        from storage.metadata_db import MetadataDB
+
+        mock_llm = FakeLLMRouter()
+        parser_router = ParserRouter()
+        parser_router.parse = MagicMock(
+            return_value=MagicMock(text="Paper text about neural networks")
+        )
+        db = MetadataDB(str(tmp_path / "metadata.duckdb"))
+        processor = BatchProcessor(mock_llm, parser_router, metadata_db=db)
+
+        status = processor.process_papers(
+            ["paper_001"],
+            {"paper_001": str(tmp_path / "paper.pdf")},
+            job_id="persist_job",
+        )
+
+        assert status.status == "completed"
+        assert status.papers_processed == 1
+        assert len(db.get_paper_extractions("paper_001")) == 1
+        db.close()
+
+    def test_batch_processor_retries_failed_parse(self, tmp_path):
+        """Test batch processor retries transient parser failures."""
+        mock_llm = FakeLLMRouter()
+        parser_router = ParserRouter()
+        parser_router.parse = MagicMock(
+            side_effect=[
+                RuntimeError("temporary parse failure"),
+                MagicMock(text="Paper text about neural networks"),
+            ]
+        )
+        processor = BatchProcessor(mock_llm, parser_router, max_retries=1)
+
+        status = processor.process_papers(
+            ["paper_001"],
+            {"paper_001": str(tmp_path / "paper.pdf")},
+            job_id="retry_job",
+        )
+
+        assert status.papers_processed == 1
+        assert status.papers_failed == 0
+        assert parser_router.parse.call_count == 2
 
 
 # Run tests

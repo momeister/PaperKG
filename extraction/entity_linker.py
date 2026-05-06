@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from extraction.embedding_engine import EmbeddingEngine
+
 from extraction.entity_extractor import EntityExtractor, ExtractionResult
 from query.llm_router import LLMRouter
 
@@ -20,7 +22,12 @@ class OpenAlexLinkageStrategy(ConceptLinkageStrategy):
     Can be extended to query OpenAlex API or use local embeddings.
     """
 
-    def __init__(self, concept_cache: dict[str, dict] | None = None) -> None:
+    def __init__(
+        self,
+        concept_cache: dict[str, dict] | None = None,
+        embedding_engine: EmbeddingEngine | None = None,
+        similarity_threshold: float = 0.85,
+    ) -> None:
         """
         Initialize with optional concept cache.
 
@@ -28,6 +35,8 @@ class OpenAlexLinkageStrategy(ConceptLinkageStrategy):
             concept_cache: Pre-populated dict of {concept_label -> openalx_concept_data}
         """
         self.cache = concept_cache or {}
+        self.embedding_engine = embedding_engine
+        self.similarity_threshold = similarity_threshold
 
     def link(self, concept: dict[str, str]) -> dict[str, Any] | None:
         """
@@ -39,18 +48,60 @@ class OpenAlexLinkageStrategy(ConceptLinkageStrategy):
         Returns:
             Enriched dict with 'openalx_id', 'openalx_label' or None if not found
         """
-        label = concept.get("label", "").lower()
+        label = concept.get("label", "").strip().lower()
 
-        if label in self.cache:
-            cached = self.cache[label]
-            return {
-                **concept,
-                "openalx_id": cached.get("id"),
-                "openalx_label": cached.get("display_name"),
-            }
+        cached = self._lookup_exact(label)
+        if cached is None:
+            cached = self._lookup_by_embedding(label)
+        if cached is not None:
+            return self._enrich(concept, cached)
 
-        # In production: query OpenAlex API or embedding similarity
         return None
+
+    def _lookup_exact(self, normalized_label: str) -> dict[str, Any] | None:
+        if normalized_label in self.cache:
+            return self.cache[normalized_label]
+
+        for item in self.cache.values():
+            labels = [item.get("display_name", "")]
+            labels.extend(item.get("aliases") or [])
+            if normalized_label in {str(label).strip().lower() for label in labels}:
+                return item
+        return None
+
+    def _lookup_by_embedding(self, normalized_label: str) -> dict[str, Any] | None:
+        if self.embedding_engine is None or not self.cache:
+            return None
+
+        query_vector = self.embedding_engine.embed(normalized_label)
+        best_item = None
+        best_score = 0.0
+        for item in self.cache.values():
+            candidate_label = item.get("display_name")
+            if not candidate_label:
+                continue
+            score = self.embedding_engine.similarity(
+                query_vector,
+                self.embedding_engine.embed(str(candidate_label)),
+            )
+            if score > best_score:
+                best_score = score
+                best_item = item
+
+        if best_item is not None and best_score >= self.similarity_threshold:
+            return {**best_item, "link_score": best_score}
+        return None
+
+    @staticmethod
+    def _enrich(concept: dict[str, str], cached: dict[str, Any]) -> dict[str, Any]:
+        enriched = {
+            **concept,
+            "openalx_id": cached.get("id"),
+            "openalx_label": cached.get("display_name"),
+        }
+        if "link_score" in cached:
+            enriched["link_score"] = cached["link_score"]
+        return enriched
 
 
 class EntityLinker:
@@ -149,8 +200,12 @@ class ExtractionPipeline:
             paper_id, paper_text, provider=provider, overrides=overrides
         )
 
-        # Link to knowledge bases if requested and extraction successful
-        if link_concepts and not extraction.raw_response:
+        extraction_failed = extraction.raw_response.lower().startswith("extraction failed:")
+
+        # Link to knowledge bases if requested and extraction produced concepts.
+        # Successful extractions keep raw_response for debugging, so raw_response
+        # itself is not an error signal.
+        if link_concepts and not extraction_failed:
             extraction = self.linker.enrich_extraction(extraction)
 
         return extraction

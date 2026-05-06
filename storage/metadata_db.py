@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,21 +15,41 @@ class MetadataDB:
     """
 
     def __init__(self, db_path: str = "data/metadata.duckdb") -> None:
-        self.db_path = db_path
+        self.db_path = str(Path(db_path).resolve())
+        self._lock = threading.RLock()
+        self._closed = False
         db_file = Path(db_path)
         db_file.parent.mkdir(parents=True, exist_ok=True)
         if db_file.exists() and db_file.stat().st_size == 0:
             db_file.unlink()
-        self.conn = duckdb.connect(db_path)
+        self.conn = duckdb.connect(str(db_file))
         self._init_schema()
+
+    def __enter__(self) -> "MetadataDB":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def _execute(self, query: str, parameters: list[Any] | tuple[Any, ...] | None = None):
+        if self._closed:
+            raise RuntimeError(f"MetadataDB connection is closed: {self.db_path}")
+        with self._lock:
+            if parameters is None:
+                return self.conn.execute(query)
+            return self.conn.execute(query, parameters)
 
     def _init_schema(self) -> None:
         """
         Initialize all required tables if they don't exist.
         """
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_dedup_id")
+        self._execute("CREATE SEQUENCE IF NOT EXISTS seq_dedup_id")
 
-        self.conn.execute("""
+        self._execute("""
             CREATE TABLE IF NOT EXISTS papers (
                 id VARCHAR PRIMARY KEY,
                 source VARCHAR NOT NULL,
@@ -40,14 +61,27 @@ class MetadataDB:
                 doi VARCHAR,
                 pdf_url VARCHAR,
                 landing_page_url VARCHAR,
+                "references" JSON,
+                citations JSON,
+                citation_count INTEGER DEFAULT 0,
+                superseded_by VARCHAR,
+                peer_reviewed BOOLEAN DEFAULT false,
+                retracted BOOLEAN DEFAULT false,
+                language_original VARCHAR DEFAULT 'unknown',
+                confidence_score FLOAT DEFAULT 0.5,
+                obsolescence_score FLOAT DEFAULT 0.0,
+                conflict_flag BOOLEAN DEFAULT false,
+                embedding_model VARCHAR,
+                embedding_version INTEGER DEFAULT 0,
                 has_full_text BOOLEAN DEFAULT false,
                 version INTEGER DEFAULT 1,
                 added_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        self._migrate_schema()
 
-        self.conn.execute("""
+        self._execute("""
             CREATE TABLE IF NOT EXISTS paper_sources (
                 paper_id VARCHAR NOT NULL,
                 source VARCHAR NOT NULL,
@@ -58,7 +92,34 @@ class MetadataDB:
             )
         """)
 
-        self.conn.execute("""
+    def _migrate_schema(self) -> None:
+        """
+        Add Phase 2/3 columns when opening older DuckDB files.
+        """
+        columns = {
+            "references": "JSON",
+            "citations": "JSON",
+            "citation_count": "INTEGER DEFAULT 0",
+            "superseded_by": "VARCHAR",
+            "peer_reviewed": "BOOLEAN DEFAULT false",
+            "retracted": "BOOLEAN DEFAULT false",
+            "language_original": "VARCHAR DEFAULT 'unknown'",
+            "confidence_score": "FLOAT DEFAULT 0.5",
+            "obsolescence_score": "FLOAT DEFAULT 0.0",
+            "conflict_flag": "BOOLEAN DEFAULT false",
+            "embedding_model": "VARCHAR",
+            "embedding_version": "INTEGER DEFAULT 0",
+        }
+        existing = {
+            row[1]
+            for row in self._execute("PRAGMA table_info('papers')").fetchall()
+        }
+        for name, column_type in columns.items():
+            if name not in existing:
+                column_name = f'"{name}"' if name == "references" else name
+                self._execute(f"ALTER TABLE papers ADD COLUMN {column_name} {column_type}")
+
+        self._execute("""
             CREATE TABLE IF NOT EXISTS dedup_log (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_dedup_id'),
                 kept_id VARCHAR NOT NULL,
@@ -68,7 +129,7 @@ class MetadataDB:
             )
         """)
 
-        self.conn.execute("""
+        self._execute("""
             CREATE TABLE IF NOT EXISTS extraction_results (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_dedup_id'),
                 paper_id VARCHAR NOT NULL,
@@ -91,10 +152,17 @@ class MetadataDB:
         Insert or update a paper record.
         """
         paper_id = record.get("id") or f"{record['source']}:{record['source_id']}"
-        self.conn.execute("""
+        self._execute("""
             INSERT OR REPLACE INTO papers
-            (id, source, source_id, title, abstract, authors, year, doi, pdf_url, landing_page_url, has_full_text, version, updated_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            (
+                id, source, source_id, title, abstract, authors, year, doi,
+                pdf_url, landing_page_url, "references", citations, citation_count,
+                superseded_by, peer_reviewed, retracted, language_original,
+                confidence_score, obsolescence_score, conflict_flag,
+                embedding_model, embedding_version, has_full_text, version,
+                updated_timestamp
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """, [
             paper_id,
             record.get("source"),
@@ -106,7 +174,19 @@ class MetadataDB:
             record.get("doi"),
             record.get("pdf_url"),
             record.get("landing_page_url"),
-            bool(record.get("pdf_url")),
+            json.dumps(record.get("references", [])),
+            json.dumps(record.get("citations", [])),
+            int(record.get("citation_count") or len(record.get("citations") or record.get("references") or [])),
+            record.get("superseded_by"),
+            bool(record.get("peer_reviewed", False)),
+            bool(record.get("retracted", False)),
+            record.get("language_original") or "unknown",
+            float(record.get("confidence_score") or 0.5),
+            float(record.get("obsolescence_score") or 0.0),
+            bool(record.get("conflict_flag", False)),
+            record.get("embedding_model"),
+            int(record.get("embedding_version") or 0),
+            bool(record.get("has_full_text", bool(record.get("pdf_url")))),
             record.get("version", 1),
         ])
 
@@ -122,51 +202,68 @@ class MetadataDB:
         """
         Retrieve a paper by ID.
         """
-        result = self.conn.execute(
+        result = self._execute(
             "SELECT * FROM papers WHERE id = ?",
             [paper_id]
         ).fetchone()
         if result is None:
             return None
         cols = [desc[0] for desc in self.conn.description]
-        return dict(zip(cols, result))
+        return self._parse_paper_row(dict(zip(cols, result)))
 
     def search_by_title(self, title_query: str, limit: int = 50) -> list[dict[str, Any]]:
         """
         Search papers by title substring.
         """
-        results = self.conn.execute("""
+        results = self._execute("""
             SELECT * FROM papers
             WHERE title ILIKE ?
             LIMIT ?
         """, [f"%{title_query}%", limit]).fetchall()
         cols = [desc[0] for desc in self.conn.description]
-        return [dict(zip(cols, row)) for row in results]
+        return [self._parse_paper_row(dict(zip(cols, row))) for row in results]
 
     def list_papers(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
         """
         List all papers with pagination.
         """
-        results = self.conn.execute("""
+        results = self._execute("""
             SELECT * FROM papers
             ORDER BY added_timestamp DESC
             LIMIT ? OFFSET ?
         """, [limit, offset]).fetchall()
         cols = [desc[0] for desc in self.conn.description]
-        return [dict(zip(cols, row)) for row in results]
+        return [self._parse_paper_row(dict(zip(cols, row))) for row in results]
+
+    @staticmethod
+    def _parse_paper_row(data: dict[str, Any]) -> dict[str, Any]:
+        for field in ["authors", "references", "citations"]:
+            if data.get(field):
+                try:
+                    data[field] = json.loads(data[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return data
 
     def count_papers(self) -> int:
         """
         Count total papers in database.
         """
-        result = self.conn.execute("SELECT COUNT(*) FROM papers").fetchone()
+        result = self._execute("SELECT COUNT(*) FROM papers").fetchone()
         return result[0] if result else 0
+
+    def count_dedup_events(self) -> int:
+        """
+        Count deduplication decisions in the database.
+        """
+        result = self._execute("SELECT COUNT(*) FROM dedup_log").fetchone()
+        return int(result[0]) if result else 0
 
     def log_dedup(self, kept_id: str, dropped_id: str, reason: str) -> None:
         """
         Log a deduplication decision.
         """
-        self.conn.execute("""
+        self._execute("""
             INSERT INTO dedup_log (kept_id, dropped_id, reason)
             VALUES (?, ?, ?)
         """, [kept_id, dropped_id, reason])
@@ -189,7 +286,7 @@ class MetadataDB:
         """
         status = "success" if error_message is None else "failed"
         
-        result_id = self.conn.execute("""
+        result_id = self._execute("""
             INSERT INTO extraction_results
             (paper_id, llm_provider, llm_model, extraction_status, concepts, methods, claims, 
              cross_domain_hints, raw_response, error_message, extraction_duration_seconds)
@@ -215,7 +312,7 @@ class MetadataDB:
         """
         Retrieve an extraction result by ID.
         """
-        result = self.conn.execute(
+        result = self._execute(
             "SELECT * FROM extraction_results WHERE id = ?",
             [result_id]
         ).fetchone()
@@ -240,7 +337,7 @@ class MetadataDB:
         """
         Get all extraction results for a specific paper.
         """
-        results = self.conn.execute("""
+        results = self._execute("""
             SELECT * FROM extraction_results
             WHERE paper_id = ?
             ORDER BY extraction_timestamp DESC
@@ -263,8 +360,58 @@ class MetadataDB:
         
         return data_list
 
+    def list_extraction_results(self, limit: int = 50) -> list[dict[str, Any]]:
+        """
+        List recent extraction results across all papers.
+        """
+        results = self._execute("""
+            SELECT * FROM extraction_results
+            ORDER BY extraction_timestamp DESC
+            LIMIT ?
+        """, [limit]).fetchall()
+
+        cols = [desc[0] for desc in self.conn.description]
+        data_list = []
+        for row in results:
+            data = dict(zip(cols, row))
+            for field in ["concepts", "methods", "claims", "cross_domain_hints"]:
+                if data.get(field):
+                    try:
+                        data[field] = json.loads(data[field])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            data_list.append(data)
+        return data_list
+
+    def clear_extraction_results(self) -> None:
+        """
+        Delete stored extraction runs while keeping harvested paper metadata.
+        """
+        self._execute("DELETE FROM extraction_results")
+
+    def clear_all(self) -> None:
+        """
+        Delete all mutable metadata tables and keep the schema intact.
+        """
+        with self._lock:
+            self._execute("BEGIN TRANSACTION")
+            try:
+                self._execute("DELETE FROM extraction_results")
+                self._execute("DELETE FROM dedup_log")
+                self._execute("DELETE FROM paper_sources")
+                self._execute("DELETE FROM papers")
+                self._execute("COMMIT")
+            except Exception:
+                self._execute("ROLLBACK")
+                raise
+
     def close(self) -> None:
         """
         Close database connection.
         """
-        self.conn.close()
+        if self._closed:
+            return
+        with self._lock:
+            if not self._closed:
+                self.conn.close()
+                self._closed = True

@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from extraction.entity_extractor import EntityExtractor
@@ -23,6 +24,7 @@ from extraction.embedding_engine import EmbeddingEngine
 from extraction.batch_processor import BatchProcessor
 from parsing.parser_router import ParserRouter
 from query.llm_router import LLMRouter
+from storage.metadata_db import MetadataDB
 
 app = FastAPI(
     title="ScienceKG Phase 3 API",
@@ -36,7 +38,12 @@ llm_router = LLMRouter.from_config_file("config.yaml")
 parser_router = ParserRouter()
 embedding_engine = EmbeddingEngine()
 extraction_pipeline = ExtractionPipeline(llm_router)
-batch_processor = BatchProcessor(llm_router, parser_router, embedding_engine)
+batch_processor = BatchProcessor(
+    llm_router,
+    parser_router,
+    embedding_engine,
+    metadata_db_factory=lambda: MetadataDB("data/metadata.duckdb"),
+)
 
 
 # Request/Response models
@@ -82,14 +89,25 @@ class BatchJobResponse(BaseModel):
     error_message: str | None = None
 
 
-@app.get("/health")
-async def health_check() -> dict[str, str]:
+class HealthResponse(BaseModel):
+    """Health check response."""
+
+    status: str
+    phase: str
+    default_provider: str
+    available_providers: list[str]
+
+
+@app.get("/health", response_model=None)
+async def health_check() -> JSONResponse:
     """Health check endpoint."""
-    return {
-        "status": "ok",
-        "phase": "3",
-        "default_provider": llm_router.available_providers(),
-    }
+    payload = HealthResponse(
+        status="ok",
+        phase="3",
+        default_provider=str(llm_router.default_provider),
+        available_providers=llm_router.available_providers(),
+    )
+    return JSONResponse(content=payload.model_dump())
 
 
 @app.get("/extraction/providers")

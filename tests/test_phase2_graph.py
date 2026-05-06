@@ -6,8 +6,10 @@ from graph.citation_analysis import (
 )
 from graph.paper_ingestion import (
     extract_citation_ids,
+    ingest_from_metadata_db,
     ingest_records,
     to_phase2_paper_node,
+    to_reference_stub_paper_node,
 )
 from graph.project_global_merge import merge_project_records_into_global
 
@@ -63,6 +65,29 @@ def test_ingest_records_writes_papers_and_citations() -> None:
     assert stats.papers_written == 1
     assert stats.citation_edges_written == 2
     assert "arxiv:1234.5678" in graph.papers
+    assert "arxiv:1111.1111" in graph.papers
+    assert graph.papers["arxiv:1111.1111"]["source"] == "citation_reference"
+
+
+def test_ingest_from_metadata_db_uses_persisted_references(tmp_path) -> None:
+    from storage.metadata_db import MetadataDB
+
+    db = MetadataDB(str(tmp_path / "metadata.duckdb"))
+    db.insert_paper(
+        {
+            "source": "arxiv",
+            "source_id": "1234.5678",
+            "title": "Paper A",
+            "references": [{"paperId": "S2:1"}, "doi:10.1000/x"],
+        }
+    )
+    graph = FakeGraph()
+
+    stats = ingest_from_metadata_db(graph, db)
+
+    assert stats.citation_edges_written == 2
+    assert ("arxiv:1234.5678", "S2:1") in graph.citations
+    db.close()
 
 
 def test_to_phase2_paper_node_defaults() -> None:
@@ -79,6 +104,15 @@ def test_to_phase2_paper_node_defaults() -> None:
     assert node["id"] == "openalex:W1"
     assert node["version"] == 1
     assert node["confidence_score"] == 0.5
+    assert node["obsolescence_score"] > 0
+
+
+def test_reference_stub_node_defaults() -> None:
+    node = to_reference_stub_paper_node("doi:10.1000/x")
+
+    assert node["id"] == "doi:10.1000/x"
+    assert node["source"] == "citation_reference"
+    assert node["has_full_text"] is False
 
 
 def test_build_co_citation_similarity_creates_bidirectional_edges() -> None:
@@ -102,6 +136,23 @@ def test_obsolescence_score_decreases_with_more_citations() -> None:
     old_high = compute_obsolescence_score(year=2010, citation_count=500, current_year=2026)
 
     assert old_low > old_high
+
+
+def test_nightly_rebuild_returns_report_without_crashing(tmp_path) -> None:
+    from scheduler.nightly_jobs import rebuild_phase2_graph
+    from storage.metadata_db import MetadataDB
+
+    db_path = tmp_path / "metadata.duckdb"
+    db = MetadataDB(str(db_path))
+    db.insert_paper({"source": "arxiv", "source_id": "1", "title": "Paper"})
+    db.close()
+
+    report = rebuild_phase2_graph(
+        metadata_db_path=str(db_path),
+        graph_db_path=str(tmp_path / "graph"),
+    )
+
+    assert hasattr(report, "papers_seen")
 
 
 def test_merge_project_records_into_global_uses_deduplication() -> None:

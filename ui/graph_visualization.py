@@ -44,11 +44,8 @@ def run_graph_visualization_app() -> None:
 	limit = st.slider("Max papers", min_value=10, max_value=5000, value=300, step=10)
 
 	if st.button("Build Graph"):
-		db = MetadataDB(db_path)
-		try:
+		with MetadataDB(db_path) as db:
 			records = db.list_papers(limit=limit)
-		finally:
-			db.close()
 
 		graph = build_network_from_metadata(records)
 		html_path = render_pyvis(graph, Path("data/graphs/project_kgs/graph_preview.html"))
