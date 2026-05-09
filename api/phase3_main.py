@@ -37,7 +37,7 @@ app = FastAPI(
 llm_router = LLMRouter.from_config_file("config.yaml")
 parser_router = ParserRouter()
 embedding_engine = EmbeddingEngine()
-extraction_pipeline = ExtractionPipeline(llm_router)
+extraction_pipeline = ExtractionPipeline(llm_router, embedding_engine=embedding_engine)
 batch_processor = BatchProcessor(
     llm_router,
     parser_router,
@@ -56,6 +56,8 @@ class ExtractionRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
+    context_size: int | None = None
+    extraction_mode: str | None = None
 
 
 class ConceptItem(BaseModel):
@@ -71,11 +73,21 @@ class ExtractionResponse(BaseModel):
     """Response from entity extraction."""
 
     paper_id: str
+    paper_type: str
     concepts: list[ConceptItem]
     methods: list[dict[str, Any]]
+    concept_candidates: list[dict[str, Any]] = []
+    method_candidates: list[dict[str, Any]] = []
+    relations: list[dict[str, Any]] = []
     claims: list[dict[str, Any]]
-    cross_domain_hints: list[str]
+    cross_domain_hints: list[dict[str, Any]]
+    terminology_conflicts: list[dict[str, Any]]
+    temporal_coverage: dict[str, Any]
+    mathematical_content: dict[str, Any]
     language_detected: str
+    quality_warnings: list[str] = []
+    candidate_count: int = 0
+    extraction_diagnostics: dict[str, Any] = {}
 
 
 class BatchJobResponse(BaseModel):
@@ -87,6 +99,19 @@ class BatchJobResponse(BaseModel):
     papers_processed: int
     papers_failed: int
     error_message: str | None = None
+    superseded_by: str | None = None
+
+
+class BatchJobRequest(BaseModel):
+    """Request for resumable batch extraction."""
+
+    paper_ids: list[str]
+    pdf_paths: dict[str, str]
+    provider: str | None = None
+    llm_overrides: dict[str, Any] | None = None
+    job_id: str | None = None
+    resume: bool = True
+    supersede_job_id: str | None = None
 
 
 class HealthResponse(BaseModel):
@@ -135,6 +160,12 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
         if request.top_p is not None:
             overrides["top_p"] = request.top_p
 
+        if request.context_size is not None:
+            overrides["context_size"] = request.context_size
+
+        if request.extraction_mode is not None:
+            overrides["extraction_mode"] = request.extraction_mode
+
         # Extract entities
         result = extraction_pipeline.process(
             request.paper_id,
@@ -157,11 +188,21 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
 
         return ExtractionResponse(
             paper_id=result.paper_id,
+            paper_type=result.paper_type,
             concepts=concepts,
             methods=result.methods,
+            concept_candidates=result.concept_candidates,
+            method_candidates=result.method_candidates,
+            relations=result.relations,
             claims=result.claims,
             cross_domain_hints=result.cross_domain_hints,
+            terminology_conflicts=result.terminology_conflicts,
+            temporal_coverage=result.temporal_coverage,
+            mathematical_content=result.mathematical_content,
             language_detected=result.language_detected,
+            quality_warnings=result.quality_warnings,
+            candidate_count=result.candidate_count,
+            extraction_diagnostics=result.extraction_diagnostics,
         )
 
     except Exception as exc:
@@ -170,9 +211,7 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
 
 @app.post("/extraction/batch")
 async def start_batch_job(
-    paper_ids: list[str],
-    pdf_paths: dict[str, str],
-    provider: str | None = None,
+    request: BatchJobRequest,
 ) -> BatchJobResponse:
     """
     Start batch extraction job for multiple papers.
@@ -181,9 +220,13 @@ async def start_batch_job(
     """
     try:
         status = batch_processor.process_papers(
-            paper_ids,
-            pdf_paths,
-            llm_provider=provider,
+            request.paper_ids,
+            request.pdf_paths,
+            job_id=request.job_id,
+            llm_provider=request.provider,
+            llm_overrides=request.llm_overrides,
+            resume=request.resume,
+            supersede_job_id=request.supersede_job_id,
         )
 
         return BatchJobResponse(
@@ -193,6 +236,7 @@ async def start_batch_job(
             papers_processed=status.papers_processed,
             papers_failed=status.papers_failed,
             error_message=status.error_message,
+            superseded_by=status.superseded_by,
         )
 
     except Exception as exc:
@@ -214,6 +258,7 @@ async def get_batch_status(job_id: str) -> BatchJobResponse:
         papers_processed=status.papers_processed,
         papers_failed=status.papers_failed,
         error_message=status.error_message,
+        superseded_by=status.superseded_by,
     )
 
 
@@ -231,10 +276,20 @@ async def list_batch_jobs() -> dict[str, list[BatchJobResponse]]:
                 papers_processed=j.papers_processed,
                 papers_failed=j.papers_failed,
                 error_message=j.error_message,
+                superseded_by=j.superseded_by,
             )
             for j in jobs
         ]
     }
+
+
+@app.get("/extraction/batch/{job_id}/items")
+async def get_batch_items(job_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Get durable per-paper state for a batch extraction job."""
+    with MetadataDB("data/metadata.duckdb") as db:
+        if db.get_batch_job(job_id) is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return {"items": db.get_batch_job_items(job_id)}
 
 
 if __name__ == "__main__":

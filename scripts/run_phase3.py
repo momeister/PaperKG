@@ -12,6 +12,7 @@ Usage:
     python scripts/run_phase3.py --api-only         # API only
     python scripts/run_phase3.py --ui-only          # UI only
     python scripts/run_phase3.py --api-port 9000    # Custom API port
+    python scripts/run_phase3.py --run-demo         # Opt-in demo extraction
 
 Requires:
     - Running Ollama instance (or configured LLM provider)
@@ -31,6 +32,61 @@ import time
 from pathlib import Path
 
 import httpx
+
+
+def _configured_ollama_models(config_path: Path = Path("config.yaml")) -> set[str]:
+    """Return Ollama model names configured for this project."""
+    try:
+        import yaml
+    except ImportError:
+        return set()
+
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return set()
+
+    ollama_cfg = raw.get("llm", {}).get("providers", {}).get("ollama", {})
+    models = set()
+    configured_model = ollama_cfg.get("model")
+    if configured_model:
+        models.add(str(configured_model))
+    for model in ollama_cfg.get("models") or []:
+        if model:
+            models.add(str(model))
+    return models
+
+
+def _stop_ollama_models(models: set[str]) -> None:
+    """Best-effort unload for project Ollama models that are still resident."""
+    if not models:
+        return
+    try:
+        ps = subprocess.run(
+            ["ollama", "ps"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return
+
+    loaded = ps.stdout or ""
+    for model in sorted(models):
+        if model not in loaded:
+            continue
+        try:
+            subprocess.run(
+                ["ollama", "stop", model],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            print(f"   Unloaded Ollama model: {model}")
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
 
 
 def _wait_for_api(api_url: str, max_wait: int = 15) -> bool:
@@ -131,9 +187,12 @@ def _start(args: argparse.Namespace) -> None:
                 print("✗ API failed to start within timeout")
                 return
 
-            # Trigger demo extraction
-            if not args.skip_demo:
+            # Demo extraction is intentionally opt-in. Starting Phase 3 should
+            # never load an LLM or occupy GPU memory without a user action.
+            if args.run_demo and not args.skip_demo:
                 _trigger_extraction_demo(api_url)
+            else:
+                print("   Demo extraction disabled; use --run-demo to run it explicitly.")
 
         # Start UI if requested
         if not args.api_only:
@@ -194,6 +253,9 @@ def _start(args: argparse.Namespace) -> None:
                     process.kill()
                     process.wait()
 
+        if not args.keep_ollama_loaded:
+            _stop_ollama_models(_configured_ollama_models())
+
         print("✓ All services stopped")
 
 
@@ -208,6 +270,7 @@ Examples:
   python scripts/run_phase3.py --api-only   # API only
   python scripts/run_phase3.py --ui-only    # UI only
   python scripts/run_phase3.py --api-port 9000  # Custom port
+  python scripts/run_phase3.py --run-demo   # Start services and run demo extraction
         """.strip(),
     )
 
@@ -228,9 +291,19 @@ Examples:
         help="FastAPI port (default: 8000)",
     )
     parser.add_argument(
+        "--run-demo",
+        action="store_true",
+        help="Run a small demo extraction after the API is ready",
+    )
+    parser.add_argument(
         "--skip-demo",
         action="store_true",
-        help="Skip demo extraction after API ready",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--keep-ollama-loaded",
+        action="store_true",
+        help="Do not unload configured Ollama models when the runner stops",
     )
 
     args = parser.parse_args()

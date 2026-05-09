@@ -1,0 +1,10 @@
+llm:
+  default_provider: ollama
+  providers:
+    ollama:
+      provider_type: ollama
+      base_url: http://localhost:11434
+      model: qwen3.6-35b
+      models:
+        - qwen3.6-35b
+        - llama3.1:8b

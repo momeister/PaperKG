@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from graph.citation_analysis import compute_obsolescence_score
+from extraction.text_normalization import normalize_scientific_text, slugify_label
 
 
 class GraphWriter(Protocol):
@@ -14,12 +17,32 @@ class GraphWriter(Protocol):
 	def merge_citation(self, from_paper_id: str, to_paper_id: str) -> None:
 		...
 
+	def merge_concept(self, concept: dict[str, Any]) -> None:
+		...
+
+	def merge_method(self, method: dict[str, Any]) -> None:
+		...
+
+	def merge_has_concept(self, paper_id: str, concept_id: str, weight: float) -> None:
+		...
+
+	def merge_has_method(self, paper_id: str, method_id: str, weight: float) -> None:
+		...
+
+	def merge_related_concept(self, subject_id: str, object_id: str, relation_type: str) -> None:
+		...
+
 
 @dataclass
 class IngestionStats:
 	papers_seen: int = 0
 	papers_written: int = 0
 	citation_edges_written: int = 0
+	concept_nodes_written: int = 0
+	method_nodes_written: int = 0
+	concept_edges_written: int = 0
+	method_edges_written: int = 0
+	relation_edges_written: int = 0
 
 
 def paper_id(record: dict[str, Any]) -> str:
@@ -134,11 +157,242 @@ def ingest_records(graph: GraphWriter, records: list[dict[str, Any]]) -> Ingesti
 	return stats
 
 
+def ingest_extractions_from_metadata_db(
+	graph: GraphWriter,
+	metadata_db: Any,
+	limit: int = 5000,
+	create_missing_paper_stubs: bool = False,
+) -> IngestionStats:
+	"""Ingest extracted concepts/methods into Kuzu semantic KG edges."""
+	stats = IngestionStats()
+	seen_per_paper: set[tuple[str, str, str]] = set()
+	seen_entity_ids_per_paper: set[tuple[str, str]] = set()
+
+	for extraction in metadata_db.list_extraction_results(limit=limit):
+		if extraction.get("extraction_status") != "success":
+			continue
+		raw_paper_id = str(extraction.get("paper_id") or "")
+		if not raw_paper_id:
+			continue
+
+		record = None
+		if hasattr(metadata_db, "resolve_paper"):
+			record = metadata_db.resolve_paper(raw_paper_id)
+
+		if record is None:
+			if not create_missing_paper_stubs:
+				continue
+			record = _extraction_stub_paper(raw_paper_id, extraction)
+			graph.merge_paper(record)
+			stats.papers_written += 1
+
+		canonical_id = paper_id(record)
+		current_concept_ids: set[str] = set()
+		for concept in _accepted_entities(extraction, "concepts", legacy_threshold=0.75):
+			if not isinstance(concept, dict):
+				continue
+			node = to_concept_node(concept)
+			if not node:
+				continue
+			key = (canonical_id, "concept", node["id"])
+			entity_key = (canonical_id, node["id"])
+			if key in seen_per_paper or entity_key in seen_entity_ids_per_paper:
+				continue
+			seen_per_paper.add(key)
+			seen_entity_ids_per_paper.add(entity_key)
+			graph.merge_concept(node)
+			graph.merge_has_concept(canonical_id, node["id"], _weight(concept))
+			current_concept_ids.add(node["id"])
+			stats.concept_nodes_written += 1
+			stats.concept_edges_written += 1
+
+		for method in _accepted_entities(extraction, "methods", legacy_threshold=0.70):
+			if not isinstance(method, dict):
+				continue
+			node = to_method_node(method)
+			if not node:
+				continue
+			key = (canonical_id, "method", node["id"])
+			entity_key = (canonical_id, node["id"])
+			if key in seen_per_paper or entity_key in seen_entity_ids_per_paper:
+				continue
+			seen_per_paper.add(key)
+			seen_entity_ids_per_paper.add(entity_key)
+			graph.merge_method(node)
+			graph.merge_has_method(canonical_id, node["id"], _weight(method))
+			stats.method_nodes_written += 1
+			stats.method_edges_written += 1
+
+		for relation in _accepted_relations(extraction):
+			subject_id = str(relation.get("subject_id") or "")
+			object_id = str(relation.get("object_id") or "")
+			if not subject_id or not object_id or subject_id == object_id:
+				continue
+			if subject_id not in current_concept_ids or object_id not in current_concept_ids:
+				continue
+			if hasattr(graph, "merge_related_concept"):
+				graph.merge_related_concept(subject_id, object_id, str(relation.get("relation_type") or "RELATED_TO"))
+				stats.relation_edges_written += 1
+
+	return stats
+
+
+def to_concept_node(concept: dict[str, Any]) -> dict[str, Any] | None:
+	label = _clean_label(concept.get("label"))
+	if not label:
+		return None
+	openalex_id = concept.get("openAlex_id") or concept.get("openalx_id") or concept.get("openalex_id")
+	concept_id = str(concept.get("canonical_id") or f"concept:{_stable_id(str(openalex_id or label))}")
+	return {
+		"id": concept_id,
+		"label": _clean_label(concept.get("canonical_label") or label),
+		"aliases": _aliases(concept, label),
+		"domain": str(concept.get("domain") or ""),
+		"openAlex_id": str(openalex_id) if openalex_id else "",
+		"custom": not bool(openalex_id),
+	}
+
+
+def to_method_node(method: dict[str, Any]) -> dict[str, Any] | None:
+	label = _clean_label(method.get("label"))
+	if not label:
+		return None
+	return {
+		"id": str(method.get("canonical_id") or f"method:{_stable_id(label)}"),
+		"label": _clean_label(method.get("canonical_label") or label),
+		"domain": str(method.get("domain") or ""),
+		"description": str(method.get("description") or method.get("context") or ""),
+	}
+
+
+def _extraction_stub_paper(raw_paper_id: str, extraction: dict[str, Any]) -> dict[str, Any]:
+	coverage = extraction.get("temporal_coverage") or {}
+	year = coverage.get("paper_year") if isinstance(coverage, dict) else None
+	node = to_reference_stub_paper_node(raw_paper_id)
+	node["source"] = "extraction_stub"
+	try:
+		node["year"] = int(year) if year is not None else None
+	except (TypeError, ValueError):
+		node["year"] = None
+	return node
+
+
+def _clean_label(value: Any) -> str:
+	return re.sub(r"\s+", " ", normalize_scientific_text(value)).strip(" .,:;()[]{}")[:160]
+
+
+def _stable_id(value: str) -> str:
+	slug = slugify_label(value)
+	if slug:
+		return slug[:96]
+	return hashlib.sha1(normalize_scientific_text(value).encode("utf-8")).hexdigest()[:16]
+
+
+def _aliases(entity: dict[str, Any], label: str) -> list[str]:
+	aliases = [label]
+	for key in ("aliases", "alias", "openalx_label", "openAlex_label"):
+		value = entity.get(key)
+		if isinstance(value, list):
+			aliases.extend(str(item) for item in value if item)
+		elif value:
+			aliases.append(str(value))
+	seen: set[str] = set()
+	output: list[str] = []
+	for alias in aliases:
+		clean = _clean_label(alias)
+		key = clean.lower()
+		if clean and key not in seen:
+			seen.add(key)
+			output.append(clean)
+	return output
+
+
+def _weight(entity: dict[str, Any]) -> float:
+	try:
+		return float(entity.get("confidence"))
+	except (TypeError, ValueError):
+		return 1.0
+
+
+def _accepted_entities(
+	extraction: dict[str, Any],
+	field: str,
+	legacy_threshold: float,
+) -> list[dict[str, Any]]:
+	"""Return KG-safe extraction entities.
+
+	New rows store only accepted entities in concepts/methods. Legacy rows may
+	contain deterministic high-recall scan results, so filter those
+	conservatively at graph-ingest time.
+	"""
+	items = extraction.get(field) or []
+	if not isinstance(items, list):
+		return []
+	candidate_field = "concept_candidates" if field == "concepts" else "method_candidates"
+	has_candidate_split = candidate_field in extraction and extraction.get(candidate_field) is not None
+	if has_candidate_split:
+		return [
+			item
+			for item in items
+			if isinstance(item, dict)
+			and not item.get("auto_detected")
+			and item.get("candidate_source") != "deterministic_scan"
+			and _review_allows_graph_write(item)
+		]
+
+	output: list[dict[str, Any]] = []
+	for item in items:
+		if not isinstance(item, dict):
+			continue
+		if item.get("auto_detected") or item.get("candidate_source") == "deterministic_scan":
+			continue
+		try:
+			confidence = float(item.get("confidence"))
+		except (TypeError, ValueError):
+			confidence = 1.0
+		if confidence < legacy_threshold:
+			continue
+		output.append(item)
+	return output
+
+
+def _review_allows_graph_write(entity: dict[str, Any]) -> bool:
+	"""Production KG writes only explicitly approved entities."""
+	status = entity.get("review_status")
+	status_text = str(status).strip().lower()
+	return status_text == "approved"
+
+
+def _accepted_relations(extraction: dict[str, Any]) -> list[dict[str, Any]]:
+	relations = extraction.get("relations") or []
+	if not isinstance(relations, list):
+		return []
+	output: list[dict[str, Any]] = []
+	for relation in relations:
+		if not isinstance(relation, dict):
+			continue
+		if str(relation.get("review_status") or "").lower() != "approved":
+			continue
+		if not relation.get("evidence_span"):
+			continue
+		output.append(relation)
+	return output
+
+
 def ingest_from_metadata_db(
 	graph: GraphWriter,
 	metadata_db: Any,
 	limit: int = 1000,
 	offset: int = 0,
+	include_extractions: bool = False,
 ) -> IngestionStats:
 	records = metadata_db.list_papers(limit=limit, offset=offset)
-	return ingest_records(graph, records)
+	stats = ingest_records(graph, records)
+	if include_extractions:
+		semantic_stats = ingest_extractions_from_metadata_db(graph, metadata_db, limit=limit)
+		stats.concept_nodes_written += semantic_stats.concept_nodes_written
+		stats.method_nodes_written += semantic_stats.method_nodes_written
+		stats.concept_edges_written += semantic_stats.concept_edges_written
+		stats.method_edges_written += semantic_stats.method_edges_written
+		stats.relation_edges_written += semantic_stats.relation_edges_written
+	return stats

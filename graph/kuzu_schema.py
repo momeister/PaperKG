@@ -175,6 +175,57 @@ class KuzuGraph:
 			},
 		)
 
+	def merge_concept(self, concept: dict[str, Any]) -> None:
+		conn = self.connection
+		query = """
+		MERGE (c:Concept {id: $id})
+		SET
+		  c.label = $label,
+		  c.aliases = $aliases,
+		  c.domain = $domain,
+		  c.openAlex_id = $openAlex_id,
+		  c.custom = $custom
+		"""
+		conn.execute(query, concept)
+
+	def merge_method(self, method: dict[str, Any]) -> None:
+		conn = self.connection
+		query = """
+		MERGE (m:Method {id: $id})
+		SET
+		  m.label = $label,
+		  m.domain = $domain,
+		  m.description = $description
+		"""
+		conn.execute(query, method)
+
+	def merge_has_concept(self, paper_id: str, concept_id: str, weight: float) -> None:
+		conn = self.connection
+		query = """
+		MATCH (p:Paper {id: $paper_id}), (c:Concept {id: $concept_id})
+		MERGE (p)-[r:HAS_CONCEPT]->(c)
+		SET r.weight = $weight
+		"""
+		conn.execute(query, {"paper_id": paper_id, "concept_id": concept_id, "weight": float(weight)})
+
+	def merge_has_method(self, paper_id: str, method_id: str, weight: float) -> None:
+		conn = self.connection
+		query = """
+		MATCH (p:Paper {id: $paper_id}), (m:Method {id: $method_id})
+		MERGE (p)-[r:HAS_METHOD]->(m)
+		SET r.weight = $weight
+		"""
+		conn.execute(query, {"paper_id": paper_id, "method_id": method_id, "weight": float(weight)})
+
+	def merge_related_concept(self, subject_id: str, object_id: str, relation_type: str) -> None:
+		conn = self.connection
+		query = """
+		MATCH (a:Concept {id: $subject_id}), (b:Concept {id: $object_id})
+		MERGE (a)-[r:RELATED_CONCEPT]->(b)
+		SET r.relation = $relation_type
+		"""
+		conn.execute(query, {"subject_id": subject_id, "object_id": object_id, "relation_type": relation_type})
+
 
 def initialize_kuzu_schema(db_path: str = "data/graphs/global_kg") -> KuzuGraph:
 	graph = KuzuGraph(KuzuConfig(db_path=db_path))

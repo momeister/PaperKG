@@ -1,4 +1,13 @@
 {
+  "Q-learning": {
+    "aliases": [
+      "q-learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
   "Reinforcement Learning": {
     "aliases": [
       "reinforcement learning"
@@ -17,9 +26,27 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Computational Emotion Models": {
+  "Value function": {
     "aliases": [
-      "computational emotion models"
+      "value function"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Reward function": {
+    "aliases": [
+      "reward function"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dynamic Programming": {
+    "aliases": [
+      "dynamic programming"
     ],
     "openalx_id": null,
     "domain": null,
@@ -35,16 +62,16 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Appraisal Theory": {
+  "Extrinsic motivation": {
     "aliases": [
-      "appraisal theory"
+      "extrinsic motivation"
     ],
     "openalx_id": null,
     "domain": null,
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Intrinsic Motivation": {
+  "Intrinsic motivation": {
     "aliases": [
       "intrinsic motivation"
     ],
@@ -53,25 +80,187 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Model-based Reinforcement Learning": {
+  "Motivated reinforcement learning": {
     "aliases": [
-      "model-based reinforcement learning"
+      "motivated reinforcement learning"
     ],
     "openalx_id": null,
     "domain": null,
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Affective Modelling": {
+  "Appraisal theory": {
     "aliases": [
-      "affective modelling"
+      "appraisal theory"
     ],
     "openalx_id": null,
     "domain": null,
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Human-Robot Interaction": {
+  "Average reward": {
+    "aliases": [
+      "average reward"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Categorical emotions": {
+    "aliases": [
+      "categorical emotions"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dimensional emotions": {
+    "aliases": [
+      "dimensional emotions"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Well-being": {
+    "aliases": [
+      "well-being"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Model uncertainty": {
+    "aliases": [
+      "model uncertainty"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Novelty": {
+    "aliases": [
+      "novelty"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Recency": {
+    "aliases": [
+      "recency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Motivational relevance": {
+    "aliases": [
+      "motivational relevance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Intrinsic pleasantness": {
+    "aliases": [
+      "intrinsic pleasantness"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social fairness": {
+    "aliases": [
+      "social fairness"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social accountability": {
+    "aliases": [
+      "social accountability"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Valence": {
+    "aliases": [
+      "valence"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Arousal": {
+    "aliases": [
+      "arousal"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dopamine": {
+    "aliases": [
+      "dopamine"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Fuzzy logic": {
+    "aliases": [
+      "fuzzy logic"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Transition model": {
+    "aliases": [
+      "transition model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Bio-inspiration": {
+    "aliases": [
+      "bio-inspiration"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotional feedback": {
+    "aliases": [
+      "emotional feedback"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Human-robot interaction": {
     "aliases": [
       "human-robot interaction"
     ],
@@ -80,10 +269,1493 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Grid-world Task": {
+  "Emotion modelling": {
     "aliases": [
-      "grid-world task"
+      "emotion modelling"
     ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotional agents": {
+    "aliases": [
+      "emotional agents"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Intrinsic reward": {
+    "aliases": [
+      "intrinsic reward"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Cognitive appraisal": {
+    "aliases": [
+      "cognitive appraisal"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Appraisal dimensions": {
+    "aliases": [
+      "appraisal dimensions"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Human feedback": {
+    "aliases": [
+      "human feedback"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "KL-divergence": {
+    "aliases": [
+      "kl-divergence"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "L1 norm": {
+    "aliases": [
+      "l1 norm"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Euclidean distance": {
+    "aliases": [
+      "euclidean distance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Set point": {
+    "aliases": [
+      "set point"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Drive": {
+    "aliases": [
+      "drive"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Primary reinforcers": {
+    "aliases": [
+      "primary reinforcers"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "OCC Model": {
+    "aliases": [
+      "occ model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Somatic Marker Hypothesis": {
+    "aliases": [
+      "somatic marker hypothesis"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Machine Learning": {
+    "aliases": [
+      "machine learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "HRI": {
+    "aliases": [
+      "hri"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning Agents": {
+    "aliases": [
+      "learning agents"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Reinforcement Learning Agents": {
+    "aliases": [
+      "reinforcement learning agents"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotion Elicitation": {
+    "aliases": [
+      "emotion elicitation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning Agents And Robots": {
+    "aliases": [
+      "learning agents and robots"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Real Robot": {
+    "aliases": [
+      "real robot"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Task Learning": {
+    "aliases": [
+      "task learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "World Agent": {
+    "aliases": [
+      "world agent"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Grid- World Agent": {
+    "aliases": [
+      "grid- world agent"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Categorical emotion theory": {
+    "aliases": [
+      "categorical emotion theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dimensional emotion theory": {
+    "aliases": [
+      "dimensional emotion theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Cognitive appraisal theory": {
+    "aliases": [
+      "cognitive appraisal theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Component process theory of emotions": {
+    "aliases": [
+      "component process theory of emotions"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Belief-desire theory of emotions": {
+    "aliases": [
+      "belief-desire theory of emotions"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Core affect model": {
+    "aliases": [
+      "core affect model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "PAD model": {
+    "aliases": [
+      "pad model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Affective modelling": {
+    "aliases": [
+      "affective modelling"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Amygdala": {
+    "aliases": [
+      "amygdala"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Orbitofrontal cortex": {
+    "aliases": [
+      "orbitofrontal cortex"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Cathexis model": {
+    "aliases": [
+      "cathexis model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Kismet": {
+    "aliases": [
+      "kismet"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "EMIB": {
+    "aliases": [
+      "emib"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "EMA": {
+    "aliases": [
+      "ema"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "LIDA": {
+    "aliases": [
+      "lida"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Goal relevance": {
+    "aliases": [
+      "goal relevance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Goal congruence": {
+    "aliases": [
+      "goal congruence"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Coping potential": {
+    "aliases": [
+      "coping potential"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Action tendency": {
+    "aliases": [
+      "action tendency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Evolutionary theory of emotion": {
+    "aliases": [
+      "evolutionary theory of emotion"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Homeostatic systems": {
+    "aliases": [
+      "homeostatic systems"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Hedonic value": {
+    "aliases": [
+      "hedonic value"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Control": {
+    "aliases": [
+      "control"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Power": {
+    "aliases": [
+      "power"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Suddenness": {
+    "aliases": [
+      "suddenness"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Predictability": {
+    "aliases": [
+      "predictability"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Familiarity": {
+    "aliases": [
+      "familiarity"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Temporal difference error": {
+    "aliases": [
+      "temporal difference error"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Hard-wired emotion elicitation": {
+    "aliases": [
+      "hard-wired emotion elicitation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Componential emotion theory": {
+    "aliases": [
+      "componential emotion theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Markovian transition model": {
+    "aliases": [
+      "markovian transition model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Facial expression recognition": {
+    "aliases": [
+      "facial expression recognition"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Forward planning procedure": {
+    "aliases": [
+      "forward planning procedure"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Transition model ensemble": {
+    "aliases": [
+      "transition model ensemble"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "L1-distance": {
+    "aliases": [
+      "l1-distance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Hope and fear signals": {
+    "aliases": [
+      "hope and fear signals"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Frustration": {
+    "aliases": [
+      "frustration"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Epiphenomenon": {
+    "aliases": [
+      "epiphenomenon"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Exploration/exploitation trade-off": {
+    "aliases": [
+      "exploration/exploitation trade-off"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Boltzmann action selection mechanism": {
+    "aliases": [
+      "boltzmann action selection mechanism"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Happiness": {
+    "aliases": [
+      "happiness"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Inverse recency": {
+    "aliases": [
+      "inverse recency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Appraisal": {
+    "aliases": [
+      "appraisal"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning efficiency": {
+    "aliases": [
+      "learning efficiency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotion dynamics": {
+    "aliases": [
+      "emotion dynamics"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social simulation": {
+    "aliases": [
+      "social simulation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Navigation tasks": {
+    "aliases": [
+      "navigation tasks"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Gridworld": {
+    "aliases": [
+      "gridworld"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Simulated robot": {
+    "aliases": [
+      "simulated robot"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Blocking": {
+    "aliases": [
+      "blocking"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Habituation": {
+    "aliases": [
+      "habituation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Extinction": {
+    "aliases": [
+      "extinction"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Approach and avoidance behaviour": {
+    "aliases": [
+      "approach and avoidance behaviour"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Transparency": {
+    "aliases": [
+      "transparency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Gaze direction": {
+    "aliases": [
+      "gaze direction"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Surprise": {
+    "aliases": [
+      "surprise"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Joy": {
+    "aliases": [
+      "joy"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Anticipated change": {
+    "aliases": [
+      "anticipated change"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Model-based reinforcement learning": {
+    "aliases": [
+      "model-based reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Deep reinforcement learning": {
+    "aliases": [
+      "deep reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning from demonstration": {
+    "aliases": [
+      "learning from demonstration"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Temporal difference": {
+    "aliases": [
+      "temporal difference"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Q-value": {
+    "aliases": [
+      "q-value"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Metalearning": {
+    "aliases": [
+      "metalearning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Action selection": {
+    "aliases": [
+      "action selection"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "State modification": {
+    "aliases": [
+      "state modification"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Discount factor": {
+    "aliases": [
+      "discount factor"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Transition function": {
+    "aliases": [
+      "transition function"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Psychological theory": {
+    "aliases": [
+      "psychological theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Questionnaire": {
+    "aliases": [
+      "questionnaire"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Free-energy principle": {
+    "aliases": [
+      "free-energy principle"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Conditional reward neurons": {
+    "aliases": [
+      "conditional reward neurons"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Error neurons": {
+    "aliases": [
+      "error neurons"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dominance": {
+    "aliases": [
+      "dominance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Temporal difference learning": {
+    "aliases": [
+      "temporal difference learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Value functions": {
+    "aliases": [
+      "value functions"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social communication": {
+    "aliases": [
+      "social communication"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Empathy": {
+    "aliases": [
+      "empathy"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "User investment": {
+    "aliases": [
+      "user investment"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Embodiment": {
+    "aliases": [
+      "embodiment"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Gridworld navigation": {
+    "aliases": [
+      "gridworld navigation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Prey and predators": {
+    "aliases": [
+      "prey and predators"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social simulation scenario": {
+    "aliases": [
+      "social simulation scenario"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Average rewards": {
+    "aliases": [
+      "average rewards"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Collision avoidance": {
+    "aliases": [
+      "collision avoidance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Behavior switching": {
+    "aliases": [
+      "behavior switching"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning from human demonstration": {
+    "aliases": [
+      "learning from human demonstration"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Meta-learning": {
+    "aliases": [
+      "meta-learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Uncertainty": {
+    "aliases": [
+      "uncertainty"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Cognitive theory": {
+    "aliases": [
+      "cognitive theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotion type": {
+    "aliases": [
+      "emotion type"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotion function": {
+    "aliases": [
+      "emotion function"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning from human feedback": {
+    "aliases": [
+      "learning from human feedback"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social interaction": {
+    "aliases": [
+      "social interaction"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Bayesian Affect Control Theory": {
+    "aliases": [
+      "bayesian affect control theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "LIDA architecture": {
+    "aliases": [
+      "lida architecture"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Soar cognitive architecture": {
+    "aliases": [
+      "soar cognitive architecture"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Tree search": {
+    "aliases": [
+      "tree search"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Neuromodulation": {
+    "aliases": [
+      "neuromodulation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Theory of mind": {
+    "aliases": [
+      "theory of mind"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Amygdala models": {
+    "aliases": [
+      "amygdala models"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Orbitofrontal cortex models": {
+    "aliases": [
+      "orbitofrontal cortex models"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "FLAME model": {
+    "aliases": [
+      "flame model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "EMA process model": {
+    "aliases": [
+      "ema process model"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Reward shaping": {
+    "aliases": [
+      "reward shaping"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Policy invariance": {
+    "aliases": [
+      "policy invariance"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social signal processing": {
+    "aliases": [
+      "social signal processing"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotional multiagent reinforcement learning": {
+    "aliases": [
+      "emotional multiagent reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Hierarchical reinforcement learning": {
+    "aliases": [
+      "hierarchical reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Sensation-emotion connections": {
+    "aliases": [
+      "sensation-emotion connections"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Ensemble of transition models": {
+    "aliases": [
+      "ensemble of transition models"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Mazes": {
+    "aliases": [
+      "mazes"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Valence-arousal space": {
+    "aliases": [
+      "valence-arousal space"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "State": {
+    "aliases": [
+      "state"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Transition function approximation": {
+    "aliases": [
+      "transition function approximation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Boltzmann temperature": {
+    "aliases": [
+      "boltzmann temperature"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Meta-parameter tuning": {
+    "aliases": [
+      "meta-parameter tuning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Exploration": {
+    "aliases": [
+      "exploration"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Accountability": {
+    "aliases": [
+      "accountability"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Progress": {
+    "aliases": [
+      "progress"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Desirability": {
+    "aliases": [
+      "desirability"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Attachment": {
+    "aliases": [
+      "attachment"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Unexpectedness": {
+    "aliases": [
+      "unexpectedness"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Motive consistency": {
+    "aliases": [
+      "motive consistency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Agency": {
+    "aliases": [
+      "agency"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Non-progress": {
+    "aliases": [
+      "non-progress"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Goal reachability": {
+    "aliases": [
+      "goal reachability"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Continuation of eliciting event": {
+    "aliases": [
+      "continuation of eliciting event"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Worst historical Q-value": {
+    "aliases": [
+      "worst historical q-value"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Anticipated temporal difference": {
+    "aliases": [
+      "anticipated temporal difference"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Drive Reduction Theory": {
+    "aliases": [
+      "drive reduction theory"
+    ],
+    "openalx_id": null,
+    "domain": "Psychology",
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Aï¬€ective modelling": {
+    "aliases": [
+      "aï¬€ective modelling"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Boltzmann action selection": {
+    "aliases": [
+      "boltzmann action selection"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "POMDP": {
+    "aliases": [
+      "pomdp"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Bayesian Aï¬€ect Control Theory": {
+    "aliases": [
+      "bayesian aï¬€ect control theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Auto-encoder": {
+    "aliases": [
+      "auto-encoder"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Learning rate": {
+    "aliases": [
+      "learning rate"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Expectation": {
+    "aliases": [
+      "expectation"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Interactive reinforcement learning": {
+    "aliases": [
+      "interactive reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Reward modification": {
+    "aliases": [
+      "reward modification"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Extrinsic reward": {
+    "aliases": [
+      "extrinsic reward"
+    ],
+    "openalx_id": null,
+    "domain": "Reinforcement Learning",
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "habituation and extinction": {
+    "aliases": [],
     "openalx_id": null,
     "domain": null,
     "confidence": 1.0,

@@ -1,0 +1,87 @@
+{
+  "paper_id": "emotion_rl_survey",
+  "expected": {
+    "concepts": [
+      {"label": "Reinforcement Learning", "entity_type": "MethodFamily"},
+      {"label": "Markov Decision Process", "entity_type": "Theory"},
+      {"label": "Appraisal theory", "entity_type": "Theory"},
+      {"label": "Homeostasis", "entity_type": "DomainConcept"},
+      {"label": "Intrinsic motivation", "entity_type": "DomainConcept"},
+      {"label": "Valence", "entity_type": "DomainConcept"},
+      {"label": "Arousal", "entity_type": "DomainConcept"}
+    ],
+    "concept_candidates": [
+      {"label": "Q-learning", "entity_type": "Algorithm"},
+      {"label": "SARSA", "entity_type": "Algorithm"},
+      {"label": "TD(lambda)", "entity_type": "Algorithm"},
+      {"label": "Dynamic Programming", "entity_type": "Algorithm"}
+    ],
+    "methods": [
+      {"label": "Emotion in RL Survey Taxonomy", "entity_type": "MethodFamily"},
+      {"label": "Appraisal-based emotion elicitation", "entity_type": "MethodFamily"},
+      {"label": "Homeostatic emotion system", "entity_type": "MethodFamily"}
+    ]
+  },
+  "prediction": {
+    "paper_id": "emotion_rl_survey",
+    "concepts": [
+      {
+        "label": "Reinforcement Learning",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:reinforcement-learning",
+        "review_status": "approved"
+      },
+      {
+        "label": "Markov Decision Process",
+        "entity_type": "Theory",
+        "canonical_id": "concept:markov-decision-process",
+        "review_status": "approved"
+      },
+      {
+        "label": "Appraisal theory",
+        "entity_type": "Theory",
+        "canonical_id": "concept:appraisal-theory",
+        "review_status": "approved"
+      },
+      {
+        "label": "Homeostasis",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:homeostasis",
+        "review_status": "approved"
+      },
+      {
+        "label": "Intrinsic motivation",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:intrinsic-motivation",
+        "review_status": "approved"
+      },
+      {
+        "label": "Valence",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:valence",
+        "review_status": "approved"
+      },
+      {
+        "label": "Arousal",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:arousal",
+        "review_status": "approved"
+      }
+    ],
+    "concept_candidates": [
+      {"label": "Q-learning", "entity_type": "Algorithm", "review_status": "pending"},
+      {"label": "SARSA", "entity_type": "Algorithm", "review_status": "pending"},
+      {"label": "TD(lambda)", "entity_type": "Algorithm", "review_status": "pending"},
+      {"label": "Dynamic Programming", "entity_type": "Algorithm", "review_status": "pending"}
+    ],
+    "methods": [
+      {"label": "Emotion in RL Survey Taxonomy", "entity_type": "MethodFamily"},
+      {"label": "Appraisal-based emotion elicitation", "entity_type": "MethodFamily"},
+      {"label": "Homeostatic emotion system", "entity_type": "MethodFamily"}
+    ],
+    "claims": [
+      {"statement": "The survey categorizes computational emotion models in RL agents.", "attributed_to": "this_paper"}
+    ],
+    "quality_warnings": []
+  }
+}

@@ -65,10 +65,37 @@ def create_celery_app(config: dict[str, Any] | None = None):
     broker_url = cfg.get("broker_url", "redis://localhost:6379/0")
     result_backend = cfg.get("result_backend", "redis://localhost:6379/1")
     app = Celery("sciencekg", broker=broker_url, backend=result_backend)
+    app.conf.update(
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        worker_prefetch_multiplier=1,
+        result_expires=cfg.get("result_expires", 86400),
+    )
 
     @app.task(name="sciencekg.rebuild_phase2_graph")
     def rebuild_phase2_graph_task(**kwargs):
         return rebuild_phase2_graph(**kwargs).__dict__
+
+    @app.task(name="sciencekg.process_extraction_batch", bind=True)
+    def process_extraction_batch_task(self, **kwargs):
+        from extraction.batch_processor import BatchProcessor
+        from extraction.embedding_engine import EmbeddingEngine
+        from parsing.parser_router import ParserRouter
+        from query.llm_router import LLMRouter
+        from storage.metadata_db import MetadataDB
+
+        metadata_db_path = kwargs.pop("metadata_db_path", "data/metadata.duckdb")
+        config_path = kwargs.pop("config_path", "config.yaml")
+        processor = BatchProcessor(
+            LLMRouter.from_config_file(config_path),
+            ParserRouter(),
+            EmbeddingEngine(),
+            metadata_db_factory=lambda: MetadataDB(metadata_db_path),
+            max_retries=int(cfg.get("max_retries", 2)),
+            retry_delay_seconds=float(cfg.get("retry_delay_seconds", 10)),
+        )
+        status = processor.process_papers(**kwargs)
+        return status.__dict__
 
     return app
 

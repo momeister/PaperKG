@@ -70,7 +70,7 @@ rate_limits:
 
 llm:
   # Default provider for all LLM operations
-  default_provider: "ollama"
+  default_provider: "lm_studio"
 
   # Supported providers: ollama, lm_studio, openai, openai_compatible
   providers:
@@ -79,7 +79,7 @@ llm:
       provider_type: "ollama"
       base_url: "http://localhost:11434"
       api_key: null  # Ollama doesn't require API key
-      timeout_seconds: 300
+      timeout_seconds: 1800
       models:
         - "qwen3.6:35b"
         - "llama3.1:8b"
@@ -89,29 +89,35 @@ llm:
       model: "qwen3.6:35b"
       temperature: 0.2          # Lower = more deterministic
       top_p: 0.95               # Nucleus sampling
-      max_tokens: 8192          # Max output tokens for structured extraction
+      max_tokens: 16384         # Max output tokens for structured extraction
       context_size: 32768       # Max input context
       repeat_penalty: 1.05      # Penalize repeated tokens
       seed: null                # null = random, or specify for reproducibility
+      extra_options:
+        keep_alive: "0s"        # unload local model after each request
 
     # LM Studio - Alternative local inference
     lm_studio:
       provider_type: "openai_compatible"
       base_url: "http://localhost:1234/v1"
       api_key: null  # LM Studio doesn't require API key
-      timeout_seconds: 300
+      timeout_seconds: 1800
       models:
         - "qwen3.6-35b"
         - "llama-3.1-8b-instruct"
         - "mistral-small-3.1"
       
       model: "qwen3.6-35b"      # Model name in LM Studio
-      temperature: 0.2
-      top_p: 0.95
+      temperature: 0.05
+      top_p: 0.8
       max_tokens: 8192
       context_size: 32768
       repeat_penalty: 1.05
       seed: null
+      extra_options:
+        force_response_format: true
+        chat_template_kwargs:
+          enable_thinking: false
 
     # OpenAI API - Cloud-based GPT models
     openai:
@@ -127,7 +133,7 @@ llm:
       model: "gpt-4o"
       temperature: 0.3
       top_p: 0.95
-      max_tokens: 8192
+      max_tokens: 16384
       context_size: 128000
       repeat_penalty: null  # OpenAI doesn't support repeat_penalty
 
@@ -158,8 +164,10 @@ llm:
 
   # Conflict Detection
   conflict_detection:
-    enabled: true
+    enabled: false
     confidence_threshold: 0.7  # Only report conflicts with >= 0.7 confidence
+    max_pairs: 20
+    max_tokens: 800
 
   # Batch Processing
   batch_processing:
@@ -170,3 +178,18 @@ llm:
     # Retry failed extractions
     max_retries: 2
     retry_delay_seconds: 10
+    # Durable job handling
+    resume_by_default: true
+    job_state_backend: "duckdb"
+    broker_url: "redis://localhost:6379/0"
+    result_backend: "redis://localhost:6379/1"
+    task_queue: "sciencekg.extraction"
+
+embedding:
+  backend: "hash-fallback"
+  model: "BAAI/bge-m3"
+  version: 1
+  store: "duckdb"
+  table: "entity_embeddings"
+  top_k: 10
+  similarity_threshold: 0.7

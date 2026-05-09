@@ -1,0 +1,309 @@
+version: 1
+policy:
+  auto_accept_min_confidence: 0.85
+  candidate_similarity_threshold: 0.78
+  auto_merge_similarity_threshold: 0.92
+  require_real_embeddings_for_auto_merge: true
+
+entity_types:
+  - Algorithm
+  - Theory
+  - MethodFamily
+  - Metric
+  - Dataset
+  - Benchmark
+  - DomainConcept
+  - ApplicationSetting
+  - ModelArchitecture
+  - System
+  - Phenomenon
+  - Task
+
+relation_types:
+  - IS_A
+  - USES
+  - EXTENDS
+  - EVALUATED_ON
+  - MEASURES
+  - PROPOSED_BY
+  - ALIAS_OF
+  - RELATED_TO
+  - CONTRADICTS
+
+seed_concepts:
+  - label: Reinforcement Learning
+    entity_type: MethodFamily
+    aliases: [RL]
+    domain: Machine Learning
+  - label: Q-learning
+    entity_type: Algorithm
+    aliases: [Q learning]
+    domain: Reinforcement Learning
+  - label: SARSA
+    entity_type: Algorithm
+    aliases: [State-Action-Reward-State-Action]
+    domain: Reinforcement Learning
+  - label: TD(lambda)
+    entity_type: Algorithm
+    aliases: [TD(λ), TD(lambda), TD learning with eligibility traces]
+    domain: Reinforcement Learning
+  - label: TD learning
+    entity_type: MethodFamily
+    aliases: [Temporal difference learning, Temporal-difference learning]
+    domain: Reinforcement Learning
+  - label: Temporal difference error
+    entity_type: Metric
+    aliases: [TD error]
+    domain: Reinforcement Learning
+  - label: Markov Decision Process
+    entity_type: DomainConcept
+    aliases: [MDP]
+    domain: Reinforcement Learning
+  - label: Dynamic Programming
+    entity_type: Algorithm
+    aliases: [DP]
+    domain: Reinforcement Learning
+  - label: Policy gradient
+    entity_type: Algorithm
+    aliases: [Policy gradients]
+    domain: Reinforcement Learning
+  - label: Actor-Critic
+    entity_type: Algorithm
+    aliases: [Actor Critic, Actor-Critic architecture]
+    domain: Reinforcement Learning
+  - label: Value function
+    entity_type: DomainConcept
+    aliases: [Value functions]
+    domain: Reinforcement Learning
+  - label: Transition model
+    entity_type: DomainConcept
+    aliases: [Transition function, Transition function approximation]
+    domain: Reinforcement Learning
+  - label: Reward function
+    entity_type: DomainConcept
+    aliases: [Reward functions]
+    domain: Reinforcement Learning
+  - label: State-action value
+    entity_type: Metric
+    aliases: [Q-value, Q value]
+    domain: Reinforcement Learning
+  - label: Appraisal theory
+    entity_type: Theory
+    aliases: [Cognitive appraisal theory, Componential emotion theory]
+    domain: Affective Computing
+  - label: Appraisal dimensions
+    entity_type: DomainConcept
+    aliases: [Appraisal variables]
+    domain: Affective Computing
+  - label: OCC model
+    entity_type: Theory
+    aliases: [Ortony Clore Collins model]
+    domain: Computational Psychology
+  - label: Component process theory of emotions
+    entity_type: Theory
+    aliases: [CPT]
+    domain: Computational Psychology
+  - label: Belief-desire theory of emotions
+    entity_type: Theory
+    aliases: []
+    domain: Computational Psychology
+  - label: PAD model
+    entity_type: Theory
+    aliases: [Pleasure-Arousal-Dominance model]
+    domain: Affective Computing
+  - label: Categorical emotion theory
+    entity_type: Theory
+    aliases: [Categorical emotions]
+    domain: Psychology
+  - label: Dimensional emotion theory
+    entity_type: Theory
+    aliases: [Dimensional emotions, Valence-arousal space]
+    domain: Psychology
+  - label: Homeostasis
+    entity_type: DomainConcept
+    aliases: [Homeostatic regulation]
+    domain: Computational Neuroscience
+  - label: Drive Reduction Theory
+    entity_type: Theory
+    aliases: [Drive reduction]
+    domain: Psychology
+  - label: Intrinsic motivation
+    entity_type: DomainConcept
+    aliases: [Intrinsic rewards, Intrinsic reward]
+    domain: Reinforcement Learning
+  - label: Extrinsic motivation
+    entity_type: DomainConcept
+    aliases: [Extrinsic rewards, Extrinsic reward]
+    domain: Reinforcement Learning
+  - label: Motivated reinforcement learning
+    entity_type: MethodFamily
+    aliases: [Motivated RL]
+    domain: Reinforcement Learning
+  - label: Reward shaping
+    entity_type: MethodFamily
+    aliases: [Reward modulation, Reward modification]
+    domain: Reinforcement Learning
+  - label: Homeostatic reward modification
+    entity_type: MethodFamily
+    aliases: [Homeostasis-based reward modification]
+    domain: Reinforcement Learning
+  - label: Appraisal-based reward modification
+    entity_type: MethodFamily
+    aliases: [Appraisal-based reward modulation]
+    domain: Reinforcement Learning
+  - label: Model-based RL
+    entity_type: MethodFamily
+    aliases: [Model-based reinforcement learning, Model based RL, Model-based Reinforcement Learning]
+    domain: Reinforcement Learning
+  - label: Policy search
+    entity_type: MethodFamily
+    aliases: []
+    domain: Reinforcement Learning
+  - label: Boltzmann action selection
+    entity_type: Algorithm
+    aliases: [Boltzmann exploration]
+    domain: Reinforcement Learning
+  - label: Genetic programming
+    entity_type: Algorithm
+    aliases: []
+    domain: Machine Learning
+  - label: KL-divergence
+    entity_type: Metric
+    aliases: [Kullback-Leibler divergence, KL divergence]
+    domain: Information Theory
+  - label: L1 norm
+    entity_type: Metric
+    aliases: [L1 distance, Manhattan distance]
+    domain: Mathematics
+  - label: Euclidean distance
+    entity_type: Metric
+    aliases: [L2 distance]
+    domain: Mathematics
+  - label: Model uncertainty
+    entity_type: Metric
+    aliases: [Uncertainty]
+    domain: Machine Learning
+  - label: Learning rate
+    entity_type: Metric
+    aliases: []
+    domain: Reinforcement Learning
+  - label: Discount factor
+    entity_type: Metric
+    aliases: [Gamma discount]
+    domain: Reinforcement Learning
+  - label: Learning efficiency
+    entity_type: Metric
+    aliases: []
+    domain: Machine Learning
+  - label: Novelty
+    entity_type: DomainConcept
+    aliases: []
+    domain: Affective Computing
+  - label: Recency
+    entity_type: Metric
+    aliases: [Inverse recency]
+    domain: Reinforcement Learning
+  - label: Valence
+    entity_type: DomainConcept
+    aliases: []
+    domain: Psychology
+  - label: Arousal
+    entity_type: DomainConcept
+    aliases: []
+    domain: Psychology
+  - label: Dopamine
+    entity_type: Phenomenon
+    aliases: []
+    domain: Neuroscience
+  - label: Surprise
+    entity_type: Phenomenon
+    aliases: [Curiosity]
+    domain: Affective Computing
+  - label: Frustration
+    entity_type: Phenomenon
+    aliases: []
+    domain: Affective Computing
+  - label: Emotion elicitation
+    entity_type: DomainConcept
+    aliases: []
+    domain: Affective Computing
+  - label: Emotion dynamics
+    entity_type: Phenomenon
+    aliases: []
+    domain: Affective Computing
+  - label: State modification
+    entity_type: MethodFamily
+    aliases: []
+    domain: Reinforcement Learning
+  - label: Meta-learning
+    entity_type: MethodFamily
+    aliases: [Metalearning]
+    domain: Machine Learning
+  - label: POMDP
+    entity_type: ModelArchitecture
+    aliases: [Partially Observable Markov Decision Process]
+    domain: Reinforcement Learning
+  - label: Bayesian Affect Control Theory
+    entity_type: ModelArchitecture
+    aliases: [Bayesian Affective Control Theory]
+    domain: Affective Computing
+  - label: Human-robot interaction
+    entity_type: ApplicationSetting
+    aliases: [HRI]
+    domain: Robotics
+  - label: Affective Computing
+    entity_type: MethodFamily
+    aliases: [Affective modelling, Affective modeling]
+    domain: Computer Science
+  - label: Deep reinforcement learning
+    entity_type: MethodFamily
+    aliases: [Deep RL]
+    domain: Machine Learning
+  - label: Deep neural networks
+    entity_type: ModelArchitecture
+    aliases: [Deep neural network, DNN]
+    domain: Machine Learning
+  - label: Auto-encoders
+    entity_type: ModelArchitecture
+    aliases: [Auto-encoder, Autoencoders, Autoencoder]
+    domain: Machine Learning
+  - label: Gridworld
+    entity_type: ApplicationSetting
+    aliases: [Grid-world]
+    domain: Reinforcement Learning
+  - label: Concept Drift
+    entity_type: Phenomenon
+    aliases: [Data drift]
+    domain: Machine Learning
+  - label: Official Statistics
+    entity_type: ApplicationSetting
+    aliases: []
+    domain: Statistics
+  - label: Data Availability
+    entity_type: DomainConcept
+    aliases: [Availability]
+    domain: Data Quality
+  - label: Data Validity
+    entity_type: DomainConcept
+    aliases: [Validity]
+    domain: Data Quality
+  - label: Data Accuracy
+    entity_type: Metric
+    aliases: [Accuracy]
+    domain: Data Quality
+  - label: Data Completeness
+    entity_type: Metric
+    aliases: [Completeness]
+    domain: Data Quality
+  - label: Bias
+    entity_type: Phenomenon
+    aliases: [Data bias]
+    domain: Machine Learning
+  - label: Privacy
+    entity_type: DomainConcept
+    aliases: []
+    domain: Data Governance
+  - label: Regulation
+    entity_type: DomainConcept
+    aliases: [Regulatory constraints]
+    domain: Data Governance

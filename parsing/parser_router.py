@@ -236,6 +236,22 @@ class ParserRouter:
         if preview_result is not None and selected == ParserType.MARKER:
             result = preview_result
         else:
-            result = parser.parse(file_path, paper_id)
+            try:
+                result = parser.parse(file_path, paper_id)
+            except Exception as exc:
+                marker = self.available_parsers.get(ParserType.MARKER)
+                if selected == ParserType.MARKER or marker is None:
+                    raise
+                try:
+                    result = preview_result or marker.parse(file_path, paper_id)
+                except Exception:
+                    raise exc
+                metadata = getattr(result, "metadata", None)
+                if metadata is None:
+                    metadata = getattr(result, "meta", None)
+                if isinstance(metadata, dict):
+                    metadata["parser_fallback_from"] = selected.value
+                    metadata["parser_fallback_error"] = str(exc)
+                selected = ParserType.MARKER
         result.parser = selected
         return result

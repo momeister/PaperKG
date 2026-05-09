@@ -48,6 +48,7 @@ class LLMRouter:
 		self.providers = providers
 		self.default_provider = default_provider
 		self._client = client
+		self.last_response_metadata: dict[str, Any] = {}
 
 	@classmethod
 	def from_config_file(cls, config_path: str | Path = "config.yaml") -> "LLMRouter":
@@ -179,7 +180,7 @@ class LLMRouter:
 			model=model or base.model,
 			temperature=base.temperature,
 			top_p=base.top_p,
-			max_tokens=max(base.max_tokens, 8192),
+			max_tokens=max(base.max_tokens, 16384),
 			context_size=base.context_size,
 			repeat_penalty=base.repeat_penalty,
 			seed=base.seed,
@@ -201,7 +202,7 @@ class LLMRouter:
 			model_settings = self.discover_ollama_model_settings(cfg, settings.model)
 			if model_settings:
 				settings = self._merged_settings(settings, model_settings)
-				settings.max_tokens = max(settings.max_tokens, 8192)
+				settings.max_tokens = max(settings.max_tokens, 16384)
 
 		return settings
 
@@ -299,19 +300,30 @@ class LLMRouter:
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:
+		extra_options = dict(settings.extra)
+		keep_alive = extra_options.pop("keep_alive", "0s")
+		response_format = extra_options.pop("format", None)
+		json_mode = bool(extra_options.pop("json_mode", False))
+		extra_options.pop("response_format", None)
+		extra_options.pop("chat_template_kwargs", None)
 		payload: dict[str, Any] = {
 			"model": settings.model,
 			"messages": messages,
 			"stream": False,
+			"keep_alive": keep_alive,
 			"options": {
 				"temperature": settings.temperature,
 				"top_p": settings.top_p,
 				"num_ctx": settings.context_size,
 				"num_predict": settings.max_tokens,
 				"repeat_penalty": settings.repeat_penalty,
-				**settings.extra,
+				**extra_options,
 			},
 		}
+		if response_format is not None:
+			payload["format"] = response_format
+		elif json_mode:
+			payload["format"] = "json"
 		payload["options"] = self._drop_none_values(payload["options"])
 		if settings.seed is not None:
 			payload["options"]["seed"] = settings.seed
@@ -320,6 +332,14 @@ class LLMRouter:
 		response = client.post(f"{cfg.base_url.rstrip('/')}/api/chat", json=payload)
 		response.raise_for_status()
 		data = response.json()
+		self.last_response_metadata = {
+			"provider_type": "ollama",
+			"eval_count": data.get("eval_count"),
+			"prompt_eval_count": data.get("prompt_eval_count"),
+			"total_duration": data.get("total_duration"),
+			"load_duration": data.get("load_duration"),
+			"done_reason": data.get("done_reason"),
+		}
 		message = data.get("message") or {}
 		return str(message.get("content", "")).strip()
 
@@ -330,6 +350,16 @@ class LLMRouter:
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:
+		extra_options = dict(settings.extra)
+		response_format = extra_options.pop("response_format", None)
+		json_mode = bool(extra_options.pop("json_mode", False))
+		force_response_format = bool(extra_options.pop("force_response_format", False))
+		extra_options.pop("format", None)
+		use_response_format = (
+			force_response_format
+			or cfg.provider_type == "openai"
+			or "api.openai.com" in cfg.base_url.lower()
+		)
 		payload: dict[str, Any] = {
 			"model": settings.model,
 			"messages": messages,
@@ -339,9 +369,13 @@ class LLMRouter:
 			"extra_body": {
 				"num_ctx": settings.context_size,
 				"repeat_penalty": settings.repeat_penalty,
-				**settings.extra,
+				**extra_options,
 			},
 		}
+		if response_format is not None and use_response_format:
+			payload["response_format"] = response_format
+		elif json_mode and use_response_format:
+			payload["response_format"] = {"type": "json_object"}
 		payload["extra_body"] = self._drop_none_values(payload["extra_body"])
 		if settings.seed is not None:
 			payload["seed"] = settings.seed
@@ -353,9 +387,25 @@ class LLMRouter:
 		endpoint = f"{cfg.base_url.rstrip('/')}/chat/completions"
 		client = self._client_for(request_timeout_seconds)
 		response = client.post(endpoint, headers=headers, json=payload)
-		response.raise_for_status()
+		response_format_fallback = False
+		try:
+			response.raise_for_status()
+		except httpx.HTTPStatusError as exc:
+			if "response_format" not in payload or exc.response.status_code not in {400, 422}:
+				raise
+			fallback_payload = dict(payload)
+			fallback_payload.pop("response_format", None)
+			response = client.post(endpoint, headers=headers, json=fallback_payload)
+			response.raise_for_status()
+			response_format_fallback = True
 		data = response.json()
 		choices = data.get("choices") or []
+		self.last_response_metadata = {
+			"provider_type": cfg.provider_type,
+			"usage": data.get("usage") or {},
+			"finish_reason": choices[0].get("finish_reason") if choices else None,
+			"response_format_fallback": response_format_fallback,
+		}
 		if not choices:
 			return ""
 		message = choices[0].get("message") or {}

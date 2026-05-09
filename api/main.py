@@ -19,6 +19,7 @@ class BuildGraphRequest(BaseModel):
 	offset: int = 0
 	min_shared_citations: int = 2
 	min_similarity_score: float = 0.25
+	include_extractions: bool = True
 
 
 @app.get("/health")
@@ -43,7 +44,13 @@ def build_phase2_graph(req: BuildGraphRequest) -> dict[str, int | str]:
 			raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 		records = db.list_papers(limit=req.limit, offset=req.offset)
-		stats = ingest_from_metadata_db(graph, db, limit=req.limit, offset=req.offset)
+		stats = ingest_from_metadata_db(
+			graph,
+			db,
+			limit=req.limit,
+			offset=req.offset,
+			include_extractions=req.include_extractions,
+		)
 		citation_edges = _citation_edges_from_records(records)
 		similarities = build_co_citation_similarity(
 			citation_edges,
@@ -63,6 +70,10 @@ def build_phase2_graph(req: BuildGraphRequest) -> dict[str, int | str]:
 			"papers_written": stats.papers_written,
 			"citation_edges_written": stats.citation_edges_written,
 			"similarity_edges_written": len(similarities),
+			"concept_nodes_written": stats.concept_nodes_written,
+			"method_nodes_written": stats.method_nodes_written,
+			"concept_edges_written": stats.concept_edges_written,
+			"method_edges_written": stats.method_edges_written,
 		}
 
 

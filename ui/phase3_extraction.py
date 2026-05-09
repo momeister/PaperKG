@@ -62,7 +62,7 @@ def init_llm_router():
 def init_extraction_pipeline():
     """Initialize extraction pipeline with caching."""
     llm_router = init_llm_router()
-    return ExtractionPipeline(llm_router)
+    return ExtractionPipeline(llm_router, embedding_engine=init_embedding_engine())
 
 
 @st.cache_resource
@@ -109,9 +109,13 @@ def init_file_manager():
     return FileManager("data/pdfs")
 
 
-@st.cache_resource(validate=lambda db: not db.is_closed)
 def init_metadata_db():
-    """Initialize metadata database with caching."""
+    """Open a short-lived metadata database connection.
+
+    Do not cache DuckDB connections in Streamlit. Cached write connections keep
+    `data/metadata.duckdb` locked across reruns and across multiple Streamlit
+    processes.
+    """
     return MetadataDB("data/metadata.duckdb")
 
 
@@ -280,6 +284,14 @@ def _safe_json_parse(value: str) -> object | None:
         return None
 
 
+def _format_cross_domain_hint(hint: object) -> str:
+    if isinstance(hint, dict):
+        field = str(hint.get("field") or hint.get("domain") or "Target field")
+        why = str(hint.get("why_applicable") or hint.get("reason") or "").strip()
+        return f"{field}: {why}" if why else field
+    return str(hint)
+
+
 def _render_pdf_preview(pdf_path: str, title: str = "PDF Preview", key_scope: str = "default") -> None:
     path = Path(pdf_path)
     if not path.exists():
@@ -296,7 +308,7 @@ def _render_pdf_preview(pdf_path: str, title: str = "PDF Preview", key_scope: st
             data=path.read_bytes(),
             file_name=path.name,
             mime="application/pdf",
-            use_container_width=True,
+            width="stretch",
             key=f"download_preview_{key_scope}_{path.as_posix()}",
         )
         if size_mb <= 10:
@@ -337,7 +349,97 @@ def _pdf_text_preview(path: Path, max_pages: int = 3, max_chars: int = 6000) -> 
 
 def _default_paper_id_from_pdf(label_or_path: str) -> str:
     stem = Path(label_or_path).stem
-    return stem.rsplit("_v", 1)[0] or "document"
+    base = stem.rsplit("_v", 1)[0] or "document"
+    arxiv_match = re.search(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", base, flags=re.IGNORECASE)
+    if arxiv_match:
+        return f"arxiv:{arxiv_match.group(1)}"
+    return base
+
+
+def _paper_year_from_result(result: object) -> int | None:
+    coverage = getattr(result, "temporal_coverage", {}) or {}
+    value = coverage.get("paper_year") if isinstance(coverage, dict) else None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _title_from_parsed_text(text: str, max_lines: int = 5) -> str:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines()]
+    lines = [line for line in lines if line and not re.match(r"^\d+$", line)]
+    if not lines:
+        return ""
+    title_lines = []
+    for line in lines[:max_lines]:
+        if re.search(r"\b(abstract|presented at|author|university|department)\b", line, flags=re.IGNORECASE):
+            break
+        title_lines.append(line)
+    return " ".join(title_lines or lines[:1])[:240]
+
+
+def _format_duration(total_seconds: float | int | None) -> str:
+    """Format elapsed time with seconds, minutes, hours, and days."""
+    if total_seconds is None:
+        return "n/a"
+    try:
+        seconds = max(0, float(total_seconds))
+    except (TypeError, ValueError):
+        return "n/a"
+
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+
+    remaining = int(round(seconds))
+    days, remaining = divmod(remaining, 86400)
+    hours, remaining = divmod(remaining, 3600)
+    minutes, seconds_part = divmod(remaining, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds_part or not parts:
+        parts.append(f"{seconds_part}s")
+    return " ".join(parts)
+
+
+def _save_successful_extraction(
+    metadata_db: MetadataDB,
+    paper_id: str,
+    result: object,
+    provider: str,
+    model: str,
+    duration: float | None = None,
+    paper_text: str = "",
+    pdf_path: str | None = None,
+) -> tuple[str, int]:
+    canonical_paper_id = metadata_db.ensure_paper_record(
+        paper_id,
+        title=_title_from_parsed_text(paper_text),
+        year=_paper_year_from_result(result),
+        pdf_path=pdf_path,
+    )
+    result_id = metadata_db.save_extraction_result(
+        paper_id=canonical_paper_id,
+        llm_provider=provider,
+        llm_model=model,
+        paper_type=result.paper_type,
+        concepts=result.concepts,
+        methods=result.methods,
+        concept_candidates=getattr(result, "concept_candidates", []),
+        method_candidates=getattr(result, "method_candidates", []),
+        claims=result.claims,
+        cross_domain_hints=result.cross_domain_hints,
+        terminology_conflicts=result.terminology_conflicts,
+        temporal_coverage=result.temporal_coverage,
+        mathematical_content=result.mathematical_content,
+        raw_response=result.raw_response,
+        duration_seconds=duration,
+    )
+    return canonical_paper_id, result_id
 
 
 def _set_loaded_paper(
@@ -396,11 +498,10 @@ def _clear_kg_storage(graph_dir: str = "data/graphs") -> int:
 
 
 def _close_cached_metadata_db() -> None:
-    try:
-        init_metadata_db().close()
-    except Exception:
-        pass
-    init_metadata_db.clear()
+    # Kept for compatibility with existing reset/reload buttons. MetadataDB is
+    # intentionally no longer cached, so there is no persistent UI connection
+    # to close here.
+    return None
 
 
 def _reset_metadata_database_files(db_path: str = "data/metadata.duckdb") -> int:
@@ -469,6 +570,7 @@ def _extract_pdf_document(
     top_p: float,
     context_size: int,
     max_tokens: int,
+    extraction_mode: str,
     request_timeout_seconds: int,
     link_concepts: bool,
 ) -> tuple[object, float, object, dict[str, object]]:
@@ -479,6 +581,7 @@ def _extract_pdf_document(
         "top_p": top_p,
         "max_tokens": max_tokens,
         "context_size": context_size,
+        "extraction_mode": extraction_mode,
         "timeout_seconds": request_timeout_seconds,
     }
     start_time = time.time()
@@ -502,59 +605,60 @@ def _run_pdf_batch_extraction(
     top_p: float,
     context_size: int,
     max_tokens: int,
+    extraction_mode: str,
     request_timeout_seconds: int,
     link_concepts: bool,
 ) -> tuple[list[dict[str, object]], list[str]]:
     batch_results = []
     batch_errors = []
-    metadata_db = init_metadata_db()
-
     progress = st.progress(0)
     status = st.empty()
 
-    for index, pdf_name in enumerate(selected_pdfs, start=1):
-        pdf_path = pdf_options[pdf_name]
-        batch_paper_id = _default_paper_id_from_pdf(pdf_name)
-        status.info(f"Processing {index}/{len(selected_pdfs)}: {pdf_name}")
-        try:
-            parsed, duration, result, parse_debug = _extract_pdf_document(
-                pdf_path,
-                batch_paper_id,
-                provider,
-                model,
-                temperature,
-                top_p,
-                context_size,
-                max_tokens,
-                request_timeout_seconds,
-                link_concepts,
-            )
-            result_id = metadata_db.save_extraction_result(
-                paper_id=batch_paper_id,
-                llm_provider=provider,
-                llm_model=model,
-                concepts=result.concepts,
-                methods=result.methods,
-                claims=result.claims,
-                cross_domain_hints=result.cross_domain_hints,
-                raw_response=result.raw_response,
-                duration_seconds=duration,
-            )
-            added_vocabulary = _sync_vocabulary_from_concepts(result.concepts)
-            batch_results.append(
-                {
-                    "paper_id": batch_paper_id,
-                    "pdf_name": pdf_name,
-                    "parsed_pages": parsed.page_count,
-                    "parse_debug": parse_debug,
-                    "result": result,
-                    "result_id": result_id,
-                    "added_vocabulary": added_vocabulary,
-                }
-            )
-        except Exception as exc:
-            batch_errors.append(f"{pdf_name}: {exc}")
-        progress.progress(index / len(selected_pdfs))
+    with init_metadata_db() as metadata_db:
+        for index, pdf_name in enumerate(selected_pdfs, start=1):
+            pdf_path = pdf_options[pdf_name]
+            batch_paper_id = _default_paper_id_from_pdf(pdf_name)
+            status.info(f"Processing {index}/{len(selected_pdfs)}: {pdf_name}")
+            try:
+                parsed, duration, result, parse_debug = _extract_pdf_document(
+                    pdf_path,
+                    batch_paper_id,
+                    provider,
+                    model,
+                    temperature,
+                    top_p,
+                    context_size,
+                    max_tokens,
+                    extraction_mode,
+                    request_timeout_seconds,
+                    link_concepts,
+                )
+                canonical_paper_id, result_id = _save_successful_extraction(
+                    metadata_db,
+                    batch_paper_id,
+                    result,
+                    provider,
+                    model,
+                    duration=duration,
+                    paper_text=parsed.text,
+                    pdf_path=pdf_path,
+                )
+                added_vocabulary = _sync_vocabulary_from_concepts(result.concepts)
+                batch_results.append(
+                    {
+                        "paper_id": canonical_paper_id,
+                        "raw_paper_id": batch_paper_id,
+                        "pdf_name": pdf_name,
+                        "parsed_pages": parsed.page_count,
+                        "parse_debug": parse_debug,
+                        "result": result,
+                        "result_id": result_id,
+                        "added_vocabulary": added_vocabulary,
+                    }
+                )
+            except Exception as exc:
+                batch_errors.append(f"{pdf_name}: {exc}")
+            progress.progress(index / len(selected_pdfs))
 
     status.empty()
     progress.empty()
@@ -567,10 +671,16 @@ def _snapshot_extraction_result(result: object) -> dict[str, object]:
             "paper_id": result.get("paper_id", ""),
             "result_id": result.get("id") or result.get("result_id"),
             "extraction_timestamp": result.get("extraction_timestamp"),
+            "paper_type": result.get("paper_type"),
             "concepts": result.get("concepts") or [],
             "methods": result.get("methods") or [],
+            "concept_candidates": result.get("concept_candidates") or [],
+            "method_candidates": result.get("method_candidates") or [],
             "claims": result.get("claims") or [],
             "cross_domain_hints": result.get("cross_domain_hints") or [],
+            "terminology_conflicts": result.get("terminology_conflicts") or [],
+            "temporal_coverage": result.get("temporal_coverage") or {},
+            "mathematical_content": result.get("mathematical_content") or {},
             "raw_response": result.get("raw_response") or "",
             "extraction_status": result.get("extraction_status"),
         }
@@ -579,10 +689,16 @@ def _snapshot_extraction_result(result: object) -> dict[str, object]:
         "paper_id": getattr(result, "paper_id", ""),
         "result_id": None,
         "extraction_timestamp": None,
+        "paper_type": getattr(result, "paper_type", None),
         "concepts": list(getattr(result, "concepts", []) or []),
         "methods": list(getattr(result, "methods", []) or []),
+        "concept_candidates": list(getattr(result, "concept_candidates", []) or []),
+        "method_candidates": list(getattr(result, "method_candidates", []) or []),
         "claims": list(getattr(result, "claims", []) or []),
         "cross_domain_hints": list(getattr(result, "cross_domain_hints", []) or []),
+        "terminology_conflicts": list(getattr(result, "terminology_conflicts", []) or []),
+        "temporal_coverage": dict(getattr(result, "temporal_coverage", {}) or {}),
+        "mathematical_content": dict(getattr(result, "mathematical_content", {}) or {}),
         "raw_response": getattr(result, "raw_response", "") or "",
         "extraction_status": None,
     }
@@ -676,7 +792,7 @@ def _render_extraction_diff(current: dict[str, object], previous: dict[str, obje
         st.write(f"Claims: {len(previous_claims)}")
         st.dataframe(
             _entity_label_rows(previous_concepts, "label", "confidence"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -690,7 +806,7 @@ def _render_extraction_diff(current: dict[str, object], previous: dict[str, obje
         st.write(f"Claims: {len(current_claims)}")
         st.dataframe(
             _entity_label_rows(current_concepts, "label", "confidence"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -746,7 +862,6 @@ pipeline = init_extraction_pipeline()
 embedding_engine = init_embedding_engine()
 vocabulary = init_vocabulary_manager()
 file_manager = init_file_manager()
-batch_processor = init_batch_processor()
 
 
 # Sidebar configuration
@@ -762,8 +877,8 @@ with st.sidebar:
         help="Select which LLM provider to use for extraction",
     )
 
-    # Always refresh models on page load to show all available models
-    provider_models = llm_router.provider_model_options(selected_provider, refresh=True)
+    refresh_models = st.button("Refresh models manually")
+    provider_models = llm_router.provider_model_options(selected_provider, refresh=refresh_models)
     default_model = llm_router.provider_default_model(selected_provider)
     selected_model = st.selectbox(
         "Model",
@@ -771,16 +886,20 @@ with st.sidebar:
         index=provider_models.index(default_model) if default_model in provider_models else 0,
         help="Choose the model that should answer the extraction prompt",
     )
-    recommended_settings = llm_router.recommended_settings(selected_provider, selected_model, refresh=True)
-    settings_key = re.sub(r"[^A-Za-z0-9_]+", "_", f"{selected_provider}_{selected_model}")
-    
-    if st.button("Refresh models manually"):
-        st.rerun()
+    recommended_settings = llm_router.recommended_settings(selected_provider, selected_model, refresh=False)
+    settings_key = re.sub(r"[^A-Za-z0-9_]+", "_", f"v3_{selected_provider}_{selected_model}")
 
     st.divider()
 
     # LLM Settings
     st.subheader("Generation Settings")
+
+    extraction_mode = st.selectbox(
+        "Extraction Mode",
+        options=["quality", "quick"],
+        index=0,
+        help="Quality runs semantic enrichment; Quick keeps only structural extraction and deterministic metadata.",
+    )
 
     temperature = st.slider(
         "Temperature",
@@ -810,6 +929,8 @@ with st.sidebar:
         help="How much input text the model can consider at once",
         key=f"context_size_{settings_key}",
     )
+    if selected_provider == "lm_studio":
+        st.caption("LM Studio must load the model with at least this context length. This slider controls PaperKG chunking, not the server slot size.")
 
     max_tokens = st.slider(
         "Max Tokens",
@@ -825,7 +946,7 @@ with st.sidebar:
         "LLM Request Timeout (seconds)",
         min_value=60,
         max_value=3600,
-        value=max(900, int(llm_router.provider_config(selected_provider).timeout_seconds)),
+        value=max(1800, int(llm_router.provider_config(selected_provider).timeout_seconds)),
         step=60,
         help="How long Streamlit waits for a local model response before aborting the request.",
     )
@@ -836,6 +957,21 @@ with st.sidebar:
     st.subheader("Features")
     link_concepts = st.checkbox("Link to OpenAlex", value=True)
     embed_concepts = st.checkbox("Generate embeddings", value=False)
+    run_conflict_detection = st.checkbox(
+        "Run conflict detection after extraction",
+        value=False,
+        help="Runs additional LLM calls over claim pairs. Leave off for faster extraction.",
+    )
+    conflict_max_pairs = 20
+    if run_conflict_detection:
+        conflict_max_pairs = st.slider(
+            "Max claim pairs",
+            min_value=1,
+            max_value=100,
+            value=20,
+            step=1,
+            help="Caps post-extraction conflict LLM calls. Pairs are ranked by lexical overlap first.",
+        )
 
     st.divider()
 
@@ -858,7 +994,7 @@ with st.sidebar:
             "Type RESET to confirm",
             key="debug_reset_confirm",
         )
-        if st.button("Run Reset", use_container_width=True, type="secondary"):
+        if st.button("Run Reset", width="stretch", type="secondary"):
             if reset_confirm != "RESET":
                 st.warning("Type RESET before running a reset.")
             elif reset_scope == "Session only":
@@ -866,7 +1002,8 @@ with st.sidebar:
                 st.cache_data.clear()
                 st.rerun()
             elif reset_scope == "Extraction history only":
-                init_metadata_db().clear_extraction_results()
+                with init_metadata_db() as metadata_db:
+                    metadata_db.clear_extraction_results()
                 for key in ["last_extraction", "last_extraction_previous", "batch_extractions"]:
                     st.session_state.pop(key, None)
                 st.success("Extraction history cleared.")
@@ -903,7 +1040,7 @@ with tabs[0]:
             f"parser={parse_debug.get('selected_parser', 'n/a') if isinstance(parse_debug, dict) else 'n/a'} | "
             f"method={metadata.get('extraction_method', 'n/a') if isinstance(metadata, dict) else 'n/a'}"
         )
-        if st.button("Clear loaded input", use_container_width=False):
+        if st.button("Clear loaded input", width="content"):
             _clear_loaded_input()
             st.rerun()
 
@@ -946,7 +1083,7 @@ with tabs[0]:
                     data=file_bytes,
                     file_name=uploaded_file.name,
                     mime="application/pdf",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
                 saved_path = file_manager.save_pdf(paper_id or uploaded_file.name, file_bytes)
@@ -978,7 +1115,7 @@ with tabs[0]:
                 help="Stable ID used to group extraction history and later KG records.",
             )
 
-            if st.button("Download PDF", use_container_width=True):
+            if st.button("Download PDF", width="stretch"):
                 if not pdf_url:
                     st.error("Please provide a PDF URL")
                     paper_text = ""
@@ -1028,7 +1165,7 @@ with tabs[0]:
                     help="Stable ID used to group extraction history and later KG records.",
                 )
 
-                if st.button("Load and Parse PDF", use_container_width=True):
+                if st.button("Load and Parse PDF", width="stretch"):
                     with st.spinner(f"Parsing {selected_pdf_name}..."):
                         try:
                             parsed, parse_debug = _parse_pdf_document(
@@ -1065,6 +1202,7 @@ with tabs[0]:
             **Model:** {selected_model}
             
             **Settings:**
+            - Mode: {extraction_mode}
             - Temperature: {temperature}
             - Top P: {top_p}
             - Context Size: {context_size}
@@ -1074,7 +1212,7 @@ with tabs[0]:
         )
 
     # Extract button
-    if st.button("Extract Entities", use_container_width=True):
+    if st.button("Extract Entities", width="stretch"):
         if not paper_text:
             st.error("Please provide paper text")
 
@@ -1089,6 +1227,7 @@ with tabs[0]:
                     "top_p": top_p,
                     "max_tokens": max_tokens,
                     "context_size": context_size,
+                    "extraction_mode": extraction_mode,
                     "timeout_seconds": request_timeout_seconds,
                 }
 
@@ -1111,34 +1250,37 @@ with tabs[0]:
                     st.session_state.last_parse_debug = st.session_state.get("last_parse_debug", {})
 
                     # Save to database
-                    metadata_db = init_metadata_db()
-                    result_id = metadata_db.save_extraction_result(
-                        paper_id=paper_id or "document",
-                        llm_provider=selected_provider,
-                        llm_model=selected_model,
-                        concepts=result.concepts,
-                        methods=result.methods,
-                        claims=result.claims,
-                        cross_domain_hints=result.cross_domain_hints,
-                        raw_response=result.raw_response,
-                        duration_seconds=duration,
-                    )
+                    with init_metadata_db() as metadata_db:
+                        canonical_paper_id, result_id = _save_successful_extraction(
+                            metadata_db,
+                            paper_id or "document",
+                            result,
+                            selected_provider,
+                            selected_model,
+                            duration=duration,
+                            paper_text=paper_text,
+                            pdf_path=st.session_state.get("last_pdf_path"),
+                        )
+                        previous_runs = metadata_db.get_paper_extractions(canonical_paper_id, limit=2)
                     added_vocabulary = _sync_vocabulary_from_concepts(result.concepts)
-                    previous_runs = metadata_db.get_paper_extractions(paper_id or "document", limit=2)
                     previous_snapshot = _snapshot_extraction_result(previous_runs[1]) if len(previous_runs) > 1 else None
 
-                    st.success(f"Extraction complete. Result ID: {result_id}, Duration: {duration:.2f}s")
+                    st.success(
+                        f"Extraction complete. Result ID: {result_id}, Duration: {_format_duration(duration)}"
+                    )
                     if added_vocabulary:
                         st.info(f"Vocabulary grew by {len(added_vocabulary)} concept(s): {', '.join(added_vocabulary[:12])}")
                     st.session_state.last_extraction_previous = previous_snapshot
+                    st.session_state.last_extract_paper_id = canonical_paper_id
 
                     claim_texts = [claim.get("statement", "") for claim in result.claims if claim.get("statement")]
-                    if len(claim_texts) >= 2:
+                    if run_conflict_detection and len(claim_texts) >= 2:
                         detector = init_conflict_detector()
                         st.session_state.last_conflict_analyses = detector.analyze_claims_batch(
                             claim_texts,
                             provider=selected_provider,
                             overrides=overrides,
+                            max_pairs=conflict_max_pairs,
                         )
 
                 except Exception as e:
@@ -1148,13 +1290,13 @@ with tabs[0]:
                     
                     # Save error to database
                     try:
-                        metadata_db = init_metadata_db()
-                        metadata_db.save_extraction_result(
-                            paper_id=paper_id or "document",
-                            llm_provider=selected_provider,
-                            llm_model=selected_model,
-                            error_message=str(e),
-                        )
+                        with init_metadata_db() as metadata_db:
+                            metadata_db.save_extraction_result(
+                                paper_id=paper_id or "document",
+                                llm_provider=selected_provider,
+                                llm_model=selected_model,
+                                error_message=str(e),
+                            )
                     except Exception:
                         pass
 
@@ -1163,17 +1305,19 @@ with tabs[0]:
         result = st.session_state.last_extraction
         parse_debug = st.session_state.get("last_parse_debug", {})
         paper_identifier = st.session_state.get("last_extract_paper_id", "document")
-        metadata_db = init_metadata_db()
-
         st.divider()
 
         if result.raw_response:
-            st.subheader("Raw LLM Output")
+            st.subheader("Extraction Payload")
             parsed_raw = _safe_json_parse(result.raw_response)
             if parsed_raw is not None:
                 st.json(parsed_raw)
             else:
                 st.code(result.raw_response)
+
+        if getattr(result, "quality_warnings", None):
+            for warning in result.quality_warnings:
+                st.warning(warning)
 
         previous_snapshot = st.session_state.get("last_extraction_previous")
         if previous_snapshot:
@@ -1203,15 +1347,22 @@ with tabs[0]:
             with st.expander("PDF Preview", expanded=False):
                 _render_pdf_preview(str(st.session_state.last_pdf_path), title="Current paper PDF", key_scope="current")
 
+        meta_cols = st.columns(4)
+        meta_cols[0].metric("Paper Type", str(getattr(result, "paper_type", "unknown")).title())
+        meta_cols[1].metric("Language", str(getattr(result, "language_detected", "unknown")))
+        meta_cols[2].metric("Formulas", "Yes" if result.mathematical_content.get("has_formulas") else "No")
+        meta_cols[3].metric("Term Conflicts", len(result.terminology_conflicts))
+
         with st.expander("Stored KG Snapshot", expanded=False):
-            paper_record = metadata_db.get_paper(paper_identifier)
+            with init_metadata_db() as metadata_db:
+                paper_record = metadata_db.get_paper(paper_identifier)
+                stored_results = metadata_db.get_paper_extractions(paper_identifier, limit=5)
             if paper_record:
                 st.write("**Paper node:**")
                 st.json(paper_record)
             else:
                 st.info("No paper node stored yet for this paper_id.")
 
-            stored_results = metadata_db.get_paper_extractions(paper_identifier, limit=5)
             if stored_results:
                 st.write("**Recent stored extractions:**")
                 st.dataframe(
@@ -1225,7 +1376,7 @@ with tabs[0]:
                         }
                         for item in stored_results
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -1248,6 +1399,8 @@ with tabs[0]:
             st.subheader("Methods")
             for method in result.methods:
                 with st.expander(f"{method.get('label')}"):
+                    st.write(f"**Domain:** {method.get('domain', 'unknown')}")
+                    st.write(f"**Source:** {method.get('source_type', 'unknown')}")
                     st.write(method.get("description", ""))
 
         with col3:
@@ -1255,12 +1408,50 @@ with tabs[0]:
             for claim in result.claims:
                 with st.expander(claim.get("statement", "")[:50]):
                     st.write(f"**Type:** {claim.get('evidence_type')}")
+                    st.write(f"**Attributed to:** {claim.get('attributed_to', 'this_paper')}")
+                    if claim.get("negated"):
+                        st.warning("Negative finding")
+
+        concept_candidates = list(getattr(result, "concept_candidates", []) or [])
+        method_candidates = list(getattr(result, "method_candidates", []) or [])
+        if concept_candidates or method_candidates:
+            with st.expander(
+                f"Review Candidates ({len(concept_candidates)} concepts, {len(method_candidates)} methods)",
+                expanded=False,
+            ):
+                if concept_candidates:
+                    st.write("**Concept candidates**")
+                    st.dataframe(
+                        _entity_label_rows(concept_candidates, "label", "confidence"),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                if method_candidates:
+                    st.write("**Method candidates**")
+                    st.dataframe(
+                        _entity_label_rows(method_candidates, "label", "confidence"),
+                        width="stretch",
+                        hide_index=True,
+                    )
 
         # Cross-domain hints
         if result.cross_domain_hints:
             st.subheader("Cross-Domain Hints")
             for hint in result.cross_domain_hints:
-                st.info(f"- {hint}")
+                st.info(_format_cross_domain_hint(hint))
+
+        if result.terminology_conflicts:
+            st.subheader("Terminology Conflicts")
+            st.dataframe(result.terminology_conflicts, width="stretch", hide_index=True)
+
+        if result.temporal_coverage or result.mathematical_content:
+            with st.expander("Coverage & Mathematical Content", expanded=False):
+                st.json(
+                    {
+                        "temporal_coverage": result.temporal_coverage,
+                        "mathematical_content": result.mathematical_content,
+                    }
+                )
 
         with st.expander("Entity Linking Details", expanded=True):
             linked_rows = [
@@ -1274,7 +1465,7 @@ with tabs[0]:
                 for concept in result.concepts
             ]
             if linked_rows:
-                st.dataframe(linked_rows, use_container_width=True, hide_index=True)
+                st.dataframe(linked_rows, width="stretch", hide_index=True)
             else:
                 st.info("No concepts were extracted, so no linking could be shown.")
 
@@ -1282,7 +1473,7 @@ with tabs[0]:
             labels = [concept.get("label", "").strip() for concept in result.concepts if concept.get("label")]
             if labels:
                 demo_labels = labels[:3]
-                st.dataframe(_embedding_rows(demo_labels), use_container_width=True, hide_index=True)
+                st.dataframe(_embedding_rows(demo_labels), width="stretch", hide_index=True)
 
                 same_a = embedding_engine.embed(demo_labels[0])
                 same_b = embedding_engine.embed(demo_labels[0])
@@ -1313,7 +1504,7 @@ with tabs[0]:
                     }
                     for analysis in analyses
                 ]
-                st.dataframe(conflict_rows, use_container_width=True, hide_index=True)
+                st.dataframe(conflict_rows, width="stretch", hide_index=True)
                 contradictions = [row for row in conflict_rows if row["type"] == "contradictory" and row["confidence"] >= 0.7]
                 if contradictions:
                     st.error(f"Found {len(contradictions)} high-confidence contradictions.")
@@ -1345,10 +1536,14 @@ with tabs[0]:
                 st.write(f"**Concepts:** {len(result.concepts)}")
                 st.write(f"**Methods:** {len(result.methods)}")
                 st.write(f"**Claims:** {len(result.claims)}")
+                st.write(f"**Paper type:** {getattr(result, 'paper_type', 'unknown')}")
                 if result.cross_domain_hints:
                     st.write("**Cross-domain hints:**")
                     for hint in result.cross_domain_hints:
-                        st.info(f"- {hint}")
+                        st.info(_format_cross_domain_hint(hint))
+                if result.terminology_conflicts:
+                    st.write("**Terminology conflicts:**")
+                    st.dataframe(result.terminology_conflicts, width="stretch", hide_index=True)
                 if parse_debug:
                     with st.expander("Parser details"):
                         st.write(parse_debug.get("parser_indicators", {}))
@@ -1395,7 +1590,7 @@ with tabs[1]:
 
         action_cols = st.columns([1, 1])
         with action_cols[0]:
-            if st.button("Load for Extract tab", use_container_width=True):
+            if st.button("Load for Extract tab", width="stretch"):
                 with st.spinner(f"Parsing {selected_pdf_name}..."):
                     try:
                         parsed, parse_debug = _parse_pdf_document(selected_pdf_path, selected_paper_id)
@@ -1404,7 +1599,7 @@ with tabs[1]:
                     except Exception as exc:
                         st.error(f"Failed to parse PDF: {exc}")
         with action_cols[1]:
-            if st.button("Forget loaded PDF", use_container_width=True):
+            if st.button("Forget loaded PDF", width="stretch"):
                 _clear_loaded_input()
                 st.rerun()
 
@@ -1439,7 +1634,7 @@ with tabs[2]:
             }
             for canonical, entry in sorted(vocabulary.entries.items())
         ]
-        st.dataframe(vocab_rows, use_container_width=True, hide_index=True)
+        st.dataframe(vocab_rows, width="stretch", hide_index=True)
 
     with col2:
         st.subheader("Add Entry")
@@ -1494,10 +1689,10 @@ with tabs[3]:
             }
             for name in batch_selection
         ]
-        st.dataframe(batch_preview_rows, use_container_width=True, hide_index=True)
+        st.dataframe(batch_preview_rows, width="stretch", hide_index=True)
         st.caption("Paper ID groups extraction history and later KG records. It is derived from the PDF filename.")
 
-        if st.button("Start Batch Extraction", use_container_width=True, type="primary"):
+        if st.button("Start Batch Extraction", width="stretch", type="primary"):
             if not batch_selection:
                 st.error("Select at least one PDF.")
             else:
@@ -1510,6 +1705,7 @@ with tabs[3]:
                     top_p,
                     context_size,
                     max_tokens,
+                    extraction_mode,
                     request_timeout_seconds,
                     link_concepts,
                 )
@@ -1533,7 +1729,7 @@ with tabs[3]:
             }
             for item in st.session_state.batch_extractions
         ]
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
 
 # Tab 5: Phase 1 Harvest
@@ -1556,7 +1752,7 @@ with tabs[4]:
     with col2:
         st.subheader("Options")
         download_pdfs = st.checkbox("Download available PDFs", value=False)
-        run_search = st.button("Search Papers", use_container_width=True)
+        run_search = st.button("Search Papers", width="stretch")
 
     if run_search:
         if not harvest_query.strip():
@@ -1570,8 +1766,8 @@ with tabs[4]:
                     st.session_state.harvest_results = results
 
                     if save_to_db:
-                        metadata_db = init_metadata_db()
-                        metadata_db.batch_insert_papers(results)
+                        with init_metadata_db() as metadata_db:
+                            metadata_db.batch_insert_papers(results)
 
                     if download_pdfs and results:
                         downloaded, skipped, failed = asyncio.run(_download_search_results(results))
@@ -1623,16 +1819,23 @@ with tabs[5]:
         if st.button("Refresh History"):
             st.rerun()
     
-    metadata_db = init_metadata_db()
-    
-    if paper_id_filter.strip():
-        # Show specific paper's extractions
-        extractions = metadata_db.get_paper_extractions(paper_id_filter.strip(), limit=100)
-        st.subheader(f"Extractions for {paper_id_filter}")
-    else:
-        # Show most recent extractions across all papers
-        extractions = metadata_db.list_extraction_results(limit=50)
-        st.subheader("Recent Extractions (Last 50)")
+    try:
+        with init_metadata_db() as metadata_db:
+            if paper_id_filter.strip():
+                # Show specific paper's extractions
+                extractions = metadata_db.get_paper_extractions(paper_id_filter.strip(), limit=100)
+                history_title = f"Extractions for {paper_id_filter}"
+            else:
+                # Show most recent extractions across all papers
+                extractions = metadata_db.list_extraction_results(limit=50)
+                history_title = "Recent Extractions (Last 50)"
+        st.subheader(history_title)
+    except Exception as exc:
+        extractions = []
+        st.error(
+            "Could not open the metadata database. Close other running ScienceKG/Streamlit/Python "
+            f"processes that use data/metadata.duckdb, then refresh. Details: {exc}"
+        )
     
     if extractions:
         st.write(f"Found {len(extractions)} extraction(s)")
@@ -1659,10 +1862,10 @@ with tabs[5]:
                     st.metric("Methods", len(ext.get('methods', [])))
                     st.metric("Claims", len(ext.get('claims', [])))
                     if ext.get('extraction_duration_seconds'):
-                        st.metric("Duration", f"{ext['extraction_duration_seconds']:.2f}s")
+                        st.metric("Duration", _format_duration(ext.get('extraction_duration_seconds')))
 
                 if ext.get('raw_response'):
-                    with st.expander("Raw LLM output"):
+                    with st.expander("Extraction payload"):
                         parsed_raw = _safe_json_parse(str(ext.get('raw_response')))
                         if parsed_raw is not None:
                             st.json(parsed_raw)
@@ -1686,11 +1889,15 @@ with tabs[5]:
                     st.subheader("Claims")
                     for claim in ext['claims']:
                         st.write(f"- {claim.get('statement', 'Unknown')}")
-                
+
                 if ext.get('cross_domain_hints'):
                     st.subheader("Cross-Domain Hints")
                     for hint in ext['cross_domain_hints']:
-                        st.info(hint)
+                        st.info(_format_cross_domain_hint(hint))
+
+                if ext.get('terminology_conflicts'):
+                    st.subheader("Terminology Conflicts")
+                    st.dataframe(ext['terminology_conflicts'], width="stretch", hide_index=True)
     else:
         st.info("No extraction history found. Start by extracting entities from papers.")
 
