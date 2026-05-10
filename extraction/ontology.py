@@ -230,7 +230,7 @@ class CanonicalResolver:
         if not normalized:
             return None
         seed = self._seed_index.get(normalized)
-        if seed is not None and self._type_compatible(seed.entity_type, entity_type):
+        if seed is not None:
             return CanonicalMatch(
                 canonical_id=seed.canonical_id,
                 canonical_label=seed.label,
@@ -312,6 +312,11 @@ class CanonicalResolver:
             ("MethodFamily", "Algorithm"),
             ("Theory", "DomainConcept"),
             ("Metric", "DomainConcept"),
+            ("ModelArchitecture", "Algorithm"),
+            ("ModelArchitecture", "MethodFamily"),
+            ("System", "MethodFamily"),
+            ("System", "ModelArchitecture"),
+            ("MethodFamily", "Theory"),
         }
         return (candidate_type, requested_type) in compatible
 

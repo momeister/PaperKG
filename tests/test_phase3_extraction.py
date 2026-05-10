@@ -1238,7 +1238,7 @@ class TestEntityLinker:
             "concept:appraisal-dimensions",
         ]
         assert all(concept["review_status"] == "approved" for concept in result.concepts)
-        assert result.relations[0]["relation_type"] == "RELATED_TO"
+        assert result.relations[0]["relation_type"] == "PART_OF"
         assert result.relations[0]["subject_id"] == "concept:appraisal-dimensions"
         rendered = json.loads(result.raw_response)
         assert rendered["concepts"][0]["canonical_id"] == "concept:appraisal-theory"
@@ -1296,6 +1296,181 @@ class TestEntityLinker:
         assert occ_model["review_status"] == "approved"
         assert occ_model["acceptance_reason"] == "ontology_exact_candidate_rescue"
 
+    def test_canonical_resolver_exact_alias_overrides_llm_type(self):
+        resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
+
+        result = resolver.resolve(
+            {
+                "label": "POMDP",
+                "entity_type": "Algorithm",
+                "confidence": 0.85,
+                "accepted": True,
+                "review_status": "pending",
+                "evidence_span": "POMDP variant called Bayesian Affect Control Theory",
+            }
+        )
+
+        assert result["canonical_id"] == "concept:pomdp"
+        assert result["canonical_label"] == "POMDP"
+        assert result["entity_type"] == "ModelArchitecture"
+        assert result["review_status"] == "approved"
+        assert result["canonical_match"]["match_type"] == "exact_alias"
+
+    def test_entity_linker_dedupes_cross_prefix_concept_method_labels(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "approach and avoidance behaviour",
+                    "entity_type": "Phenomenon",
+                    "canonical_id": "concept:approach-and-avoidance-behaviour",
+                    "canonical_label": "approach and avoidance behaviour",
+                    "confidence": 0.8,
+                    "accepted": True,
+                    "review_status": "approved",
+                    "evidence_span": "observed approach and avoidance behaviour",
+                }
+            ],
+            methods=[
+                {
+                    "label": "approach and avoidance behaviour",
+                    "entity_type": "Phenomenon",
+                    "canonical_id": "method:approach-and-avoidance-behaviour",
+                    "canonical_label": "approach and avoidance behaviour",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "approved",
+                    "evidence_span": "approach and avoidance behaviour in their emotional agent",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        assert len(result.concepts) == 1
+        assert result.concepts[0]["canonical_id"] == "concept:approach-and-avoidance-behaviour"
+        assert result.concepts[0]["extracted_roles"] == ["concept", "method"]
+        assert result.methods == []
+
+    def test_entity_linker_builds_specific_relation_types(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "Reinforcement Learning",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "reinforcement learning agents",
+                },
+                {
+                    "label": "Temporal difference error",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "connection between dopamine and the TD",
+                },
+                {
+                    "label": "Dopamine",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "connection between dopamine and the TD",
+                },
+                {
+                    "label": "OCC model",
+                    "entity_type": "Theory",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "OCC model named after Ortony Clore and Collins",
+                },
+                {
+                    "label": "Cognitive appraisal theory",
+                    "entity_type": "Theory",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "componential emotion theory, best known as cognitive appraisal theory",
+                },
+                {
+                    "label": "Valence",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "the most implemented dimension is valence",
+                },
+                {
+                    "label": "Dimensional emotion theory",
+                    "entity_type": "Theory",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Dimensional emotion theory assumes an affective space",
+                },
+                {
+                    "label": "POMDP",
+                    "entity_type": "Algorithm",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "POMDP variant called Bayesian Affect Control Theory",
+                },
+                {
+                    "label": "Bayesian Affect Control Theory",
+                    "entity_type": "Theory",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "POMDP variant called Bayesian Affect Control Theory",
+                },
+            ],
+            methods=[
+                {
+                    "label": "Q-learning",
+                    "entity_type": "Algorithm",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Well-known algorithms are Q-learning",
+                },
+                {
+                    "label": "Boltzmann action selection",
+                    "entity_type": "Algorithm",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Boltzmann action selection mechanism",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+
+        assert (
+            "concept:temporal-difference-error",
+            "CORRESPONDS_TO",
+            "concept:dopamine",
+        ) in relation_triples
+        assert ("concept:occ-model", "IS_A", "concept:appraisal-theory") in relation_triples
+        assert ("concept:valence", "PART_OF", "concept:dimensional-emotion-theory") in relation_triples
+        assert ("concept:bayesian-affect-control-theory", "EXTENDS", "concept:pomdp") in relation_triples
+        assert ("concept:q-learning", "USED_IN", "concept:reinforcement-learning") in relation_triples
+        assert ("concept:q-learning", "IS_A", "concept:reinforcement-learning") not in relation_triples
+        assert (
+            "concept:boltzmann-action-selection",
+            "MODULATED_BY",
+            "concept:valence",
+        ) in relation_triples
+
     def test_canonical_resolver_degrades_hash_embeddings_without_auto_merge(self):
         resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
 
@@ -1312,6 +1487,7 @@ class TestEntityLinker:
         ontology = Ontology.from_file()
 
         assert ontology.validate_relation_type("USES") == "USES"
+        assert ontology.validate_relation_type("MODULATED_BY") == "MODULATED_BY"
         with pytest.raises(ValueError):
             ontology.validate_relation_type("MAKES_UP")
 

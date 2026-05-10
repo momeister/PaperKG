@@ -1664,9 +1664,9 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Aï¬€ective modelling": {
+  "AÃ¯Â¬â‚¬ective modelling": {
     "aliases": [
-      "aï¬€ective modelling"
+      "aÃ¯Â¬â‚¬ective modelling"
     ],
     "openalx_id": null,
     "domain": null,
@@ -1691,9 +1691,9 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Bayesian Aï¬€ect Control Theory": {
+  "Bayesian AÃ¯Â¬â‚¬ect Control Theory": {
     "aliases": [
-      "bayesian aï¬€ect control theory"
+      "bayesian aÃ¯Â¬â‚¬ect control theory"
     ],
     "openalx_id": null,
     "domain": null,
@@ -1758,6 +1758,33 @@
     "aliases": [],
     "openalx_id": null,
     "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Categorical emotion": {
+    "aliases": [
+      "categorical emotion"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dimensional emotion": {
+    "aliases": [
+      "dimensional emotion"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Genetic programming": {
+    "aliases": [
+      "genetic programming"
+    ],
+    "openalx_id": null,
+    "domain": "Machine Learning",
     "confidence": 1.0,
     "custom_metadata": {}
   }

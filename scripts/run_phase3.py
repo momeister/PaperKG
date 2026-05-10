@@ -33,8 +33,10 @@ from pathlib import Path
 
 import httpx
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-def _configured_ollama_models(config_path: Path = Path("config.yaml")) -> set[str]:
+
+def _configured_ollama_models(config_path: Path = PROJECT_ROOT / "config.yaml") -> set[str]:
     """Return Ollama model names configured for this project."""
     try:
         import yaml
@@ -177,6 +179,7 @@ def _start(args: argparse.Namespace) -> None:
                     f"--port={api_port}",
                     "--reload",
                 ],
+                cwd=PROJECT_ROOT,
                 env=api_env,
             )
             processes.append(("API", api_process))
@@ -208,9 +211,10 @@ def _start(args: argparse.Namespace) -> None:
                     "-m",
                     "streamlit",
                     "run",
-                    "ui/phase3_extraction.py",
+                    str(PROJECT_ROOT / "ui" / "phase3_extraction.py"),
                     f"--server.port=8501",
                 ],
+                cwd=PROJECT_ROOT,
                 env=ui_env,
             )
             processes.append(("UI", ui_process))

@@ -273,7 +273,7 @@ class EntityLinker:
         concepts: list[dict[str, Any]],
         methods: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        by_id: dict[str, tuple[str, dict[str, Any]]] = {}
+        by_key: dict[str, tuple[str, dict[str, Any]]] = {}
         concept_like = {
             "Theory",
             "Metric",
@@ -285,6 +285,22 @@ class EntityLinker:
             "Benchmark",
             "Dataset",
         }
+        method_like = {"Algorithm", "MethodFamily", "Task"}
+
+        def entity_key(item: dict[str, Any]) -> str:
+            label_key = normalize_key(item.get("canonical_label") or item.get("label"))
+            if label_key:
+                return f"label:{label_key}"
+            canonical_id = str(item.get("canonical_id") or "").strip()
+            return f"id:{canonical_id}" if canonical_id else ""
+
+        def preferred_role(item: dict[str, Any], extracted_role: str) -> str:
+            entity_type = str(item.get("entity_type") or "")
+            if entity_type in concept_like:
+                return "concept"
+            if entity_type in method_like:
+                return "method"
+            return extracted_role
 
         def merge_entity(target: dict[str, Any], source: dict[str, Any], role: str) -> dict[str, Any]:
             output = dict(target)
@@ -304,25 +320,24 @@ class EntityLinker:
 
         for role, items in (("concept", concepts), ("method", methods)):
             for item in items:
-                canonical_id = str(item.get("canonical_id") or "").strip()
-                if not canonical_id:
+                key = entity_key(item)
+                if not key:
                     continue
-                current = by_id.get(canonical_id)
+                item_role = preferred_role(item, role)
+                current = by_key.get(key)
                 if current is None:
                     enriched = dict(item)
                     enriched["extracted_roles"] = sorted({role, *(enriched.get("extracted_roles") or [])})
-                    by_id[canonical_id] = (role, enriched)
+                    by_key[key] = (role, enriched)
                     continue
                 existing_role, existing = current
-                entity_type = str(item.get("entity_type") or "")
-                preferred_role = "concept" if entity_type in concept_like else "method"
-                if preferred_role == role and preferred_role != existing_role:
-                    by_id[canonical_id] = (role, merge_entity(item, existing, existing_role))
+                if item_role != existing_role:
+                    by_key[key] = (item_role, merge_entity(item, existing, existing_role))
                 else:
-                    by_id[canonical_id] = (existing_role, merge_entity(existing, item, role))
+                    by_key[key] = (existing_role, merge_entity(existing, item, role))
 
-        kept_concepts = [item for role, item in by_id.values() if role == "concept"]
-        kept_methods = [item for role, item in by_id.values() if role == "method"]
+        kept_concepts = [item for role, item in by_key.values() if role == "concept"]
+        kept_methods = [item for role, item in by_key.values() if role == "method"]
         return kept_concepts, kept_methods
 
     @staticmethod
@@ -377,15 +392,33 @@ class ControlledRelationExtractor:
             if clean:
                 relations.append(clean)
 
-        self._add_known_relation(relations, by_label, "appraisaldimensions", "RELATED_TO", "appraisaltheory")
+        self._add_known_relation(relations, by_label, "appraisaldimensions", "PART_OF", "appraisaltheory")
+        self._add_known_relation(relations, by_label, "occmodel", "IS_A", "appraisaltheory")
+        self._add_known_relation(relations, by_label, "componentprocesstheoryofemotions", "IS_A", "appraisaltheory")
+        self._add_known_relation(relations, by_label, "beliefdesiretheoryofemotions", "IS_A", "appraisaltheory")
+        self._add_known_relation(relations, by_label, "valence", "PART_OF", "dimensionalemotiontheory")
+        self._add_known_relation(relations, by_label, "arousal", "PART_OF", "dimensionalemotiontheory")
+        self._add_known_relation(relations, by_label, "novelty", "PART_OF", "appraisaldimensions")
+        self._add_known_relation(relations, by_label, "recency", "PART_OF", "appraisaldimensions")
+        self._add_known_relation(relations, by_label, "temporaldifferenceerror", "CORRESPONDS_TO", "dopamine")
         self._add_known_relation(relations, by_label, "rewardshaping", "USES", "rewardfunction")
+        self._add_known_relation(relations, by_label, "rewardfunction", "PART_OF", "markovdecisionprocess")
+        self._add_known_relation(relations, by_label, "transitionmodel", "PART_OF", "markovdecisionprocess")
+        self._add_known_relation(relations, by_label, "valuefunction", "PART_OF", "reinforcementlearning")
         self._add_known_relation(relations, by_label, "kldivergence", "MEASURES", "modeluncertainty")
+        self._add_known_relation(relations, by_label, "pomdp", "IS_A", "markovdecisionprocess")
+        self._add_known_relation(relations, by_label, "bayesianaffectcontroltheory", "EXTENDS", "pomdp")
         self._add_known_relation(relations, by_label, "deepreinforcementlearning", "IS_A", "reinforcementlearning")
         self._add_known_relation(relations, by_label, "motivatedreinforcementlearning", "IS_A", "reinforcementlearning")
         self._add_known_relation(relations, by_label, "homeostaticrewardmodification", "IS_A", "rewardshaping")
         self._add_known_relation(relations, by_label, "appraisalbasedrewardmodification", "IS_A", "rewardshaping")
+        self._add_known_relation(relations, by_label, "homeostaticrewardmodification", "USES", "homeostasis")
+        self._add_known_relation(relations, by_label, "appraisalbasedrewardmodification", "USES", "appraisaldimensions")
+        self._add_known_relation(relations, by_label, "homeostasis", "USED_FOR", "extrinsicmotivation")
+        self._add_known_relation(relations, by_label, "appraisaldimensions", "USED_FOR", "intrinsicmotivation")
         self._add_known_relation(relations, by_label, "modelbasedrl", "IS_A", "reinforcementlearning")
         self._add_known_relation(relations, by_label, "tdlearning", "IS_A", "reinforcementlearning")
+        self._add_known_relation(relations, by_label, "boltzmannactionselection", "MODULATED_BY", "valence")
 
         reinforcement_learning = by_label.get("reinforcementlearning")
         if reinforcement_learning:
@@ -394,7 +427,7 @@ class ControlledRelationExtractor:
                     self._append_relation(
                         relations,
                         item,
-                        "IS_A",
+                        "USED_IN",
                         reinforcement_learning,
                         self._evidence(item, reinforcement_learning),
                     )

@@ -22,7 +22,12 @@ entity_types:
 relation_types:
   - IS_A
   - USES
+  - USED_IN
+  - USED_FOR
+  - PART_OF
   - EXTENDS
+  - MODULATED_BY
+  - CORRESPONDS_TO
   - EVALUATED_ON
   - MEASURES
   - PROPOSED_BY

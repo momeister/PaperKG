@@ -39,6 +39,20 @@ from query.llm_router import LLMRouter
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+DATA_DIR = PROJECT_ROOT / "data"
+PDF_DIR = DATA_DIR / "pdfs"
+GRAPH_DIR = DATA_DIR / "graphs"
+METADATA_DB_PATH = DATA_DIR / "metadata.duckdb"
+VOCABULARY_PATH = DATA_DIR / "vocabulary.json"
+
+
+def _project_path(path: str | Path) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+
 # Page config
 st.set_page_config(
     page_title="ScienceKG Phase 3",
@@ -55,7 +69,7 @@ st.markdown("Extract concepts, methods, and claims from research papers with con
 @st.cache_resource
 def init_llm_router():
     """Initialize LLM router with caching."""
-    return LLMRouter.from_config_file("config.yaml")
+    return LLMRouter.from_config_file(str(CONFIG_PATH))
 
 
 @st.cache_resource
@@ -86,7 +100,7 @@ def init_conflict_detector():
 @st.cache_resource
 def init_vocabulary_manager():
     """Initialize vocabulary manager with caching."""
-    vocab_file = Path("data/vocabulary.json")
+    vocab_file = VOCABULARY_PATH
 
     if vocab_file.exists():
         import json
@@ -106,7 +120,7 @@ def init_vocabulary_manager():
 @st.cache_resource
 def init_file_manager():
     """Initialize local PDF storage manager with caching."""
-    return FileManager("data/pdfs")
+    return FileManager(PDF_DIR)
 
 
 def init_metadata_db():
@@ -116,13 +130,18 @@ def init_metadata_db():
     `data/metadata.duckdb` locked across reruns and across multiple Streamlit
     processes.
     """
-    return MetadataDB("data/metadata.duckdb")
+    return MetadataDB(str(METADATA_DB_PATH))
 
 
 @st.cache_resource
 def init_batch_processor():
     """Initialize in-process batch processor with caching."""
-    return BatchProcessor(init_llm_router(), init_parser_router(), init_embedding_engine())
+    return BatchProcessor(
+        init_llm_router(),
+        init_parser_router(),
+        init_embedding_engine(),
+        metadata_db_factory=init_metadata_db,
+    )
 
 
 def _normalize_arxiv_entry(entry: dict) -> dict:
@@ -215,8 +234,8 @@ async def _search_phase1_papers(query: str, sources: list[str], max_results: int
     return unique
 
 
-async def _download_search_results(results: list[dict], pdf_dir: str = "data/pdfs") -> tuple[int, int, int]:
-    file_manager = FileManager(pdf_dir)
+async def _download_search_results(results: list[dict], pdf_dir: str | Path = PDF_DIR) -> tuple[int, int, int]:
+    file_manager = FileManager(_project_path(pdf_dir))
     downloaded = 0
     skipped = 0
     failed = 0
@@ -256,8 +275,8 @@ def _paper_pdf_storage_id(paper: dict) -> str:
     )
 
 
-def _list_harvested_pdfs(pdf_dir: str = "data/pdfs") -> list[tuple[str, str]]:
-    pdf_root = Path(pdf_dir)
+def _list_harvested_pdfs(pdf_dir: str | Path = PDF_DIR) -> list[tuple[str, str]]:
+    pdf_root = _project_path(pdf_dir)
     if not pdf_root.exists():
         return []
 
@@ -290,6 +309,71 @@ def _format_cross_domain_hint(hint: object) -> str:
         why = str(hint.get("why_applicable") or hint.get("reason") or "").strip()
         return f"{field}: {why}" if why else field
     return str(hint)
+
+
+def _payload_count(value: object) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _extraction_history_label(index: int, extraction: dict[str, object]) -> str:
+    status = str(extraction.get("extraction_status") or "unknown").upper()
+    paper_id = str(extraction.get("paper_id") or "Unknown")
+    model = str(extraction.get("llm_model") or "Unknown")
+    timestamp = str(extraction.get("extraction_timestamp") or "Unknown")
+    return f"{index}. {paper_id} | {model} | {status} | {timestamp}"
+
+
+def _render_extraction_history_detail(ext: dict[str, object]) -> None:
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Paper ID", str(ext.get("paper_id") or "N/A"))
+        st.metric("Provider", str(ext.get("llm_provider") or "N/A"))
+
+    with col2:
+        st.metric("Model", str(ext.get("llm_model") or "N/A"))
+        st.metric("Status", str(ext.get("extraction_status") or "N/A"))
+
+    with col3:
+        st.metric("Concepts", _payload_count(ext.get("concepts")))
+        st.metric("Methods", _payload_count(ext.get("methods")))
+        st.metric("Claims", _payload_count(ext.get("claims")))
+        if ext.get("extraction_duration_seconds"):
+            st.metric("Duration", _format_duration(ext.get("extraction_duration_seconds")))
+
+    if ext.get("error_message"):
+        st.error(f"Error: {ext['error_message']}")
+
+    if ext.get("concepts"):
+        st.subheader("Concepts")
+        for concept in ext["concepts"]:
+            st.write(f"- {concept.get('label', 'Unknown')} (confidence: {concept.get('confidence', 0):.1%})")
+
+    if ext.get("methods"):
+        st.subheader("Methods")
+        for method in ext["methods"]:
+            st.write(f"- {method.get('label', 'Unknown')}")
+
+    if ext.get("claims"):
+        st.subheader("Claims")
+        for claim in ext["claims"]:
+            st.write(f"- {claim.get('statement', 'Unknown')}")
+
+    if ext.get("cross_domain_hints"):
+        st.subheader("Cross-Domain Hints")
+        for hint in ext["cross_domain_hints"]:
+            st.info(_format_cross_domain_hint(hint))
+
+    if ext.get("terminology_conflicts"):
+        st.subheader("Terminology Conflicts")
+        st.dataframe(ext["terminology_conflicts"], width="stretch", hide_index=True)
+
+    if ext.get("raw_response") and st.checkbox("Show raw extraction payload", value=False, key="history_show_raw_payload"):
+        parsed_raw = _safe_json_parse(str(ext.get("raw_response")))
+        if parsed_raw is not None:
+            st.json(parsed_raw)
+        else:
+            st.code(str(ext.get("raw_response")))
 
 
 def _render_pdf_preview(pdf_path: str, title: str = "PDF Preview", key_scope: str = "default") -> None:
@@ -470,13 +554,13 @@ def _clear_loaded_input() -> None:
         st.session_state.pop(key, None)
 
 
-def _clear_pdf_storage(pdf_dir: str = "data/pdfs") -> int:
+def _clear_pdf_storage(pdf_dir: str | Path = PDF_DIR) -> int:
     return _clear_directory_contents(pdf_dir)
 
 
-def _clear_directory_contents(directory: str) -> int:
-    root = Path(directory).resolve()
-    project_root = Path.cwd().resolve()
+def _clear_directory_contents(directory: str | Path) -> int:
+    root = _project_path(directory).resolve()
+    project_root = PROJECT_ROOT.resolve()
     if not root.is_relative_to(project_root):
         raise ValueError(f"Refusing to clear directory outside project: {root}")
     if not root.exists():
@@ -493,8 +577,19 @@ def _clear_directory_contents(directory: str) -> int:
     return removed
 
 
-def _clear_kg_storage(graph_dir: str = "data/graphs") -> int:
+def _clear_kg_storage(graph_dir: str | Path = GRAPH_DIR) -> int:
     return _clear_directory_contents(graph_dir)
+
+
+def _reset_metadata_database_contents(db_path: str | Path = METADATA_DB_PATH) -> None:
+    """Clear local DuckDB content without deleting the database file.
+
+    Deleting an open DuckDB file is brittle on Windows when Streamlit, the API,
+    or a recent request still has a handle. Clearing the mutable tables gives
+    the UI reset the same user-visible effect while keeping the schema intact.
+    """
+    with MetadataDB(str(_project_path(db_path))) as metadata_db:
+        metadata_db.clear_all()
 
 
 def _close_cached_metadata_db() -> None:
@@ -504,10 +599,10 @@ def _close_cached_metadata_db() -> None:
     return None
 
 
-def _reset_metadata_database_files(db_path: str = "data/metadata.duckdb") -> int:
+def _reset_metadata_database_files(db_path: str | Path = METADATA_DB_PATH) -> int:
     _close_cached_metadata_db()
-    db_file = Path(db_path).resolve()
-    project_root = Path.cwd().resolve()
+    db_file = _project_path(db_path).resolve()
+    project_root = PROJECT_ROOT.resolve()
     if not db_file.is_relative_to(project_root):
         raise ValueError(f"Refusing to reset database outside project: {db_file}")
 
@@ -519,8 +614,8 @@ def _reset_metadata_database_files(db_path: str = "data/metadata.duckdb") -> int
     return removed
 
 
-def _reset_vocabulary_file(vocab_path: str = "data/vocabulary.json") -> None:
-    path = Path(vocab_path)
+def _reset_vocabulary_file(vocab_path: str | Path = VOCABULARY_PATH) -> None:
+    path = _project_path(vocab_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{}", encoding="utf-8")
 
@@ -757,7 +852,8 @@ def _sync_vocabulary_from_concepts(concepts: list[dict[str, object]]) -> list[st
         added_labels.append(label)
 
     if added_labels:
-        with open("data/vocabulary.json", "w", encoding="utf-8") as f:
+        VOCABULARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(VOCABULARY_PATH, "w", encoding="utf-8") as f:
             json.dump(vocabulary.to_dict(), f, indent=2, ensure_ascii=False)
 
     return added_labels
@@ -988,7 +1084,7 @@ with st.sidebar:
                 "Extraction history only",
                 "Database, KG, PDFs, and vocabulary",
             ],
-            help="Session reset clears Streamlit state. Full reset removes the local DuckDB database files, Kuzu/graph output, PDFs, vocabulary, and cached components.",
+            help="Session reset clears Streamlit state. Full reset clears local DuckDB content, Kuzu/graph output, PDFs, vocabulary, and cached components.",
         )
         reset_confirm = st.text_input(
             "Type RESET to confirm",
@@ -1008,19 +1104,25 @@ with st.sidebar:
                     st.session_state.pop(key, None)
                 st.success("Extraction history cleared.")
             else:
-                removed_db_files = _reset_metadata_database_files()
-                removed_files = _clear_pdf_storage()
-                removed_graph_items = _clear_kg_storage()
-                _reset_vocabulary_file()
-                st.session_state.clear()
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                st.success(
-                    "Local data reset complete. "
-                    f"Removed {removed_db_files} database file(s), "
-                    f"{removed_graph_items} graph file(s), and {removed_files} PDF file(s)."
-                )
-                st.rerun()
+                try:
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    _reset_metadata_database_contents()
+                    removed_files = _clear_pdf_storage()
+                    removed_graph_items = _clear_kg_storage()
+                    _reset_vocabulary_file()
+                    st.session_state.clear()
+                    st.success(
+                        "Local data reset complete. "
+                        f"Cleared DuckDB content, removed {removed_graph_items} graph file(s), "
+                        f"and removed {removed_files} PDF file(s)."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(
+                        "Local data reset failed. Close other running ScienceKG/Streamlit/Python "
+                        f"processes that use {METADATA_DB_PATH}, then try again. Details: {exc}"
+                    )
 
     st.caption("Graph visualization stays in Phase 2: streamlit run ui/graph_visualization.py")
 
@@ -1086,23 +1188,25 @@ with tabs[0]:
                     width="stretch",
                 )
 
-                saved_path = file_manager.save_pdf(paper_id or uploaded_file.name, file_bytes)
+                if st.button("Save and Parse Upload", width="stretch"):
+                    saved_path = file_manager.save_pdf(paper_id or uploaded_file.name, file_bytes)
 
-                with st.spinner("Parsing PDF..."):
-                    try:
-                        parsed, parse_debug = _parse_pdf_document(
-                            str(saved_path),
-                            paper_id or "pdf_document",
-                        )
-                        paper_text = parsed.text
-                        _set_loaded_paper(paper_id or "pdf_document", paper_text, str(saved_path), parse_debug)
-                        st.success(f"Parsed {parsed.page_count} pages and saved to {saved_path}")
-                        with st.expander("PDF Preview", expanded=False):
-                            _render_pdf_preview(str(saved_path), title=uploaded_file.name, key_scope="upload")
+                    with st.spinner("Parsing PDF..."):
+                        try:
+                            parsed, parse_debug = _parse_pdf_document(
+                                str(saved_path),
+                                paper_id or "pdf_document",
+                            )
+                            paper_text = parsed.text
+                            _set_loaded_paper(paper_id or "pdf_document", paper_text, str(saved_path), parse_debug)
+                            st.success(f"Parsed {parsed.page_count} pages and saved to {saved_path}")
+                            st.caption("PDF preview is available below after parsing.")
 
-                    except Exception as e:
-                        st.error(f"Failed to parse PDF: {e}")
-                        paper_text = ""
+                        except Exception as e:
+                            st.error(f"Failed to parse PDF: {e}")
+                            paper_text = ""
+                else:
+                    paper_text = ""
             else:
                 paper_text = ""
                 paper_id = ""
@@ -1138,8 +1242,7 @@ with tabs[0]:
                             paper_text = parsed.text
                             _set_loaded_paper(paper_id or "pdf_from_url", paper_text, str(saved_path), parse_debug)
                             st.success(f"Parsed {parsed.page_count} pages")
-                            with st.expander("PDF Preview", expanded=False):
-                                _render_pdf_preview(str(saved_path), title=paper_id or "pdf_from_url", key_scope="url")
+                            st.caption("PDF preview is available below after parsing.")
 
                         except Exception as e:
                             st.error(f"Failed to download or parse PDF: {e}")
@@ -1149,10 +1252,12 @@ with tabs[0]:
 
         else:  # input_method == "From Harvest"
             st.subheader("Select Recently Harvested PDF")
+            if st.button("Refresh harvested PDFs", width="content", key="phase3_refresh_harvested_pdfs"):
+                st.rerun()
 
             harvested_pdfs = _list_harvested_pdfs()
             if harvested_pdfs:
-                st.write(f"Found {len(harvested_pdfs)} harvested PDFs")
+                st.write(f"Found {len(harvested_pdfs)} harvested PDFs in {PDF_DIR}")
 
                 pdf_options = {label: path for label, path in harvested_pdfs}
                 selected_pdf_name = st.selectbox("Select PDF", options=list(pdf_options.keys()), key="phase3_single_harvest_pdf")
@@ -1176,8 +1281,7 @@ with tabs[0]:
                             paper_id = single_paper_id
                             _set_loaded_paper(single_paper_id, paper_text, selected_pdf_path, parse_debug)
                             st.success(f"Parsed {parsed.page_count} pages from {selected_pdf_name}")
-                            with st.expander("PDF Preview", expanded=False):
-                                _render_pdf_preview(selected_pdf_path, title=selected_pdf_name, key_scope="extract_harvest")
+                            st.caption("PDF preview is available below after parsing.")
                         except Exception as e:
                             st.error(f"Failed to parse PDF: {e}")
                             paper_text = ""
@@ -1307,7 +1411,7 @@ with tabs[0]:
         paper_identifier = st.session_state.get("last_extract_paper_id", "document")
         st.divider()
 
-        if result.raw_response:
+        if result.raw_response and st.checkbox("Show extraction payload", value=False, key="last_extraction_show_payload"):
             st.subheader("Extraction Payload")
             parsed_raw = _safe_json_parse(result.raw_response)
             if parsed_raw is not None:
@@ -1345,7 +1449,11 @@ with tabs[0]:
 
         if st.session_state.get("last_pdf_path"):
             with st.expander("PDF Preview", expanded=False):
-                _render_pdf_preview(str(st.session_state.last_pdf_path), title="Current paper PDF", key_scope="current")
+                st.caption(
+                    "Preview rendering is lazy because embedded PDFs can make every Streamlit interaction slow."
+                )
+                if st.button("Render current PDF preview", width="stretch", key="render_current_pdf_preview"):
+                    _render_pdf_preview(str(st.session_state.last_pdf_path), title="Current paper PDF", key_scope="current")
 
         meta_cols = st.columns(4)
         meta_cols[0].metric("Paper Type", str(getattr(result, "paper_type", "unknown")).title())
@@ -1354,33 +1462,35 @@ with tabs[0]:
         meta_cols[3].metric("Term Conflicts", len(result.terminology_conflicts))
 
         with st.expander("Stored KG Snapshot", expanded=False):
-            with init_metadata_db() as metadata_db:
-                paper_record = metadata_db.get_paper(paper_identifier)
-                stored_results = metadata_db.get_paper_extractions(paper_identifier, limit=5)
-            if paper_record:
-                st.write("**Paper node:**")
-                st.json(paper_record)
-            else:
-                st.info("No paper node stored yet for this paper_id.")
+            st.caption("Load this only when you need the persisted record for the current paper.")
+            if st.button("Load stored KG snapshot", width="stretch", key="load_stored_kg_snapshot"):
+                with init_metadata_db() as metadata_db:
+                    paper_record = metadata_db.get_paper(paper_identifier)
+                    stored_results = metadata_db.get_paper_extractions(paper_identifier, limit=5)
+                if paper_record:
+                    st.write("**Paper node:**")
+                    st.json(paper_record)
+                else:
+                    st.info("No paper node stored yet for this paper_id.")
 
-            if stored_results:
-                st.write("**Recent stored extractions:**")
-                st.dataframe(
-                    [
-                        {
-                            "id": item.get("id"),
-                            "status": item.get("extraction_status"),
-                            "provider": item.get("llm_provider"),
-                            "model": item.get("llm_model"),
-                            "timestamp": item.get("extraction_timestamp"),
-                        }
-                        for item in stored_results
-                    ],
-                    width="stretch",
-                    hide_index=True,
-                )
-            else:
-                st.caption("No stored extraction rows for this paper yet.")
+                if stored_results:
+                    st.write("**Recent stored extractions:**")
+                    st.dataframe(
+                        [
+                            {
+                                "id": item.get("id"),
+                                "status": item.get("extraction_status"),
+                                "provider": item.get("llm_provider"),
+                                "model": item.get("llm_model"),
+                                "timestamp": item.get("extraction_timestamp"),
+                            }
+                            for item in stored_results
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+                else:
+                    st.caption("No stored extraction rows for this paper yet.")
 
         # Concepts
         col1, col2, col3 = st.columns(3)
@@ -1563,10 +1673,12 @@ with tabs[0]:
 # Tab 2: PDFs
 with tabs[1]:
     st.header("Local PDF Library")
+    if st.button("Refresh PDF list", width="content", key="pdf_library_refresh"):
+        st.rerun()
     harvested_pdfs = _list_harvested_pdfs()
 
     if not harvested_pdfs:
-        st.info("No local PDFs found in data/pdfs. Use Upload PDF, PDF URL, or Harvest first.")
+        st.info(f"No local PDFs found in {PDF_DIR}. Use Upload PDF, PDF URL, or Harvest first.")
     else:
         pdf_options = {label: path for label, path in harvested_pdfs}
         selected_pdf_name = st.selectbox(
@@ -1603,7 +1715,12 @@ with tabs[1]:
                 _clear_loaded_input()
                 st.rerun()
 
-        _render_pdf_preview(selected_pdf_path, title=selected_pdf_name, key_scope="library")
+        with st.expander("PDF Preview", expanded=False):
+            st.caption(
+                "Preview rendering is intentionally lazy because Streamlit runs every tab on each interaction."
+            )
+            if st.button("Render selected PDF preview", width="stretch", key="render_library_pdf_preview"):
+                _render_pdf_preview(selected_pdf_path, title=selected_pdf_name, key_scope="library")
 
         if st.session_state.get("loaded_paper_text"):
             with st.expander("Loaded parsed text", expanded=False):
@@ -1657,7 +1774,8 @@ with tabs[2]:
                 # Save
                 import json
 
-                with open("data/vocabulary.json", "w") as f:
+                VOCABULARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(VOCABULARY_PATH, "w", encoding="utf-8") as f:
                     json.dump(vocabulary.to_dict(), f, indent=2)
 
                 st.success("Entry added")
@@ -1780,7 +1898,7 @@ with tabs[4]:
     if "harvest_results" in st.session_state:
         results = st.session_state.harvest_results
         st.subheader("Search Results")
-        st.write("Use the download buttons to store PDFs in data/pdfs.")
+        st.write(f"Use the download buttons to store PDFs in {PDF_DIR}.")
 
         for index, paper in enumerate(results, start=1):
             title = paper.get("title") or "Untitled paper"
@@ -1823,81 +1941,57 @@ with tabs[5]:
         with init_metadata_db() as metadata_db:
             if paper_id_filter.strip():
                 # Show specific paper's extractions
-                extractions = metadata_db.get_paper_extractions(paper_id_filter.strip(), limit=100)
+                extractions = metadata_db.get_paper_extractions(paper_id_filter.strip(), limit=50)
                 history_title = f"Extractions for {paper_id_filter}"
             else:
                 # Show most recent extractions across all papers
-                extractions = metadata_db.list_extraction_results(limit=50)
-                history_title = "Recent Extractions (Last 50)"
+                extractions = metadata_db.list_extraction_results(limit=20)
+                history_title = "Recent Extractions (Last 20)"
         st.subheader(history_title)
     except Exception as exc:
         extractions = []
         st.error(
             "Could not open the metadata database. Close other running ScienceKG/Streamlit/Python "
-            f"processes that use data/metadata.duckdb, then refresh. Details: {exc}"
+            f"processes that use {METADATA_DB_PATH}, then refresh. Details: {exc}"
         )
     
     if extractions:
         st.write(f"Found {len(extractions)} extraction(s)")
-        
-        for ext in extractions:
-            with st.expander(
-                f"{ext.get('paper_id', 'Unknown')} | "
-                f"{ext.get('llm_model', 'Unknown')} | "
-                f"{ext.get('extraction_status', 'Unknown').upper()} | "
-                f"{ext.get('extraction_timestamp', 'Unknown')}"
-            ):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Paper ID", ext.get('paper_id', 'N/A'))
-                    st.metric("Provider", ext.get('llm_provider', 'N/A'))
-                
-                with col2:
-                    st.metric("Model", ext.get('llm_model', 'N/A'))
-                    st.metric("Status", ext.get('extraction_status', 'N/A'))
-                
-                with col3:
-                    st.metric("Concepts", len(ext.get('concepts', [])))
-                    st.metric("Methods", len(ext.get('methods', [])))
-                    st.metric("Claims", len(ext.get('claims', [])))
-                    if ext.get('extraction_duration_seconds'):
-                        st.metric("Duration", _format_duration(ext.get('extraction_duration_seconds')))
 
-                if ext.get('raw_response'):
-                    with st.expander("Extraction payload"):
-                        parsed_raw = _safe_json_parse(str(ext.get('raw_response')))
-                        if parsed_raw is not None:
-                            st.json(parsed_raw)
-                        else:
-                            st.code(str(ext.get('raw_response')))
-                
-                if ext.get('error_message'):
-                    st.error(f"Error: {ext['error_message']}")
-                
-                if ext.get('concepts'):
-                    st.subheader("Concepts")
-                    for concept in ext['concepts']:
-                        st.write(f"- {concept.get('label', 'Unknown')} (confidence: {concept.get('confidence', 0):.1%})")
-                
-                if ext.get('methods'):
-                    st.subheader("Methods")
-                    for method in ext['methods']:
-                        st.write(f"- {method.get('label', 'Unknown')}")
-                
-                if ext.get('claims'):
-                    st.subheader("Claims")
-                    for claim in ext['claims']:
-                        st.write(f"- {claim.get('statement', 'Unknown')}")
+        st.dataframe(
+            [
+                {
+                    "id": ext.get("id"),
+                    "paper_id": ext.get("paper_id"),
+                    "status": ext.get("extraction_status"),
+                    "provider": ext.get("llm_provider"),
+                    "model": ext.get("llm_model"),
+                    "timestamp": ext.get("extraction_timestamp"),
+                    "concepts": _payload_count(ext.get("concepts")),
+                    "methods": _payload_count(ext.get("methods")),
+                    "claims": _payload_count(ext.get("claims")),
+                    "duration": _format_duration(ext.get("extraction_duration_seconds"))
+                    if ext.get("extraction_duration_seconds")
+                    else "",
+                }
+                for ext in extractions
+            ],
+            width="stretch",
+            hide_index=True,
+        )
 
-                if ext.get('cross_domain_hints'):
-                    st.subheader("Cross-Domain Hints")
-                    for hint in ext['cross_domain_hints']:
-                        st.info(_format_cross_domain_hint(hint))
-
-                if ext.get('terminology_conflicts'):
-                    st.subheader("Terminology Conflicts")
-                    st.dataframe(ext['terminology_conflicts'], width="stretch", hide_index=True)
+        detail_options = {
+            _extraction_history_label(index, ext): ext
+            for index, ext in enumerate(extractions, start=1)
+        }
+        selected_history = st.selectbox(
+            "Show details for extraction",
+            options=[""] + list(detail_options.keys()),
+            format_func=lambda value: "Select an extraction..." if value == "" else value,
+            key="history_detail_selection",
+        )
+        if selected_history:
+            _render_extraction_history_detail(detail_options[selected_history])
     else:
         st.info("No extraction history found. Start by extracting entities from papers.")
 
