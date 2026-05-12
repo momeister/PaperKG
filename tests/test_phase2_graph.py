@@ -45,11 +45,29 @@ class FakeGraph:
     def merge_method(self, method: dict) -> None:
         self.methods[method["id"]] = method
 
-    def merge_has_concept(self, paper_id: str, concept_id: str, weight: float) -> None:
-        self.has_concepts.append((paper_id, concept_id, weight))
+    def merge_has_concept(
+        self,
+        paper_id: str,
+        concept_id: str,
+        weight: float,
+        relation: str = "MENTIONS",
+        evidence_span: str = "",
+        confidence: float = 0.0,
+        source: str = "",
+    ) -> None:
+        self.has_concepts.append((paper_id, concept_id, weight, relation, evidence_span, confidence, source))
 
-    def merge_has_method(self, paper_id: str, method_id: str, weight: float) -> None:
-        self.has_methods.append((paper_id, method_id, weight))
+    def merge_has_method(
+        self,
+        paper_id: str,
+        method_id: str,
+        weight: float,
+        relation: str = "USES",
+        evidence_span: str = "",
+        confidence: float = 0.0,
+        source: str = "",
+    ) -> None:
+        self.has_methods.append((paper_id, method_id, weight, relation, evidence_span, confidence, source))
 
     def merge_related_concept(self, subject_id: str, object_id: str, relation_type: str) -> None:
         self.related_concepts.append((subject_id, object_id, relation_type))
@@ -139,7 +157,15 @@ def test_ingest_extractions_writes_semantic_edges_from_canonical_paper() -> None
                 {"label": "Concept Drift", "confidence": 0.42, "review_status": "approved"},
                 {"label": ""},
             ],
-            methods=[{"label": "Data Source Monitoring", "confidence": 0.8, "review_status": "approved"}],
+            methods=[
+                {
+                    "label": "Data Source Monitoring",
+                    "confidence": 0.8,
+                    "review_status": "approved",
+                    "source_type": "paper_contribution",
+                    "evidence_span": "monitoring changes in data sources",
+                }
+            ],
             concept_candidates=[{"label": "Machine Learning", "confidence": 0.9}],
             method_candidates=[{"label": "Q-learning", "confidence": 0.9}],
         )
@@ -151,6 +177,8 @@ def test_ingest_extractions_writes_semantic_edges_from_canonical_paper() -> None
         assert stats.method_edges_written == 1
         assert graph.has_concepts[0][0] == "arxiv:2509.08759"
         assert graph.has_methods[0][0] == "arxiv:2509.08759"
+        assert graph.has_methods[0][3] == "INTRODUCES"
+        assert graph.has_methods[0][4] == "monitoring changes in data sources"
         assert next(iter(graph.concepts.values()))["label"] == "Concept Drift"
         assert "Machine Learning" not in {node["label"] for node in graph.concepts.values()}
         assert "Q-learning" not in {node["label"] for node in graph.methods.values()}
@@ -195,6 +223,43 @@ def test_ingest_extractions_filters_legacy_deterministic_scan_noise() -> None:
     assert stats.method_edges_written == 1
     assert {node["label"] for node in graph.concepts.values()} == {"Accepted Concept"}
     assert {node["label"] for node in graph.methods.values()} == {"Accepted Method"}
+
+
+def test_ingest_extractions_creates_stub_paper_anchor_when_metadata_is_missing() -> None:
+    class Metadata:
+        def list_extraction_results(self, limit: int = 5000):
+            return [
+                {
+                    "extraction_status": "success",
+                    "paper_id": "paper_only_in_extractions",
+                    "paper_type": "survey",
+                    "concept_candidates": [],
+                    "method_candidates": [],
+                    "concepts": [],
+                    "methods": [
+                        {
+                            "label": "Survey Framework",
+                            "confidence": 0.82,
+                            "review_status": "approved",
+                            "source_type": "paper_contribution",
+                            "evidence_span": "we introduce a survey framework",
+                        }
+                    ],
+                    "temporal_coverage": {"paper_year": 2024},
+                }
+            ]
+
+        def resolve_paper(self, paper_id: str):
+            return None
+
+    graph = FakeGraph()
+
+    stats = ingest_extractions_from_metadata_db(graph, Metadata())
+
+    assert stats.papers_written == 1
+    assert "paper_only_in_extractions" in graph.papers
+    assert graph.has_methods[0][0] == "paper_only_in_extractions"
+    assert graph.has_methods[0][3] == "INTRODUCES"
 
 
 def test_ingest_extractions_blocks_pending_review_entities() -> None:

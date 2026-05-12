@@ -24,6 +24,8 @@ relation_types:
   - USES
   - USED_IN
   - USED_FOR
+  - IMPLEMENTS
+  - ELICITS
   - PART_OF
   - EXTENDS
   - MODULATED_BY
@@ -124,6 +126,14 @@ seed_concepts:
     entity_type: Theory
     aliases: [Dimensional emotions, Valence-arousal space]
     domain: Psychology
+  - label: Categorical emotion
+    entity_type: DomainConcept
+    aliases: [Discrete emotion]
+    domain: Affective Computing
+  - label: Dimensional emotion
+    entity_type: DomainConcept
+    aliases: [Dimensional affect]
+    domain: Affective Computing
   - label: Homeostasis
     entity_type: DomainConcept
     aliases: [Homeostatic regulation]
@@ -216,7 +226,27 @@ seed_concepts:
     entity_type: DomainConcept
     aliases: []
     domain: Psychology
+  - label: Control
+    entity_type: DomainConcept
+    aliases: [Control appraisal]
+    domain: Affective Computing
+  - label: Well-being
+    entity_type: DomainConcept
+    aliases: [Wellbeing]
+    domain: Affective Computing
   - label: Dopamine
+    entity_type: Phenomenon
+    aliases: []
+    domain: Neuroscience
+  - label: Serotonin
+    entity_type: Phenomenon
+    aliases: []
+    domain: Neuroscience
+  - label: Noradrenaline
+    entity_type: Phenomenon
+    aliases: [Norepinephrine]
+    domain: Neuroscience
+  - label: Acetylcholine
     entity_type: Phenomenon
     aliases: []
     domain: Neuroscience
@@ -264,6 +294,18 @@ seed_concepts:
     entity_type: MethodFamily
     aliases: [Deep RL]
     domain: Machine Learning
+  - label: Exploration/exploitation trade-off
+    entity_type: DomainConcept
+    aliases: [Exploration-exploitation trade-off, Exploration exploitation trade-off]
+    domain: Reinforcement Learning
+  - label: Primary reinforcers
+    entity_type: DomainConcept
+    aliases: [Primary reinforcer]
+    domain: Psychology
+  - label: Boltzmann action selection temperature
+    entity_type: Metric
+    aliases: [Boltzmann temperature, Temperature parameter]
+    domain: Reinforcement Learning
   - label: Deep neural networks
     entity_type: ModelArchitecture
     aliases: [Deep neural network, DNN]

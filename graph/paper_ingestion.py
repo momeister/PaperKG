@@ -23,13 +23,39 @@ class GraphWriter(Protocol):
 	def merge_method(self, method: dict[str, Any]) -> None:
 		...
 
-	def merge_has_concept(self, paper_id: str, concept_id: str, weight: float) -> None:
+	def merge_has_concept(
+		self,
+		paper_id: str,
+		concept_id: str,
+		weight: float,
+		relation: str = "MENTIONS",
+		evidence_span: str = "",
+		confidence: float = 0.0,
+		source: str = "",
+	) -> None:
 		...
 
-	def merge_has_method(self, paper_id: str, method_id: str, weight: float) -> None:
+	def merge_has_method(
+		self,
+		paper_id: str,
+		method_id: str,
+		weight: float,
+		relation: str = "USES",
+		evidence_span: str = "",
+		confidence: float = 0.0,
+		source: str = "",
+	) -> None:
 		...
 
-	def merge_related_concept(self, subject_id: str, object_id: str, relation_type: str) -> None:
+	def merge_related_concept(
+		self,
+		subject_id: str,
+		object_id: str,
+		relation_type: str,
+		evidence_span: str = "",
+		confidence: float = 0.0,
+		source: str = "",
+	) -> None:
 		...
 
 
@@ -161,7 +187,7 @@ def ingest_extractions_from_metadata_db(
 	graph: GraphWriter,
 	metadata_db: Any,
 	limit: int = 5000,
-	create_missing_paper_stubs: bool = False,
+	create_missing_paper_stubs: bool = True,
 ) -> IngestionStats:
 	"""Ingest extracted concepts/methods into Kuzu semantic KG edges."""
 	stats = IngestionStats()
@@ -201,7 +227,7 @@ def ingest_extractions_from_metadata_db(
 			seen_per_paper.add(key)
 			seen_entity_ids_per_paper.add(entity_key)
 			graph.merge_concept(node)
-			graph.merge_has_concept(canonical_id, node["id"], _weight(concept))
+			_merge_has_concept(graph, canonical_id, node["id"], concept, extraction)
 			current_concept_ids.add(node["id"])
 			stats.concept_nodes_written += 1
 			stats.concept_edges_written += 1
@@ -219,7 +245,7 @@ def ingest_extractions_from_metadata_db(
 			seen_per_paper.add(key)
 			seen_entity_ids_per_paper.add(entity_key)
 			graph.merge_method(node)
-			graph.merge_has_method(canonical_id, node["id"], _weight(method))
+			_merge_has_method(graph, canonical_id, node["id"], method, extraction)
 			stats.method_nodes_written += 1
 			stats.method_edges_written += 1
 
@@ -231,7 +257,7 @@ def ingest_extractions_from_metadata_db(
 			if subject_id not in current_concept_ids or object_id not in current_concept_ids:
 				continue
 			if hasattr(graph, "merge_related_concept"):
-				graph.merge_related_concept(subject_id, object_id, str(relation.get("relation_type") or "RELATED_TO"))
+				_merge_related_concept(graph, relation)
 				stats.relation_edges_written += 1
 
 	return stats
@@ -314,6 +340,79 @@ def _weight(entity: dict[str, Any]) -> float:
 		return 1.0
 
 
+def _entity_evidence(entity: dict[str, Any]) -> str:
+	return str(entity.get("evidence_span") or entity.get("evidence") or entity.get("context") or "")[:360]
+
+
+def _entity_source(entity: dict[str, Any]) -> str:
+	return str(entity.get("source_type") or entity.get("evidence_role") or entity.get("source") or "")
+
+
+def _paper_concept_relation(extraction: dict[str, Any], concept: dict[str, Any]) -> str:
+	paper_type = str(extraction.get("paper_type") or "").lower()
+	evidence_role = str(concept.get("evidence_role") or "").lower()
+	salience = str(concept.get("salience") or "").lower()
+	if paper_type == "survey" and salience in {"central", "supporting"}:
+		return "REVIEWS"
+	if evidence_role in {"metric", "theory", "domain_concept", "method_family"}:
+		return "DISCUSSES"
+	return "MENTIONS"
+
+
+def _paper_method_relation(extraction: dict[str, Any], method: dict[str, Any]) -> str:
+	paper_type = str(extraction.get("paper_type") or "").lower()
+	source_type = str(method.get("source_type") or "").lower()
+	if source_type == "paper_contribution":
+		return "INTRODUCES"
+	if paper_type == "survey" or source_type == "reviewed_method":
+		return "REVIEWS"
+	if source_type in {"baseline", "background"}:
+		return "MENTIONS"
+	return "USES"
+
+
+def _merge_has_concept(
+	graph: GraphWriter,
+	paper_id_value: str,
+	concept_id: str,
+	concept: dict[str, Any],
+	extraction: dict[str, Any],
+) -> None:
+	try:
+		graph.merge_has_concept(
+			paper_id_value,
+			concept_id,
+			_weight(concept),
+			_paper_concept_relation(extraction, concept),
+			_entity_evidence(concept),
+			_weight(concept),
+			_entity_source(concept),
+		)
+	except TypeError:
+		graph.merge_has_concept(paper_id_value, concept_id, _weight(concept))
+
+
+def _merge_has_method(
+	graph: GraphWriter,
+	paper_id_value: str,
+	method_id: str,
+	method: dict[str, Any],
+	extraction: dict[str, Any],
+) -> None:
+	try:
+		graph.merge_has_method(
+			paper_id_value,
+			method_id,
+			_weight(method),
+			_paper_method_relation(extraction, method),
+			_entity_evidence(method),
+			_weight(method),
+			_entity_source(method),
+		)
+	except TypeError:
+		graph.merge_has_method(paper_id_value, method_id, _weight(method))
+
+
 def _accepted_entities(
 	extraction: dict[str, Any],
 	field: str,
@@ -377,6 +476,29 @@ def _accepted_relations(extraction: dict[str, Any]) -> list[dict[str, Any]]:
 			continue
 		output.append(relation)
 	return output
+
+
+def _merge_related_concept(graph: GraphWriter, relation: dict[str, Any]) -> None:
+	subject_id = str(relation.get("subject_id") or "")
+	object_id = str(relation.get("object_id") or "")
+	relation_type = str(relation.get("relation_type") or "RELATED_TO")
+	evidence_span = str(relation.get("evidence_span") or "")
+	source = str(relation.get("source") or "")
+	try:
+		confidence = float(relation.get("confidence") or 0.0)
+	except (TypeError, ValueError):
+		confidence = 0.0
+	try:
+		graph.merge_related_concept(
+			subject_id,
+			object_id,
+			relation_type,
+			evidence_span,
+			confidence,
+			source,
+		)
+	except TypeError:
+		graph.merge_related_concept(subject_id, object_id, relation_type)
 
 
 def ingest_from_metadata_db(

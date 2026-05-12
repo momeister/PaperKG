@@ -1664,9 +1664,9 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "AÃ¯Â¬â‚¬ective modelling": {
+  "AÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ective modelling": {
     "aliases": [
-      "aÃ¯Â¬â‚¬ective modelling"
+      "aÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ective modelling"
     ],
     "openalx_id": null,
     "domain": null,
@@ -1691,9 +1691,9 @@
     "confidence": 1.0,
     "custom_metadata": {}
   },
-  "Bayesian AÃ¯Â¬â‚¬ect Control Theory": {
+  "Bayesian AÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ect Control Theory": {
     "aliases": [
-      "bayesian aÃ¯Â¬â‚¬ect control theory"
+      "bayesian aÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ect control theory"
     ],
     "openalx_id": null,
     "domain": null,
@@ -1785,6 +1785,175 @@
     ],
     "openalx_id": null,
     "domain": "Machine Learning",
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotion": {
+    "aliases": [
+      "emotion"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Prospect Theory": {
+    "aliases": [
+      "prospect theory"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Serotonin": {
+    "aliases": [
+      "serotonin"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Noradrenaline": {
+    "aliases": [
+      "noradrenaline"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Acetylcholine": {
+    "aliases": [
+      "acetylcholine"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Dimensional models": {
+    "aliases": [
+      "dimensional models"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Rolls' evolutionary theory of emotion": {
+    "aliases": [
+      "rolls' evolutionary theory of emotion"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Model-free reinforcement learning": {
+    "aliases": [
+      "model-free reinforcement learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "optimism in the face of uncertainty": {
+    "aliases": [],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Boltzmann action selection temperature": {
+    "aliases": [
+      "boltzmann action selection temperature"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Intrinsically motivated RL framework": {
+    "aliases": [
+      "intrinsically motivated rl framework"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Grid world": {
+    "aliases": [
+      "grid world"
+    ],
+    "openalx_id": null,
+    "domain": "Reinforcement Learning",
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Adaptive Critic": {
+    "aliases": [
+      "adaptive critic"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Internal Critic": {
+    "aliases": [
+      "internal critic"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Deep auto-encoders": {
+    "aliases": [
+      "deep auto-encoders"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Representation learning": {
+    "aliases": [
+      "representation learning"
+    ],
+    "openalx_id": null,
+    "domain": null,
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Component Process Theory": {
+    "aliases": [
+      "component process theory"
+    ],
+    "openalx_id": null,
+    "domain": "Computational Affective Science",
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Emotion Elicitation and Function Taxonomy": {
+    "aliases": [
+      "emotion elicitation and function taxonomy"
+    ],
+    "openalx_id": null,
+    "domain": "Affective Computing",
+    "confidence": 1.0,
+    "custom_metadata": {}
+  },
+  "Social robot Maggie": {
+    "aliases": [
+      "social robot maggie"
+    ],
+    "openalx_id": null,
+    "domain": "Human-Robot Interaction",
     "confidence": 1.0,
     "custom_metadata": {}
   }

@@ -68,14 +68,14 @@ SCHEMA_STATEMENTS = [
 	)
 	""",
 	"CREATE REL TABLE IF NOT EXISTS CITES(FROM Paper TO Paper)",
-	"CREATE REL TABLE IF NOT EXISTS HAS_CONCEPT(FROM Paper TO Concept, weight DOUBLE)",
-	"CREATE REL TABLE IF NOT EXISTS HAS_METHOD(FROM Paper TO Method, weight DOUBLE)",
+	"CREATE REL TABLE IF NOT EXISTS HAS_CONCEPT(FROM Paper TO Concept, weight DOUBLE, relation STRING, evidence_span STRING, confidence DOUBLE, source STRING)",
+	"CREATE REL TABLE IF NOT EXISTS HAS_METHOD(FROM Paper TO Method, weight DOUBLE, relation STRING, evidence_span STRING, confidence DOUBLE, source STRING)",
 	"CREATE REL TABLE IF NOT EXISTS AUTHORED_BY(FROM Paper TO Author)",
 	"CREATE REL TABLE IF NOT EXISTS IMPLEMENTS(FROM Paper TO Repository)",
 	"CREATE REL TABLE IF NOT EXISTS SIMILAR_TO(FROM Paper TO Paper, score DOUBLE, type STRING)",
 	"CREATE REL TABLE IF NOT EXISTS CONFLICTS_WITH(FROM Paper TO Paper, aspect STRING)",
 	"CREATE REL TABLE IF NOT EXISTS SUPERSEDES(FROM Paper TO Paper)",
-	"CREATE REL TABLE IF NOT EXISTS RELATED_CONCEPT(FROM Concept TO Concept, relation STRING)",
+	"CREATE REL TABLE IF NOT EXISTS RELATED_CONCEPT(FROM Concept TO Concept, relation STRING, evidence_span STRING, confidence DOUBLE, source STRING)",
 ]
 
 
@@ -199,32 +199,122 @@ class KuzuGraph:
 		"""
 		conn.execute(query, method)
 
-	def merge_has_concept(self, paper_id: str, concept_id: str, weight: float) -> None:
+	def merge_has_concept(
+		self,
+		paper_id: str,
+		concept_id: str,
+		weight: float,
+		relation: str = "MENTIONS",
+		evidence_span: str = "",
+		confidence: float = 0.0,
+		source: str = "",
+	) -> None:
 		conn = self.connection
 		query = """
 		MATCH (p:Paper {id: $paper_id}), (c:Concept {id: $concept_id})
 		MERGE (p)-[r:HAS_CONCEPT]->(c)
-		SET r.weight = $weight
+		SET
+		  r.weight = $weight,
+		  r.relation = $relation,
+		  r.evidence_span = $evidence_span,
+		  r.confidence = $confidence,
+		  r.source = $source
 		"""
-		conn.execute(query, {"paper_id": paper_id, "concept_id": concept_id, "weight": float(weight)})
+		params = {
+			"paper_id": paper_id,
+			"concept_id": concept_id,
+			"weight": float(weight),
+			"relation": relation,
+			"evidence_span": evidence_span,
+			"confidence": float(confidence or 0.0),
+			"source": source,
+		}
+		try:
+			conn.execute(query, params)
+		except Exception:
+			legacy_query = """
+			MATCH (p:Paper {id: $paper_id}), (c:Concept {id: $concept_id})
+			MERGE (p)-[r:HAS_CONCEPT]->(c)
+			SET r.weight = $weight
+			"""
+			conn.execute(legacy_query, params)
 
-	def merge_has_method(self, paper_id: str, method_id: str, weight: float) -> None:
+	def merge_has_method(
+		self,
+		paper_id: str,
+		method_id: str,
+		weight: float,
+		relation: str = "USES",
+		evidence_span: str = "",
+		confidence: float = 0.0,
+		source: str = "",
+	) -> None:
 		conn = self.connection
 		query = """
 		MATCH (p:Paper {id: $paper_id}), (m:Method {id: $method_id})
 		MERGE (p)-[r:HAS_METHOD]->(m)
-		SET r.weight = $weight
+		SET
+		  r.weight = $weight,
+		  r.relation = $relation,
+		  r.evidence_span = $evidence_span,
+		  r.confidence = $confidence,
+		  r.source = $source
 		"""
-		conn.execute(query, {"paper_id": paper_id, "method_id": method_id, "weight": float(weight)})
+		params = {
+			"paper_id": paper_id,
+			"method_id": method_id,
+			"weight": float(weight),
+			"relation": relation,
+			"evidence_span": evidence_span,
+			"confidence": float(confidence or 0.0),
+			"source": source,
+		}
+		try:
+			conn.execute(query, params)
+		except Exception:
+			legacy_query = """
+			MATCH (p:Paper {id: $paper_id}), (m:Method {id: $method_id})
+			MERGE (p)-[r:HAS_METHOD]->(m)
+			SET r.weight = $weight
+			"""
+			conn.execute(legacy_query, params)
 
-	def merge_related_concept(self, subject_id: str, object_id: str, relation_type: str) -> None:
+	def merge_related_concept(
+		self,
+		subject_id: str,
+		object_id: str,
+		relation_type: str,
+		evidence_span: str = "",
+		confidence: float = 0.0,
+		source: str = "",
+	) -> None:
 		conn = self.connection
 		query = """
 		MATCH (a:Concept {id: $subject_id}), (b:Concept {id: $object_id})
 		MERGE (a)-[r:RELATED_CONCEPT]->(b)
-		SET r.relation = $relation_type
+		SET
+		  r.relation = $relation_type,
+		  r.evidence_span = $evidence_span,
+		  r.confidence = $confidence,
+		  r.source = $source
 		"""
-		conn.execute(query, {"subject_id": subject_id, "object_id": object_id, "relation_type": relation_type})
+		params = {
+			"subject_id": subject_id,
+			"object_id": object_id,
+			"relation_type": relation_type,
+			"evidence_span": evidence_span,
+			"confidence": float(confidence or 0.0),
+			"source": source,
+		}
+		try:
+			conn.execute(query, params)
+		except Exception:
+			legacy_query = """
+			MATCH (a:Concept {id: $subject_id}), (b:Concept {id: $object_id})
+			MERGE (a)-[r:RELATED_CONCEPT]->(b)
+			SET r.relation = $relation_type
+			"""
+			conn.execute(legacy_query, params)
 
 
 def initialize_kuzu_schema(db_path: str = "data/graphs/global_kg") -> KuzuGraph:

@@ -527,6 +527,12 @@ Paper text: {paper_text}"""
         ("Valence", r"\bvalence\b|\bvalency\b"),
         ("Arousal", r"\barousal\b"),
         ("Dopamine", r"\bdopamine\b"),
+        ("Serotonin", r"\bserotonin\b"),
+        ("Noradrenaline", r"\bnoradrenaline\b|\bnorepinephrine\b"),
+        ("Acetylcholine", r"\bacetylcholine\b"),
+        ("Learning rate", r"\blearning rate\b"),
+        ("Discount factor", r"\bdiscount factor\b"),
+        ("Boltzmann action selection temperature", r"\bBoltzmann action selection temperature\b"),
         ("Fuzzy logic", r"\bfuzzy logic\b"),
         ("Transition model", r"\btransition models?\b"),
         ("Forward simulation", r"\bforward simulation\b"),
@@ -618,6 +624,12 @@ Paper text: {paper_text}"""
         "Valence",
         "Arousal",
         "Dopamine",
+        "Serotonin",
+        "Noradrenaline",
+        "Acetylcholine",
+        "Learning rate",
+        "Discount factor",
+        "Boltzmann action selection temperature",
         "Fuzzy logic",
         "Transition model",
         "Forward simulation",
@@ -2875,6 +2887,18 @@ Paper text: {paper_text}"""
                 if phrase_words[0] in stop or phrase_words[-1] in stop:
                     continue
                 phrase = " ".join(phrase_words)
+                generic_words = {
+                    "reinforcement",
+                    "learning",
+                    "agent",
+                    "agents",
+                    "robot",
+                    "robots",
+                    "human",
+                    "humans",
+                }
+                if all(word in generic_words for word in phrase_words):
+                    continue
                 if 10 <= len(phrase) <= 70:
                     counts[phrase.title()] += 1
         return counts

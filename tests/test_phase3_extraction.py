@@ -1093,6 +1093,17 @@ class TestEntityExtractor:
         }
         assert "ML" in candidate_aliases_by_label["Machine Learning"]
 
+    def test_repeated_rl_emotion_phrase_filter_blocks_generic_learning_agents(self):
+        text = (
+            "Learning agents can be useful. Learning agents are discussed. "
+            "Reward shaping improves learning. Reward shaping appears again."
+        )
+
+        phrases = EntityExtractor._repeated_rl_emotion_phrases(text)
+
+        assert "Learning Agents" not in phrases
+        assert "Reward Shaping" in phrases
+
 
 class TestEntityLinker:
     """Test entity linking to knowledge bases."""
@@ -1352,6 +1363,111 @@ class TestEntityLinker:
         assert result.concepts[0]["extracted_roles"] == ["concept", "method"]
         assert result.methods == []
 
+    def test_entity_linker_approves_accepted_custom_methods(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[],
+            methods=[
+                {
+                    "label": "Doya neurotransmitter-RL mapping",
+                    "entity_type": "MethodFamily",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "neurotransmitters and several reinforcement learning parameters",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        assert result.methods[0]["canonical_id"] == "method:doya-neurotransmitter-rl-mapping"
+        assert result.methods[0]["review_status"] == "approved"
+        assert result.methods[0]["acceptance_reason"] == "accepted_method_high_precision"
+
+    def test_entity_linker_merges_survey_contribution_methods(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[],
+            methods=[
+                {
+                    "label": "Survey Taxonomy",
+                    "entity_type": "System",
+                    "source_type": "paper_contribution",
+                    "description": "Taxonomy categorizing emotion elicitation, type, and function",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "proposed taxonomy of emotion elicitation, type and function",
+                },
+                {
+                    "label": "Emotion-RL Survey Framework",
+                    "entity_type": "MethodFamily",
+                    "source_type": "paper_contribution",
+                    "description": "framework connecting emotion models and RL implementations",
+                    "confidence": 0.78,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "establish such a framework",
+                },
+                {
+                    "label": "Intrinsic motivation framework",
+                    "entity_type": "MethodFamily",
+                    "source_type": "paper_contribution",
+                    "description": "structured according to the intrinsically motivated RL framework",
+                    "confidence": 0.74,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "structured according to the intrinsically motivated RL framework",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        assert [method["label"] for method in result.methods] == ["Emotion in RL Survey Taxonomy"]
+        assert result.methods[0]["canonical_id"] == "method:emotion-in-rl-survey-taxonomy"
+        assert "Survey Taxonomy" in result.methods[0]["aliases"]
+        assert result.methods[0]["review_status"] == "approved"
+
+    def test_entity_linker_merges_author_year_method_duplicates(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[],
+            methods=[
+                {
+                    "label": "Gadanho and Hallam (1998, 2001)",
+                    "entity_type": "System",
+                    "source_type": "reviewed_method",
+                    "description": "Early RL system deriving emotions from homeostasis",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "One of the first RL systems deriving emotions from homeostasis",
+                },
+                {
+                    "label": "Gadanho and Hallam emotion model",
+                    "entity_type": "MethodFamily",
+                    "source_type": "reviewed_method",
+                    "description": "Homeostasis-based emotion elicitation modifying reward signals",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Homeostasis: hunger, pain, restlessness",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        assert [method["label"] for method in result.methods] == ["Gadanho and Hallam emotion model"]
+        assert "Gadanho and Hallam (1998, 2001)" in result.methods[0]["aliases"]
+        assert result.methods[0]["review_status"] == "approved"
+
     def test_entity_linker_builds_specific_relation_types(self):
         extraction = ExtractionResult(
             paper_id="p1",
@@ -1428,6 +1544,38 @@ class TestEntityLinker:
                     "review_status": "pending",
                     "evidence_span": "POMDP variant called Bayesian Affect Control Theory",
                 },
+                {
+                    "label": "Value function",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Q-learning iteratively approximates the value-function",
+                },
+                {
+                    "label": "Learning efficiency",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Most authors in emotion-RL research have focussed on learning efficiency",
+                },
+                {
+                    "label": "Homeostasis",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "homeostatic variables can elicit categorical emotions",
+                },
+                {
+                    "label": "Categorical emotion",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "homeostatic variables can elicit categorical emotions",
+                },
             ],
             methods=[
                 {
@@ -1445,6 +1593,14 @@ class TestEntityLinker:
                     "accepted": True,
                     "review_status": "pending",
                     "evidence_span": "Boltzmann action selection mechanism",
+                },
+                {
+                    "label": "Reward shaping",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "reward shaping can improve learning efficiency",
                 },
             ],
         )
@@ -1464,12 +1620,269 @@ class TestEntityLinker:
         assert ("concept:valence", "PART_OF", "concept:dimensional-emotion-theory") in relation_triples
         assert ("concept:bayesian-affect-control-theory", "EXTENDS", "concept:pomdp") in relation_triples
         assert ("concept:q-learning", "USED_IN", "concept:reinforcement-learning") in relation_triples
+        assert ("concept:q-learning", "IMPLEMENTS", "concept:value-function") in relation_triples
+        assert ("concept:reward-shaping", "USED_FOR", "concept:learning-efficiency") in relation_triples
+        assert ("concept:homeostasis", "ELICITS", "concept:categorical-emotion") in relation_triples
         assert ("concept:q-learning", "IS_A", "concept:reinforcement-learning") not in relation_triples
         assert (
             "concept:boltzmann-action-selection",
             "MODULATED_BY",
             "concept:valence",
         ) in relation_triples
+
+    def test_entity_linker_builds_pending_relations_from_review_candidates(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[],
+            methods=[
+                {
+                    "label": "Reward shaping",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "reward shaping",
+                }
+            ],
+            method_candidates=[
+                {
+                    "label": "Appraisal-based reward modulation",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.76,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "evidence_span": "Similar ideas are used for appraisal-based reward modifications.",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation = next(
+            item
+            for item in result.relations
+            if item["subject_id"] == "concept:appraisal-based-reward-modification"
+        )
+
+        assert relation["relation_type"] == "IS_A"
+        assert relation["object_id"] == "concept:reward-shaping"
+        assert relation["review_status"] == "pending"
+        assert relation["source"] == "candidate_relation"
+
+    def test_entity_linker_filters_candidates_shadowed_by_accepted_canonical_entities(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "Extrinsic reward",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Extrinsic reward is related to external resources.",
+                }
+            ],
+            concept_candidates=[
+                {
+                    "label": "Extrinsic motivation",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.86,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "evidence_span": "extrinsic motivation parallels homeostasis",
+                },
+                {
+                    "label": "Human-robot interaction",
+                    "entity_type": "ApplicationSetting",
+                    "confidence": 0.9,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "evidence_span": "human-robot interaction community",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        candidate_ids = {item["canonical_id"] for item in result.concept_candidates}
+        assert "concept:extrinsic-motivation" not in candidate_ids
+        assert next(item for item in result.concept_candidates if item["canonical_id"] == "concept:human-robot-interaction")[
+            "review_status"
+        ] == "pending"
+
+    def test_entity_linker_builds_neurotransmitter_parameter_relations(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "Serotonin",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "serotonin and the discount factor",
+                },
+                {
+                    "label": "Discount factor",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "serotonin and the discount factor",
+                },
+                {
+                    "label": "Noradrenaline",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "noradrenaline and the Boltzmann action selection temperature",
+                },
+                {
+                    "label": "Boltzmann action selection temperature",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "noradrenaline and the Boltzmann action selection temperature",
+                },
+                {
+                    "label": "Acetylcholine",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "acetylcholine and the learning rate",
+                },
+                {
+                    "label": "Learning rate",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "acetylcholine and the learning rate",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+
+        assert ("concept:serotonin", "CORRESPONDS_TO", "concept:discount-factor") in relation_triples
+        assert (
+            "concept:noradrenaline",
+            "CORRESPONDS_TO",
+            "concept:boltzmann-action-selection-temperature",
+        ) in relation_triples
+        assert ("concept:acetylcholine", "CORRESPONDS_TO", "concept:learning-rate") in relation_triples
+
+    def test_entity_linker_repairs_zero_mention_count_from_alias_evidence(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            methods=[
+                {
+                    "label": "Model-based reinforcement learning",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "mention_count": 0,
+                    "evidence_span": "Model-based RL is a hybrid form of planning and sampling.",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        assert result.methods[0]["mention_count"] == 1
+
+    def test_relation_evidence_avoids_generic_theory_word_matches(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "Appraisal dimensions",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "appraisal dimensions include novelty and valence",
+                },
+                {
+                    "label": "Cognitive appraisal theory",
+                    "entity_type": "Theory",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "cognitive appraisal theory evaluates incoming stimuli",
+                },
+                {
+                    "label": "Dimensional emotion theory",
+                    "entity_type": "Theory",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Dimensional emotion theory assumes an affective space with dimensions",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation = next(
+            item
+            for item in result.relations
+            if item["subject_id"] == "concept:appraisal-dimensions"
+            and item["object_id"] == "concept:appraisal-theory"
+        )
+
+        assert "Dimensional emotion theory" not in relation["evidence_span"]
+
+    def test_entity_linker_prefers_relation_specific_evidence(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[
+                {
+                    "label": "Valence",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "The most implemented dimension is valence.",
+                }
+            ],
+            methods=[
+                {
+                    "label": "Boltzmann action selection",
+                    "entity_type": "Algorithm",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "β parameter in a Boltzmann action selection mechanism",
+                },
+                {
+                    "label": "Broekens valency-driven exploration",
+                    "entity_type": "MethodFamily",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "this valency directly influenced the β parameter in a Boltzmann action selection mechanism",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation = next(
+            item
+            for item in result.relations
+            if item["relation_type"] == "MODULATED_BY"
+        )
+
+        assert "valency directly influenced" in relation["evidence_span"]
 
     def test_canonical_resolver_degrades_hash_embeddings_without_auto_merge(self):
         resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
@@ -1488,6 +1901,8 @@ class TestEntityLinker:
 
         assert ontology.validate_relation_type("USES") == "USES"
         assert ontology.validate_relation_type("MODULATED_BY") == "MODULATED_BY"
+        assert ontology.validate_relation_type("IMPLEMENTS") == "IMPLEMENTS"
+        assert ontology.validate_relation_type("ELICITS") == "ELICITS"
         with pytest.raises(ValueError):
             ontology.validate_relation_type("MAKES_UP")
 

@@ -8,7 +8,10 @@
       {"label": "Homeostasis", "entity_type": "DomainConcept"},
       {"label": "Intrinsic motivation", "entity_type": "DomainConcept"},
       {"label": "Valence", "entity_type": "DomainConcept"},
-      {"label": "Arousal", "entity_type": "DomainConcept"}
+      {"label": "Arousal", "entity_type": "DomainConcept"},
+      {"label": "Value function", "entity_type": "DomainConcept"},
+      {"label": "Learning efficiency", "entity_type": "Metric"},
+      {"label": "Categorical emotion", "entity_type": "DomainConcept"}
     ],
     "concept_candidates": [
       {"label": "Q-learning", "entity_type": "Algorithm"},
@@ -17,9 +20,46 @@
       {"label": "Dynamic Programming", "entity_type": "Algorithm"}
     ],
     "methods": [
-      {"label": "Emotion in RL Survey Taxonomy", "entity_type": "MethodFamily"},
-      {"label": "Appraisal-based emotion elicitation", "entity_type": "MethodFamily"},
-      {"label": "Homeostatic emotion system", "entity_type": "MethodFamily"}
+      {"label": "Emotion in RL Survey Taxonomy", "entity_type": "MethodFamily", "source_type": "paper_contribution"},
+      {"label": "Appraisal-based emotion elicitation", "entity_type": "MethodFamily", "source_type": "reviewed_method"},
+      {"label": "Homeostatic emotion system", "entity_type": "MethodFamily", "source_type": "reviewed_method"}
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:appraisal-dimensions",
+        "relation_type": "PART_OF",
+        "object_id": "concept:appraisal-theory"
+      },
+      {
+        "subject_id": "concept:valence",
+        "relation_type": "PART_OF",
+        "object_id": "concept:dimensional-emotion-theory"
+      },
+      {
+        "subject_id": "concept:homeostasis",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:extrinsic-motivation"
+      },
+      {
+        "subject_id": "concept:appraisal-dimensions",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:intrinsic-motivation"
+      },
+      {
+        "subject_id": "concept:q-learning",
+        "relation_type": "IMPLEMENTS",
+        "object_id": "concept:value-function"
+      },
+      {
+        "subject_id": "concept:reward-shaping",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:learning-efficiency"
+      },
+      {
+        "subject_id": "concept:homeostasis",
+        "relation_type": "ELICITS",
+        "object_id": "concept:categorical-emotion"
+      }
     ]
   },
   "prediction": {
@@ -66,6 +106,24 @@
         "entity_type": "DomainConcept",
         "canonical_id": "concept:arousal",
         "review_status": "approved"
+      },
+      {
+        "label": "Value function",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:value-function",
+        "review_status": "approved"
+      },
+      {
+        "label": "Learning efficiency",
+        "entity_type": "Metric",
+        "canonical_id": "concept:learning-efficiency",
+        "review_status": "approved"
+      },
+      {
+        "label": "Categorical emotion",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:categorical-emotion",
+        "review_status": "approved"
       }
     ],
     "concept_candidates": [
@@ -75,9 +133,60 @@
       {"label": "Dynamic Programming", "entity_type": "Algorithm", "review_status": "pending"}
     ],
     "methods": [
-      {"label": "Emotion in RL Survey Taxonomy", "entity_type": "MethodFamily"},
-      {"label": "Appraisal-based emotion elicitation", "entity_type": "MethodFamily"},
-      {"label": "Homeostatic emotion system", "entity_type": "MethodFamily"}
+      {"label": "Emotion in RL Survey Taxonomy", "entity_type": "MethodFamily", "source_type": "paper_contribution"},
+      {"label": "Appraisal-based emotion elicitation", "entity_type": "MethodFamily", "source_type": "reviewed_method"},
+      {"label": "Homeostatic emotion system", "entity_type": "MethodFamily", "source_type": "reviewed_method"}
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:appraisal-dimensions",
+        "relation_type": "PART_OF",
+        "object_id": "concept:appraisal-theory",
+        "review_status": "approved",
+        "evidence_span": "appraisal dimensions are part of appraisal theory"
+      },
+      {
+        "subject_id": "concept:valence",
+        "relation_type": "PART_OF",
+        "object_id": "concept:dimensional-emotion-theory",
+        "review_status": "approved",
+        "evidence_span": "valence is a dimension of dimensional emotion theory"
+      },
+      {
+        "subject_id": "concept:homeostasis",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:extrinsic-motivation",
+        "review_status": "approved",
+        "evidence_span": "homeostasis and extrinsic motivation"
+      },
+      {
+        "subject_id": "concept:appraisal-dimensions",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:intrinsic-motivation",
+        "review_status": "approved",
+        "evidence_span": "appraisal and intrinsic motivation"
+      },
+      {
+        "subject_id": "concept:q-learning",
+        "relation_type": "IMPLEMENTS",
+        "object_id": "concept:value-function",
+        "review_status": "approved",
+        "evidence_span": "Q-learning iteratively approximates the value-function"
+      },
+      {
+        "subject_id": "concept:reward-shaping",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:learning-efficiency",
+        "review_status": "approved",
+        "evidence_span": "reward shaping can improve learning efficiency"
+      },
+      {
+        "subject_id": "concept:homeostasis",
+        "relation_type": "ELICITS",
+        "object_id": "concept:categorical-emotion",
+        "review_status": "approved",
+        "evidence_span": "homeostatic variables can elicit categorical emotions"
+      }
     ],
     "claims": [
       {"statement": "The survey categorizes computational emotion models in RL agents.", "attributed_to": "this_paper"}

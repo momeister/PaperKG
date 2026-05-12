@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from extraction.embedding_engine import EmbeddingEngine
 from extraction.ontology import CanonicalResolver, Ontology, stable_canonical_id
-from extraction.text_normalization import normalize_key
+from extraction.text_normalization import normalize_key, normalize_scientific_text
 
 from extraction.entity_extractor import EntityExtractor, ExtractionResult
 from query.llm_router import LLMRouter
@@ -161,12 +162,16 @@ class EntityLinker:
             self._enrich_entity(method, default_entity_type="Algorithm")
             for method in extraction.methods
         ]
+        enriched_methods = self._dedupe_methods(
+            extraction.paper_type,
+            enriched_methods,
+        )
         enriched_concept_candidates = [
-            self._enrich_entity(candidate, default_entity_type="DomainConcept")
+            self._enrich_candidate_entity(candidate, default_entity_type="DomainConcept")
             for candidate in extraction.concept_candidates
         ]
         enriched_method_candidates = [
-            self._enrich_entity(candidate, default_entity_type="Algorithm")
+            self._enrich_candidate_entity(candidate, default_entity_type="Algorithm")
             for candidate in extraction.method_candidates
         ]
         enriched_concepts, enriched_concept_candidates = self._promote_exact_review_candidates(
@@ -179,10 +184,18 @@ class EntityLinker:
             enriched_concepts,
             enriched_methods,
         )
+        enriched_concept_candidates, enriched_method_candidates = self._filter_shadowed_candidates(
+            enriched_concept_candidates,
+            enriched_method_candidates,
+            enriched_concepts,
+            enriched_methods,
+        )
         relations = ControlledRelationExtractor(self.resolver).extract(
             enriched_concepts,
             enriched_methods,
             extraction.relations,
+            enriched_concept_candidates,
+            enriched_method_candidates,
         )
 
         enriched_result = ExtractionResult(
@@ -215,10 +228,246 @@ class EntityLinker:
     ) -> dict[str, Any]:
         item = dict(entity)
         item.setdefault("entity_type", default_entity_type)
+        if default_entity_type == "Algorithm" and not item.get("canonical_id"):
+            item["canonical_id"] = stable_canonical_id(item.get("label", ""), prefix="method")
         linked = self.strategy.link(item) if default_entity_type == "DomainConcept" else None
         if linked:
             item = dict(linked)
-        return self.resolver.resolve(item)
+        resolved = self.resolver.resolve(item)
+        if default_entity_type == "Algorithm":
+            resolved = self._approve_accepted_method(resolved)
+        resolved = self._repair_mention_count(resolved)
+        return resolved
+
+    def _enrich_candidate_entity(
+        self,
+        entity: dict[str, Any],
+        default_entity_type: str,
+    ) -> dict[str, Any]:
+        item = self._enrich_entity(entity, default_entity_type=default_entity_type)
+        if str(item.get("review_status") or "").lower() != "rejected":
+            item["review_status"] = "pending"
+        item["accepted"] = False
+        item.setdefault("candidate_reason", item.get("candidate_source") or "needs_review")
+        return item
+
+    @staticmethod
+    def _repair_mention_count(entity: dict[str, Any]) -> dict[str, Any]:
+        """Backfill alias-based mention counts for accepted LLM entities.
+
+        Some local models emit `mention_count: 0` for a method even when the
+        evidence span contains an ontology alias, e.g. "Model-based RL" for
+        "Model-based reinforcement learning". Keep non-zero counts intact.
+        """
+        try:
+            if int(_coerce_float(entity.get("mention_count"), 0.0)) > 0:
+                return entity
+        except (TypeError, ValueError):
+            return entity
+
+        evidence = " ".join(
+            str(entity.get(key) or "")
+            for key in ("evidence_span", "context", "description")
+        )
+        evidence = normalize_scientific_text(evidence).lower()
+        if not evidence.strip():
+            return entity
+
+        labels = [
+            str(entity.get("label") or ""),
+            str(entity.get("canonical_label") or ""),
+            *[str(alias) for alias in (entity.get("aliases") or []) if alias],
+        ]
+        for label in labels:
+            normalized = normalize_scientific_text(label).lower().strip()
+            if not normalized:
+                continue
+            if re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", evidence):
+                item = dict(entity)
+                item["mention_count"] = 1
+                return item
+        return entity
+
+    @staticmethod
+    def _approve_accepted_method(method: dict[str, Any]) -> dict[str, Any]:
+        """Allow precise accepted methods to become KG nodes even without ontology matches."""
+        if method.get("accepted") is not True:
+            return method
+        if str(method.get("review_status") or "").lower() == "rejected":
+            return method
+        if str(method.get("candidate_reason") or ""):
+            return method
+        confidence = _coerce_float(method.get("confidence"), 0.0)
+        if confidence < 0.70:
+            return method
+        source_type = str(method.get("source_type") or "reviewed_method")
+        if source_type not in {"paper_contribution", "reviewed_method", "baseline"}:
+            return method
+        item = dict(method)
+        item["review_status"] = "approved"
+        item.setdefault("acceptance_reason", "accepted_method_high_precision")
+        return item
+
+    @classmethod
+    def _dedupe_methods(
+        cls,
+        paper_type: str,
+        methods: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        survey_contribution: dict[str, Any] | None = None
+        author_year: dict[str, dict[str, Any]] = {}
+
+        for method in methods:
+            if not isinstance(method, dict):
+                continue
+            item = dict(method)
+            if paper_type == "survey" and cls._is_survey_contribution_method(item):
+                canonical = cls._canonical_survey_contribution(item)
+                survey_contribution = canonical if survey_contribution is None else cls._merge_method_entities(
+                    survey_contribution,
+                    canonical,
+                    prefer_source=True,
+                )
+                continue
+
+            key = cls._author_year_method_key(item)
+            if key:
+                existing = author_year.get(key)
+                author_year[key] = item if existing is None else cls._merge_method_entities(
+                    existing,
+                    item,
+                    prefer_source=cls._prefer_method(item, existing),
+                )
+                continue
+
+            merged.append(item)
+
+        if survey_contribution is not None:
+            merged.append(survey_contribution)
+        merged.extend(author_year.values())
+        return cls._dedupe_methods_by_label(merged)
+
+    @staticmethod
+    def _is_survey_contribution_method(method: dict[str, Any]) -> bool:
+        if str(method.get("source_type") or "") != "paper_contribution":
+            return False
+        text = " ".join(
+            str(method.get(key) or "")
+            for key in ("label", "canonical_label", "description", "evidence_span")
+        ).lower()
+        return bool(
+            re.search(r"\b(taxonom\w*|framework|categorization|categorisation|overview)\b", text)
+            and re.search(r"\b(emotion|affect|rl|reinforcement|intrinsic)\b", text)
+        )
+
+    @staticmethod
+    def _canonical_survey_contribution(method: dict[str, Any]) -> dict[str, Any]:
+        item = dict(method)
+        original_label = str(item.get("label") or "")
+        aliases = list(item.get("aliases") or [])
+        if original_label and original_label != "Emotion in RL Survey Taxonomy" and original_label not in aliases:
+            aliases.append(original_label)
+        item["label"] = "Emotion in RL Survey Taxonomy"
+        item["canonical_label"] = "Emotion in RL Survey Taxonomy"
+        item["canonical_id"] = stable_canonical_id("Emotion in RL Survey Taxonomy", prefix="method")
+        item["entity_type"] = "MethodFamily"
+        item["source_type"] = "paper_contribution"
+        if aliases:
+            item["aliases"] = aliases
+        item["review_status"] = "approved" if item.get("accepted") is True else item.get("review_status", "pending")
+        item.setdefault("acceptance_reason", "survey_contribution_canonicalized")
+        return item
+
+    @staticmethod
+    def _author_year_method_key(method: dict[str, Any]) -> str:
+        label = str(method.get("canonical_label") or method.get("label") or "")
+        normalized = normalize_key(label)
+        if not normalized:
+            return ""
+        base = re.sub(r"\s*\((?:19|20)\d{2}(?:\s*,\s*(?:19|20)\d{2})*\)\s*", " ", label)
+        base = re.sub(r"\b(emotion|affective)\s+model\b", " ", base, flags=re.IGNORECASE)
+        base_key = normalize_key(base)
+        if not base_key or base_key == normalized:
+            return ""
+        if not re.search(r"\b(?:and|et\s+al\.?)\b", label, flags=re.IGNORECASE):
+            return ""
+        return f"author_method:{base_key}"
+
+    @classmethod
+    def _dedupe_methods_by_label(cls, methods: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        output: dict[str, dict[str, Any]] = {}
+        for method in methods:
+            key = normalize_key(method.get("canonical_label") or method.get("label"))
+            if not key:
+                continue
+            existing = output.get(key)
+            output[key] = method if existing is None else cls._merge_method_entities(
+                existing,
+                method,
+                prefer_source=cls._prefer_method(method, existing),
+            )
+        return list(output.values())
+
+    @staticmethod
+    def _prefer_method(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+        candidate_label = str(candidate.get("label") or "")
+        current_label = str(current.get("label") or "")
+        candidate_has_year = bool(re.search(r"\((?:19|20)\d{2}", candidate_label))
+        current_has_year = bool(re.search(r"\((?:19|20)\d{2}", current_label))
+        if candidate_has_year != current_has_year:
+            return not candidate_has_year
+        return len(candidate_label) > len(current_label)
+
+    @staticmethod
+    def _merge_method_entities(
+        target: dict[str, Any],
+        source: dict[str, Any],
+        prefer_source: bool = False,
+    ) -> dict[str, Any]:
+        primary, secondary = (source, target) if prefer_source else (target, source)
+        output = dict(primary)
+        aliases = list(output.get("aliases") or [])
+        for alias in secondary.get("aliases") or []:
+            if alias and str(alias) not in aliases and str(alias) != output.get("label"):
+                aliases.append(str(alias))
+        for alias in (
+            secondary.get("label"),
+            secondary.get("canonical_label"),
+            primary.get("label"),
+            primary.get("canonical_label"),
+        ):
+            if alias and str(alias) not in aliases and str(alias) != output.get("label"):
+                aliases.append(str(alias))
+        if aliases:
+            output["aliases"] = aliases
+
+        descriptions = [
+            str(item).strip()
+            for item in (output.get("description"), secondary.get("description"))
+            if str(item or "").strip()
+        ]
+        if descriptions:
+            output["description"] = " | ".join(dict.fromkeys(descriptions))[:1000]
+        evidence = EntityLinker._best_evidence_span([output, secondary])
+        if evidence:
+            output["evidence_span"] = evidence
+        output["confidence"] = max(_coerce_float(output.get("confidence"), 0.0), _coerce_float(secondary.get("confidence"), 0.0))
+        if str(secondary.get("review_status") or "").lower() == "approved":
+            output["review_status"] = "approved"
+        return output
+
+    @staticmethod
+    def _best_evidence_span(items: list[dict[str, Any]]) -> str:
+        spans = [
+            str(item.get("evidence_span") or item.get("context") or item.get("description") or "").strip()
+            for item in items
+        ]
+        spans = [re.sub(r"\s+", " ", span) for span in spans if span]
+        if not spans:
+            return ""
+        spans.sort(key=len, reverse=True)
+        return spans[0][:360]
 
     @staticmethod
     def _promote_exact_review_candidates(
@@ -239,23 +488,43 @@ class EntityLinker:
             "System",
             "Phenomenon",
         }
+        promotable_method_family_keys = {
+            "tdlearning",
+            "motivatedreinforcementlearning",
+            "modelbasedrl",
+            "policysearch",
+            "statemodification",
+            "metalearning",
+        }
         promoted: list[dict[str, Any]] = []
         remaining: list[dict[str, Any]] = []
         for candidate in concept_candidates:
             canonical_id = str(candidate.get("canonical_id") or "")
             match = candidate.get("canonical_match") or {}
             entity_type = str(candidate.get("entity_type") or "")
+            canonical_key = normalize_key(candidate.get("canonical_label") or candidate.get("label"))
             confidence = _coerce_float(candidate.get("confidence"), 0.0)
             mention_count = int(_coerce_float(candidate.get("mention_count"), 0.0))
             salience = str(candidate.get("salience") or "").lower()
-            should_promote = (
+            exact_match = (
                 canonical_id
                 and canonical_id not in existing_ids
                 and match.get("match_type") == "exact_alias"
+            )
+            standard_rescue = (
+                exact_match
                 and entity_type in promotable_types
                 and confidence >= 0.70
                 and (mention_count >= 2 or salience in {"central", "supporting"})
             )
+            method_family_rescue = (
+                exact_match
+                and entity_type == "MethodFamily"
+                and canonical_key in promotable_method_family_keys
+                and confidence >= 0.60
+                and (mention_count >= 1 or salience in {"central", "supporting"})
+            )
+            should_promote = standard_rescue or method_family_rescue
             if should_promote:
                 item = dict(candidate)
                 item["accepted"] = True
@@ -285,7 +554,7 @@ class EntityLinker:
             "Benchmark",
             "Dataset",
         }
-        method_like = {"Algorithm", "MethodFamily", "Task"}
+        method_like = {"Algorithm", "Task"}
 
         def entity_key(item: dict[str, Any]) -> str:
             label_key = normalize_key(item.get("canonical_label") or item.get("label"))
@@ -328,7 +597,7 @@ class EntityLinker:
                 if current is None:
                     enriched = dict(item)
                     enriched["extracted_roles"] = sorted({role, *(enriched.get("extracted_roles") or [])})
-                    by_key[key] = (role, enriched)
+                    by_key[key] = (item_role, enriched)
                     continue
                 existing_role, existing = current
                 if item_role != existing_role:
@@ -339,6 +608,50 @@ class EntityLinker:
         kept_concepts = [item for role, item in by_key.values() if role == "concept"]
         kept_methods = [item for role, item in by_key.values() if role == "method"]
         return kept_concepts, kept_methods
+
+    @staticmethod
+    def _filter_shadowed_candidates(
+        concept_candidates: list[dict[str, Any]],
+        method_candidates: list[dict[str, Any]],
+        concepts: list[dict[str, Any]],
+        methods: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        accepted_ids = {
+            str(item.get("canonical_id"))
+            for item in [*concepts, *methods]
+            if isinstance(item, dict) and item.get("canonical_id")
+        }
+        accepted_labels = {
+            normalize_key(item.get("canonical_label") or item.get("label"))
+            for item in [*concepts, *methods]
+            if isinstance(item, dict)
+        }
+        seen_candidates: set[str] = set()
+
+        def keep(items: list[dict[str, Any]], role: str) -> list[dict[str, Any]]:
+            output: list[dict[str, Any]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                canonical_id = str(item.get("canonical_id") or "")
+                label_key = normalize_key(item.get("canonical_label") or item.get("label"))
+                if canonical_id and canonical_id in accepted_ids:
+                    continue
+                if label_key and label_key in accepted_labels:
+                    continue
+                candidate_key = canonical_id or label_key
+                if not candidate_key:
+                    continue
+                scoped_key = f"{role}:{candidate_key}"
+                cross_key = f"any:{candidate_key}"
+                if scoped_key in seen_candidates or cross_key in seen_candidates:
+                    continue
+                seen_candidates.add(scoped_key)
+                seen_candidates.add(cross_key)
+                output.append(item)
+            return output
+
+        return keep(concept_candidates, "concept"), keep(method_candidates, "method")
 
     @staticmethod
     def _render_raw_response(extraction: ExtractionResult, previous_raw: str) -> str:
@@ -373,6 +686,30 @@ class EntityLinker:
 class ControlledRelationExtractor:
     """Build controlled, evidence-carrying relations between canonical entities."""
 
+    GENERIC_EVIDENCE_WORDS = {
+        "action",
+        "agent",
+        "agents",
+        "based",
+        "concept",
+        "emotion",
+        "emotional",
+        "function",
+        "functions",
+        "learning",
+        "method",
+        "methods",
+        "model",
+        "models",
+        "reinforcement",
+        "state",
+        "states",
+        "system",
+        "systems",
+        "theory",
+        "used",
+    }
+
     def __init__(self, resolver: CanonicalResolver) -> None:
         self.resolver = resolver
 
@@ -381,10 +718,18 @@ class ControlledRelationExtractor:
         concepts: list[dict[str, Any]],
         methods: list[dict[str, Any]],
         existing_relations: list[dict[str, Any]] | None = None,
+        concept_candidates: list[dict[str, Any]] | None = None,
+        method_candidates: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        entities = [item for item in [*concepts, *methods] if self._is_approved(item)]
-        by_label = {self._key(item.get("canonical_label") or item.get("label")): item for item in entities}
-        by_id = {str(item.get("canonical_id")): item for item in entities if item.get("canonical_id")}
+        approved_entities = [item for item in [*concepts, *methods] if self._is_approved(item)]
+        candidate_entities = [
+            item
+            for item in [*(concept_candidates or []), *(method_candidates or [])]
+            if self._is_reviewable_candidate(item)
+        ]
+        entities = [*approved_entities, *candidate_entities]
+        by_label = self._index_by_label(entities)
+        by_id = {str(item.get("canonical_id")): item for item in approved_entities if item.get("canonical_id")}
         relations: list[dict[str, Any]] = []
 
         for relation in existing_relations or []:
@@ -392,59 +737,69 @@ class ControlledRelationExtractor:
             if clean:
                 relations.append(clean)
 
-        self._add_known_relation(relations, by_label, "appraisaldimensions", "PART_OF", "appraisaltheory")
-        self._add_known_relation(relations, by_label, "occmodel", "IS_A", "appraisaltheory")
-        self._add_known_relation(relations, by_label, "componentprocesstheoryofemotions", "IS_A", "appraisaltheory")
-        self._add_known_relation(relations, by_label, "beliefdesiretheoryofemotions", "IS_A", "appraisaltheory")
-        self._add_known_relation(relations, by_label, "valence", "PART_OF", "dimensionalemotiontheory")
-        self._add_known_relation(relations, by_label, "arousal", "PART_OF", "dimensionalemotiontheory")
-        self._add_known_relation(relations, by_label, "novelty", "PART_OF", "appraisaldimensions")
-        self._add_known_relation(relations, by_label, "recency", "PART_OF", "appraisaldimensions")
-        self._add_known_relation(relations, by_label, "temporaldifferenceerror", "CORRESPONDS_TO", "dopamine")
-        self._add_known_relation(relations, by_label, "rewardshaping", "USES", "rewardfunction")
-        self._add_known_relation(relations, by_label, "rewardfunction", "PART_OF", "markovdecisionprocess")
-        self._add_known_relation(relations, by_label, "transitionmodel", "PART_OF", "markovdecisionprocess")
-        self._add_known_relation(relations, by_label, "valuefunction", "PART_OF", "reinforcementlearning")
-        self._add_known_relation(relations, by_label, "kldivergence", "MEASURES", "modeluncertainty")
-        self._add_known_relation(relations, by_label, "pomdp", "IS_A", "markovdecisionprocess")
-        self._add_known_relation(relations, by_label, "bayesianaffectcontroltheory", "EXTENDS", "pomdp")
-        self._add_known_relation(relations, by_label, "deepreinforcementlearning", "IS_A", "reinforcementlearning")
-        self._add_known_relation(relations, by_label, "motivatedreinforcementlearning", "IS_A", "reinforcementlearning")
-        self._add_known_relation(relations, by_label, "homeostaticrewardmodification", "IS_A", "rewardshaping")
-        self._add_known_relation(relations, by_label, "appraisalbasedrewardmodification", "IS_A", "rewardshaping")
-        self._add_known_relation(relations, by_label, "homeostaticrewardmodification", "USES", "homeostasis")
-        self._add_known_relation(relations, by_label, "appraisalbasedrewardmodification", "USES", "appraisaldimensions")
-        self._add_known_relation(relations, by_label, "homeostasis", "USED_FOR", "extrinsicmotivation")
-        self._add_known_relation(relations, by_label, "appraisaldimensions", "USED_FOR", "intrinsicmotivation")
-        self._add_known_relation(relations, by_label, "modelbasedrl", "IS_A", "reinforcementlearning")
-        self._add_known_relation(relations, by_label, "tdlearning", "IS_A", "reinforcementlearning")
-        self._add_known_relation(relations, by_label, "boltzmannactionselection", "MODULATED_BY", "valence")
+        self._add_known_relation(relations, by_label, entities, "appraisaldimensions", "PART_OF", "appraisaltheory")
+        self._add_known_relation(relations, by_label, entities, "occmodel", "IS_A", "appraisaltheory")
+        self._add_known_relation(relations, by_label, entities, "componentprocesstheoryofemotions", "IS_A", "appraisaltheory")
+        self._add_known_relation(relations, by_label, entities, "beliefdesiretheoryofemotions", "IS_A", "appraisaltheory")
+        self._add_known_relation(relations, by_label, entities, "valence", "PART_OF", "dimensionalemotiontheory")
+        self._add_known_relation(relations, by_label, entities, "arousal", "PART_OF", "dimensionalemotiontheory")
+        self._add_known_relation(relations, by_label, entities, "novelty", "PART_OF", "appraisaldimensions")
+        self._add_known_relation(relations, by_label, entities, "recency", "PART_OF", "appraisaldimensions")
+        self._add_known_relation(relations, by_label, entities, "temporaldifferenceerror", "CORRESPONDS_TO", "dopamine")
+        self._add_known_relation(relations, by_label, entities, "rewardshaping", "USES", "rewardfunction")
+        self._add_known_relation(relations, by_label, entities, "rewardfunction", "PART_OF", "markovdecisionprocess")
+        self._add_known_relation(relations, by_label, entities, "transitionmodel", "PART_OF", "markovdecisionprocess")
+        self._add_known_relation(relations, by_label, entities, "valuefunction", "PART_OF", "reinforcementlearning")
+        self._add_known_relation(relations, by_label, entities, "kldivergence", "MEASURES", "modeluncertainty")
+        self._add_known_relation(relations, by_label, entities, "pomdp", "IS_A", "markovdecisionprocess")
+        self._add_known_relation(relations, by_label, entities, "bayesianaffectcontroltheory", "EXTENDS", "pomdp")
+        self._add_known_relation(relations, by_label, entities, "deepreinforcementlearning", "IS_A", "reinforcementlearning")
+        self._add_known_relation(relations, by_label, entities, "motivatedreinforcementlearning", "IS_A", "reinforcementlearning")
+        self._add_known_relation(relations, by_label, entities, "homeostaticrewardmodification", "IS_A", "rewardshaping")
+        self._add_known_relation(relations, by_label, entities, "appraisalbasedrewardmodification", "IS_A", "rewardshaping")
+        self._add_known_relation(relations, by_label, entities, "homeostaticrewardmodification", "USES", "homeostasis")
+        self._add_known_relation(relations, by_label, entities, "appraisalbasedrewardmodification", "USES", "appraisaldimensions")
+        self._add_known_relation(relations, by_label, entities, "homeostasis", "USED_FOR", "extrinsicmotivation")
+        self._add_known_relation(relations, by_label, entities, "appraisaldimensions", "USED_FOR", "intrinsicmotivation")
+        self._add_known_relation(relations, by_label, entities, "modelbasedrl", "IS_A", "reinforcementlearning")
+        self._add_known_relation(relations, by_label, entities, "modelbasedrl", "USES", "transitionmodel")
+        self._add_known_relation(relations, by_label, entities, "tdlearning", "IS_A", "reinforcementlearning")
+        self._add_known_relation(relations, by_label, entities, "tdlearning", "USES", "temporaldifferenceerror")
+        self._add_known_relation(relations, by_label, entities, "qlearning", "IMPLEMENTS", "valuefunction")
+        self._add_known_relation(relations, by_label, entities, "qlearning", "USES", "temporaldifferenceerror")
+        self._add_known_relation(relations, by_label, entities, "rewardshaping", "USED_FOR", "learningefficiency")
+        self._add_known_relation(relations, by_label, entities, "homeostasis", "ELICITS", "categoricalemotion")
+        self._add_known_relation(relations, by_label, entities, "serotonin", "CORRESPONDS_TO", "discountfactor")
+        self._add_known_relation(relations, by_label, entities, "noradrenaline", "CORRESPONDS_TO", "boltzmannactionselectiontemperature")
+        self._add_known_relation(relations, by_label, entities, "acetylcholine", "CORRESPONDS_TO", "learningrate")
+        self._add_known_relation(relations, by_label, entities, "boltzmannactionselection", "MODULATED_BY", "valence")
+        self._add_known_relation(relations, by_label, entities, "boltzmannactionselection", "USED_FOR", "explorationexploitationtradeoff")
 
         reinforcement_learning = by_label.get("reinforcementlearning")
         if reinforcement_learning:
             for item in entities:
                 if str(item.get("entity_type")) == "Algorithm" and item is not reinforcement_learning:
+                    review_status = "approved" if self._is_approved(item) and self._is_approved(reinforcement_learning) else "pending"
                     self._append_relation(
                         relations,
                         item,
                         "USED_IN",
                         reinforcement_learning,
-                        self._evidence(item, reinforcement_learning),
+                        self._evidence(item, reinforcement_learning, "USED_IN", entities),
+                        review_status=review_status,
                     )
 
-        deduped: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str]] = set()
+        by_relation_key: dict[tuple[str, str, str], dict[str, Any]] = {}
         for relation in relations:
             key = (
                 str(relation.get("subject_id")),
                 str(relation.get("relation_type")),
                 str(relation.get("object_id")),
             )
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(relation)
-        return deduped
+            current = by_relation_key.get(key)
+            if current is None or self._relation_rank(relation) > self._relation_rank(current):
+                by_relation_key[key] = relation
+        return list(by_relation_key.values())
 
     def _validate_existing_relation(
         self,
@@ -479,6 +834,7 @@ class ControlledRelationExtractor:
         self,
         relations: list[dict[str, Any]],
         by_label: dict[str, dict[str, Any]],
+        entities: list[dict[str, Any]],
         subject_key: str,
         relation_type: str,
         object_key: str,
@@ -486,7 +842,15 @@ class ControlledRelationExtractor:
         subject = by_label.get(subject_key)
         object_entity = by_label.get(object_key)
         if subject and object_entity:
-            self._append_relation(relations, subject, relation_type, object_entity, self._evidence(subject, object_entity))
+            review_status = "approved" if self._is_approved(subject) and self._is_approved(object_entity) else "pending"
+            self._append_relation(
+                relations,
+                subject,
+                relation_type,
+                object_entity,
+                self._evidence(subject, object_entity, relation_type, entities),
+                review_status=review_status,
+            )
 
     def _append_relation(
         self,
@@ -495,6 +859,7 @@ class ControlledRelationExtractor:
         relation_type: str,
         object_entity: dict[str, Any],
         evidence: str,
+        review_status: str = "approved",
     ) -> None:
         if subject.get("canonical_id") == object_entity.get("canonical_id"):
             return
@@ -511,9 +876,9 @@ class ControlledRelationExtractor:
                 "object_id": str(object_entity.get("canonical_id")),
                 "evidence_span": evidence[:360],
                 "section": str(subject.get("section") or object_entity.get("section") or ""),
-                "confidence": 0.8,
-                "source": "deterministic_relation",
-                "review_status": "approved",
+                "confidence": 0.8 if review_status == "approved" else 0.65,
+                "source": "deterministic_relation" if review_status == "approved" else "candidate_relation",
+                "review_status": review_status,
             }
         )
 
@@ -522,16 +887,201 @@ class ControlledRelationExtractor:
         return bool(entity.get("canonical_id")) and str(entity.get("review_status") or "").lower() == "approved"
 
     @staticmethod
+    def _is_reviewable_candidate(entity: dict[str, Any]) -> bool:
+        if not bool(entity.get("canonical_id")):
+            return False
+        return str(entity.get("review_status") or "").lower() not in {"approved", "rejected"}
+
+    @classmethod
+    def _index_by_label(cls, entities: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        index: dict[str, dict[str, Any]] = {}
+        for item in entities:
+            for label in cls._entity_labels(item):
+                key = cls._key(label)
+                if not key:
+                    continue
+                current = index.get(key)
+                if current is None or (not cls._is_approved(current) and cls._is_approved(item)):
+                    index[key] = item
+        return index
+
+    @staticmethod
+    def _relation_rank(relation: dict[str, Any]) -> tuple[int, int, float, int]:
+        source_priority = {
+            "deterministic_relation": 3,
+            "llm_relation": 2,
+            "candidate_relation": 1,
+        }
+        return (
+            1 if str(relation.get("review_status") or "").lower() == "approved" else 0,
+            source_priority.get(str(relation.get("source") or ""), 0),
+            _coerce_float(relation.get("confidence"), 0.0),
+            len(str(relation.get("evidence_span") or "")),
+        )
+
+    @staticmethod
     def _key(value: Any) -> str:
         return normalize_key(value)
 
-    @staticmethod
-    def _evidence(subject: dict[str, Any], object_entity: dict[str, Any]) -> str:
+    @classmethod
+    def _evidence(
+        cls,
+        subject: dict[str, Any],
+        object_entity: dict[str, Any],
+        relation_type: str,
+        entities: list[dict[str, Any]],
+    ) -> str:
+        candidates = [cls._entity_text(item) for item in entities]
+        relation_terms = cls._relation_terms(relation_type, subject, object_entity)
+
+        ranked: list[tuple[int, int, str]] = []
+        for text in candidates:
+            text_key = normalize_scientific_text(text).lower()
+            subject_score = cls._entity_match_score(text_key, subject)
+            object_score = cls._entity_match_score(text_key, object_entity)
+            if not subject_score or not object_score:
+                continue
+            relation_score = 0
+            if relation_terms:
+                relation_score = 3 if any(term in text_key for term in relation_terms) else 0
+            ranked.append((subject_score + object_score + relation_score, len(text), text))
+        if ranked:
+            ranked.sort(reverse=True)
+            return ranked[0][2][:360]
+
         for item in (subject, object_entity):
-            evidence = str(item.get("evidence_span") or item.get("context") or item.get("description") or "").strip()
+            evidence = cls._entity_text(item)
             if evidence:
-                return evidence
+                return evidence[:360]
         return f"{subject.get('label')} {object_entity.get('label')}"
+
+    @staticmethod
+    def _entity_text(entity: dict[str, Any]) -> str:
+        text = " ".join(
+            str(entity.get(key) or "")
+            for key in ("evidence_span", "context", "description")
+        )
+        return re.sub(r"\s+", " ", text).strip()
+
+    @classmethod
+    def _entity_match_score(cls, text_key: str, entity: dict[str, Any]) -> int:
+        phrases = cls._evidence_phrase_terms(entity)
+        if any(phrase in text_key for phrase in phrases):
+            return 4
+        tokens = cls._evidence_token_terms(entity)
+        if not tokens:
+            return 0
+        matches = sum(1 for token in tokens if token in text_key)
+        required = 1 if len(tokens) == 1 else min(2, len(tokens))
+        anchors = cls._evidence_anchor_terms(entity)
+        if anchors and not any(anchor in text_key for anchor in anchors):
+            return 0
+        return 2 if matches >= required else 0
+
+    @staticmethod
+    def _entity_labels(entity: dict[str, Any]) -> list[str]:
+        return [
+            str(entity.get("canonical_label") or ""),
+            str(entity.get("label") or ""),
+            *[str(alias) for alias in (entity.get("aliases") or []) if alias],
+        ]
+
+    @classmethod
+    def _evidence_phrase_terms(cls, entity: dict[str, Any]) -> list[str]:
+        terms: list[str] = []
+        for label in cls._entity_labels(entity):
+            normalized = normalize_scientific_text(label).lower().strip()
+            if not normalized:
+                continue
+            variants = {
+                normalized,
+                normalized.replace("-", " "),
+                normalized.replace(" ", "-"),
+            }
+            terms.extend(term for term in variants if len(term) >= 4)
+        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        if canonical_key == "valence":
+            terms.extend(["valency", "valence"])
+        if canonical_key == "boltzmannactionselection":
+            terms.extend(["boltzmann action selection", "boltzmann", "beta", "β", "Î²"])
+        return list(dict.fromkeys(terms))
+
+    @classmethod
+    def _evidence_token_terms(cls, entity: dict[str, Any]) -> list[str]:
+        tokens: list[str] = []
+        for label in cls._entity_labels(entity):
+            words = [
+                word.lower()
+                for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", normalize_scientific_text(label))
+            ]
+            tokens.extend(
+                word
+                for word in words
+                if len(word) >= 4 and word not in cls.GENERIC_EVIDENCE_WORDS
+            )
+        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        if canonical_key == "valence":
+            tokens.append("valency")
+        if canonical_key == "boltzmannactionselection":
+            tokens.extend(["boltzmann", "beta"])
+        return list(dict.fromkeys(tokens))
+
+    @classmethod
+    def _evidence_anchor_terms(cls, entity: dict[str, Any]) -> list[str]:
+        anchors: list[str] = []
+        for label in cls._entity_labels(entity):
+            words = [
+                word.lower()
+                for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", normalize_scientific_text(label))
+            ]
+            for word in words:
+                if len(word) >= 4 and word not in cls.GENERIC_EVIDENCE_WORDS:
+                    anchors.append(word)
+                    break
+        return list(dict.fromkeys(anchors))
+
+    @staticmethod
+    def _evidence_terms(entity: dict[str, Any]) -> list[str]:
+        labels = [
+            str(entity.get("canonical_label") or ""),
+            str(entity.get("label") or ""),
+            *[str(alias) for alias in (entity.get("aliases") or []) if alias],
+        ]
+        terms: list[str] = []
+        for label in labels:
+            normalized = label.lower()
+            if normalized:
+                terms.append(normalized)
+            words = [word.lower() for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", label)]
+            terms.extend(word for word in words if len(word) >= 4)
+        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        if canonical_key == "valence":
+            terms.append("valency")
+        if canonical_key == "boltzmannactionselection":
+            terms.extend(["boltzmann", "beta", "β"])
+        return list(dict.fromkeys(terms))
+
+    @staticmethod
+    def _relation_terms(
+        relation_type: str,
+        subject: dict[str, Any],
+        object_entity: dict[str, Any],
+    ) -> list[str]:
+        subject_key = normalize_key(subject.get("canonical_label") or subject.get("label"))
+        object_key = normalize_key(object_entity.get("canonical_label") or object_entity.get("label"))
+        if relation_type == "MODULATED_BY" and subject_key == "boltzmannactionselection" and object_key == "valence":
+            return ["influenced", "modulated", "valency", "valence", "beta", "β"]
+        if relation_type == "CORRESPONDS_TO":
+            return ["connection", "correspond", "maps", "mapped"]
+        if relation_type == "MEASURES":
+            return ["measure", "derive", "distance"]
+        if relation_type == "IMPLEMENTS":
+            return ["implements", "update", "approximate", "value-function", "value function"]
+        if relation_type == "ELICITS":
+            return ["elicit", "elicits", "derive", "derives", "generate"]
+        if relation_type == "USED_FOR":
+            return ["used for", "improve", "improved", "learning efficiency", "drive", "guide"]
+        return []
 
 
 class ExtractionPipeline:
