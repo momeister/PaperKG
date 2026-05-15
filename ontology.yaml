@@ -24,6 +24,13 @@ relation_types:
   - USES
   - USED_IN
   - USED_FOR
+  - AFFECTS
+  - CAUSES
+  - LEADS_TO
+  - MITIGATES
+  - PREVENTS
+  - GROUPED_WITH_IN_SURVEY
+  - MAPPED_TO_IN_TAXONOMY
   - IMPLEMENTS
   - ELICITS
   - PART_OF
@@ -31,6 +38,11 @@ relation_types:
   - MODULATED_BY
   - CORRESPONDS_TO
   - EVALUATED_ON
+  - BUILT_ON
+  - PROVIDES
+  - SUPPORTS
+  - REPRODUCES
+  - MORE_ROBUST_THAN
   - MEASURES
   - PROPOSED_BY
   - ALIAS_OF
@@ -38,6 +50,10 @@ relation_types:
   - CONTRADICTS
 
 seed_concepts:
+  - label: Machine Learning
+    entity_type: MethodFamily
+    aliases: [ML]
+    domain: Artificial Intelligence
   - label: Reinforcement Learning
     entity_type: MethodFamily
     aliases: [RL]
@@ -120,19 +136,19 @@ seed_concepts:
     domain: Affective Computing
   - label: Categorical emotion theory
     entity_type: Theory
-    aliases: [Categorical emotions]
+    aliases: [Basic emotion theory]
     domain: Psychology
   - label: Dimensional emotion theory
     entity_type: Theory
-    aliases: [Dimensional emotions, Valence-arousal space]
+    aliases: [Valence-arousal space]
     domain: Psychology
   - label: Categorical emotion
     entity_type: DomainConcept
-    aliases: [Discrete emotion]
+    aliases: [Categorical emotions, Discrete emotion]
     domain: Affective Computing
   - label: Dimensional emotion
     entity_type: DomainConcept
-    aliases: [Dimensional affect]
+    aliases: [Dimensional emotions, Dimensional affect]
     domain: Affective Computing
   - label: Homeostasis
     entity_type: DomainConcept
@@ -326,6 +342,58 @@ seed_concepts:
     entity_type: ApplicationSetting
     aliases: []
     domain: Statistics
+  - label: External Data Sources
+    entity_type: DomainConcept
+    aliases: [External data source, Non-traditional data sources]
+    domain: Data Governance
+  - label: Data Source Changes
+    entity_type: Phenomenon
+    aliases: [Changing data sources, Data source change, Source changes]
+    domain: Data Governance
+  - label: Selection Bias
+    entity_type: Phenomenon
+    aliases: [Selection bias]
+    domain: Statistics
+  - label: Operationalization Bias
+    entity_type: Phenomenon
+    aliases: [Operationalization bias]
+    domain: Data Governance
+  - label: Feature Mismatch
+    entity_type: Phenomenon
+    aliases: [Feature mismatches, Feature distribution mismatch]
+    domain: Machine Learning
+  - label: Model staleness
+    entity_type: Phenomenon
+    aliases: [Model Staleness, Stale model]
+    domain: Machine Learning
+  - label: Quality metrics
+    entity_type: Metric
+    aliases: [Data quality metrics]
+    domain: Data Quality
+  - label: Data distribution
+    entity_type: DomainConcept
+    aliases: [Feature distribution]
+    domain: Machine Learning
+  - label: Data Pipeline
+    entity_type: System
+    aliases: [Data pipeline, Data pipelines]
+    domain: Data Engineering
+  - label: Data validation
+    entity_type: MethodFamily
+    aliases: [Data Validation, Data type validation]
+    domain: Data Engineering
+  - label: Data Frequency
+    entity_type: DomainConcept
+    aliases: [Data frequency]
+    domain: Data Engineering
+  - label: Data Source Discontinuation
+    entity_type: Phenomenon
+    aliases: [Source discontinuation, Data discontinuation]
+    domain: Data Governance
+  - label: Legal robustness
+    entity_type: DomainConcept
+    aliases: [Legal Robustness]
+    domain: Data Governance
   - label: Data Availability
     entity_type: DomainConcept
     aliases: [Availability]
@@ -354,3 +422,55 @@ seed_concepts:
     entity_type: DomainConcept
     aliases: [Regulatory constraints]
     domain: Data Governance
+  - label: Quantum Machine Learning
+    entity_type: MethodFamily
+    aliases: [QML]
+    domain: Quantum Computing
+  - label: Photonic Quantum Machine Learning
+    entity_type: MethodFamily
+    aliases: [Photonic QML]
+    domain: Quantum Computing
+  - label: Variational Quantum Circuit
+    entity_type: ModelArchitecture
+    aliases: [VQC, VQCs, Variational quantum circuits]
+    domain: Quantum Machine Learning
+  - label: Quantum Generative Adversarial Network
+    entity_type: ModelArchitecture
+    aliases: [QGAN, QGANs, Quantum generative adversarial networks]
+    domain: Quantum Machine Learning
+  - label: Quantum Relational Knowledge Distillation
+    entity_type: Algorithm
+    aliases: [QRKD]
+    domain: Quantum Machine Learning
+  - label: Quantum Self-Supervised Learning
+    entity_type: MethodFamily
+    aliases: [qSSL, Quantum SSL]
+    domain: Quantum Machine Learning
+  - label: Quantum Long Short-Term Memory
+    entity_type: ModelArchitecture
+    aliases: [QLSTM, Quantum LSTM]
+    domain: Quantum Machine Learning
+  - label: Quantum Recurrent Neural Network
+    entity_type: ModelArchitecture
+    aliases: [QRNN]
+    domain: Quantum Machine Learning
+  - label: Distributed Quantum Neural Network
+    entity_type: ModelArchitecture
+    aliases: [Distributed QNN]
+    domain: Quantum Machine Learning
+  - label: Strong Linear Optical Simulation
+    entity_type: Algorithm
+    aliases: [SLOS]
+    domain: Photonic Quantum Computing
+  - label: MNIST
+    entity_type: Dataset
+    aliases: [MNIST dataset]
+    domain: Machine Learning
+  - label: CIFAR-10
+    entity_type: Dataset
+    aliases: [CIFAR10, CIFAR-10 dataset]
+    domain: Machine Learning
+  - label: SST2
+    entity_type: Dataset
+    aliases: [SST-2, SST2 sentiment analysis, Stanford Sentiment Treebank 2]
+    domain: Natural Language Processing

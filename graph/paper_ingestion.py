@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -196,6 +197,8 @@ def ingest_extractions_from_metadata_db(
 
 	for extraction in metadata_db.list_extraction_results(limit=limit):
 		if extraction.get("extraction_status") != "success":
+			continue
+		if _metadata_blocks_graph_write(extraction):
 			continue
 		raw_paper_id = str(extraction.get("paper_id") or "")
 		if not raw_paper_id:
@@ -457,9 +460,36 @@ def _accepted_entities(
 
 def _review_allows_graph_write(entity: dict[str, Any]) -> bool:
 	"""Production KG writes only explicitly approved entities."""
+	if entity.get("accepted_for_kg_write") is False:
+		return False
 	status = entity.get("review_status")
 	status_text = str(status).strip().lower()
 	return status_text == "approved"
+
+
+def _metadata_blocks_graph_write(extraction: dict[str, Any]) -> bool:
+	"""Skip semantic KG writes when the paper identity is known-invalid."""
+	payload = _raw_payload(extraction)
+	status = str(
+		extraction.get("metadata_status")
+		or payload.get("metadata_status")
+		or ""
+	).lower()
+	if status == "invalid":
+		return True
+	blocking_errors = extraction.get("blocking_errors") or payload.get("blocking_errors") or []
+	return bool(blocking_errors)
+
+
+def _raw_payload(extraction: dict[str, Any]) -> dict[str, Any]:
+	raw = extraction.get("raw_response")
+	if not raw:
+		return {}
+	try:
+		payload = json.loads(str(raw))
+	except (TypeError, json.JSONDecodeError):
+		return {}
+	return payload if isinstance(payload, dict) else {}
 
 
 def _accepted_relations(extraction: dict[str, Any]) -> list[dict[str, Any]]:

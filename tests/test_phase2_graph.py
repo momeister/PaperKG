@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -311,6 +312,84 @@ def test_ingest_extractions_blocks_pending_review_entities() -> None:
     assert stats.method_edges_written == 0
     assert {node["label"] for node in graph.concepts.values()} == {"Approved Concept"}
     assert next(iter(graph.concepts.values()))["id"] == "concept:approved"
+
+
+def test_ingest_extractions_blocks_detail_layer_entities() -> None:
+    class Metadata:
+        def list_extraction_results(self, limit: int = 5000):
+            return [
+                {
+                    "extraction_status": "success",
+                    "paper_id": "paper_001",
+                    "concept_candidates": [],
+                    "method_candidates": [],
+                    "concepts": [
+                        {
+                            "label": "Core Concept",
+                            "confidence": 0.9,
+                            "review_status": "approved",
+                            "accepted_for_kg_write": True,
+                        },
+                        {
+                            "label": "Detail Metric",
+                            "confidence": 0.9,
+                            "review_status": "approved",
+                            "accepted_for_kg_write": False,
+                            "kg_layer": "detail",
+                        },
+                    ],
+                    "methods": [],
+                }
+            ]
+
+        def resolve_paper(self, paper_id: str):
+            return {"id": paper_id, "title": "Paper", "source": "test"}
+
+    graph = FakeGraph()
+
+    stats = ingest_extractions_from_metadata_db(graph, Metadata())
+
+    assert stats.concept_edges_written == 1
+    assert {node["label"] for node in graph.concepts.values()} == {"Core Concept"}
+
+
+def test_ingest_extractions_blocks_invalid_metadata_payloads() -> None:
+    class Metadata:
+        def list_extraction_results(self, limit: int = 5000):
+            return [
+                {
+                    "extraction_status": "success",
+                    "paper_id": "arxiv:2509.08759",
+                    "raw_response": json.dumps(
+                        {
+                            "metadata_status": "invalid",
+                            "blocking_errors": [
+                                "paper_id_year_mismatch: supplied arxiv:2509.08759 implies 2025, extracted paper_year=2017"
+                            ],
+                        }
+                    ),
+                    "concept_candidates": [],
+                    "method_candidates": [],
+                    "concepts": [
+                        {
+                            "label": "Should Not Write",
+                            "confidence": 0.9,
+                            "review_status": "approved",
+                        }
+                    ],
+                    "methods": [],
+                }
+            ]
+
+        def resolve_paper(self, paper_id: str):
+            return {"id": paper_id, "title": "Paper", "source": "test"}
+
+    graph = FakeGraph()
+
+    stats = ingest_extractions_from_metadata_db(graph, Metadata())
+
+    assert stats.concept_edges_written == 0
+    assert graph.concepts == {}
 
 
 def test_ingest_extractions_writes_only_approved_concept_relations() -> None:

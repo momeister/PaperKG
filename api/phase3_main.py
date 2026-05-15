@@ -86,6 +86,8 @@ class ExtractionResponse(BaseModel):
     mathematical_content: dict[str, Any]
     language_detected: str
     quality_warnings: list[str] = []
+    metadata_status: str = "valid"
+    blocking_errors: list[str] = []
     candidate_count: int = 0
     extraction_diagnostics: dict[str, Any] = {}
 
@@ -201,6 +203,8 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
             mathematical_content=result.mathematical_content,
             language_detected=result.language_detected,
             quality_warnings=result.quality_warnings,
+            metadata_status=result.metadata_status,
+            blocking_errors=result.blocking_errors,
             candidate_count=result.candidate_count,
             extraction_diagnostics=result.extraction_diagnostics,
         )

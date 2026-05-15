@@ -37,12 +37,12 @@
       },
       {
         "subject_id": "concept:homeostasis",
-        "relation_type": "USED_FOR",
+        "relation_type": "GROUPED_WITH_IN_SURVEY",
         "object_id": "concept:extrinsic-motivation"
       },
       {
         "subject_id": "concept:appraisal-dimensions",
-        "relation_type": "USED_FOR",
+        "relation_type": "MAPPED_TO_IN_TAXONOMY",
         "object_id": "concept:intrinsic-motivation"
       },
       {
@@ -154,14 +154,14 @@
       },
       {
         "subject_id": "concept:homeostasis",
-        "relation_type": "USED_FOR",
+        "relation_type": "GROUPED_WITH_IN_SURVEY",
         "object_id": "concept:extrinsic-motivation",
         "review_status": "approved",
         "evidence_span": "homeostasis and extrinsic motivation"
       },
       {
         "subject_id": "concept:appraisal-dimensions",
-        "relation_type": "USED_FOR",
+        "relation_type": "MAPPED_TO_IN_TAXONOMY",
         "object_id": "concept:intrinsic-motivation",
         "review_status": "approved",
         "evidence_span": "appraisal and intrinsic motivation"

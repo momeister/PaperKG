@@ -343,6 +343,87 @@ class TestEntityExtractor:
         assert isinstance(result.claims, list)
         assert result.paper_type == "research"
         assert result.language_detected == "en"
+        assert result.paper_node["paper_id"] == "paper_001"
+        assert result.paper_node["node_type"] == "Paper"
+
+    def test_build_paper_node_materializes_extraction_anchor(self):
+        node = EntityExtractor._build_paper_node(
+            paper_id="arxiv:1705.05172",
+            paper_text="Emotion in Reinforcement Learning Agents and Robots: A Survey\n\nAbstract\n...",
+            paper_type="survey",
+            semantic_paper_node={},
+            temporal_coverage={"paper_year": 2017, "reviewed_period": "1997-2017"},
+            language_detected="en",
+        )
+
+        assert node["node_type"] == "Paper"
+        assert node["paper_id"] == "arxiv:1705.05172"
+        assert node["title"] == "Emotion in Reinforcement Learning Agents and Robots: A Survey"
+        assert node["paper_type"] == "survey"
+        assert node["paper_year"] == 2017
+
+    def test_quality_warnings_flag_paper_id_metadata_mismatch(self):
+        node = EntityExtractor._build_paper_node(
+            paper_id="arxiv:2509.08759",
+            paper_text="arXiv:1705.05172\nEmotion in Reinforcement Learning Agents and Robots: A Survey",
+            paper_type="survey",
+            semantic_paper_node={
+                "title": "Emotion in Reinforcement Learning Agents and Robots: A Survey",
+            },
+            temporal_coverage={"paper_year": 2017},
+            language_detected="en",
+        )
+
+        warnings = EntityExtractor._quality_warnings(
+            paper_type="survey",
+            concept_count=40,
+            method_count=10,
+            text_length=30000,
+            parse_quality="clean",
+            paper_id="arxiv:2509.08759",
+            paper_node=node,
+        )
+        validation = EntityExtractor._metadata_validation(
+            paper_id="arxiv:2509.08759",
+            paper_node=node,
+        )
+
+        assert node["detected_source_id"] == "arxiv:1705.05172"
+        assert any("implies year 2025" in warning for warning in warnings)
+        assert any("text contains arxiv:1705.05172" in warning.lower() for warning in warnings)
+        assert validation["metadata_status"] == "invalid"
+        assert "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:1705.05172" in validation[
+            "blocking_errors"
+        ]
+        assert any(error.startswith("paper_id_year_mismatch") for error in validation["blocking_errors"])
+
+    def test_front_matter_arxiv_identifier_detects_late_explicit_id(self):
+        paper_text = (
+            "MerLin: A Discovery Engine for Photonic and Hybrid Quantum Machine Learning\n"
+            "Authors and affiliations\n"
+            + ("Long affiliation line. " * 300)
+            + "arXiv:2602.11092v2\n"
+            "Abstract\nWe introduce MerLin."
+        )
+
+        node = EntityExtractor._build_paper_node(
+            paper_id="arxiv:2509.08759",
+            paper_text=paper_text,
+            paper_type="benchmark",
+            semantic_paper_node={
+                "title": "MerLin: A Discovery Engine for Photonic and Hybrid Quantum Machine Learning",
+                "paper_year": 2026,
+            },
+            temporal_coverage={"paper_year": 2026},
+            language_detected="en",
+        )
+        validation = EntityExtractor._metadata_validation("arxiv:2509.08759", node)
+
+        assert node["detected_source_id"] == "arxiv:2602.11092"
+        assert validation["metadata_status"] == "invalid"
+        assert "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:2602.11092" in validation[
+            "blocking_errors"
+        ]
 
     def test_extract_preserves_extended_scientific_metadata(self):
         """Test extraction keeps paper type, attribution, and formula metadata."""
@@ -669,6 +750,30 @@ class TestEntityExtractor:
                 {"label": "Low Signal Concept", "confidence": 0.5, "candidate_source": "deterministic_scan"},
                 {"label": "Questionnaire", "confidence": 0.9},
                 {"label": "Reward Shaping", "confidence": 0.72, "candidate_source": "deterministic_scan"},
+                {
+                    "label": "Data Sources",
+                    "context": "Repeated phrase in parsed paper text (53 mentions).",
+                    "confidence": 0.9,
+                    "auto_detected": True,
+                },
+                {
+                    "label": "For Official Statistics",
+                    "context": "context of the paper | Section or heading: FOR OFFICIAL STATISTICS",
+                    "confidence": 0.9,
+                    "auto_detected": True,
+                },
+                {
+                    "label": "Statistics Flanders",
+                    "context": "Section or heading: Statistics Flanders",
+                    "confidence": 0.74,
+                    "auto_detected": True,
+                },
+                {
+                    "label": "Concept Drift",
+                    "context": "Concept drift is related to changes in the data distribution.",
+                    "confidence": 0.72,
+                    "auto_detected": True,
+                },
             ],
             title="Emotion in Reinforcement Learning Agents and Robots",
         )
@@ -679,6 +784,163 @@ class TestEntityExtractor:
         assert labels.count("Questionnaire") == 1
         assert "Low Signal Concept" not in labels
         assert "Reward Shaping" in labels
+        assert "Data Sources" not in labels
+        assert "For Official Statistics" not in labels
+        assert "Statistics Flanders" not in labels
+        assert "Concept Drift" in labels
+
+    def test_candidate_only_rejects_merged_heading_and_repeated_phrase_artifacts(self):
+        candidates = EntityExtractor._candidate_only(
+            "Changing Data Sources in the Age of Machine Learning for Official Statistics\n"
+            "Concept drift is related to changes in the data distribution.",
+            [
+                {
+                    "label": "Data Sources",
+                    "context": "Repeated phrase in parsed paper text (53 mentions).",
+                    "confidence": 0.9,
+                    "auto_detected": True,
+                },
+                {
+                    "label": "For Official Statistics",
+                    "context": "context of the paper | Section or heading: FOR OFFICIAL STATISTICS",
+                    "confidence": 0.9,
+                    "auto_detected": True,
+                    "evidence_role": "environment",
+                },
+                {
+                    "label": "Statistics Flanders",
+                    "context": "Section or heading: Statistics Flanders",
+                    "confidence": 0.74,
+                    "auto_detected": True,
+                },
+                {
+                    "label": "Concept Drift",
+                    "context": "Concept drift is related to changes in the data distribution.",
+                    "confidence": 0.9,
+                },
+            ],
+            [],
+            default_role="possible_concept",
+        )
+
+        labels = {candidate["label"] for candidate in candidates}
+        assert labels == {"Concept Drift"}
+
+    def test_candidate_only_rejects_zero_mention_deterministic_method_candidates(self):
+        candidates = EntityExtractor._candidate_only(
+            "Risk Analysis is discussed as a mitigation step. Monitoring is also important.",
+            [
+                {
+                    "label": "Data Pipeline Monitoring",
+                    "description": "To mitigate these risks, data pipelines should monitor incoming data frequency.",
+                    "confidence": 0.74,
+                    "candidate_source": "deterministic_scan",
+                    "auto_detected": True,
+                },
+                {
+                    "label": "Risk Analysis",
+                    "description": "Risk analysis is discussed as a mitigation step.",
+                    "confidence": 0.74,
+                    "candidate_source": "deterministic_scan",
+                    "auto_detected": True,
+                },
+            ],
+            [],
+            default_role="method_candidate",
+        )
+
+        labels = {candidate["label"] for candidate in candidates}
+        assert labels == {"Risk Analysis"}
+
+    def test_candidate_only_keeps_zero_mention_deterministic_concept_candidates(self):
+        candidates = EntityExtractor._candidate_only(
+            "The statistical offering can be discontinued when data sources disappear.",
+            [
+                {
+                    "label": "Data Source Discontinuation",
+                    "context": "discontinuation of the statistical offering.",
+                    "confidence": 0.52,
+                    "candidate_source": "deterministic_scan",
+                    "auto_detected": True,
+                }
+            ],
+            [],
+            default_role="possible_concept",
+        )
+
+        labels = {candidate["label"] for candidate in candidates}
+        assert labels == {"Data Source Discontinuation"}
+
+    def test_reference_section_candidates_need_body_support(self):
+        text = """
+        A survey of model monitoring
+
+        Concept drift affects deployed systems. Concept drift changes error rates.
+
+        # References
+        Benchmark study for Flemish Twitter sentiment analysis.
+        Stop explaining black box machine learning models.
+        """.strip()
+
+        candidates = EntityExtractor._candidate_only(
+            text,
+            [
+                {
+                    "label": "Twitter Sentiment Analysis",
+                    "section": "References",
+                    "evidence_span": "Benchmark study for Flemish Twitter sentiment analysis",
+                    "confidence": 0.8,
+                    "salience": "background",
+                },
+                {
+                    "label": "Concept Drift",
+                    "section": "References",
+                    "evidence_span": "performance-aware drift detectors for concept drift",
+                    "confidence": 0.8,
+                    "salience": "supporting",
+                },
+            ],
+            [],
+            default_role="possible_concept",
+        )
+
+        labels = {candidate["label"] for candidate in candidates}
+        assert labels == {"Concept Drift"}
+
+    def test_accept_methods_rejects_bibliography_only_methods(self):
+        text = """
+        A survey of robust statistics
+
+        We discuss monitoring and risk analysis in official statistics.
+
+        References
+        Topic modelling applied on innovation studies.
+        """.strip()
+
+        accepted = EntityExtractor._accept_methods(
+            text,
+            [
+                {
+                    "label": "Topic Modelling",
+                    "section": "References",
+                    "evidence_span": "Topic modelling applied on innovation studies",
+                    "confidence": 0.9,
+                    "salience": "supporting",
+                    "source_type": "reviewed_method",
+                }
+            ],
+            paper_type_hint="survey",
+        )
+
+        assert accepted == []
+
+    def test_text_before_references_handles_markdown_reference_heading(self):
+        text = "Title\n\nBody concept.\n\n# References\nReference title concept."
+
+        body = EntityExtractor._text_before_references(text)
+
+        assert "Body concept" in body
+        assert "Reference title concept" not in body
 
     def test_deduplicate_methods_merges_similar_labels_by_description(self, caplog):
         methods = [
@@ -761,6 +1023,30 @@ class TestEntityExtractor:
         assert "Methodological recommendations" in CLAIMS_EXTRACTION_PROMPT
         assert "Negative findings" in CLAIMS_EXTRACTION_PROMPT
         assert "Comparative claims" in CLAIMS_EXTRACTION_PROMPT
+        assert "claim_type" in CLAIMS_EXTRACTION_PROMPT
+
+    def test_claim_merge_marks_limitations_without_logical_negation(self):
+        claims = EntityExtractor._merge_claim_lists(
+            [
+                {
+                    "statement": "The binary classification setting on SST2 appears too simple to draw definitive conclusions about quantum utility.",
+                    "evidence_type": "experimental",
+                    "negated": True,
+                    "attributed_to": "this_paper",
+                },
+                {
+                    "statement": "The model does not improve over the baseline.",
+                    "evidence_type": "experimental",
+                    "negated": False,
+                    "attributed_to": "this_paper",
+                },
+            ]
+        )
+
+        assert claims[0]["claim_type"] == "limitation"
+        assert claims[0]["negated"] is False
+        assert claims[1]["claim_type"] == "negative_result"
+        assert claims[1]["negated"] is True
 
     def test_extraction_source_text_repairs_page_break_word_fragments(self):
         text = EntityExtractor._clean_extraction_source_text(
@@ -814,7 +1100,7 @@ class TestEntityExtractor:
             "Regulation",
         }.issubset(labels)
         method_labels = {method["label"] for method in result.method_candidates}
-        assert "Data Pipeline Monitoring" in method_labels
+        assert "Data Pipeline Monitoring" not in method_labels
         assert result.temporal_coverage["paper_year"] == 2023
         assert result.candidate_count >= 10
 
@@ -1307,6 +1593,55 @@ class TestEntityLinker:
         assert occ_model["review_status"] == "approved"
         assert occ_model["acceptance_reason"] == "ontology_exact_candidate_rescue"
 
+    def test_entity_linker_keeps_detail_metrics_out_of_core_kg_layer(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[
+                {
+                    "label": "Temporal difference error",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "temporal difference error is used to derive emotions",
+                },
+                {
+                    "label": "KL-divergence",
+                    "entity_type": "Metric",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "derive model uncertainty from the KL-divergence",
+                },
+            ],
+            concept_candidates=[
+                {
+                    "label": "L1 norm",
+                    "entity_type": "Metric",
+                    "confidence": 0.75,
+                    "mention_count": 2,
+                    "salience": "supporting",
+                    "accepted": False,
+                    "review_status": "pending",
+                    "evidence_span": "absolute difference between current value and setpoint (i.e. the L1 norm)",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concepts_by_id = {item["canonical_id"]: item for item in result.concepts}
+        candidate_ids = {item["canonical_id"] for item in result.concept_candidates}
+
+        assert concepts_by_id["concept:temporal-difference-error"]["accepted_for_kg_write"] is True
+        assert concepts_by_id["concept:temporal-difference-error"]["kg_layer"] == "core"
+        assert concepts_by_id["concept:kl-divergence"]["accepted_for_kg_write"] is False
+        assert concepts_by_id["concept:kl-divergence"]["kg_layer"] == "detail"
+        assert concepts_by_id["concept:kl-divergence"]["kg_block_reason"] == "detail_or_parameter_mention"
+        assert "concept:l1-norm" in candidate_ids
+
     def test_canonical_resolver_exact_alias_overrides_llm_type(self):
         resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
 
@@ -1467,6 +1802,136 @@ class TestEntityLinker:
         assert [method["label"] for method in result.methods] == ["Gadanho and Hallam emotion model"]
         assert "Gadanho and Hallam (1998, 2001)" in result.methods[0]["aliases"]
         assert result.methods[0]["review_status"] == "approved"
+
+    def test_entity_linker_normalizes_qml_aliases_and_builds_benchmark_relations(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:2602.11092",
+            paper_type="benchmark",
+            concepts=[
+                {
+                    "label": "MerLin",
+                    "entity_type": "System",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "method_family",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "We introduce MerLin, an open-source framework designed as a discovery engine.",
+                },
+                {
+                    "label": "QuantumLayer",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.92,
+                    "salience": "central",
+                    "evidence_role": "method_family",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "MerLin's PyTorch integration is provided through QuantumLayer.",
+                },
+                {
+                    "label": "QGANs",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.85,
+                    "salience": "supporting",
+                    "evidence_role": "method_family",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Quantum generative adversarial networks (QGANs) were among the first generative variational quantum algorithms.",
+                },
+                {
+                    "label": "MNIST",
+                    "entity_type": "Dataset",
+                    "confidence": 0.9,
+                    "salience": "supporting",
+                    "evidence_role": "dataset",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "MNIST dataset",
+                },
+            ],
+            methods=[
+                {
+                    "label": "Strong Linear Optical Simulation",
+                    "entity_type": "Algorithm",
+                    "domain": "Photonic Quantum Computing",
+                    "description": "Tool that performs strong simulation.",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.9,
+                    "salience": "central",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "SLOS framework, on which MerLin is built, performs strong simulation.",
+                },
+                {
+                    "label": "Angle encoding",
+                    "entity_type": "MethodFamily",
+                    "domain": "Quantum Machine Learning",
+                    "description": "Maps classical features to phase shifts.",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "salience": "supporting",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Angle encoding proves substantially more robust than amplitude encoding.",
+                },
+                {
+                    "label": "Amplitude encoding",
+                    "entity_type": "MethodFamily",
+                    "domain": "Quantum Machine Learning",
+                    "description": "Initializes amplitudes to match input features.",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "salience": "supporting",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Amplitude encoding is highly vulnerable to small adversarial perturbations.",
+                },
+                {
+                    "label": "Quantum Generative Adversarial Network",
+                    "entity_type": "ModelArchitecture",
+                    "domain": "Quantum Machine Learning",
+                    "description": "Generative variational quantum algorithm for image generation.",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "salience": "supporting",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "QGAN reproduction on the MNIST dataset.",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        merlin = next(item for item in result.concepts if item["canonical_id"] == "concept:merlin")
+        qgan_entities = [
+            item
+            for item in [*result.concepts, *result.methods]
+            if item["canonical_id"] == "concept:quantum-generative-adversarial-network"
+        ]
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+
+        assert merlin["review_status"] == "approved"
+        assert merlin["accepted_for_kg_write"] is True
+        assert len(qgan_entities) == 1
+        assert "QGANs" in qgan_entities[0].get("aliases", [])
+        assert ("concept:merlin", "BUILT_ON", "concept:strong-linear-optical-simulation") in relation_triples
+        assert ("concept:merlin", "PROVIDES", "concept:quantumlayer") in relation_triples
+        assert ("concept:quantumlayer", "SUPPORTS", "method:angle-encoding") in relation_triples
+        assert ("concept:quantumlayer", "SUPPORTS", "method:amplitude-encoding") in relation_triples
+        assert (
+            "concept:merlin",
+            "REPRODUCES",
+            "concept:quantum-generative-adversarial-network",
+        ) in relation_triples
+        assert (
+            "concept:quantum-generative-adversarial-network",
+            "EVALUATED_ON",
+            "concept:mnist",
+        ) in relation_triples
+        assert ("method:angle-encoding", "MORE_ROBUST_THAN", "method:amplitude-encoding") in relation_triples
 
     def test_entity_linker_builds_specific_relation_types(self):
         extraction = ExtractionResult(
@@ -1630,6 +2095,271 @@ class TestEntityLinker:
             "concept:valence",
         ) in relation_triples
 
+    def test_entity_linker_builds_official_statistics_risk_relations(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[
+                {
+                    "label": "Official Statistics",
+                    "entity_type": "ApplicationSetting",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "production of official statistics",
+                },
+                {
+                    "label": "External Data Sources",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.92,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "exploiting external data sources to power novel statistics",
+                },
+                {
+                    "label": "Concept drift",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Concept drift is related to changes in the data distribution between train and test time",
+                },
+                {
+                    "label": "Feature Mismatch",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.88,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "induce feature mismatches between train and inference time",
+                },
+                {
+                    "label": "Model staleness",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.92,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "When a model becomes outdated, it no longer reflects current trends",
+                },
+                {
+                    "label": "Data Source Discontinuation",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.7,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "canonical_id": "concept:data-source-discontinuation",
+                    "canonical_label": "Data Source Discontinuation",
+                    "evidence_span": "discontinuation of the statistical offering",
+                },
+            ],
+            methods=[
+                {
+                    "label": "Risk analysis",
+                    "entity_type": "MethodFamily",
+                    "domain": "Data Engineering",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "source_type": "paper_contribution",
+                    "evidence_span": "Performing a risk analysis before incorporating a new data source is an essential step",
+                },
+                {
+                    "label": "Monitoring",
+                    "entity_type": "MethodFamily",
+                    "domain": "Data Engineering",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "source_type": "paper_contribution",
+                    "evidence_span": "Monitoring everything that is relevant is another crucial step in mitigating the impact",
+                },
+                {
+                    "label": "Diversification",
+                    "entity_type": "MethodFamily",
+                    "domain": "Data Engineering",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "source_type": "paper_contribution",
+                    "evidence_span": "Diversifying data sources is another important measure",
+                },
+            ],
+            concept_candidates=[
+                {
+                    "label": "Data Source Changes",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.52,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "salience": "passing",
+                    "evidence_span": "Changing data sources can impact official statistics",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+        relation_status = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"]): relation["review_status"]
+            for relation in result.relations
+        }
+
+        assert ("concept:external-data-sources", "LEADS_TO", "concept:concept-drift") in relation_triples
+        assert ("concept:data-source-changes", "LEADS_TO", "concept:concept-drift") in relation_triples
+        assert ("concept:concept-drift", "CAUSES", "concept:model-staleness") in relation_triples
+        assert ("method:risk-analysis", "MITIGATES", "concept:feature-mismatch") in relation_triples
+        assert ("method:monitoring", "MITIGATES", "concept:concept-drift") in relation_triples
+        assert ("method:diversification", "PREVENTS", "concept:data-source-discontinuation") in relation_triples
+        assert (
+            relation_status[("method:diversification", "PREVENTS", "concept:data-source-discontinuation")]
+            == "pending"
+        )
+        assert relation_status[("concept:data-source-changes", "LEADS_TO", "concept:concept-drift")] == "pending"
+
+    def test_entity_linker_promotes_ontology_title_theme_candidate(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            paper_node={
+                "title": "Changing Data Sources in the Age of Machine Learning for Official Statistics",
+            },
+            concept_candidates=[
+                {
+                    "label": "Data Source Changes",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.52,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "salience": "passing",
+                    "evidence_span": "CHANGING DATA SOURCES IN THE AGE OF",
+                    "mention_count": 1,
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        data_source_changes = next(
+            concept for concept in result.concepts if concept["canonical_id"] == "concept:data-source-changes"
+        )
+        assert data_source_changes["review_status"] == "approved"
+        assert data_source_changes["accepted_for_kg_write"] is True
+        assert result.concept_candidates == []
+
+    def test_entity_linker_promotes_central_machine_learning_survey_candidate(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concept_candidates=[
+                {
+                    "label": "Machine Learning",
+                    "entity_type": "MethodFamily",
+                    "context": "Machine Learning is central to the survey.",
+                    "evidence_span": "rise of machine learning has transformed the field of statistics",
+                    "confidence": 0.95,
+                    "mention_count": 12,
+                    "salience": "central",
+                    "evidence_role": "method_family",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+
+        machine_learning = next(concept for concept in result.concepts if concept["canonical_id"] == "concept:machine-learning")
+        assert machine_learning["review_status"] == "approved"
+        assert machine_learning["accepted_for_kg_write"] is True
+        assert result.concept_candidates == []
+
+    def test_entity_linker_filters_generic_background_algorithm_used_in_relations(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "Reinforcement Learning",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "reinforcement learning agents",
+                }
+            ],
+            method_candidates=[
+                {
+                    "label": "Evolutionary Algorithms",
+                    "entity_type": "Algorithm",
+                    "domain": "Machine Learning",
+                    "confidence": 0.62,
+                    "salience": "passing",
+                    "source_type": "background",
+                    "accepted": False,
+                    "review_status": "pending",
+                    "canonical_id": "concept:evolutionary-algorithms",
+                    "evidence_span": "biological principles, such as neural networks, evolutionary algorithms and swarm-based optimization",
+                    "description": "Biologically inspired optimization method mentioned as advancement",
+                    "section": "1 Introduction",
+                },
+                {
+                    "label": "Swarm-based Optimization",
+                    "entity_type": "Algorithm",
+                    "domain": "Machine Learning",
+                    "confidence": 0.62,
+                    "salience": "passing",
+                    "source_type": "background",
+                    "accepted": False,
+                    "review_status": "pending",
+                    "canonical_id": "concept:swarm-based-optimization",
+                    "evidence_span": "biological principles, such as evolutionary algorithms and swarm-based optimization",
+                    "description": "Biologically inspired optimization method mentioned as advancement",
+                    "section": "1 Introduction",
+                },
+                {
+                    "label": "Tsankova (2002) frustration switching",
+                    "entity_type": "Algorithm",
+                    "domain": "navigation tasks",
+                    "confidence": 0.65,
+                    "salience": "background",
+                    "source_type": "reviewed_method",
+                    "accepted": False,
+                    "review_status": "pending",
+                    "canonical_id": "concept:tsankova-2002-frustration-switching",
+                    "evidence_span": "Tsankova (2002) and Hasson et al (2011) use a high frustration to switch between behaviour",
+                    "description": "Uses high frustration to trigger switching between behavioral sets",
+                    "section": "6.4",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+
+        assert (
+            "concept:evolutionary-algorithms",
+            "USED_IN",
+            "concept:reinforcement-learning",
+        ) not in relation_triples
+        assert (
+            "concept:swarm-based-optimization",
+            "USED_IN",
+            "concept:reinforcement-learning",
+        ) not in relation_triples
+        assert (
+            "concept:tsankova-2002-frustration-switching",
+            "USED_IN",
+            "concept:reinforcement-learning",
+        ) in relation_triples
+
     def test_entity_linker_builds_pending_relations_from_review_candidates(self):
         extraction = ExtractionResult(
             paper_id="p1",
@@ -1779,6 +2509,121 @@ class TestEntityLinker:
         ) in relation_triples
         assert ("concept:acetylcholine", "CORRESPONDS_TO", "concept:learning-rate") in relation_triples
 
+    def test_entity_linker_promotes_relation_endpoint_candidates(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            paper_type="survey",
+            concepts=[
+                {
+                    "label": "Homeostasis",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.92,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "homeostasis derives categorical emotions from internal variables",
+                },
+                {
+                    "label": "Bayesian Affect Control Theory",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.92,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Bayesian Affect Control Theory is a POMDP variant",
+                },
+                {
+                    "label": "Markov Decision Process",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Markov Decision Process formalization",
+                },
+                {
+                    "label": "Reinforcement Learning",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "reinforcement learning survey",
+                },
+                {
+                    "label": "Transition model",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.8,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "transition model is learned in model-based RL",
+                },
+            ],
+            concept_candidates=[
+                {
+                    "label": "Categorical emotion",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.62,
+                    "salience": "supporting",
+                    "accepted": False,
+                    "review_status": "pending",
+                    "evidence_span": "homeostasis derives categorical emotions",
+                }
+            ],
+            method_candidates=[
+                {
+                    "label": "POMDP",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.60,
+                    "mention_count": 2,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "source_type": "background",
+                    "evidence_span": "POMDP variant called Bayesian Affect Control Theory",
+                },
+                {
+                    "label": "Model-based RL",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.70,
+                    "mention_count": 1,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "source_type": "reviewed_method",
+                    "evidence_span": "Model-based RL approximates a transition model",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concept_ids = {item["canonical_id"] for item in result.concepts}
+        method_ids = {item["canonical_id"] for item in result.methods}
+        candidate_ids = {
+            item["canonical_id"]
+            for item in [*result.concept_candidates, *result.method_candidates]
+        }
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"], relation["review_status"])
+            for relation in result.relations
+        }
+
+        assert "concept:categorical-emotion" in concept_ids
+        assert "concept:pomdp" in concept_ids
+        assert "concept:model-based-rl" in method_ids
+        assert "concept:categorical-emotion" not in candidate_ids
+        assert ("concept:homeostasis", "ELICITS", "concept:categorical-emotion", "approved") in relation_triples
+        assert ("concept:bayesian-affect-control-theory", "EXTENDS", "concept:pomdp", "approved") in relation_triples
+        assert ("concept:model-based-rl", "USES", "concept:transition-model", "approved") in relation_triples
+
+    def test_categorical_emotions_alias_resolves_to_domain_concept(self):
+        resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
+
+        result = resolver.resolve(
+            {
+                "label": "Categorical emotions",
+                "entity_type": "DomainConcept",
+                "confidence": 0.9,
+                "accepted": True,
+            }
+        )
+
+        assert result["canonical_id"] == "concept:categorical-emotion"
+
     def test_entity_linker_repairs_zero_mention_count_from_alias_evidence(self):
         extraction = ExtractionResult(
             paper_id="p1",
@@ -1903,6 +2748,10 @@ class TestEntityLinker:
         assert ontology.validate_relation_type("MODULATED_BY") == "MODULATED_BY"
         assert ontology.validate_relation_type("IMPLEMENTS") == "IMPLEMENTS"
         assert ontology.validate_relation_type("ELICITS") == "ELICITS"
+        assert ontology.validate_relation_type("MITIGATES") == "MITIGATES"
+        assert ontology.validate_relation_type("LEADS_TO") == "LEADS_TO"
+        assert ontology.validate_relation_type("REPRODUCES") == "REPRODUCES"
+        assert ontology.validate_relation_type("MORE_ROBUST_THAN") == "MORE_ROBUST_THAN"
         with pytest.raises(ValueError):
             ontology.validate_relation_type("MAKES_UP")
 

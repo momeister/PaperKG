@@ -85,6 +85,7 @@ Extract distinct claim types. Include at least 2 per type when present in the pa
 For each claim, output exactly these fields:
 {
   "statement": "quote or close paraphrase from the source text",
+  "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation",
   "evidence_type": "empirical|theoretical|review|recommendation",
   "negated": false,
   "attributed_to": "this_paper|cited_work"
@@ -94,7 +95,7 @@ Rules:
 - Quote or closely paraphrase the paper text; do not abstract into vague summaries.
 - Prefer specific findings, recommendations, comparisons, named systems, and quantified results.
 - Do not include vague meta-statements like "this paper provides an overview" unless the paper states that as its explicit contribution.
-- Use "negated": true for negative findings, failed results, explicit limitations, or absence claims.
+- Use claim_type="limitation" or "negative_result" for weak/null/insufficient results. Set "negated": true only for explicit logical negation such as "does not", "no evidence", or "fails to".
 - Use attributed_to="this_paper" for the authors' own contribution, recommendation, result, or review-level synthesis.
 - Use attributed_to="cited_work" only when the paper clearly attributes the claim to another named work.
 
@@ -218,6 +219,8 @@ def filter_concepts(
         lowered = label.lower()
         if "---" in label or "page break" in lowered or "break---" in lowered:
             continue
+        if EntityExtractor._is_candidate_noise_artifact(item, label, title=title):
+            continue
         if is_deterministic and normalized in blocked:
             continue
         if (
@@ -319,6 +322,7 @@ def enrich_method_domains(
 class ExtractionResult:
     paper_id: str
     paper_type: str = "research"
+    paper_node: dict[str, Any] = field(default_factory=dict)
     concepts: list[dict[str, Any]] = field(default_factory=list)
     methods: list[dict[str, Any]] = field(default_factory=list)
     concept_candidates: list[dict[str, Any]] = field(default_factory=list)
@@ -331,6 +335,8 @@ class ExtractionResult:
     mathematical_content: dict[str, Any] = field(default_factory=dict)
     language_detected: str = "en"
     quality_warnings: list[str] = field(default_factory=list)
+    metadata_status: str = "valid"
+    blocking_errors: list[str] = field(default_factory=list)
     candidate_count: int = 0
     extraction_diagnostics: dict[str, Any] = field(default_factory=dict)
     raw_response: str = ""
@@ -432,8 +438,9 @@ Your task is meta-level analysis, not additional broad enumeration.
 Return only one complete valid JSON object with exactly these top-level keys:
 {
   "paper_type": "research|survey|theoretical|benchmark",
+  "paper_node": {"title": "paper title if clear", "paper_year": null, "reviewed_period": null},
   "claims": [
-    {"statement": "claim made by this paper", "evidence_type": "experimental|theoretical|review", "negated": false, "attributed_to": "this_paper"}
+    {"statement": "claim made by this paper", "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation", "evidence_type": "experimental|theoretical|review", "negated": false, "attributed_to": "this_paper"}
   ],
   "cross_domain_hints": [
     {"field": "specific target field", "why_applicable": "method-level transfer reason"}
@@ -448,9 +455,10 @@ Return only one complete valid JSON object with exactly these top-level keys:
 
 Rules:
 - Classify paper_type first: research, survey, theoretical, or benchmark.
+- Fill paper_node with title/year/reviewed_period when explicit. The pipeline will add the stable paper_id.
 - For research papers, extract claims about this paper's own results only.
 - For survey papers, extract field-level meta-claims made by this survey. Do not attribute cited paper results to this paper.
-- Extract negative findings with "negated": true.
+- Use claim_type="limitation" or "negative_result" for weak/null/insufficient results. Set "negated": true only for explicit logical negation such as "does not", "no evidence", or "fails to".
 - Cross-domain hints must transfer methods, not just topics.
 - Return 3-8 cross-domain hints for survey or theoretical papers when methods could plausibly transfer.
 - Terminology conflicts prevent false graph links; include them when a term has materially different meanings across fields.
@@ -474,7 +482,7 @@ Respond with only the JSON array, no other text."""
 Return only one complete valid JSON object with exactly these keys:
 {
   "claims": [
-    {"statement": "claim made by this paper", "evidence_type": "experimental|theoretical|review", "negated": false, "attributed_to": "this_paper"}
+    {"statement": "claim made by this paper", "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation", "evidence_type": "experimental|theoretical|review", "negated": false, "attributed_to": "this_paper"}
   ],
   "cross_domain_hints": [
     {"field": "specific target field", "why_applicable": "method-level transfer reason"}
@@ -484,6 +492,7 @@ Return only one complete valid JSON object with exactly these keys:
   ]
 }
 For survey papers, extract 4-8 field-level meta-claims made by the survey, not individual cited-paper results.
+Use claim_type="limitation" or "negative_result" for weak/null/insufficient results. Set "negated": true only for explicit logical negation such as "does not", "no evidence", or "fails to".
 Return 3-8 cross-domain hints when methods could plausibly transfer.
 Return terminology conflicts for overloaded terms such as reward, value, drive, valence, policy, model, bias, or control when they appear.
 Paper text: {paper_text}"""
@@ -513,8 +522,10 @@ Paper text: {paper_text}"""
         ("Appraisal theory", r"\bappraisal theor(?:y|ies)\b"),
         ("Prospect Theory", r"\bProspect Theory\b"),
         ("Average reward", r"\baverage reward\b"),
-        ("Categorical emotions", r"\bcategorical emotions?\b"),
-        ("Dimensional emotions", r"\bdimensional emotions?\b"),
+        ("Categorical emotion", r"\bcategorical emotions?\b"),
+        ("Dimensional emotion", r"\bdimensional emotions?\b"),
+        ("Model-based RL", r"\bmodel[- ]based\s+RL\b|\bmodel[- ]based reinforcement learning\b"),
+        ("POMDP", r"\bPOMDP\b|\bPartially Observable Markov Decision Process\b"),
         ("Well-being", r"\bwell[- ]being\b"),
         ("Model uncertainty", r"\bmodel uncertainty\b"),
         ("Novelty", r"\bnovelty\b"),
@@ -610,8 +621,10 @@ Paper text: {paper_text}"""
         "Appraisal theory",
         "Prospect Theory",
         "Average reward",
-        "Categorical emotions",
-        "Dimensional emotions",
+        "Categorical emotion",
+        "Dimensional emotion",
+        "Model-based RL",
+        "POMDP",
         "Well-being",
         "Model uncertainty",
         "Novelty",
@@ -933,14 +946,15 @@ Paper text: {paper_text}"""
         """
         started = time.perf_counter()
         source_text = self._clean_extraction_source_text(paper_text)
-        scan = self._scan_paper_text(source_text)
-        semantic_text = self._build_extraction_text(source_text, max_chars=30000)
+        extraction_text = self._text_before_references(source_text)
+        scan = self._scan_paper_text(extraction_text)
+        semantic_text = self._build_extraction_text(extraction_text, max_chars=30000)
         base_overrides = dict(overrides or {})
         extraction_mode = self._normalize_extraction_mode(base_overrides.pop("extraction_mode", None))
         base_overrides["context_size"] = self._effective_context_size(provider, base_overrides)
 
         chunks = self._build_extraction_chunks(
-            source_text,
+            extraction_text,
             context_size=int(base_overrides["context_size"]),
         )
         structural_calls = [
@@ -971,7 +985,7 @@ Paper text: {paper_text}"""
         methods_retry: ParsedLLMResponse | None = None
         if self._should_retry_methods(methods, structural_calls, concepts, scan):
             logger.warning("Methods lost in partial recovery — running methods-only retry")
-            methods_retry = self._run_methods_only_retry(source_text, provider, base_overrides)
+            methods_retry = self._run_methods_only_retry(extraction_text, provider, base_overrides)
             retry_methods = self._coerce_list(methods_retry.data.get("methods"))
             if retry_methods:
                 methods = self._merge_entity_lists(retry_methods)
@@ -982,28 +996,28 @@ Paper text: {paper_text}"""
                     paper_id,
                 )
 
-        regex_result = self._validate_concepts_with_regex(source_text, concept_candidates)
+        regex_result = self._validate_concepts_with_regex(extraction_text, concept_candidates)
         concept_candidates = regex_result.concepts
         concepts = filter_concepts(
             concepts,
-            title=self._paper_title_from_text(source_text),
+            title=self._paper_title_from_text(extraction_text),
         )
         concepts = self._post_process_concepts(concepts)
-        concepts = self._calibrate_concept_confidences(source_text, concepts)
+        concepts = self._calibrate_concept_confidences(extraction_text, concepts)
         concept_candidates = filter_concepts(
             concept_candidates,
-            title=self._paper_title_from_text(source_text),
+            title=self._paper_title_from_text(extraction_text),
         )
         concept_candidates = self._post_process_concepts(concept_candidates)
-        concept_candidates = self._calibrate_concept_confidences(source_text, concept_candidates)
+        concept_candidates = self._calibrate_concept_confidences(extraction_text, concept_candidates)
         methods = enrich_method_domains(deduplicate_methods(methods))
         method_candidates = enrich_method_domains(deduplicate_methods(method_candidates))
 
-        detected_paper_type = self._detect_paper_type(source_text)
+        detected_paper_type = self._detect_paper_type(extraction_text)
         raw_concepts = concepts
         raw_methods = methods
-        concepts = self._accept_concepts(source_text, raw_concepts, detected_paper_type)
-        methods = self._accept_methods(source_text, raw_methods, detected_paper_type)
+        concepts = self._accept_concepts(extraction_text, raw_concepts, detected_paper_type)
+        methods = self._accept_methods(extraction_text, raw_methods, detected_paper_type)
         concept_candidates = self._merge_entity_lists(
             concept_candidates,
             self._rejected_as_candidates(raw_concepts, concepts, "not_accepted_for_auto_kg"),
@@ -1012,8 +1026,8 @@ Paper text: {paper_text}"""
             method_candidates,
             self._rejected_as_candidates(raw_methods, methods, "not_accepted_for_auto_kg"),
         )
-        concept_candidates = self._candidate_only(source_text, concept_candidates, concepts, default_role="possible_concept")
-        method_candidates = self._candidate_only(source_text, method_candidates, methods, default_role="method_candidate")
+        concept_candidates = self._candidate_only(extraction_text, concept_candidates, concepts, default_role="possible_concept")
+        method_candidates = self._candidate_only(extraction_text, method_candidates, methods, default_role="method_candidate")
 
         claims_pass: ParsedLLMResponse | None = None
         semantic_retry: ParsedLLMResponse | None = None
@@ -1021,6 +1035,7 @@ Paper text: {paper_text}"""
             semantic = ParsedLLMResponse(
                 data={
                     "paper_type": detected_paper_type or "research",
+                    "paper_node": {},
                     "claims": [],
                     "cross_domain_hints": [],
                     "terminology_conflicts": [],
@@ -1053,7 +1068,7 @@ Paper text: {paper_text}"""
                 cross_domain_hints,
                 terminology_conflicts,
                 concepts,
-                source_text,
+                extraction_text,
             ):
                 logger.warning("Semantic extraction too thin — running claims/hints retry")
                 semantic_retry = self._run_semantic_lists_retry(semantic_text, provider, base_overrides)
@@ -1066,12 +1081,15 @@ Paper text: {paper_text}"""
                         "Claims retry failed for paper_id=%s after partial semantic recovery; setting claims to []",
                         paper_id,
                     )
-            if self._should_run_dedicated_claims_pass(source_text, claims):
+            if self._should_run_dedicated_claims_pass(extraction_text, claims):
                 claims_pass = self._run_claims_call(semantic_text, provider, base_overrides)
                 claims = self._merge_claim_lists(claims, self._coerce_list(claims_pass.data.get("claims")))
-            claims = claims or self._fallback_claims_from_text(source_text, paper_type_hint=detected_paper_type)
+            claims = claims or self._fallback_claims_from_text(extraction_text, paper_type_hint=detected_paper_type)
             cross_domain_hints = cross_domain_hints or self._fallback_cross_domain_hints(concepts)
-            terminology_conflicts = terminology_conflicts or self._fallback_terminology_conflicts(concepts)
+            terminology_conflicts = self._merge_terminology_conflicts(
+                terminology_conflicts,
+                self._fallback_terminology_conflicts([*concepts, *concept_candidates]),
+            )
 
         mathematical_content = self._coerce_dict(semantic_data.get("mathematical_content"))
         if regex_result.has_formulas:
@@ -1094,6 +1112,14 @@ Paper text: {paper_text}"""
         paper_type = self._normalize_paper_type(semantic_data.get("paper_type"))
         if detected_paper_type == "survey" and paper_type == "research":
             paper_type = "survey"
+        paper_node = self._build_paper_node(
+            paper_id=paper_id,
+            paper_text=source_text,
+            paper_type=paper_type,
+            semantic_paper_node=self._coerce_dict(semantic_data.get("paper_node")),
+            temporal_coverage=temporal_coverage,
+            language_detected=str(semantic_data.get("language_detected") or "en"),
+        )
         parse_quality = self._combined_parse_quality(
             self._worst_parse_quality([call.parse_quality for call in structural_calls]),
             "clean" if extraction_mode == "quick" else self._worst_parse_quality(
@@ -1102,16 +1128,23 @@ Paper text: {paper_text}"""
             ),
         )
         duration = time.perf_counter() - started
+        metadata_validation = self._metadata_validation(
+            paper_id=paper_id,
+            paper_node=paper_node,
+        )
         warnings = self._quality_warnings(
             paper_type=paper_type,
             concept_count=len(concepts),
             method_count=len(methods),
-            text_length=len(source_text or ""),
+            text_length=len(extraction_text or ""),
             parse_quality=parse_quality,
+            paper_id=paper_id,
+            paper_node=paper_node,
         )
 
         result_payload = {
             "paper_type": paper_type,
+            "paper_node": paper_node,
             "concepts": concepts,
             "methods": methods,
             "concept_candidates": concept_candidates,
@@ -1127,6 +1160,8 @@ Paper text: {paper_text}"""
             "auto_detected_concepts": regex_result.auto_detected_count,
             "deterministic_candidate_count": len(concept_candidates) + len(method_candidates),
             "quality_warnings": warnings,
+            "metadata_status": metadata_validation["metadata_status"],
+            "blocking_errors": metadata_validation["blocking_errors"],
             "chunk_count": len(chunks),
             "extraction_mode": extraction_mode,
             "call_1_parse_quality": self._worst_parse_quality([call.parse_quality for call in structural_calls]),
@@ -1154,6 +1189,7 @@ Paper text: {paper_text}"""
         return ExtractionResult(
             paper_id=paper_id,
             paper_type=paper_type,
+            paper_node=paper_node,
             concepts=concepts,
             methods=methods,
             concept_candidates=concept_candidates,
@@ -1166,6 +1202,8 @@ Paper text: {paper_text}"""
             mathematical_content=mathematical_content,
             language_detected=result_payload["language_detected"],
             quality_warnings=warnings,
+            metadata_status=result_payload["metadata_status"],
+            blocking_errors=result_payload["blocking_errors"],
             candidate_count=int(result_payload["deterministic_candidate_count"]),
             extraction_diagnostics={
                 "chunk_count": len(chunks),
@@ -1485,12 +1523,48 @@ Paper text: {paper_text}"""
                 item = dict(claim)
                 item["statement"] = statement
                 item.setdefault("evidence_type", "theoretical")
-                item.setdefault("negated", False)
+                item["claim_type"] = cls._infer_claim_type(item)
+                item["negated"] = cls._normalize_claim_negation(item)
                 item.setdefault("attributed_to", "this_paper")
                 if normalized not in merged:
                     merged[normalized] = item
                     order.append(normalized)
         return [merged[key] for key in order]
+
+    @staticmethod
+    def _infer_claim_type(claim: dict[str, Any]) -> str:
+        existing = str(claim.get("claim_type") or "").strip().lower()
+        allowed = {"contribution", "finding", "limitation", "negative_result", "comparison", "recommendation"}
+        if existing in allowed:
+            return existing
+
+        statement = str(claim.get("statement") or "").lower()
+        if re.search(r"\b(too simple|insufficient|limited|limitation|cannot draw|unable to draw|hard to draw|not enough to)\b", statement):
+            return "limitation"
+        if re.search(r"\b(no evidence|does not|do not|did not|failed to|fails to|cannot|unable to|no significant)\b", statement):
+            return "negative_result"
+        if re.search(r"\b(outperform|outperforms|more robust|less robust|more accurate|less accurate|compared|whereas|than)\b", statement):
+            return "comparison"
+        if re.search(r"\b(should|recommend|requires?|must|need to|necessary)\b", statement):
+            return "recommendation"
+        if re.search(r"\b(introduce|introduces|propose|proposes|present|presents|provide|provides|contribute|contributes)\b", statement):
+            return "contribution"
+        return "finding"
+
+    @classmethod
+    def _normalize_claim_negation(cls, claim: dict[str, Any]) -> bool:
+        statement = str(claim.get("statement") or "").lower()
+        explicit_negation = bool(
+            re.search(
+                r"\b(no evidence|no significant|does not|do not|did not|cannot|can not|unable to|failed to|fails to|without)\b",
+                statement,
+            )
+        )
+        if explicit_negation:
+            return True
+        if str(claim.get("claim_type") or "").lower() in {"limitation", "negative_result"}:
+            return False
+        return bool(claim.get("negated"))
 
     @staticmethod
     def _hints_for_chunk(
@@ -1955,7 +2029,7 @@ Paper text: {paper_text}"""
         templates = {
             "Reward function": ("reward", "reinforcement signal or objective term", "psychology/economics - subjective or extrinsic incentive"),
             "Value function": ("value", "expected return estimate", "ethics/statistics - normative worth or measured quantity"),
-            "Drive": ("drive", "internal motivational variable", "storage/computing - hardware or persistence medium"),
+            "Drive": ("drive", "internal motivational variable in an RL/control loop", "psychology/physiology - homeostatic need state or drive reduction construct"),
             "Valence": ("valence", "affective polarity", "chemistry/linguistics - bonding capacity or argument structure"),
             "Policy": ("policy", "action-selection rule", "governance - institutional rule or regulation"),
             "Bias": ("bias", "statistical or model distortion", "social science - systematic unfairness or prejudice"),
@@ -1971,6 +2045,26 @@ Paper text: {paper_text}"""
                     }
                 )
         return conflicts[:5]
+
+    @classmethod
+    def _merge_terminology_conflicts(
+        cls,
+        primary: list[dict[str, Any]],
+        fallback: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Preserve LLM conflicts while backfilling stable overloaded terms."""
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for source in (primary, fallback):
+            for item in source or []:
+                if not isinstance(item, dict):
+                    continue
+                term = str(item.get("term") or "").strip().lower()
+                if not term or term in seen:
+                    continue
+                seen.add(term)
+                output.append(dict(item))
+        return output[:8]
 
     @classmethod
     def _has_overloaded_terms(cls, concepts: list[dict[str, Any]]) -> bool:
@@ -2117,6 +2211,129 @@ Paper text: {paper_text}"""
             return True
         return False
 
+    @classmethod
+    def _is_candidate_noise_artifact(
+        cls,
+        item: dict[str, Any],
+        label: str,
+        title: str | None = None,
+    ) -> bool:
+        """Reject parser/chunking artifacts before they enter review queues."""
+        clean_label = cls._clean_label(label)
+        normalized = cls._normalize_label(clean_label)
+        if not normalized:
+            return True
+
+        evidence_text = cls._candidate_evidence_text(item)
+        if re.search(r"(?:^|\|\s*)repeated phrase in parsed paper text", evidence_text.lower()):
+            return True
+
+        if cls._looks_like_heading_artifact(item, clean_label):
+            return True
+
+        if bool(item.get("auto_detected")) and normalized in {"datasource", "datasources", "changingdata"}:
+            return True
+
+        normalized_title = cls._normalize_label(title or "")
+        if (
+            bool(item.get("auto_detected"))
+            and normalized_title
+            and normalized in normalized_title
+            and normalized != normalized_title
+            and cls._starts_with_fragment_preposition(clean_label)
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _candidate_evidence_text(item: dict[str, Any]) -> str:
+        text = " ".join(
+            str(item.get(key) or "")
+            for key in ("evidence_span", "context", "description", "section")
+        )
+        return re.sub(r"\s+", " ", text).strip()
+
+    @classmethod
+    def _looks_like_heading_artifact(cls, item: dict[str, Any], label: str) -> bool:
+        evidence_text = cls._candidate_evidence_text(item)
+        is_heading = bool(re.search(r"(?:^|\|\s*)section or heading:", evidence_text.lower()))
+        if not is_heading and str(item.get("evidence_role") or "").lower() != "environment":
+            return False
+
+        if cls._starts_with_fragment_preposition(label):
+            return True
+        if cls._looks_like_affiliation_label(label):
+            return True
+        if cls._normalize_label(label) in {"datasource", "datasources", "changingdata"}:
+            return True
+        return False
+
+    @staticmethod
+    def _starts_with_fragment_preposition(label: str) -> bool:
+        return bool(re.match(r"^(?:and|by|for|from|in|of|on|or|to|with)\b", str(label or "").strip(), flags=re.IGNORECASE))
+
+    @staticmethod
+    def _looks_like_affiliation_label(label: str) -> bool:
+        clean = re.sub(r"\s+", " ", str(label or "")).strip()
+        lowered = clean.lower()
+        if not clean:
+            return False
+        if re.search(
+            r"\b(?:affiliation|author|centre|center|college|department|faculty|institute|laborator(?:y|ies)|school|university)\b",
+            lowered,
+        ):
+            return True
+        if re.match(r"^statistics\s+[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)?$", clean, flags=re.IGNORECASE):
+            return True
+        return False
+
+    @classmethod
+    def _is_reference_only_entity(
+        cls,
+        item: dict[str, Any],
+        label: str,
+        body_text: str,
+    ) -> bool:
+        """Drop entities whose only support is a bibliography/citation title."""
+        if not cls._looks_like_reference_section(item):
+            return False
+        body_mentions = cls._mention_count(label, body_text)
+        return body_mentions < 2
+
+    @classmethod
+    def _looks_like_reference_section(cls, item: dict[str, Any]) -> bool:
+        section = re.sub(r"\s+", " ", str(item.get("section") or "")).strip().lower()
+        if cls._is_reference_heading(section):
+            return True
+
+        evidence_text = cls._candidate_evidence_text(item).lower()
+        if re.search(r"(?:^|\|\s*)section or heading:\s*(?:\d+\.?\s*)?(?:references|bibliography|works cited|literature cited)\b", evidence_text):
+            return True
+        return False
+
+    @staticmethod
+    def _is_reference_heading(value: str) -> bool:
+        text = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+        return bool(
+            re.fullmatch(
+                r"(?:#+\s*)?(?:\d+\.?\s*)?(?:references|bibliography|works cited|literature cited)",
+                text,
+            )
+        )
+
+    @classmethod
+    def _is_zero_mention_deterministic_method_candidate(
+        cls,
+        item: dict[str, Any],
+        default_role: str,
+    ) -> bool:
+        """Drop phrase-engineered method candidates whose label never appears."""
+        if default_role != "method_candidate":
+            return False
+        if str(item.get("candidate_source") or "").lower() != "deterministic_scan":
+            return False
+        return cls._coerce_float(item.get("mention_count"), 0.0) <= 0.0
+
     @staticmethod
     def _looks_like_truncated_label(label: str) -> bool:
         """Detect common PDF page-break fragments in deterministic labels."""
@@ -2185,6 +2402,8 @@ Paper text: {paper_text}"""
             normalized = cls._normalize_label(label)
             if not normalized or normalized in blocked:
                 continue
+            if cls._is_reference_only_entity(item, label, body_text):
+                continue
             if item.get("candidate_source") == "deterministic_scan" or item.get("auto_detected"):
                 continue
             if (
@@ -2225,6 +2444,8 @@ Paper text: {paper_text}"""
             label = str(item.get("label") or "")
             if not cls._normalize_label(label):
                 continue
+            if cls._is_reference_only_entity(item, label, body_text):
+                continue
             if item.get("candidate_source") == "deterministic_scan" or item.get("auto_detected"):
                 continue
             confidence = cls._coerce_float(item.get("confidence"), 0.75)
@@ -2261,6 +2482,12 @@ Paper text: {paper_text}"""
             label = cls._clean_label(str(item.get("label") or ""))
             normalized = cls._normalize_label(label)
             if not normalized or normalized in accepted or normalized in seen:
+                continue
+            if cls._is_zero_mention_deterministic_method_candidate(item, default_role):
+                continue
+            if cls._is_reference_only_entity(item, label, body_text):
+                continue
+            if cls._is_candidate_noise_artifact(item, label, title=cls._paper_title_from_text(body_text)):
                 continue
             seen.add(normalized)
             item["label"] = label
@@ -2521,6 +2748,7 @@ Paper text: {paper_text}"""
             )
         semantic_keys = {
             "paper_type",
+            "paper_node",
             "claims",
             "cross_domain_hints",
             "terminology_conflicts",
@@ -2549,6 +2777,38 @@ Paper text: {paper_text}"""
             )
         return diagnostics
 
+    @classmethod
+    def _build_paper_node(
+        cls,
+        paper_id: str,
+        paper_text: str,
+        paper_type: str,
+        semantic_paper_node: dict[str, Any],
+        temporal_coverage: dict[str, Any],
+        language_detected: str,
+    ) -> dict[str, Any]:
+        """Materialize the extraction's Paper node anchor independent of LLM recall."""
+        title = str(semantic_paper_node.get("title") or "").strip()
+        if not title:
+            title = cls._paper_title_from_text(paper_text)
+        paper_year = semantic_paper_node.get("paper_year") or temporal_coverage.get("paper_year")
+        reviewed_period = semantic_paper_node.get("reviewed_period") or temporal_coverage.get("reviewed_period")
+        node = {
+            "node_type": "Paper",
+            "paper_id": str(paper_id),
+            "title": title,
+            "paper_type": cls._normalize_paper_type(paper_type),
+            "paper_year": paper_year,
+            "reviewed_period": reviewed_period,
+            "language_detected": language_detected or "en",
+            "source": "extraction",
+        }
+        detected_source_id = cls._extract_front_matter_arxiv_identifier(paper_text)
+        requested_arxiv_id = cls._extract_arxiv_identifier(str(paper_id))
+        if detected_source_id and detected_source_id != requested_arxiv_id:
+            node["detected_source_id"] = detected_source_id
+        return {key: value for key, value in node.items() if value not in (None, "", [], {})}
+
     @staticmethod
     def _worst_parse_quality(qualities: list[str]) -> str:
         if not qualities:
@@ -2557,13 +2817,16 @@ Paper text: {paper_text}"""
         worst = max(qualities, key=lambda item: order.get(item, 2))
         return worst if worst in order else "partial"
 
-    @staticmethod
+    @classmethod
     def _quality_warnings(
+        cls,
         paper_type: str,
         concept_count: int,
         method_count: int,
         text_length: int,
         parse_quality: str,
+        paper_id: str | None = None,
+        paper_node: dict[str, Any] | None = None,
     ) -> list[str]:
         warnings: list[str] = []
         if parse_quality == "partial":
@@ -2580,7 +2843,134 @@ Paper text: {paper_text}"""
             )
         if text_length >= 20000 and method_count == 0:
             warnings.append("Full-length paper produced no methods; review method extraction.")
+        warnings.extend(cls._paper_identity_warnings(paper_id, paper_node or {}))
         return warnings
+
+    @classmethod
+    def _paper_identity_warnings(
+        cls,
+        paper_id: str | None,
+        paper_node: dict[str, Any],
+    ) -> list[str]:
+        warnings: list[str] = []
+        node_paper_id = str(paper_node.get("paper_id") or paper_id or "")
+        arxiv_id = cls._extract_arxiv_identifier(node_paper_id)
+        arxiv_year = cls._arxiv_publication_year(arxiv_id)
+        paper_year = cls._coerce_year(paper_node.get("paper_year"))
+        if arxiv_year and paper_year and abs(arxiv_year - paper_year) > 2:
+            warnings.append(
+                f"Paper id {arxiv_id} implies year {arxiv_year}, "
+                f"but extracted paper_year is {paper_year}; verify paper metadata."
+            )
+
+        detected_source_id = cls._extract_arxiv_identifier(str(paper_node.get("detected_source_id") or ""))
+        if arxiv_id and detected_source_id and detected_source_id != arxiv_id:
+            warnings.append(
+                f"Paper text contains {detected_source_id}, "
+                f"but extraction paper_id is {arxiv_id}; verify source identity."
+            )
+        return warnings
+
+    @classmethod
+    def _metadata_validation(
+        cls,
+        paper_id: str | None,
+        paper_node: dict[str, Any],
+    ) -> dict[str, Any]:
+        blocking_errors: list[str] = []
+        node_paper_id = str(paper_node.get("paper_id") or paper_id or "")
+        supplied_arxiv_id = cls._extract_arxiv_identifier(node_paper_id)
+        detected_source_id = cls._extract_arxiv_identifier(str(paper_node.get("detected_source_id") or ""))
+        if supplied_arxiv_id and detected_source_id and detected_source_id != supplied_arxiv_id:
+            blocking_errors.append(
+                f"paper_id_mismatch: supplied {supplied_arxiv_id}, extracted {detected_source_id}"
+            )
+
+        arxiv_year = cls._arxiv_publication_year(supplied_arxiv_id)
+        paper_year = cls._coerce_year(paper_node.get("paper_year"))
+        if arxiv_year and paper_year and abs(arxiv_year - paper_year) > 2:
+            blocking_errors.append(
+                f"paper_id_year_mismatch: supplied {supplied_arxiv_id} implies {arxiv_year}, "
+                f"extracted paper_year={paper_year}"
+            )
+
+        return {
+            "metadata_status": "invalid" if blocking_errors else "valid",
+            "blocking_errors": blocking_errors,
+        }
+
+    @staticmethod
+    def _coerce_year(value: Any) -> int | None:
+        try:
+            year = int(value)
+        except (TypeError, ValueError):
+            return None
+        return year if 1500 <= year <= 3000 else None
+
+    @staticmethod
+    def _extract_arxiv_identifier(value: str) -> str:
+        match = re.search(
+            r"\b(?:arxiv:\s*)?(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?\b",
+            value,
+            re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        return f"arxiv:{match.group(1)}{match.group(2)}.{match.group(3)}"
+
+    @classmethod
+    def _extract_front_matter_arxiv_identifier(cls, paper_text: str) -> str:
+        body_text = cls._text_before_references(paper_text or "")
+        front_matter = body_text[:20000]
+        explicit = cls._extract_explicit_arxiv_identifier(front_matter[:8000])
+        if explicit:
+            return explicit
+
+        introduction_match = re.search(
+            r"(?:^|\n)\s*(?:#{1,6}\s*)?(?:\d+\.?\s*)?(?:introduction|i\.\s+introduction)\b",
+            front_matter,
+            re.IGNORECASE,
+        )
+        if introduction_match:
+            explicit = cls._extract_explicit_arxiv_identifier(front_matter[: introduction_match.start()])
+            if explicit:
+                return explicit
+
+        explicit = cls._extract_explicit_arxiv_identifier(front_matter)
+        if explicit:
+            return explicit
+
+        abstract_match = re.search(r"\babstract\b", front_matter, re.IGNORECASE)
+        fallback_window = front_matter[: abstract_match.end() + 250] if abstract_match else front_matter[:2500]
+        return cls._extract_arxiv_identifier(fallback_window)
+
+    @staticmethod
+    def _extract_explicit_arxiv_identifier(value: str) -> str:
+        match = re.search(
+            r"\barxiv\s*:\s*(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?\b",
+            value or "",
+            re.IGNORECASE,
+        )
+        if not match:
+            match = re.search(
+                r"\barxiv\.org/(?:abs|pdf)/(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?\b",
+                value or "",
+                re.IGNORECASE,
+            )
+        if not match:
+            return ""
+        return f"arxiv:{match.group(1)}{match.group(2)}.{match.group(3)}"
+
+    @staticmethod
+    def _arxiv_publication_year(arxiv_id: str) -> int | None:
+        match = re.search(r"\b(?:arxiv:\s*)?(\d{2})(\d{2})\.\d{4,5}", arxiv_id, re.IGNORECASE)
+        if not match:
+            return None
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if not 1 <= month <= 12:
+            return None
+        return 2000 + year if year < 90 else 1900 + year
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -2761,10 +3151,17 @@ Paper text: {paper_text}"""
 
     @staticmethod
     def _text_before_references(text: str) -> str:
-        match = re.search(r"\n\s*(?:references|bibliography)\s*\n", text or "", flags=re.IGNORECASE)
+        raw = text or ""
+        match = re.search(
+            r"(?im)^\s*(?:#+\s*)?(?:\d+\.?\s*)?(?:references|bibliography|works cited|literature cited)\s*$",
+            raw,
+        )
+        if match:
+            return raw[: match.start()]
+        match = re.search(r"\n\s*(?:references|bibliography)\s*\n", raw, flags=re.IGNORECASE)
         if not match:
-            return text or ""
-        return (text or "")[: match.start()]
+            return raw
+        return raw[: match.start()]
 
     @classmethod
     def _looks_like_official_statistics(cls, text: str) -> bool:
@@ -2905,9 +3302,27 @@ Paper text: {paper_text}"""
 
     @staticmethod
     def _context_for_match(text: str, match: re.Match[str], window: int = 180) -> str:
-        start = max(0, match.start() - window)
-        end = min(len(text), match.end() + window)
-        return re.sub(r"\s+", " ", text[start:end]).strip()
+        start_floor = max(0, match.start() - window)
+        end_ceiling = min(len(text), match.end() + window)
+        prefix = text[start_floor: match.start()]
+        suffix = text[match.end(): end_ceiling]
+
+        start = start_floor
+        sentence_start = max(prefix.rfind(". "), prefix.rfind("! "), prefix.rfind("? "), prefix.rfind("\n"))
+        if sentence_start >= 0:
+            start = start_floor + sentence_start + 1
+
+        end = end_ceiling
+        suffix_boundary = re.search(r"(?:[.!?]\s+|\n)", suffix)
+        if suffix_boundary:
+            end = match.end() + suffix_boundary.end()
+
+        context = re.sub(r"\s+", " ", text[start:end]).strip()
+        if context and context[0].islower() and match.start() > start_floor:
+            fallback = re.sub(r"\s+", " ", text[match.start():end]).strip()
+            if fallback:
+                context = fallback
+        return context
 
     @staticmethod
     def _clean_label(label: str) -> str:
