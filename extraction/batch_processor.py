@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import hashlib
-import re
 import time
 from typing import Any
 
+from extraction.entity_extractor import EntityExtractor, extraction_failure_reason
 from extraction.entity_linker import ExtractionPipeline
 from extraction.embedding_engine import EmbeddingEngine
 from parsing.parser_router import ParserRouter, ParserType
@@ -49,6 +49,7 @@ class BatchProcessor:
         embed_concepts: bool = True,
         max_retries: int = 0,
         retry_delay_seconds: float = 0.0,
+        quality_db_path: str | None = None,
     ) -> None:
         """
         Initialize batch processor.
@@ -67,7 +68,11 @@ class BatchProcessor:
         self.embed_concepts = embed_concepts
         self.max_retries = max(0, int(max_retries))
         self.retry_delay_seconds = max(0.0, float(retry_delay_seconds))
-        self.extraction_pipeline = ExtractionPipeline(llm_router, embedding_engine=self.embedding_engine)
+        self.extraction_pipeline = ExtractionPipeline(
+            llm_router,
+            embedding_engine=self.embedding_engine,
+            quality_db_path=quality_db_path,
+        )
         self._job_states: dict[str, BatchJobStatus] = {}
 
     def process_papers(
@@ -208,8 +213,12 @@ class BatchProcessor:
                             overrides=llm_overrides,
                             link_concepts=self.link_concepts,
                         )
+                        failure_reason = extraction_failure_reason(extraction)
 
-                        if self.embed_concepts:
+                        if failure_reason is not None and metadata_db is None:
+                            raise RuntimeError(failure_reason)
+
+                        if self.embed_concepts and failure_reason is None:
                             concept_labels = [c.get("label", "") for c in extraction.concepts]
                             embedding_results = self.embedding_engine.embed_batch(concept_labels)
                             if metadata_db is not None:
@@ -249,7 +258,11 @@ class BatchProcessor:
                                 temporal_coverage=extraction.temporal_coverage,
                                 mathematical_content=extraction.mathematical_content,
                                 raw_response=extraction.raw_response,
+                                error_message=failure_reason,
                             )
+
+                        if failure_reason is not None:
+                            raise RuntimeError(failure_reason)
 
                         status.papers_processed += 1
                         last_error = None
@@ -384,13 +397,4 @@ class BatchProcessor:
 
     @staticmethod
     def _title_from_text(text: str, max_lines: int = 5) -> str:
-        lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines()]
-        lines = [line for line in lines if line and not re.match(r"^\d+$", line)]
-        if not lines:
-            return ""
-        title_lines = []
-        for line in lines[:max_lines]:
-            if re.search(r"\b(abstract|presented at|author|university|department)\b", line, flags=re.IGNORECASE):
-                break
-            title_lines.append(line)
-        return " ".join(title_lines or lines[:1])[:240]
+        return EntityExtractor._paper_title_from_text(text)[:240]

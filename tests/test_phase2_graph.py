@@ -414,6 +414,13 @@ def test_ingest_extractions_writes_only_approved_concept_relations() -> None:
                             "review_status": "approved",
                             "confidence": 0.9,
                         },
+                        {
+                            "label": "Detail endpoint",
+                            "canonical_id": "concept:detail-endpoint",
+                            "review_status": "approved",
+                            "accepted_for_kg_write": False,
+                            "confidence": 0.9,
+                        },
                     ],
                     "methods": [],
                     "relations": [
@@ -429,6 +436,13 @@ def test_ingest_extractions_writes_only_approved_concept_relations() -> None:
                             "relation_type": "RELATED_TO",
                             "object_id": "concept:missing",
                             "evidence_span": "missing object",
+                            "review_status": "approved",
+                        },
+                        {
+                            "subject_id": "concept:appraisal-theory",
+                            "relation_type": "RELATED_TO",
+                            "object_id": "concept:detail-endpoint",
+                            "evidence_span": "detail endpoint should stay out of the production graph",
                             "review_status": "approved",
                         },
                     ],

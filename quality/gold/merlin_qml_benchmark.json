@@ -1,0 +1,380 @@
+{
+  "paper_id": "arxiv:2602.11092",
+  "expected": {
+    "concepts": [
+      {"label": "Photonic Quantum Machine Learning", "entity_type": "MethodFamily"},
+      {"label": "Fock space", "entity_type": "DomainConcept"},
+      {"label": "Linear-optical circuits", "entity_type": "ModelArchitecture"},
+      {"label": "MerLin", "entity_type": "System"},
+      {"label": "QuantumLayer", "entity_type": "ModelArchitecture"},
+      {"label": "Angle encoding", "entity_type": "MethodFamily"},
+      {"label": "Amplitude encoding", "entity_type": "MethodFamily"},
+      {"label": "Fidelity kernel", "entity_type": "Metric"},
+      {"label": "Variational Quantum Circuit", "entity_type": "ModelArchitecture"},
+      {"label": "Adaptive state injection", "entity_type": "MethodFamily"},
+      {"label": "Quantum Convolutional Neural Network", "entity_type": "ModelArchitecture"},
+      {"label": "Quantum Generative Adversarial Network", "entity_type": "ModelArchitecture"},
+      {"label": "Distributed Quantum Neural Network", "entity_type": "ModelArchitecture"},
+      {"label": "MNIST", "entity_type": "Dataset"},
+      {"label": "SST2", "entity_type": "Dataset"},
+      {"label": "PyTorch", "entity_type": "System"}
+    ],
+    "concept_candidates": [
+      {"label": "CIFAR-10", "entity_type": "Dataset"},
+      {"label": "Mach-Zehnder interferometer", "entity_type": "System"},
+      {"label": "Gaussian boson sampling", "entity_type": "Phenomenon"},
+      {"label": "Threshold detectors", "entity_type": "System"}
+    ],
+    "methods": [
+      {"label": "Strong Linear Optical Simulation", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "Quantum Relational Knowledge Distillation", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "QLOQ", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "Quantum Self-Supervised Learning", "entity_type": "MethodFamily", "source_type": "reviewed_method"},
+      {"label": "SPSA", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "Stochastic Gradient Descent", "entity_type": "Algorithm", "source_type": "reviewed_method"}
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "BUILT_ON",
+        "object_id": "concept:strong-linear-optical-simulation"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "PROVIDES",
+        "object_id": "concept:quantumlayer"
+      },
+      {
+        "subject_id": "concept:quantumlayer",
+        "relation_type": "SUPPORTS",
+        "object_id": "concept:angle-encoding"
+      },
+      {
+        "subject_id": "concept:quantumlayer",
+        "relation_type": "SUPPORTS",
+        "object_id": "concept:amplitude-encoding"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-long-short-term-memory"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-convolutional-neural-network"
+      },
+      {
+        "subject_id": "concept:quantum-convolutional-neural-network",
+        "relation_type": "USES",
+        "object_id": "concept:adaptive-state-injection"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-generative-adversarial-network"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:distributed-quantum-neural-network"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-self-supervised-learning"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-relational-knowledge-distillation"
+      },
+      {
+        "subject_id": "concept:quantum-generative-adversarial-network",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:mnist"
+      },
+      {
+        "subject_id": "concept:angle-encoding",
+        "relation_type": "MORE_ROBUST_THAN",
+        "object_id": "concept:amplitude-encoding"
+      }
+    ],
+    "claims": [
+      {
+        "statement": "MerLin provides a unified, open-source framework for photonic and hybrid QML that integrates strong simulation of linear-optical circuits with PyTorch and scikit-learn.",
+        "negated": false
+      },
+      {
+        "statement": "Photon-native models can effectively substitute gate-based models in many hybrid architectures without significant loss in learning performance or qualitative behavior.",
+        "negated": false
+      },
+      {
+        "statement": "Amplitude encoding in photonic quantum models is highly vulnerable to small adversarial perturbations, whereas angle encoding provides substantially more robustness.",
+        "negated": false
+      }
+    ]
+  },
+  "prediction": {
+    "paper_id": "arxiv:2602.11092",
+    "concepts": [
+      {
+        "label": "Photonic Quantum Machine Learning",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:photonic-quantum-machine-learning",
+        "review_status": "approved"
+      },
+      {
+        "label": "Fock space",
+        "entity_type": "DomainConcept",
+        "canonical_id": "concept:fock-space",
+        "review_status": "approved"
+      },
+      {
+        "label": "Linear-optical circuits",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:linear-optical-circuits",
+        "review_status": "approved"
+      },
+      {
+        "label": "MerLin",
+        "entity_type": "System",
+        "canonical_id": "concept:merlin",
+        "review_status": "approved"
+      },
+      {
+        "label": "QuantumLayer",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:quantumlayer",
+        "review_status": "approved"
+      },
+      {
+        "label": "Angle encoding",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:angle-encoding",
+        "review_status": "approved"
+      },
+      {
+        "label": "Amplitude encoding",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:amplitude-encoding",
+        "review_status": "approved"
+      },
+      {
+        "label": "Fidelity kernel",
+        "entity_type": "Metric",
+        "canonical_id": "concept:fidelity-kernel",
+        "review_status": "approved"
+      },
+      {
+        "label": "Variational Quantum Circuit",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:variational-quantum-circuit",
+        "review_status": "approved"
+      },
+      {
+        "label": "Adaptive state injection",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:adaptive-state-injection",
+        "review_status": "approved"
+      },
+      {
+        "label": "Quantum Convolutional Neural Network",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:quantum-convolutional-neural-network",
+        "review_status": "approved"
+      },
+      {
+        "label": "Quantum Generative Adversarial Network",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:quantum-generative-adversarial-network",
+        "review_status": "approved"
+      },
+      {
+        "label": "Distributed Quantum Neural Network",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:distributed-quantum-neural-network",
+        "review_status": "approved"
+      },
+      {
+        "label": "MNIST",
+        "entity_type": "Dataset",
+        "canonical_id": "concept:mnist",
+        "review_status": "approved"
+      },
+      {
+        "label": "SST2",
+        "entity_type": "Dataset",
+        "canonical_id": "concept:sst2",
+        "review_status": "approved"
+      },
+      {
+        "label": "PyTorch",
+        "entity_type": "System",
+        "canonical_id": "method:pytorch",
+        "review_status": "approved"
+      }
+    ],
+    "concept_candidates": [
+      {"label": "CIFAR-10", "entity_type": "Dataset", "review_status": "pending"},
+      {"label": "Mach-Zehnder interferometer", "entity_type": "System", "review_status": "pending"},
+      {"label": "Gaussian boson sampling", "entity_type": "Phenomenon", "review_status": "pending"},
+      {"label": "Threshold detectors", "entity_type": "System", "review_status": "pending"}
+    ],
+    "methods": [
+      {
+        "label": "Strong Linear Optical Simulation",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:strong-linear-optical-simulation",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "Quantum Relational Knowledge Distillation",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:quantum-relational-knowledge-distillation",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "QLOQ",
+        "entity_type": "Algorithm",
+        "canonical_id": "method:qloq",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "Quantum Self-Supervised Learning",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:quantum-self-supervised-learning",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "SPSA",
+        "entity_type": "Algorithm",
+        "canonical_id": "method:spsa",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "Stochastic Gradient Descent",
+        "entity_type": "Algorithm",
+        "canonical_id": "method:stochastic-gradient-descent",
+        "source_type": "reviewed_method"
+      }
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "BUILT_ON",
+        "object_id": "concept:strong-linear-optical-simulation",
+        "review_status": "approved",
+        "evidence_span": "Strong Linear Optical Simulation (SLOS) framework"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "PROVIDES",
+        "object_id": "concept:quantumlayer",
+        "review_status": "approved",
+        "evidence_span": "QuantumLayer, a torch.nn.Module that exposes trainable circuit parameters"
+      },
+      {
+        "subject_id": "concept:quantumlayer",
+        "relation_type": "SUPPORTS",
+        "object_id": "concept:angle-encoding",
+        "review_status": "approved",
+        "evidence_span": "angle encoding maps classical features to phase shifts"
+      },
+      {
+        "subject_id": "concept:quantumlayer",
+        "relation_type": "SUPPORTS",
+        "object_id": "concept:amplitude-encoding",
+        "review_status": "approved",
+        "evidence_span": "amplitude encoding initializes the quantum state amplitudes"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-long-short-term-memory",
+        "review_status": "approved",
+        "evidence_span": "QLSTM"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-convolutional-neural-network",
+        "review_status": "approved",
+        "evidence_span": "photonic QCNN using adaptive state injection"
+      },
+      {
+        "subject_id": "concept:quantum-convolutional-neural-network",
+        "relation_type": "USES",
+        "object_id": "concept:adaptive-state-injection",
+        "review_status": "approved",
+        "evidence_span": "photonic QCNN using adaptive state injection"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-generative-adversarial-network",
+        "review_status": "approved",
+        "evidence_span": "Quantum generative adversarial networks (QGANs)"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:distributed-quantum-neural-network",
+        "review_status": "approved",
+        "evidence_span": "Distributed Quantum Neural Network (DQNN) framework"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-self-supervised-learning",
+        "review_status": "approved",
+        "evidence_span": "Quantum Self-Supervised Learning (qSSL)"
+      },
+      {
+        "subject_id": "concept:merlin",
+        "relation_type": "REPRODUCES",
+        "object_id": "concept:quantum-relational-knowledge-distillation",
+        "review_status": "approved",
+        "evidence_span": "Quantum Relational Knowledge Distillation"
+      },
+      {
+        "subject_id": "concept:quantum-generative-adversarial-network",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:mnist",
+        "review_status": "approved",
+        "evidence_span": "trained on the MNIST dataset"
+      },
+      {
+        "subject_id": "concept:angle-encoding",
+        "relation_type": "MORE_ROBUST_THAN",
+        "object_id": "concept:amplitude-encoding",
+        "review_status": "approved",
+        "evidence_span": "angle encoding proves substantially more robust"
+      }
+    ],
+    "claims": [
+      {
+        "statement": "MerLin provides a unified, open-source framework for photonic and hybrid QML that integrates strong simulation of linear-optical circuits with PyTorch and scikit-learn.",
+        "claim_type": "contribution",
+        "evidence_type": "experimental",
+        "negated": false,
+        "attributed_to": "this_paper"
+      },
+      {
+        "statement": "Photon-native models can effectively substitute gate-based models in many hybrid architectures without significant loss in learning performance or qualitative behavior.",
+        "claim_type": "finding",
+        "evidence_type": "experimental",
+        "negated": false,
+        "attributed_to": "this_paper"
+      },
+      {
+        "statement": "Amplitude encoding in photonic quantum models is highly vulnerable to small adversarial perturbations, whereas angle encoding provides substantially more robustness.",
+        "claim_type": "finding",
+        "evidence_type": "experimental",
+        "negated": false,
+        "attributed_to": "this_paper"
+      }
+    ],
+    "quality_warnings": []
+  }
+}

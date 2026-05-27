@@ -8,7 +8,7 @@ from extraction.embedding_engine import EmbeddingEngine
 from extraction.ontology import CanonicalResolver, Ontology, stable_canonical_id
 from extraction.text_normalization import normalize_key, normalize_scientific_text
 
-from extraction.entity_extractor import EntityExtractor, ExtractionResult
+from extraction.entity_extractor import EntityExtractor, ExtractionResult, extraction_failure_reason
 from query.llm_router import LLMRouter
 
 
@@ -181,6 +181,108 @@ class EntityLinker:
         "valence",
         "valuefunction",
     }
+    QML_CORE_KEYS = {
+        "adaptivestateinjection",
+        "amplitudeencoding",
+        "angleencoding",
+        "distributedquantumneuralnetwork",
+        "fidelitykernel",
+        "fockspace",
+        "linearopticalcircuits",
+        "merlin",
+        "photonicquantumcomputing",
+        "photonicquantummachinelearning",
+        "quantumbridge",
+        "quantumconvolutionalneuralnetwork",
+        "quantumgenerativeadversarialnetwork",
+        "quantumlayer",
+        "quantumlongshorttermmemory",
+        "quantummachinelearning",
+        "quantummemristor",
+        "quantumrelationalknowledgedistillation",
+        "quantumselfsupervisedlearning",
+        "reservoircomputing",
+        "stronglinearopticalsimulation",
+        "variationalquantumcircuit",
+    }
+    BENCHMARK_CORE_KEYS = {
+        "accuracy",
+        "adaboost",
+        "bert",
+        "bilstm",
+        "clstm",
+        "cnn",
+        "combinedcorpus",
+        "convhan",
+        "datasetbias",
+        "decisiontree",
+        "distilbert",
+        "electra",
+        "elmo",
+        "fakeorrealnews",
+        "fakenewsdetection",
+        "f1score",
+        "han",
+        "hierarchicalattentionnetwork",
+        "knn",
+        "liar",
+        "logisticregression",
+        "lstm",
+        "multinomialnaivebayes",
+        "naivebayes",
+        "precision",
+        "pretrainedlanguagemodels",
+        "recall",
+        "roberta",
+        "svm",
+    }
+    THEORETICAL_CORE_KEYS = {
+        "bodyschema",
+        "cartesiantheater",
+        "carthesiantheater",
+        "crossdomainmapping",
+        "crossphasemodulation",
+        "directedacyclicgraph",
+        "einselection",
+        "envariance",
+        "featurebindinghypothesis",
+        "gainfields",
+        "inversekinematicalgorithm",
+        "mirrorneurons",
+        "mirrorneuronsystem",
+        "neuroimaging",
+        "paralleldistributedprocessing",
+        "pointerstates",
+        "populationvector",
+        "quantummutualinformation",
+        "quantumtemporalimaging",
+        "referencepictureselection",
+        "schmidtdecomposition",
+        "schrdingerpicture",
+        "schrodingerpicture",
+        "synesthesia",
+        "temporalentanglement",
+        "tensorialscheme",
+        "thalamocorticalsystem",
+        "twophotonvectorsoliton",
+        "vonneumannentropy",
+        "wignerfunction",
+    }
+    MEDICAL_IMAGING_CORE_KEYS = {
+        "3dunet",
+        "adamchallenge",
+        "adamdataset",
+        "computeraideddetection",
+        "falsepositiverate",
+        "mcnemarstest",
+        "n4biasfieldcorrection",
+        "phasesscore",
+        "satisfactionofsearch",
+        "skullstripping",
+        "tofmra",
+        "unrupturedintracranialaneurysm",
+        "wilcoxonsignedranktest",
+    }
     DETAIL_ONLY_KEYS = {
         "acetylcholine",
         "averagereward",
@@ -294,6 +396,11 @@ class EntityLinker:
             extraction.relations,
             enriched_concept_candidates,
             enriched_method_candidates,
+        )
+        relations = self._align_relations_with_kg_layers(
+            relations,
+            enriched_concepts,
+            enriched_methods,
         )
 
         enriched_result = ExtractionResult(
@@ -428,11 +535,20 @@ class EntityLinker:
         entity_type = str(concept.get("entity_type") or "")
         evidence_role = str(concept.get("evidence_role") or "").lower()
         source_type = str(concept.get("source_type") or "").lower()
+        mention_count = int(_coerce_float(concept.get("mention_count"), 0.0))
         if confidence < 0.85 or salience != "central":
             return concept
-        if entity_type not in {"System", "ModelArchitecture", "Benchmark"}:
+        if entity_type not in {"System", "ModelArchitecture", "Benchmark", "DomainConcept", "MethodFamily"}:
             return concept
-        if evidence_role not in {"method_family", "system", "benchmark", "domain_concept"} and source_type not in {
+        if evidence_role not in {
+            "method_family",
+            "model_architecture",
+            "system",
+            "benchmark",
+            "domain_concept",
+        } and source_type not in {"paper_contribution", "reviewed_method"}:
+            return concept
+        if entity_type in {"DomainConcept", "MethodFamily"} and mention_count < 2 and source_type not in {
             "paper_contribution",
             "reviewed_method",
         }:
@@ -640,7 +756,13 @@ class EntityLinker:
             entity_type = str(item.get("entity_type") or "")
             evidence_role = str(item.get("evidence_role") or "").lower()
             acceptance_reason = str(item.get("acceptance_reason") or "").lower()
-            is_core_key = key in cls.CORE_KG_KEYS
+            is_core_key = (
+                key in cls.CORE_KG_KEYS
+                or key in cls.QML_CORE_KEYS
+                or key in cls.BENCHMARK_CORE_KEYS
+                or key in cls.THEORETICAL_CORE_KEYS
+                or key in cls.MEDICAL_IMAGING_CORE_KEYS
+            )
             if source_type in {"background", "generic_field"} and salience != "central" and not is_core_key:
                 eligible = False
                 block_reason = "background_detail"
@@ -680,11 +802,11 @@ class EntityLinker:
         concept_candidates: list[dict[str, Any]],
         paper_node: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Promote high-confidence ontology-backed survey candidates lost to partial JSON."""
-        if paper_type != "survey":
-            return concepts, concept_candidates
+        """Promote high-confidence ontology-backed candidates lost to partial JSON."""
         existing_ids = {str(item.get("canonical_id")) for item in concepts if item.get("canonical_id")}
         paper_title = str((paper_node or {}).get("title") or "")
+        is_survey = paper_type == "survey"
+        is_framework_or_benchmark = paper_type in {"benchmark", "research"}
         promotable_types = {
             "Theory",
             "Metric",
@@ -694,6 +816,7 @@ class EntityLinker:
             "System",
             "Phenomenon",
         }
+        title_promotable_types = {*promotable_types, "MethodFamily"}
         promotable_method_family_keys = {
             "tdlearning",
             "motivatedreinforcementlearning",
@@ -713,19 +836,22 @@ class EntityLinker:
             confidence = _coerce_float(candidate.get("confidence"), 0.0)
             mention_count = int(_coerce_float(candidate.get("mention_count"), 0.0))
             salience = str(candidate.get("salience") or "").lower()
+            candidate_source = str(candidate.get("candidate_source") or "").lower()
             exact_match = (
                 canonical_id
                 and canonical_id not in existing_ids
                 and match.get("match_type") == "exact_alias"
             )
             standard_rescue = (
-                exact_match
+                is_survey
+                and exact_match
                 and entity_type in promotable_types
                 and confidence >= 0.70
                 and (mention_count >= 2 or salience in {"central", "supporting"})
             )
             method_family_rescue = (
-                exact_match
+                is_survey
+                and exact_match
                 and entity_type == "MethodFamily"
                 and canonical_key in promotable_method_family_keys
                 and confidence >= 0.60
@@ -733,13 +859,59 @@ class EntityLinker:
             )
             title_rescue = (
                 exact_match
-                and entity_type in promotable_types
+                and entity_type in title_promotable_types
                 and confidence >= 0.50
                 and cls._entity_appears_in_title(candidate, paper_title)
             )
+            qml_rescue = (
+                is_framework_or_benchmark
+                and exact_match
+                and canonical_key in cls.QML_CORE_KEYS
+                and confidence >= 0.60
+                and (mention_count >= 1 or salience in {"central", "supporting"} or title_rescue)
+            )
+            benchmark_rescue = (
+                paper_type == "benchmark"
+                and exact_match
+                and canonical_key in cls.BENCHMARK_CORE_KEYS
+                and confidence >= 0.60
+                and (mention_count >= 1 or salience in {"central", "supporting"} or title_rescue)
+            )
+            theoretical_rescue = (
+                paper_type == "theoretical"
+                and exact_match
+                and canonical_key in cls.THEORETICAL_CORE_KEYS
+                and confidence >= 0.60
+                and (
+                    mention_count >= 2
+                    or salience in {"central", "supporting"}
+                    or title_rescue
+                    or candidate_source == "deterministic_scan"
+                )
+            )
+            medical_imaging_rescue = (
+                paper_type in {"research", "benchmark"}
+                and exact_match
+                and canonical_key in cls.MEDICAL_IMAGING_CORE_KEYS
+                and confidence >= 0.60
+                and (
+                    mention_count >= 1
+                    or salience in {"central", "supporting"}
+                    or title_rescue
+                    or candidate_source == "deterministic_scan"
+                )
+            )
             should_promote = (
                 canonical_key not in EntityLinker.DETAIL_ONLY_KEYS
-                and (standard_rescue or method_family_rescue or title_rescue)
+                and (
+                    standard_rescue
+                    or method_family_rescue
+                    or title_rescue
+                    or qml_rescue
+                    or benchmark_rescue
+                    or theoretical_rescue
+                    or medical_imaging_rescue
+                )
             )
             if should_promote:
                 item = dict(candidate)
@@ -769,14 +941,15 @@ class EntityLinker:
                 return True
         return False
 
-    @staticmethod
+    @classmethod
     def _promote_exact_review_method_candidates(
+        cls,
         paper_type: str,
         methods: list[dict[str, Any]],
         method_candidates: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Promote precise ontology-backed survey methods lost to candidate arrays."""
-        if paper_type != "survey":
+        """Promote precise ontology-backed methods lost to candidate arrays."""
+        if paper_type not in {"survey", "benchmark"}:
             return methods, method_candidates
         existing_ids = {str(item.get("canonical_id")) for item in methods if item.get("canonical_id")}
         promotable_types = {"Algorithm", "MethodFamily", "ModelArchitecture", "System", "Task"}
@@ -790,8 +963,9 @@ class EntityLinker:
             mention_count = int(_coerce_float(candidate.get("mention_count"), 0.0))
             salience = str(candidate.get("salience") or "").lower()
             source_type = str(candidate.get("source_type") or "").lower()
-            should_promote = (
-                canonical_id
+            survey_promote = (
+                paper_type == "survey"
+                and canonical_id
                 and canonical_id not in existing_ids
                 and match.get("match_type") == "exact_alias"
                 and entity_type in promotable_types
@@ -799,6 +973,30 @@ class EntityLinker:
                 and source_type in {"reviewed_method", "baseline"}
                 and (mention_count >= 1 or salience in {"central", "supporting"})
             )
+            benchmark_key = normalize_key(candidate.get("canonical_label") or candidate.get("label"))
+            benchmark_promote = (
+                paper_type == "benchmark"
+                and canonical_id
+                and canonical_id not in existing_ids
+                and match.get("match_type") == "exact_alias"
+                and entity_type in promotable_types
+                and benchmark_key in cls.BENCHMARK_CORE_KEYS
+                and confidence >= 0.70
+                and source_type in {"reviewed_method", "baseline"}
+                and (mention_count >= 1 or salience in {"central", "supporting"})
+            )
+            medical_imaging_promote = (
+                paper_type in {"research", "benchmark"}
+                and canonical_id
+                and canonical_id not in existing_ids
+                and match.get("match_type") == "exact_alias"
+                and entity_type in promotable_types
+                and benchmark_key in cls.MEDICAL_IMAGING_CORE_KEYS
+                and confidence >= 0.70
+                and source_type in {"reviewed_method", "baseline", "paper_contribution"}
+                and (mention_count >= 1 or salience in {"central", "supporting"})
+            )
+            should_promote = survey_promote or benchmark_promote or medical_imaging_promote
             if should_promote:
                 item = dict(candidate)
                 item["accepted"] = True
@@ -839,12 +1037,17 @@ class EntityLinker:
             "IS_A",
             "EXTENDS",
             "USES",
+            "USED_IN",
             "USED_FOR",
+            "CAUSES",
+            "LEADS_TO",
             "GROUPED_WITH_IN_SURVEY",
             "MAPPED_TO_IN_TAXONOMY",
             "IMPLEMENTS",
             "ELICITS",
             "PART_OF",
+            "IMPLIES",
+            "MEASURES",
         }
         relation_endpoint_keys: set[str] = set()
         for subject_key, relation_type, object_key in ControlledRelationExtractor.KNOWN_RELATION_TEMPLATES:
@@ -925,6 +1128,38 @@ class EntityLinker:
         item["acceptance_reason"] = "ontology_relation_endpoint_rescue"
         item.pop("candidate_reason", None)
         return item
+
+    @staticmethod
+    def _align_relations_with_kg_layers(
+        relations: list[dict[str, Any]],
+        concepts: list[dict[str, Any]],
+        methods: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        kg_entity_ids = {
+            str(item.get("canonical_id"))
+            for item in [*concepts, *methods]
+            if isinstance(item, dict)
+            and item.get("canonical_id")
+            and item.get("accepted_for_kg_write") is True
+            and str(item.get("review_status") or "").lower() == "approved"
+        }
+        output: list[dict[str, Any]] = []
+        for relation in relations:
+            if not isinstance(relation, dict):
+                continue
+            item = dict(relation)
+            subject_id = str(item.get("subject_id") or "")
+            object_id = str(item.get("object_id") or "")
+            if (
+                str(item.get("review_status") or "").lower() == "approved"
+                and (subject_id not in kg_entity_ids or object_id not in kg_entity_ids)
+            ):
+                item["review_status"] = "pending"
+                item["source"] = "candidate_relation"
+                item["kg_block_reason"] = "relation_endpoint_not_kg_writeable"
+                item["confidence"] = min(_coerce_float(item.get("confidence"), 0.65), 0.65)
+            output.append(item)
+        return output
 
     @staticmethod
     def _dedupe_graph_entities(
@@ -1149,12 +1384,82 @@ class ControlledRelationExtractor:
         ("merlin", "REPRODUCES", "quantumlongshorttermmemory"),
         ("merlin", "REPRODUCES", "quantumrecurrentneuralnetwork"),
         ("merlin", "REPRODUCES", "distributedquantumneuralnetwork"),
+        ("merlin", "REPRODUCES", "quantumconvolutionalneuralnetwork"),
         ("merlin", "REPRODUCES", "quantumgenerativeadversarialnetwork"),
         ("merlin", "REPRODUCES", "quantumrelationalknowledgedistillation"),
         ("merlin", "REPRODUCES", "quantumselfsupervisedlearning"),
+        ("quantumconvolutionalneuralnetwork", "USES", "adaptivestateinjection"),
         ("quantumgenerativeadversarialnetwork", "EVALUATED_ON", "mnist"),
         ("quantumllmfinetuning", "EVALUATED_ON", "sst2"),
         ("angleencoding", "MORE_ROBUST_THAN", "amplitudeencoding"),
+        ("bert", "IS_A", "pretrainedlanguagemodels"),
+        ("roberta", "IS_A", "pretrainedlanguagemodels"),
+        ("distilbert", "IS_A", "pretrainedlanguagemodels"),
+        ("electra", "IS_A", "pretrainedlanguagemodels"),
+        ("elmo", "IS_A", "pretrainedlanguagemodels"),
+        ("distilbert", "DERIVED_FROM", "bert"),
+        ("distilbert", "USES", "knowledgedistillation"),
+        ("bilstm", "IS_A", "lstm"),
+        ("han", "IS_A", "hierarchicalattentionnetwork"),
+        ("convhan", "USES", "hierarchicalattentionnetwork"),
+        ("bert", "EVALUATED_ON", "liar"),
+        ("bert", "EVALUATED_ON", "fakeorrealnews"),
+        ("bert", "EVALUATED_ON", "combinedcorpus"),
+        ("roberta", "EVALUATED_ON", "liar"),
+        ("roberta", "EVALUATED_ON", "fakeorrealnews"),
+        ("roberta", "EVALUATED_ON", "combinedcorpus"),
+        ("distilbert", "EVALUATED_ON", "liar"),
+        ("distilbert", "EVALUATED_ON", "fakeorrealnews"),
+        ("distilbert", "EVALUATED_ON", "combinedcorpus"),
+        ("electra", "EVALUATED_ON", "liar"),
+        ("electra", "EVALUATED_ON", "fakeorrealnews"),
+        ("electra", "EVALUATED_ON", "combinedcorpus"),
+        ("elmo", "EVALUATED_ON", "liar"),
+        ("elmo", "EVALUATED_ON", "fakeorrealnews"),
+        ("elmo", "EVALUATED_ON", "combinedcorpus"),
+        ("bilstm", "EVALUATED_ON", "liar"),
+        ("bilstm", "EVALUATED_ON", "fakeorrealnews"),
+        ("bilstm", "EVALUATED_ON", "combinedcorpus"),
+        ("clstm", "EVALUATED_ON", "liar"),
+        ("clstm", "EVALUATED_ON", "fakeorrealnews"),
+        ("clstm", "EVALUATED_ON", "combinedcorpus"),
+        ("cnn", "EVALUATED_ON", "liar"),
+        ("cnn", "EVALUATED_ON", "fakeorrealnews"),
+        ("cnn", "EVALUATED_ON", "combinedcorpus"),
+        ("lstm", "EVALUATED_ON", "liar"),
+        ("lstm", "EVALUATED_ON", "fakeorrealnews"),
+        ("lstm", "EVALUATED_ON", "combinedcorpus"),
+        ("han", "EVALUATED_ON", "liar"),
+        ("han", "EVALUATED_ON", "fakeorrealnews"),
+        ("han", "EVALUATED_ON", "combinedcorpus"),
+        ("convhan", "EVALUATED_ON", "liar"),
+        ("convhan", "EVALUATED_ON", "fakeorrealnews"),
+        ("convhan", "EVALUATED_ON", "combinedcorpus"),
+        ("svm", "EVALUATED_ON", "liar"),
+        ("svm", "EVALUATED_ON", "fakeorrealnews"),
+        ("svm", "EVALUATED_ON", "combinedcorpus"),
+        ("naivebayes", "EVALUATED_ON", "liar"),
+        ("naivebayes", "EVALUATED_ON", "fakeorrealnews"),
+        ("naivebayes", "EVALUATED_ON", "combinedcorpus"),
+        ("adaboost", "EVALUATED_ON", "liar"),
+        ("adaboost", "EVALUATED_ON", "fakeorrealnews"),
+        ("adaboost", "EVALUATED_ON", "combinedcorpus"),
+        ("vonneumannentropy", "USED_IN", "quantummutualinformation"),
+        ("schmidtdecomposition", "USED_IN", "envariance"),
+        ("envariance", "IMPLIES", "einselection"),
+        ("einselection", "IMPLIES", "pointerstates"),
+        ("crossphasemodulation", "USED_FOR", "temporalentanglement"),
+        ("twophotonvectorsoliton", "CAUSES", "temporalentanglement"),
+        ("quantumtemporalimaging", "USES", "temporalentanglement"),
+        ("mirrorneurons", "PART_OF", "mirrorneuronsystem"),
+        ("directedacyclicgraph", "USED_IN", "referencepictureselection"),
+        ("synesthesia", "RELATED_TO", "crossdomainmapping"),
+        ("computeraideddetection", "USES", "3dunet"),
+        ("computeraideddetection", "USED_FOR", "unrupturedintracranialaneurysm"),
+        ("computeraideddetection", "EVALUATED_ON", "tofmra"),
+        ("3dunet", "EVALUATED_ON", "adamdataset"),
+        ("3dunet", "USED_FOR", "unrupturedintracranialaneurysm"),
+        ("tofmra", "USED_FOR", "unrupturedintracranialaneurysm"),
     )
 
     GENERIC_EVIDENCE_WORDS = {
@@ -1172,6 +1477,10 @@ class ControlledRelationExtractor:
         "methods",
         "model",
         "models",
+        "network",
+        "networks",
+        "neural",
+        "quantum",
         "reinforcement",
         "state",
         "states",
@@ -1274,6 +1583,8 @@ class ControlledRelationExtractor:
                         review_status=review_status,
                     )
 
+        self._add_generic_context_relations(relations, entities)
+
         by_relation_key: dict[tuple[str, str, str], dict[str, Any]] = {}
         for relation in relations:
             key = (
@@ -1326,6 +1637,168 @@ class ControlledRelationExtractor:
         return has_rl_anchor or (has_rl_domain and has_context) or (
             source_type in {"reviewed_method", "baseline"} and has_context
         )
+
+    GENERIC_RELATION_LIMIT = 48
+    GENERIC_METHOD_SUBJECT_TYPES = {"Algorithm", "MethodFamily", "ModelArchitecture", "System", "Task"}
+    GENERIC_DATA_OBJECT_TYPES = {"Dataset", "Benchmark"}
+    GENERIC_USED_FOR_OBJECT_TYPES = {"Task", "Phenomenon", "ApplicationSetting", "DomainConcept"}
+    GENERIC_USES_OBJECT_TYPES = {"Algorithm", "MethodFamily", "ModelArchitecture"}
+    GENERIC_MEASURE_OBJECT_TYPES = {"Task", "Phenomenon", "ApplicationSetting", "DomainConcept"}
+    GENERIC_EVALUATED_TERMS = (
+        "evaluated",
+        "evaluation",
+        "benchmark",
+        "benchmarked",
+        "dataset",
+        "trained",
+        "training",
+        "tested",
+        "validation",
+        "study",
+    )
+    GENERIC_USED_FOR_TERMS = (
+        "for",
+        "used for",
+        "applied to",
+        "detect",
+        "detection",
+        "classify",
+        "classification",
+        "predict",
+        "prediction",
+        "support",
+        "decision",
+        "control",
+        "design",
+        "validation",
+        "monitoring",
+        "generation",
+        "estimate",
+        "analyze",
+        "analysis",
+        "reduce",
+        "reducing",
+    )
+    GENERIC_USES_TERMS = (
+        "uses",
+        "using",
+        "based on",
+        "built on",
+        "powered by",
+        "implemented with",
+        "integrates",
+        "applies",
+        "leverages",
+        "incorporates",
+        "llm-based",
+        "ai-based",
+    )
+    GENERIC_MEASURES_TERMS = (
+        "measure",
+        "measures",
+        "metric",
+        "score",
+        "rate",
+        "assess",
+        "assesses",
+        "evaluate",
+        "quantify",
+        "risk",
+        "error",
+    )
+
+    def _add_generic_context_relations(
+        self,
+        relations: list[dict[str, Any]],
+        entities: list[dict[str, Any]],
+    ) -> None:
+        """Infer conservative relations from entity-local evidence text."""
+        added = 0
+        for subject in entities:
+            for object_entity in entities:
+                if subject is object_entity:
+                    continue
+                if not (self._is_approved(subject) and self._is_approved(object_entity)):
+                    continue
+                relation_type = self._infer_generic_relation_type(subject, object_entity)
+                if not relation_type:
+                    continue
+                evidence = self._generic_relation_evidence(subject, object_entity, relation_type)
+                if not evidence:
+                    continue
+                review_status = "approved" if self._is_approved(subject) and self._is_approved(object_entity) else "pending"
+                self._append_relation(
+                    relations,
+                    subject,
+                    relation_type,
+                    object_entity,
+                    evidence,
+                    review_status=review_status,
+                )
+                added += 1
+                if added >= self.GENERIC_RELATION_LIMIT:
+                    return
+
+    @classmethod
+    def _infer_generic_relation_type(
+        cls,
+        subject: dict[str, Any],
+        object_entity: dict[str, Any],
+    ) -> str | None:
+        subject_type = str(subject.get("entity_type") or "")
+        object_type = str(object_entity.get("entity_type") or "")
+        if subject_type in cls.GENERIC_METHOD_SUBJECT_TYPES and object_type in cls.GENERIC_DATA_OBJECT_TYPES:
+            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_EVALUATED_TERMS) or cls._context_matches_entity(
+                object_entity, subject, cls.GENERIC_EVALUATED_TERMS
+            ):
+                return "EVALUATED_ON"
+        if subject_type in cls.GENERIC_METHOD_SUBJECT_TYPES and object_type in cls.GENERIC_USED_FOR_OBJECT_TYPES:
+            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_USED_FOR_TERMS):
+                return "USED_FOR"
+        if subject_type in {"System", "ModelArchitecture", "MethodFamily"} and object_type in cls.GENERIC_USES_OBJECT_TYPES:
+            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_USES_TERMS):
+                return "USES"
+        if subject_type == "Metric" and object_type in cls.GENERIC_MEASURE_OBJECT_TYPES:
+            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_MEASURES_TERMS):
+                return "MEASURES"
+        return None
+
+    @classmethod
+    def _generic_relation_evidence(
+        cls,
+        subject: dict[str, Any],
+        object_entity: dict[str, Any],
+        relation_type: str,
+    ) -> str:
+        terms = cls._relation_terms(relation_type, subject, object_entity)
+        if relation_type == "EVALUATED_ON":
+            terms = [*terms, *cls.GENERIC_EVALUATED_TERMS]
+        elif relation_type == "USED_FOR":
+            terms = [*terms, *cls.GENERIC_USED_FOR_TERMS]
+        elif relation_type == "USES":
+            terms = [*terms, *cls.GENERIC_USES_TERMS]
+        elif relation_type == "MEASURES":
+            terms = [*terms, *cls.GENERIC_MEASURES_TERMS]
+        for carrier, target in ((subject, object_entity), (object_entity, subject)):
+            evidence = cls._context_matches_entity(carrier, target, terms)
+            if evidence:
+                return evidence
+        return ""
+
+    @classmethod
+    def _context_matches_entity(
+        cls,
+        carrier: dict[str, Any],
+        target: dict[str, Any],
+        relation_terms: tuple[str, ...] | list[str],
+    ) -> str:
+        evidence = cls._entity_text(carrier)
+        text_key = normalize_scientific_text(evidence).lower()
+        if not text_key or not cls._entity_match_score(text_key, target):
+            return ""
+        if relation_terms and not any(str(term).lower() in text_key for term in relation_terms):
+            return ""
+        return evidence[:360]
 
     def _validate_existing_relation(
         self,
@@ -1509,7 +1982,12 @@ class ControlledRelationExtractor:
             ranked.sort(reverse=True)
             return ranked[0][2][:360]
 
-        for item in (subject, object_entity):
+        fallback_items = (
+            (object_entity, subject)
+            if relation_type in {"REPRODUCES", "EVALUATED_ON"}
+            else (subject, object_entity)
+        )
+        for item in fallback_items:
             evidence = cls._entity_text(item)
             if evidence:
                 return evidence[:360]
@@ -1567,6 +2045,10 @@ class ControlledRelationExtractor:
             terms.extend(["valency", "valence"])
         if canonical_key == "boltzmannactionselection":
             terms.extend(["boltzmann action selection", "boltzmann", "beta", "β", "Î²"])
+        if canonical_key == "largelanguagemodel":
+            terms.extend(["large language model", "large language models", "llm", "llms", "llm-based"])
+        if canonical_key == "clinicaldecisionsupport":
+            terms.extend(["clinical decision support", "cds", "cds systems"])
         if canonical_key == "rewardshaping":
             terms.extend(
                 [
@@ -1603,6 +2085,10 @@ class ControlledRelationExtractor:
             tokens.append("valency")
         if canonical_key == "boltzmannactionselection":
             tokens.extend(["boltzmann", "beta"])
+        if canonical_key == "largelanguagemodel":
+            tokens.extend(["llm", "llms"])
+        if canonical_key == "clinicaldecisionsupport":
+            tokens.append("cds")
         return list(dict.fromkeys(tokens))
 
     @classmethod
@@ -1656,16 +2142,24 @@ class ControlledRelationExtractor:
             return ["measure", "derive", "distance"]
         if relation_type == "IMPLEMENTS":
             return ["implements", "update", "approximate", "value-function", "value function"]
+        if relation_type == "IMPLIES":
+            return ["implies", "imply", "entails", "enables", "therefore", "superselection", "pointer"]
         if relation_type == "ELICITS":
             return ["elicit", "elicits", "derive", "derives", "generate"]
         if relation_type == "USED_FOR":
             return ["used for", "improve", "improved", "learning efficiency", "drive", "guide"]
+        if relation_type == "USED_IN":
+            return ["used in", "basis", "defined", "definition", "compute", "computed", "framework"]
+        if relation_type == "PART_OF":
+            return ["part of", "located", "system", "component", "subdivision"]
         if relation_type in {"CAUSES", "LEADS_TO"}:
             return [
                 "affect",
                 "cause",
                 "change",
                 "degradation",
+                "generate",
+                "generates",
                 "impact",
                 "induce",
                 "lead",
@@ -1694,12 +2188,20 @@ class ControlledRelationExtractor:
             return ["provide", "provided", "integration", "module", "exposes", "interface"]
         if relation_type == "SUPPORTS":
             return ["support", "supports", "encoding", "exposes", "strategy"]
+        if relation_type == "USES":
+            return ["use", "uses", "using", "with", "based on"]
         if relation_type == "REPRODUCES":
             return ["reproduce", "reproduces", "replicate", "replicates", "benchmark", "implementation"]
         if relation_type == "EVALUATED_ON":
             return ["dataset", "evaluated", "trained", "training", "benchmark", "on"]
+        if relation_type == "DERIVED_FROM":
+            return ["derived", "distilled", "distillation", "version", "from"]
+        if relation_type == "OUTPERFORMS":
+            return ["outperform", "outperforms", "better", "best", "higher", "improve"]
         if relation_type == "MORE_ROBUST_THAN":
             return ["robust", "more robust", "vulnerable", "whereas", "than", "perturbation"]
+        if relation_type == "RELATED_TO":
+            return ["related", "mapping", "cross-domain", "cross domain", "cross-modal", "analogy"]
         return []
 
 
@@ -1715,6 +2217,7 @@ class ExtractionPipeline:
         linker: EntityLinker | None = None,
         ontology: Ontology | None = None,
         embedding_engine: EmbeddingEngine | None = None,
+        quality_db_path: str | None = None,
     ) -> None:
         """
         Initialize pipeline.
@@ -1723,7 +2226,7 @@ class ExtractionPipeline:
             llm_router: Configured LLMRouter for extraction
             linker: Optional EntityLinker for knowledge base enrichment
         """
-        self.extractor = EntityExtractor(llm_router)
+        self.extractor = EntityExtractor(llm_router, quality_db_path=quality_db_path)
         if linker is not None:
             self.linker = linker
         else:
@@ -1756,7 +2259,10 @@ class ExtractionPipeline:
             paper_id, paper_text, provider=provider, overrides=overrides
         )
 
-        extraction_failed = extraction.raw_response.lower().startswith("extraction failed:")
+        extraction_failed = (
+            extraction.raw_response.lower().startswith("extraction failed:")
+            or extraction_failure_reason(extraction) is not None
+        )
 
         # Link to knowledge bases if requested and extraction produced concepts.
         # Successful extractions keep raw_response for debugging, so raw_response

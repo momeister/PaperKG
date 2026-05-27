@@ -38,6 +38,9 @@ relation_types:
   - MODULATED_BY
   - CORRESPONDS_TO
   - EVALUATED_ON
+  - OUTPERFORMS
+  - DERIVED_FROM
+  - IMPLIES
   - BUILT_ON
   - PROVIDES
   - SUPPORTS
@@ -406,6 +409,22 @@ seed_concepts:
     entity_type: Metric
     aliases: [Accuracy]
     domain: Data Quality
+  - label: Accuracy
+    entity_type: Metric
+    aliases: [Classification accuracy]
+    domain: Machine Learning
+  - label: Precision
+    entity_type: Metric
+    aliases: [Positive predictive value]
+    domain: Machine Learning
+  - label: Recall
+    entity_type: Metric
+    aliases: [Sensitivity]
+    domain: Machine Learning
+  - label: F1-score
+    entity_type: Metric
+    aliases: [F1 score, F1]
+    domain: Machine Learning
   - label: Data Completeness
     entity_type: Metric
     aliases: [Completeness]
@@ -428,11 +447,19 @@ seed_concepts:
     domain: Quantum Computing
   - label: Photonic Quantum Machine Learning
     entity_type: MethodFamily
-    aliases: [Photonic QML]
+    aliases: [Photonic QML, Photonic and Hybrid Quantum Machine Learning]
     domain: Quantum Computing
+  - label: MerLin
+    entity_type: System
+    aliases: [MerLin framework, MerLin discovery engine]
+    domain: Quantum Machine Learning
   - label: Variational Quantum Circuit
     entity_type: ModelArchitecture
     aliases: [VQC, VQCs, Variational quantum circuits]
+    domain: Quantum Machine Learning
+  - label: Quantum Convolutional Neural Network
+    entity_type: ModelArchitecture
+    aliases: [QCNN, QCNNs, Quantum convolutional neural networks, Subspace Preserving Quantum Convolutional Neural Network]
     domain: Quantum Machine Learning
   - label: Quantum Generative Adversarial Network
     entity_type: ModelArchitecture
@@ -462,6 +489,54 @@ seed_concepts:
     entity_type: Algorithm
     aliases: [SLOS]
     domain: Photonic Quantum Computing
+  - label: QLOQ
+    entity_type: Algorithm
+    aliases: [QLOQ scheme, QLOQ qubit encodings]
+    domain: Quantum Computing
+  - label: DeepQuantum
+    entity_type: System
+    aliases: [Deep Quantum]
+    domain: Quantum Machine Learning
+  - label: DQNN
+    entity_type: ModelArchitecture
+    aliases: [Deep Quantum Neural Network, Deep Quantum Neural Networks]
+    domain: Quantum Machine Learning
+  - label: Fock space
+    entity_type: DomainConcept
+    aliases: [Fock-space, Photonic Fock space]
+    domain: Photonic Quantum Computing
+  - label: Linear-optical circuits
+    entity_type: ModelArchitecture
+    aliases: [Linear optical circuits, Parametrized linear-optical circuits, Linear optical circuit]
+    domain: Photonic Quantum Computing
+  - label: QuantumLayer
+    entity_type: ModelArchitecture
+    aliases: [Quantum Layer]
+    domain: Quantum Machine Learning
+  - label: Angle encoding
+    entity_type: MethodFamily
+    aliases: [Phase encoding]
+    domain: Quantum Machine Learning
+  - label: Amplitude encoding
+    entity_type: MethodFamily
+    aliases: [Amplitude embedding]
+    domain: Quantum Machine Learning
+  - label: Quantum Memristor
+    entity_type: System
+    aliases: [Quantum memristors, Photonic quantum memristor, Photonic quantum memristors]
+    domain: Photonic Quantum Computing
+  - label: Fidelity Kernel
+    entity_type: Metric
+    aliases: [Fidelity-based kernel, Quantum fidelity kernel]
+    domain: Quantum Machine Learning
+  - label: Reservoir Computing
+    entity_type: MethodFamily
+    aliases: [Quantum Reservoir Computing]
+    domain: Machine Learning
+  - label: Adaptive state injection
+    entity_type: MethodFamily
+    aliases: [adaptive state injection pooling]
+    domain: Quantum Machine Learning
   - label: MNIST
     entity_type: Dataset
     aliases: [MNIST dataset]
@@ -474,3 +549,295 @@ seed_concepts:
     entity_type: Dataset
     aliases: [SST-2, SST2 sentiment analysis, Stanford Sentiment Treebank 2]
     domain: Natural Language Processing
+  - label: Fake News Detection
+    entity_type: Task
+    aliases: [Online fake news detection, Fake-news detection]
+    domain: Natural Language Processing
+  - label: Dataset Bias
+    entity_type: Phenomenon
+    aliases: [dataset-bias]
+    domain: Machine Learning
+  - label: Pre-trained Language Models
+    entity_type: MethodFamily
+    aliases: [Pretrained Language Models, PLMs, advanced pre-trained language models]
+    domain: Natural Language Processing
+  - label: LIAR
+    entity_type: Dataset
+    aliases: [Liar, LIAR dataset]
+    domain: Natural Language Processing
+  - label: Fake or Real News
+    entity_type: Dataset
+    aliases: [Fake-or-Real News, Fake and Real News]
+    domain: Natural Language Processing
+  - label: Combined Corpus
+    entity_type: Dataset
+    aliases: [Combined fake news corpus]
+    domain: Natural Language Processing
+  - label: BERT
+    entity_type: ModelArchitecture
+    aliases: [Bidirectional Encoder Representations from Transformers]
+    domain: Natural Language Processing
+  - label: RoBERTa
+    entity_type: ModelArchitecture
+    aliases: [Robustly optimized BERT approach, Robustly Optimized BERT Pretraining Approach]
+    domain: Natural Language Processing
+  - label: DistilBERT
+    entity_type: ModelArchitecture
+    aliases: [Distilled BERT]
+    domain: Natural Language Processing
+  - label: ELECTRA
+    entity_type: ModelArchitecture
+    aliases: [Efficiently Learning an Encoder that Classifies Token Replacements Accurately]
+    domain: Natural Language Processing
+  - label: ELMo
+    entity_type: ModelArchitecture
+    aliases: [Embeddings from Language Models]
+    domain: Natural Language Processing
+  - label: LSTM
+    entity_type: ModelArchitecture
+    aliases: [Long Short-Term Memory]
+    domain: Deep Learning
+  - label: Bi-LSTM
+    entity_type: ModelArchitecture
+    aliases: [Bidirectional LSTM, Bidirectional Long Short-Term Memory]
+    domain: Deep Learning
+  - label: C-LSTM
+    entity_type: ModelArchitecture
+    aliases: [Convolutional LSTM]
+    domain: Deep Learning
+  - label: CNN
+    entity_type: ModelArchitecture
+    aliases: [Convolutional Neural Network, Convolutional Neural Networks]
+    domain: Deep Learning
+  - label: HAN
+    entity_type: ModelArchitecture
+    aliases: [Hierarchical Attention Network]
+    domain: Deep Learning
+  - label: Conv-HAN
+    entity_type: ModelArchitecture
+    aliases: [Convolutional Hierarchical Attention Network]
+    domain: Deep Learning
+  - label: Hierarchical Attention Network
+    entity_type: ModelArchitecture
+    aliases: [three-level hierarchical attention network]
+    domain: Natural Language Processing
+  - label: SVM
+    entity_type: Algorithm
+    aliases: [Support Vector Machine]
+    domain: Machine Learning
+  - label: Naive Bayes
+    entity_type: Algorithm
+    aliases: [Naïve Bayes]
+    domain: Machine Learning
+  - label: Multinomial Naive Bayes
+    entity_type: Algorithm
+    aliases: [Multinomial Naïve Bayes]
+    domain: Machine Learning
+  - label: AdaBoost
+    entity_type: Algorithm
+    aliases: [Adaptive Boosting]
+    domain: Machine Learning
+  - label: k-NN
+    entity_type: Algorithm
+    aliases: [kNN, k-Nearest Neighbors, k Nearest Neighbors]
+    domain: Machine Learning
+  - label: Logistic Regression
+    entity_type: Algorithm
+    aliases: [LR]
+    domain: Machine Learning
+  - label: Decision Tree
+    entity_type: Algorithm
+    aliases: [Decision Trees]
+    domain: Machine Learning
+  - label: GloVe
+    entity_type: Algorithm
+    aliases: [Global Vectors, Global Vectors for Word Representation]
+    domain: Natural Language Processing
+  - label: Latent Dirichlet Allocation
+    entity_type: Algorithm
+    aliases: [LDA]
+    domain: Topic Modeling
+  - label: Multidimensional Scaling
+    entity_type: Algorithm
+    aliases: [MDS]
+    domain: Statistics
+  - label: Jensen-Shannon divergence
+    entity_type: Metric
+    aliases: [JS divergence, Jensen Shannon divergence]
+    domain: Statistics
+  - label: Empath
+    entity_type: MethodFamily
+    aliases: [Empath Generated Features]
+    domain: Natural Language Processing
+  - label: Knowledge Distillation
+    entity_type: MethodFamily
+    aliases: [knowledge distillation]
+    domain: Machine Learning
+  - label: Overfitting
+    entity_type: Phenomenon
+    aliases: []
+    domain: Machine Learning
+  - label: Thalamocortical system
+    entity_type: System
+    aliases: [thalamocortical system]
+    domain: Neuroscience
+  - label: Mirror neurons
+    entity_type: Phenomenon
+    aliases: [mirror neuron]
+    domain: Neuroscience
+  - label: Mirror neuron system
+    entity_type: DomainConcept
+    aliases: [mirror-neuron system]
+    domain: Neuroscience
+  - label: von Neumann entropy
+    entity_type: Theory
+    aliases: [Von Neumann entropy]
+    domain: Quantum Information Theory
+  - label: Quantum mutual information
+    entity_type: Metric
+    aliases: [QMI]
+    domain: Quantum Information Theory
+  - label: Envariance
+    entity_type: Theory
+    aliases: [environment-assisted invariance]
+    domain: Quantum Information Theory
+  - label: Einselection
+    entity_type: Phenomenon
+    aliases: [environment-induced superselection]
+    domain: Quantum Mechanics
+  - label: Pointer states
+    entity_type: DomainConcept
+    aliases: [pointer state]
+    domain: Quantum Mechanics
+  - label: Schmidt decomposition
+    entity_type: MethodFamily
+    aliases: []
+    domain: Quantum Mechanics
+  - label: Temporal entanglement
+    entity_type: Phenomenon
+    aliases: [temporal quantum entanglement]
+    domain: Quantum Optics
+  - label: Quantum temporal imaging
+    entity_type: MethodFamily
+    aliases: []
+    domain: Quantum Optics
+  - label: Two-photon vector soliton
+    entity_type: Phenomenon
+    aliases: [two photon vector soliton]
+    domain: Quantum Optics
+  - label: Cross-phase modulation
+    entity_type: Algorithm
+    aliases: [cross phase modulation]
+    domain: Quantum Optics
+  - label: Wigner function
+    entity_type: Theory
+    aliases: []
+    domain: Quantum Mechanics
+  - label: Feature binding hypothesis
+    entity_type: Theory
+    aliases: [feature binding]
+    domain: Neuroscience
+  - label: Body schema
+    entity_type: DomainConcept
+    aliases: []
+    domain: Neuroscience
+  - label: Population vector
+    entity_type: MethodFamily
+    aliases: [population vectors]
+    domain: Neuroscience
+  - label: Gain fields
+    entity_type: DomainConcept
+    aliases: [gain field]
+    domain: Neuroscience
+  - label: Reference picture selection
+    entity_type: MethodFamily
+    aliases: [RPS]
+    domain: Video Processing
+  - label: Directed Acyclic Graph
+    entity_type: Algorithm
+    aliases: [DAG, directed acyclic graph]
+    domain: Graph Theory
+  - label: Inverse kinematic algorithm
+    entity_type: Algorithm
+    aliases: [inverse kinematics, inverse kinematic]
+    domain: Robotics
+  - label: Tensorial scheme
+    entity_type: MethodFamily
+    aliases: [3-step tensorial scheme]
+    domain: Neuroscience
+  - label: Neuroimaging
+    entity_type: MethodFamily
+    aliases: [neuroimaging methods]
+    domain: Neuroscience
+  - label: Schrödinger picture
+    entity_type: MethodFamily
+    aliases: [Schrodinger picture]
+    domain: Quantum Mechanics
+  - label: Parallel distributed processing
+    entity_type: DomainConcept
+    aliases: [PDP, paralell distributed processing]
+    domain: Cognitive Science
+  - label: Synesthesia
+    entity_type: Phenomenon
+    aliases: [Synaesthesia]
+    domain: Neuroscience
+  - label: Cross-domain mapping
+    entity_type: DomainConcept
+    aliases: [cross domain mapping, cross-modal mapping, cross modal mapping]
+    domain: Cognitive Science
+  - label: Cartesian Theater
+    entity_type: Phenomenon
+    aliases: [Carthesian Theater]
+    domain: Philosophy of Mind
+  - label: Unruptured Intracranial Aneurysm
+    entity_type: Phenomenon
+    aliases: [Unruptured intracranial aneurysms, UIA, UIAs]
+    domain: Neuroradiology
+  - label: TOF-MRA
+    entity_type: MethodFamily
+    aliases: [Time-of-Flight Magnetic Resonance Angiography, Time of Flight MRA, TOF MRA, TOF-MRA scans]
+    domain: Medical Imaging
+  - label: ADAM dataset
+    entity_type: Dataset
+    aliases: [Aneurysm Detection And segMentation Challenge dataset]
+    domain: Medical Imaging
+  - label: ADAM challenge
+    entity_type: Benchmark
+    aliases: [Aneurysm Detection And segMentation Challenge, ADAM challenge results]
+    domain: Medical Imaging
+  - label: PHASES score
+    entity_type: Metric
+    aliases: [PHASES]
+    domain: Clinical Risk Prediction
+  - label: Computer-aided detection
+    entity_type: System
+    aliases: [CAD, CAD system, CAD tool, computer-aided detection system]
+    domain: Medical Imaging
+  - label: 3D U-Net
+    entity_type: ModelArchitecture
+    aliases: [3D UNET, 3D U-Net, 3D UNet, three-dimensional U-Net]
+    domain: Medical Imaging
+  - label: Satisfaction of Search
+    entity_type: Phenomenon
+    aliases: [Satisfaction-of-search effect, satisfaction of search effect]
+    domain: Radiology
+  - label: McNemar's test
+    entity_type: Algorithm
+    aliases: [McNemar test, McNemar’s test]
+    domain: Statistics
+  - label: Wilcoxon signed-rank test
+    entity_type: Algorithm
+    aliases: [Wilcoxon signed rank test, Wilcoxon signed-rank tests]
+    domain: Statistics
+  - label: Skull-stripping
+    entity_type: Algorithm
+    aliases: [Skull stripping]
+    domain: Neuroimaging
+  - label: N4 bias field correction
+    entity_type: Algorithm
+    aliases: [N4 bias correction]
+    domain: Medical Imaging
+  - label: False Positive Rate
+    entity_type: Metric
+    aliases: [FP rate, false positive rate]
+    domain: Machine Learning

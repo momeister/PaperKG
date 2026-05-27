@@ -126,6 +126,9 @@ class Ontology:
             "MODULATED_BY",
             "CORRESPONDS_TO",
             "EVALUATED_ON",
+            "OUTPERFORMS",
+            "DERIVED_FROM",
+            "IMPLIES",
             "BUILT_ON",
             "PROVIDES",
             "SUPPORTS",
@@ -216,7 +219,15 @@ class CanonicalResolver:
         elif item.get("canonical_id") or item.get("openalx_id") or item.get("openalex_id"):
             item.setdefault("canonical_id", str(item.get("canonical_id") or item.get("openalx_id") or item.get("openalex_id")))
             item.setdefault("canonical_label", item.get("openalx_label") or label)
-            item.setdefault("review_status", "approved" if confidence >= 0.70 else "pending")
+            requested_status = str(item.get("review_status") or "").lower()
+            if requested_status == "rejected":
+                item["review_status"] = "rejected"
+            elif item.get("accepted") is True and confidence >= 0.70:
+                item["review_status"] = "approved"
+            elif requested_status == "approved":
+                item["review_status"] = "approved"
+            else:
+                item["review_status"] = "approved" if confidence >= 0.85 else "pending"
             item["canonical_match"] = {
                 "match_type": "external_id",
                 "score": 1.0,

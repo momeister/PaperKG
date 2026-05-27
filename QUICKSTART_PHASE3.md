@@ -3,7 +3,7 @@
 Phase 3 is the working extraction layer of ScienceKG. It is not a toy demo UI: you can choose a provider, choose a model, tune context size and output length, upload or download PDFs, and extract concepts, methods, and claims into a structured result.
 
 What Phase 3 currently can do:
-- Switch between Ollama, LM Studio, OpenAI, and custom OpenAI-compatible APIs.
+- Switch between Ollama, LM Studio, OpenAI, NVIDIA NIM, and custom OpenAI-compatible APIs.
 - Choose the active model per provider.
 - Tune temperature, top_p, context size, and max_tokens from the UI.
 - Paste text, upload a PDF, or download a PDF from a URL and parse it locally.
@@ -32,7 +32,7 @@ Edit `config.yaml`:
 
 ```yaml
 llm:
-    default_provider: "ollama"  # Change this to: "lm_studio", "openai", or "custom_api"
+    default_provider: "ollama"  # Change this to: "lm_studio", "openai", "nvidia", or "custom_api"
     providers:
         ollama:
             models:
@@ -97,6 +97,103 @@ providers:
 ```
 
 Tip: for larger local models, increase `context_size` instead of only `max_tokens`. `context_size` controls how much source text the model can see; `max_tokens` controls how long the answer may be.
+
+---
+
+## Google Gemini API / Gemini 3.1 Flash Lite
+
+The built-in `gemini` provider uses Google's OpenAI-compatible Gemini API endpoint:
+
+```yaml
+llm:
+  providers:
+    gemini:
+      provider_type: "openai_compatible"
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+      api_key_env: "GEMINI_API_KEY"
+      model: "gemini-3.1-flash-lite"
+      extra_options:
+        force_response_format: true
+        omit_extra_body: true
+```
+
+Store the key outside Git:
+
+```bash
+# PowerShell
+$env:GEMINI_API_KEY="..."
+
+# Or copy .env.example to .env and set:
+GEMINI_API_KEY=...
+```
+
+After restarting Phase 3, choose `gemini` in the sidebar. `gemini-3.1-flash-lite` currently has a free Gemini Developer API tier in Google AI Studio, subject to Google's current limits and data-use terms for the free tier.
+
+---
+
+## NVIDIA NIM / Kimi K2.6
+
+The built-in `nvidia` provider uses NVIDIA's OpenAI-compatible endpoint:
+
+```yaml
+llm:
+  providers:
+    nvidia:
+      provider_type: "nvidia"
+      base_url: "https://integrate.api.nvidia.com/v1"
+      api_key_env: "NVIDIA_API_KEY"
+      model: "moonshotai/kimi-k2.6"
+```
+
+Store the real key outside Git:
+
+```bash
+# PowerShell
+$env:NVIDIA_API_KEY="nvapi-..."
+
+# Or copy .env.example to .env and set:
+NVIDIA_API_KEY=nvapi-...
+# NGC_API_KEY=nvapi-... also works.
+```
+
+In the Streamlit sidebar you can also paste the NVIDIA key into the password field. That key is kept only in the current Streamlit session and is not written to `config.yaml`.
+
+To switch NVIDIA models, choose another configured model in the sidebar, click **Refresh models manually** after the key is set, or enter a model ID in **Custom NVIDIA model ID**.
+
+If NVIDIA returns `403 Forbidden` with `Authorization failed`, the extraction did not reach the model. Rotate or regenerate the key and make sure the generated key includes both **NGC Catalog** and **Public API Endpoints**. The sidebar's **Test NVIDIA/NIM connection** button checks this before running a multi-call extraction.
+
+For the self-hosted NIM path from build.nvidia.com (`nim=self-hosted`), use `nvidia_local_nim` instead of `nvidia`. The key is used by Docker/NIM to pull and cache the model; PaperKG calls your local OpenAI-compatible endpoint:
+
+```yaml
+llm:
+  providers:
+    nvidia_local_nim:
+      provider_type: "nvidia"
+      base_url: "http://localhost:8000/v1"
+      api_key: null
+      model: "moonshotai/kimi-k2.6"
+```
+
+The sidebar shows container controls when `nvidia_local_nim` is selected:
+
+- `Docker login` authenticates Docker against `nvcr.io` using `NGC_API_KEY`/`NVIDIA_API_KEY` through stdin.
+- `Pull image` downloads the configured image.
+- `Start NIM` runs the container detached and exposes `http://localhost:8000/v1`.
+- `Stop NIM` stops the local container.
+- `Show NIM logs` displays recent startup and model-loading logs.
+
+Default Kimi K2.6 self-hosted image:
+
+```yaml
+llm:
+  nim_container:
+    image: "nvcr.io/nim/moonshotai/kimi-k2.6:1.7.0-variant"
+    container_name: "sciencekg-kimi-k2-6-nim"
+    host_port: 8000
+    cache_dir: "~/.cache/nim"
+```
+
+After the container is running, click **Test NVIDIA/NIM connection**. If your container exposes another port or model alias, update the sidebar container port/config or enter the served model ID in **Custom NVIDIA model ID**.
 
 ---
 
@@ -335,6 +432,9 @@ Set these in your shell or `.env` file:
 ```bash
 # For OpenAI API
 export OPENAI_API_KEY="sk-..."
+
+# For NVIDIA NIM / build.nvidia.com
+export NVIDIA_API_KEY="nvapi-..."
 
 # For custom APIs
 export CUSTOM_API_KEY="your_key_here"

@@ -32,9 +32,41 @@ STOPWORDS = {
     "that",
     "the",
     "to",
+    "use",
+    "used",
+    "uses",
+    "using",
     "what",
     "which",
     "with",
+}
+
+LOW_SIGNAL_TERMS = {
+    "ai",
+    "algorithm",
+    "algorithms",
+    "artificial",
+    "intelligence",
+    "large",
+    "language",
+    "llm",
+    "llms",
+    "method",
+    "methods",
+    "model",
+    "models",
+    "system",
+    "systems",
+}
+
+QUERY_SYNONYMS = {
+    "clinic": ["clinical", "clinics", "clinician", "clinicians"],
+    "clinics": ["clinical", "clinic", "clinician", "clinicians"],
+    "clinical": ["clinic", "clinics", "clinician", "clinicians"],
+    "doctor": ["clinical", "clinician", "physician"],
+    "doctors": ["clinical", "clinicians", "physicians"],
+    "physician": ["clinical", "clinician", "doctor"],
+    "physicians": ["clinical", "clinicians", "doctors"],
 }
 
 
@@ -122,7 +154,7 @@ class KGRetriever:
         limit: int = 10,
         include_extractions: bool = True,
     ) -> list[SearchHit]:
-        tokens = _tokenize(query)
+        tokens = _query_tokens(query)
         if not tokens:
             return []
 
@@ -408,6 +440,18 @@ def _tokenize(text: str) -> list[str]:
     return [token for token in tokens if token not in STOPWORDS and len(token) > 1]
 
 
+def _query_tokens(text: str) -> list[str]:
+    tokens = _tokenize(text)
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        for item in [token, *QUERY_SYNONYMS.get(token, [])]:
+            if item not in seen:
+                seen.add(item)
+                expanded.append(item)
+    return expanded
+
+
 def _normalize(text: str) -> str:
     return " ".join(_tokenize(text))
 
@@ -419,7 +463,19 @@ def _score_text(query: str, tokens: list[str], text: str, weight: float) -> floa
     if not text_tokens:
         return 0.0
 
-    score = weight * sum(1 for token in tokens if token in text_tokens)
+    matched = [token for token in tokens if token in text_tokens]
+    if not matched:
+        return 0.0
+
+    query_has_specific_terms = any(token not in LOW_SIGNAL_TERMS for token in tokens)
+    matched_specific_terms = [token for token in matched if token not in LOW_SIGNAL_TERMS]
+    if query_has_specific_terms and not matched_specific_terms:
+        return 0.0
+
+    score = weight * (
+        len(matched_specific_terms)
+        + 0.25 * (len(matched) - len(matched_specific_terms))
+    )
     query_norm = _normalize(query)
     text_norm = _normalize(text)
     if query_norm and query_norm in text_norm:

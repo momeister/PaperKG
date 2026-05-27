@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,9 @@ class GroundedResponder:
     Answers questions from retrieved KG evidence only.
     """
 
+    MIN_ANSWER_TOKENS = 1200
+    MAX_ANSWER_TOKENS = 8192
+
     SYSTEM_PROMPT = """You are ScienceKG's grounded research assistant.
 
 Use only the evidence provided by the local knowledge graph. Do not add facts
@@ -59,7 +63,7 @@ making claims."""
         overrides: dict[str, Any] | None = None,
     ) -> GroundedAnswer:
         hits = self.retriever.search(question, limit=limit)
-        evidence = _flatten_evidence(hits, max_items=16)
+        evidence = self._evidence_for_answer(hits, max_items=24)
         sources = [hit.source for hit in hits if hit.evidence]
 
         if not evidence:
@@ -80,6 +84,14 @@ making claims."""
             model=model,
             overrides=overrides,
         )
+        cited_ids = _cited_paper_ids(answer_text)
+        if cited_ids:
+            cited_sources = [source for source in sources if source.paper_id in cited_ids]
+            cited_evidence = [item for item in evidence if item.paper_id in cited_ids]
+            if cited_sources:
+                sources = cited_sources
+            if cited_evidence:
+                evidence = cited_evidence
         return GroundedAnswer(
             question=question,
             answer=answer_text,
@@ -106,7 +118,7 @@ making claims."""
         merged_overrides = {
             "temperature": 0.1,
             "top_p": 0.9,
-            "max_tokens": 1200,
+            "max_tokens": self._answer_max_tokens(provider),
             **(overrides or {}),
         }
         if model:
@@ -130,6 +142,32 @@ making claims."""
             )
 
         response = str(response or "").strip()
+        if not response and self._should_retry_empty_response(merged_overrides):
+            retry_overrides = dict(merged_overrides)
+            current_tokens = int(retry_overrides.get("max_tokens") or self.MIN_ANSWER_TOKENS)
+            retry_overrides["max_tokens"] = min(
+                max(current_tokens * 2, 4096),
+                self.MAX_ANSWER_TOKENS,
+            )
+            if retry_overrides["max_tokens"] > current_tokens:
+                try:
+                    response = self.llm_router.chat(
+                        [
+                            {"role": "system", "content": self.SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        provider=provider,
+                        overrides=retry_overrides,
+                    )
+                except Exception as exc:
+                    fallback = _extractive_answer(question, hits, evidence)
+                    return (
+                        "I could not generate a synthesized answer because the configured LLM call failed. "
+                        "Evidence-only fallback:\n" + fallback,
+                        str(exc),
+                    )
+                response = str(response or "").strip()
+
         if response:
             return response, None
         return (
@@ -146,6 +184,45 @@ making claims."""
         except Exception:
             return None
 
+    def _answer_max_tokens(self, provider: str | None) -> int:
+        if self.llm_router is None:
+            return self.MIN_ANSWER_TOKENS
+        try:
+            configured = int(self.llm_router.provider_settings(provider).max_tokens)
+        except Exception:
+            configured = self.MIN_ANSWER_TOKENS
+        return min(max(configured, self.MIN_ANSWER_TOKENS), self.MAX_ANSWER_TOKENS)
+
+    def _should_retry_empty_response(self, overrides: dict[str, Any]) -> bool:
+        if self.llm_router is None:
+            return False
+        metadata = getattr(self.llm_router, "last_response_metadata", {}) or {}
+        if metadata.get("finish_reason") == "length":
+            return True
+        usage = metadata.get("usage") or {}
+        completion_details = usage.get("completion_tokens_details") or {}
+        reasoning_tokens = int(completion_details.get("reasoning_tokens") or 0)
+        max_tokens = int(overrides.get("max_tokens") or self.MIN_ANSWER_TOKENS)
+        return reasoning_tokens > 0 and reasoning_tokens >= max_tokens - 1
+
+    def _evidence_for_answer(self, hits: list[SearchHit], max_items: int) -> list[Evidence]:
+        evidence = _flatten_evidence(hits, max_items=max_items)
+        paper_ids = [hit.source.paper_id for hit in hits[:3]]
+        existing = {(item.paper_id, item.kind, item.text) for item in evidence}
+
+        for paper_id in paper_ids:
+            detail = self.retriever.paper_detail(paper_id)
+            latest = (detail or {}).get("latest_extraction") or {}
+            for item in _supplemental_evidence_from_extraction(paper_id, latest):
+                key = (item.paper_id, item.kind, item.text)
+                if key in existing:
+                    continue
+                existing.add(key)
+                evidence.append(item)
+
+        evidence.sort(key=lambda item: _answer_evidence_rank(item), reverse=True)
+        return evidence[:max_items]
+
 
 def _flatten_evidence(hits: list[SearchHit], max_items: int) -> list[Evidence]:
     evidence: list[Evidence] = []
@@ -153,6 +230,72 @@ def _flatten_evidence(hits: list[SearchHit], max_items: int) -> list[Evidence]:
         evidence.extend(hit.evidence)
     evidence.sort(key=lambda item: item.score, reverse=True)
     return evidence[:max_items]
+
+
+def _supplemental_evidence_from_extraction(
+    paper_id: str,
+    extraction: dict[str, Any],
+) -> list[Evidence]:
+    evidence: list[Evidence] = []
+    for field_name, kind, base_score in [
+        ("claims", "claim", 7.0),
+        ("methods", "method", 5.0),
+        ("concepts", "concept", 4.0),
+        ("relations", "relation", 4.5),
+    ]:
+        for item in extraction.get(field_name) or []:
+            text = _evidence_item_text(item)
+            if not text:
+                continue
+            score = base_score + _evidence_specificity_bonus(text)
+            evidence.append(
+                Evidence(
+                    paper_id=paper_id,
+                    kind=kind,
+                    field=field_name,
+                    text=text,
+                    score=score,
+                    metadata=item if isinstance(item, dict) else {},
+                )
+            )
+    return evidence
+
+
+def _evidence_item_text(item: Any) -> str:
+    if isinstance(item, dict):
+        preferred = [
+            "statement",
+            "evidence_span",
+            "label",
+            "context",
+            "description",
+            "relation_type",
+            "subject_id",
+            "object_id",
+        ]
+        parts = [str(item.get(key) or "") for key in preferred]
+        return " ".join(part for part in parts if part).strip()
+    return str(item or "").strip()
+
+
+def _evidence_specificity_bonus(text: str) -> float:
+    bonus = 0.0
+    if re.search(r"\d", text or ""):
+        bonus += 2.0
+    if re.search(r"\b(ai consult|clinical|clinician|physician|patient|diagnos|treatment)\b", text or "", re.I):
+        bonus += 1.5
+    return bonus
+
+
+def _answer_evidence_rank(item: Evidence) -> float:
+    kind_bonus = {
+        "claim": 3.0,
+        "relation": 2.0,
+        "method": 1.0,
+        "concept": 0.5,
+        "paper": 0.25,
+    }.get(item.kind, 0.0)
+    return float(item.score) + kind_bonus + _evidence_specificity_bonus(item.text)
 
 
 def _build_grounded_prompt(
@@ -175,6 +318,8 @@ def _build_grounded_prompt(
             "",
             "Answer concisely using only this evidence.",
             "Include source paper IDs in square brackets for each substantive claim.",
+            "When quantitative findings or metrics are present, include the most important numbers.",
+            "Distinguish deployed clinical systems from models used only for evaluation, rating, or robustness checks.",
         ]
     )
     return "\n".join(lines)
@@ -194,3 +339,13 @@ def _extractive_answer(
         title = source_titles.get(item.paper_id, item.paper_id)
         lines.append(f"- [{item.paper_id}] {title}: {item.text}")
     return "\n".join(lines)
+
+
+def _cited_paper_ids(answer_text: str) -> set[str]:
+    ids: set[str] = set()
+    for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
+        for value in re.split(r"[,;]\s*", bracketed):
+            value = value.strip()
+            if value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p"):
+                ids.add(value)
+    return ids

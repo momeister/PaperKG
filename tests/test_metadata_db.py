@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -72,6 +73,36 @@ def test_metadata_db_resolves_pdf_storage_id_to_arxiv_metadata() -> None:
         assert resolved is not None
         assert resolved["id"] == "arxiv:2509.08759"
         assert resolved["year"] == 2025
+    finally:
+        if not db.is_closed:
+            db.close()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_metadata_db_resolves_legacy_arxiv_storage_id() -> None:
+    root = Path("test-output") / f"metadata-legacy-arxiv-{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=True)
+    db = MetadataDB(str(root / "metadata.duckdb"))
+    try:
+        db.insert_paper(
+            {
+                "source": "arxiv",
+                "source_id": "q-bio/0612009",
+                "title": "The Neurobiology Of Thinking, Identity, And Geniality",
+                "year": 2006,
+            }
+        )
+
+        resolved = db.resolve_paper("arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009")
+        canonical = db.ensure_paper_record(
+            "arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009",
+            title="The Neurobiology Of Thinking, Identity, And Geniality",
+            year=2006,
+        )
+
+        assert resolved is not None
+        assert resolved["id"] == "arxiv:q-bio/0612009"
+        assert canonical == "arxiv:q-bio/0612009"
     finally:
         if not db.is_closed:
             db.close()
@@ -157,6 +188,39 @@ def test_metadata_db_persists_extended_extraction_metadata(tmp_path) -> None:
     assert loaded["terminology_conflicts"][0]["term"] == "valence"
     assert loaded["temporal_coverage"]["reviewed_period"] == "2007-2023"
     assert loaded["mathematical_content"]["formula_types"] == ["reward_function"]
+    db.close()
+
+
+def test_save_extraction_result_infers_failed_status_from_fatal_payload(tmp_path) -> None:
+    db = MetadataDB(str(tmp_path / "metadata.duckdb"))
+
+    result_id = db.save_extraction_result(
+        paper_id="paper_001",
+        llm_provider="lm_studio",
+        llm_model="qwen",
+        raw_response=json.dumps(
+            {
+                "extraction_parse_quality": "failed",
+                "fatal_llm_error": True,
+                "failure_reason": "LLM extraction failed: LM Studio has no model loaded.",
+                "concepts": [],
+                "methods": [],
+                "call_diagnostics": [
+                    {
+                        "call_type": "structural",
+                        "parse_quality": "failed",
+                        "raw_excerpt": "LLM call failed: No models loaded",
+                    }
+                ],
+            }
+        ),
+    )
+
+    row = db.get_extraction_result(result_id)
+    assert row is not None
+    assert row["extraction_status"] == "failed"
+    assert "no model loaded" in row["error_message"].lower()
+    assert db.list_entity_review_queue() == []
     db.close()
 
 

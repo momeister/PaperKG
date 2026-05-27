@@ -43,6 +43,34 @@ class FailingLLMRouter(FakeLLMRouter):
         raise RuntimeError("model unavailable")
 
 
+class EmptyReasoningThenAnswerLLMRouter(FakeLLMRouter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_response_metadata = {}
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        if len(self.calls) == 1:
+            max_tokens = int((overrides or {}).get("max_tokens") or 0)
+            self.last_response_metadata = {
+                "finish_reason": "length",
+                "usage": {
+                    "completion_tokens_details": {
+                        "reasoning_tokens": max(max_tokens - 1, 0),
+                    }
+                },
+            }
+            return ""
+        self.last_response_metadata = {"finish_reason": "stop", "usage": {}}
+        return "Recovered after larger reasoning budget [p1]."
+
+
+class CapturingLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return "Captured evidence [clinical]."
+
+
 @contextmanager
 def _phase4_fixture():
     root = Path("test-output") / f"phase4-{uuid4().hex}"
@@ -182,6 +210,57 @@ def test_kg_retriever_resolves_pdf_derived_extraction_ids_to_metadata() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_kg_retriever_ignores_low_signal_query_matches_when_specific_terms_exist() -> None:
+    root = Path("test-output") / f"phase4-specificity-{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=True)
+    db_path = str(root / "metadata.duckdb")
+    db = MetadataDB(db_path)
+    try:
+        db.insert_paper(
+            {
+                "id": "clinical",
+                "source": "fixture",
+                "source_id": "clinical",
+                "title": "Clinical AI decision support",
+                "abstract": "AI is used in primary care clinics for clinical error detection.",
+                "year": 2025,
+            }
+        )
+        db.insert_paper(
+            {
+                "id": "robot",
+                "source": "fixture",
+                "source_id": "robot",
+                "title": "Robot AI planning",
+                "abstract": "AI is used for robot planning and navigation.",
+                "year": 2024,
+            }
+        )
+        db.save_extraction_result(
+            paper_id="clinical",
+            llm_provider="fake",
+            llm_model="fake-model",
+            concepts=[{"label": "AI Consult", "context": "clinical safety net for clinics"}],
+        )
+        db.save_extraction_result(
+            paper_id="robot",
+            llm_provider="fake",
+            llm_model="fake-model",
+            concepts=[{"label": "AI planner", "context": "used for robot navigation"}],
+        )
+        db.close()
+
+        hits = KGRetriever(metadata_db_path=db_path).search("How is ai used in clinics?", limit=5)
+
+        assert hits
+        assert hits[0].source.paper_id == "clinical"
+        assert all(hit.source.paper_id != "robot" for hit in hits)
+    finally:
+        if not db.is_closed:
+            db.close()
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_kg_retriever_paper_detail_and_neighborhood() -> None:
     with _phase4_fixture() as db_path:
         retriever = KGRetriever(metadata_db_path=db_path)
@@ -226,6 +305,72 @@ def test_grounded_responder_surfaces_generation_failures() -> None:
         assert answer.no_answer is False
         assert answer.generation_error == "model unavailable"
         assert "Evidence-only fallback" in answer.answer
+
+
+def test_grounded_responder_retries_empty_reasoning_only_responses() -> None:
+    with _phase4_fixture() as db_path:
+        fake_llm = EmptyReasoningThenAnswerLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        answer = responder.answer(
+            "What uses graph transformer?",
+            overrides={"max_tokens": 1200},
+        )
+
+        assert answer.generation_error is None
+        assert answer.answer == "Recovered after larger reasoning budget [p1]."
+        assert len(fake_llm.calls) == 2
+        assert fake_llm.calls[1]["overrides"]["max_tokens"] > fake_llm.calls[0]["overrides"]["max_tokens"]
+
+
+def test_grounded_responder_supplements_numeric_claims_for_top_hits() -> None:
+    root = Path("test-output") / f"phase4-numeric-claims-{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=True)
+    db_path = str(root / "metadata.duckdb")
+    db = MetadataDB(db_path)
+    try:
+        db.insert_paper(
+            {
+                "id": "clinical",
+                "source": "fixture",
+                "source_id": "clinical",
+                "title": "Clinical AI decision support",
+                "abstract": "AI Consult is used in primary care clinics.",
+                "year": 2025,
+            }
+        )
+        db.save_extraction_result(
+            paper_id="clinical",
+            llm_provider="fake",
+            llm_model="fake-model",
+            concepts=[{"label": "AI Consult", "context": "clinical safety net"}],
+            claims=[
+                {
+                    "statement": "Clinicians with access to AI Consult made 16% fewer diagnostic errors and 13% fewer treatment errors.",
+                    "evidence_type": "experimental",
+                }
+            ],
+        )
+        db.close()
+
+        fake_llm = CapturingLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        responder.answer("How is AI used in clinics?", limit=3)
+
+        prompt = fake_llm.calls[0]["messages"][1]["content"]
+        assert "16% fewer diagnostic errors" in prompt
+        assert "13% fewer treatment errors" in prompt
+    finally:
+        if not db.is_closed:
+            db.close()
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_hypothesis_generator_uses_cross_domain_hints() -> None:

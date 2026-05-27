@@ -53,6 +53,7 @@ class LLMRouter:
 	@classmethod
 	def from_config_file(cls, config_path: str | Path = "config.yaml") -> "LLMRouter":
 		path = Path(config_path)
+		cls._load_dotenv(path.parent / ".env")
 		with path.open("r", encoding="utf-8") as fh:
 			config = yaml.safe_load(fh) or {}
 
@@ -81,10 +82,17 @@ class LLMRouter:
 			env_name = raw.get("api_key_env")
 			if env_name:
 				api_key = os.getenv(env_name, api_key)
+			base_url = str(raw.get("base_url", "http://localhost:11434"))
+			if (
+				not api_key
+				and str(raw.get("provider_type", "")).lower() == "nvidia"
+				and "integrate.api.nvidia.com" in base_url.lower()
+			):
+				api_key = os.getenv("NGC_API_KEY")
 
 			providers[name] = ProviderConfig(
 				provider_type=str(raw.get("provider_type", "ollama")),
-				base_url=str(raw.get("base_url", "http://localhost:11434")),
+				base_url=base_url,
 				api_key=api_key,
 				timeout_seconds=float(raw.get("timeout_seconds", 120.0)),
 				settings=settings,
@@ -129,7 +137,7 @@ class LLMRouter:
 				response.raise_for_status()
 				payload = response.json()
 				models = [str(item.get("name")) for item in payload.get("models", []) if item.get("name")]
-			elif cfg.provider_type in {"openai_compatible", "lm_studio", "openai"}:
+			elif cfg.provider_type in {"openai_compatible", "lm_studio", "openai", "nvidia"}:
 				headers = {"Content-Type": "application/json"}
 				if cfg.api_key:
 					headers["Authorization"] = f"Bearer {cfg.api_key}"
@@ -254,10 +262,53 @@ class LLMRouter:
 
 		if cfg.provider_type == "ollama":
 			return self._chat_ollama(cfg, messages, settings, request_timeout_seconds)
-		if cfg.provider_type in {"openai_compatible", "lm_studio", "openai"}:
+		if cfg.provider_type in {"openai_compatible", "lm_studio", "openai", "nvidia"}:
 			return self._chat_openai_compatible(cfg, messages, settings, request_timeout_seconds)
 
 		raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
+
+	def check_provider_auth(
+		self,
+		provider: str | None = None,
+		model: str | None = None,
+		timeout_seconds: float = 30.0,
+	) -> tuple[bool, str | None]:
+		"""Run a tiny chat request to catch auth/config failures before extraction."""
+		try:
+			overrides: dict[str, Any] = {
+				"temperature": 0.0,
+				"top_p": 1.0,
+				"max_tokens": 8,
+				"timeout_seconds": timeout_seconds,
+			}
+			if model:
+				overrides["model"] = model
+			self.chat(
+				[{"role": "user", "content": "Reply with OK."}],
+				provider=provider,
+				overrides=overrides,
+			)
+		except Exception as exc:
+			return False, str(exc)
+		return True, None
+
+	@staticmethod
+	def is_auth_error(error: str | None) -> bool:
+		"""Return true when an upstream provider error is clearly authorization-related."""
+		if not error:
+			return False
+		error_lower = error.lower()
+		auth_markers = (
+			"401 unauthorized",
+			"403 forbidden",
+			"authorization failed",
+			"unauthorized",
+			"forbidden",
+			"invalid api key",
+			"incorrect api key",
+			"api key",
+		)
+		return any(marker in error_lower for marker in auth_markers)
 
 	def chat_json(
 		self,
@@ -272,6 +323,16 @@ class LLMRouter:
 		if self._client is not None:
 			return self._client
 		return httpx.Client(timeout=timeout_seconds)
+
+	@staticmethod
+	def _load_dotenv(env_path: Path) -> None:
+		if not env_path.exists():
+			return
+		try:
+			from dotenv import load_dotenv
+		except Exception:
+			return
+		load_dotenv(dotenv_path=env_path, override=False)
 
 	@staticmethod
 	def _merged_settings(base: GenerationSettings | None, overrides: dict[str, Any] | None) -> GenerationSettings:
@@ -354,6 +415,11 @@ class LLMRouter:
 		response_format = extra_options.pop("response_format", None)
 		json_mode = bool(extra_options.pop("json_mode", False))
 		force_response_format = bool(extra_options.pop("force_response_format", False))
+		omit_extra_body = bool(extra_options.pop("omit_extra_body", cfg.provider_type == "nvidia"))
+		top_level_chat_template = bool(extra_options.pop("top_level_chat_template_kwargs", cfg.provider_type == "nvidia"))
+		chat_template_kwargs = extra_options.pop("chat_template_kwargs", None)
+		if cfg.provider_type == "nvidia":
+			chat_template_kwargs = self._nvidia_chat_template_kwargs(settings.model, chat_template_kwargs)
 		extra_options.pop("format", None)
 		use_response_format = (
 			force_response_format
@@ -366,17 +432,27 @@ class LLMRouter:
 			"temperature": settings.temperature,
 			"top_p": settings.top_p,
 			"max_tokens": settings.max_tokens,
-			"extra_body": {
+		}
+		extra_body = self._drop_none_values(
+			{
 				"num_ctx": settings.context_size,
 				"repeat_penalty": settings.repeat_penalty,
 				**extra_options,
-			},
-		}
+			}
+		)
+		if chat_template_kwargs:
+			if top_level_chat_template:
+				payload["chat_template_kwargs"] = chat_template_kwargs
+			else:
+				extra_body["chat_template_kwargs"] = chat_template_kwargs
+		if extra_body and not omit_extra_body:
+			payload["extra_body"] = extra_body
+		elif omit_extra_body:
+			payload.update(self._drop_none_values(extra_options))
 		if response_format is not None and use_response_format:
 			payload["response_format"] = response_format
 		elif json_mode and use_response_format:
 			payload["response_format"] = {"type": "json_object"}
-		payload["extra_body"] = self._drop_none_values(payload["extra_body"])
 		if settings.seed is not None:
 			payload["seed"] = settings.seed
 
@@ -392,11 +468,14 @@ class LLMRouter:
 			response.raise_for_status()
 		except httpx.HTTPStatusError as exc:
 			if "response_format" not in payload or exc.response.status_code not in {400, 422}:
-				raise
+				raise self._http_status_runtime_error(exc) from exc
 			fallback_payload = dict(payload)
 			fallback_payload.pop("response_format", None)
 			response = client.post(endpoint, headers=headers, json=fallback_payload)
-			response.raise_for_status()
+			try:
+				response.raise_for_status()
+			except httpx.HTTPStatusError as fallback_exc:
+				raise self._http_status_runtime_error(fallback_exc) from fallback_exc
 			response_format_fallback = True
 		data = response.json()
 		choices = data.get("choices") or []
@@ -410,6 +489,29 @@ class LLMRouter:
 			return ""
 		message = choices[0].get("message") or {}
 		return str(message.get("content", "")).strip()
+
+	@staticmethod
+	def _nvidia_chat_template_kwargs(model: str, value: Any) -> dict[str, Any] | None:
+		"""Normalize NVIDIA NIM chat-template kwargs to model-specific keys."""
+		if not isinstance(value, dict):
+			return None
+		cleaned = dict(value)
+		model_lower = (model or "").lower()
+		if "kimi" in model_lower:
+			if "thinking" not in cleaned and "enable_thinking" in cleaned:
+				cleaned["thinking"] = bool(cleaned.get("enable_thinking"))
+			allowed = {"thinking"}
+			return {key: cleaned[key] for key in allowed if key in cleaned}
+		return cleaned
+
+	@staticmethod
+	def _http_status_runtime_error(exc: httpx.HTTPStatusError) -> RuntimeError:
+		response = exc.response
+		detail = (response.text or "").strip()
+		if len(detail) > 800:
+			detail = detail[:800] + "..."
+		message = f"{exc}; response_body={detail}" if detail else str(exc)
+		return RuntimeError(message)
 
 	@staticmethod
 	def _drop_none_values(data: dict[str, Any]) -> dict[str, Any]:

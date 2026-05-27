@@ -15,15 +15,17 @@ import asyncio
 import base64
 import httpx
 import json
+import os
 import shutil
 import re
 import time
 from pathlib import Path
 
 import streamlit as st
+import yaml
 from pypdf import PdfReader
 
-from extraction.entity_extractor import EntityExtractor
+from extraction.entity_extractor import EntityExtractor, extraction_failure_reason
 from extraction.entity_linker import ExtractionPipeline
 from extraction.conflict_detector import ConflictDetector
 from extraction.embedding_engine import EmbeddingEngine
@@ -32,10 +34,15 @@ from extraction.vocabulary import VocabularyManager
 from harvester.arxiv_client import ArxivClient, ArxivClientConfig
 from harvester.deduplication import deduplicate_papers
 from harvester.openalex_client import OpenAlexClient, OpenAlexConfig
-from harvester.semantic_scholar_client import SemanticScholarClient, SemanticScholarConfig
+from harvester.semantic_scholar_client import (
+    SemanticScholarClient,
+    SemanticScholarConfig,
+    SemanticScholarRateLimitError,
+)
 from parsing.marker_parser import MarkerParser
 from parsing.parser_router import ParserRouter, ParserType
 from query.llm_router import LLMRouter
+from query.nim_container import NIMCommandResult, NIMContainerConfig, NIMContainerManager
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
@@ -76,7 +83,11 @@ def init_llm_router():
 def init_extraction_pipeline():
     """Initialize extraction pipeline with caching."""
     llm_router = init_llm_router()
-    return ExtractionPipeline(llm_router, embedding_engine=init_embedding_engine())
+    return ExtractionPipeline(
+        llm_router,
+        embedding_engine=init_embedding_engine(),
+        quality_db_path=str(METADATA_DB_PATH),
+    )
 
 
 @st.cache_resource
@@ -141,6 +152,7 @@ def init_batch_processor():
         init_parser_router(),
         init_embedding_engine(),
         metadata_db_factory=init_metadata_db,
+        quality_db_path=str(METADATA_DB_PATH),
     )
 
 
@@ -203,25 +215,67 @@ def _normalize_openalex_work(work: dict) -> dict:
     }
 
 
-async def _search_phase1_papers(query: str, sources: list[str], max_results: int) -> list[dict]:
+def _harvester_config() -> dict:
+    try:
+        raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return raw.get("harvester") or {}
+
+
+def _semantic_scholar_config_from_project() -> SemanticScholarConfig:
+    raw = (_harvester_config().get("semantic_scholar") or {})
+    api_key = (
+        os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+        or os.getenv("S2_API_KEY")
+        or raw.get("api_key")
+        or None
+    )
+    configured_rps = float(raw.get("requests_per_second") or 1.0)
+    # Unauthenticated Semantic Scholar requests are easy to rate-limit. Keep the
+    # no-key UI path deliberately conservative even if config.yaml has an older
+    # high-throughput default.
+    requests_per_second = configured_rps if api_key else min(configured_rps, 0.5)
+    return SemanticScholarConfig(
+        api_key=str(api_key) if api_key else None,
+        requests_per_second=requests_per_second,
+        timeout_seconds=float(raw.get("timeout_seconds") or 30.0),
+        max_retries=int(raw.get("max_retries") or 3),
+        initial_retry_delay_seconds=float(raw.get("initial_retry_delay_seconds") or 2.0),
+    )
+
+
+async def _search_phase1_papers(query: str, sources: list[str], max_results: int) -> tuple[list[dict], list[str]]:
     combined: list[dict] = []
+    warnings: list[str] = []
     arxiv = ArxivClient(ArxivClientConfig()) if "arxiv" in sources else None
-    s2 = SemanticScholarClient(SemanticScholarConfig()) if "semantic_scholar" in sources else None
+    s2 = SemanticScholarClient(_semantic_scholar_config_from_project()) if "semantic_scholar" in sources else None
     openalex = OpenAlexClient(OpenAlexConfig()) if "openalex" in sources else None
 
     try:
         if arxiv is not None:
-            combined.extend(await arxiv.search(query, max_results=max_results))
+            try:
+                combined.extend(await arxiv.search(query, max_results=max_results))
+            except Exception as exc:
+                warnings.append(f"ArXiv search skipped: {exc}")
         if s2 is not None:
-            payload = await s2.search_papers(
-                query,
-                limit=min(max_results, 20),
-                fields="paperId,title,abstract,authors,year,externalIds,openAccessPdf,url",
-            )
-            combined.extend(_normalize_s2_paper(p) for p in payload.get("data", []))
+            try:
+                payload = await s2.search_papers(
+                    query,
+                    limit=min(max_results, 20),
+                    fields="paperId,title,abstract,authors,year,externalIds,openAccessPdf,url",
+                )
+                combined.extend(_normalize_s2_paper(p) for p in payload.get("data", []))
+            except SemanticScholarRateLimitError as exc:
+                warnings.append(str(exc))
+            except Exception as exc:
+                warnings.append(f"Semantic Scholar search skipped: {exc}")
         if openalex is not None:
-            payload = await openalex.list_works(search=query, per_page=min(max_results, 20), page=1)
-            combined.extend(_normalize_openalex_work(w) for w in payload.get("results", []))
+            try:
+                payload = await openalex.list_works(search=query, per_page=min(max_results, 20), page=1)
+                combined.extend(_normalize_openalex_work(w) for w in payload.get("results", []))
+            except Exception as exc:
+                warnings.append(f"OpenAlex search skipped: {exc}")
     finally:
         if arxiv is not None:
             await arxiv.close()
@@ -231,7 +285,9 @@ async def _search_phase1_papers(query: str, sources: list[str], max_results: int
             await openalex.close()
 
     unique, _ = deduplicate_papers(combined)
-    return unique
+    if not unique and warnings:
+        raise RuntimeError("; ".join(warnings))
+    return unique, warnings
 
 
 async def _download_search_results(results: list[dict], pdf_dir: str | Path = PDF_DIR) -> tuple[int, int, int]:
@@ -437,7 +493,166 @@ def _default_paper_id_from_pdf(label_or_path: str) -> str:
     arxiv_match = re.search(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", base, flags=re.IGNORECASE)
     if arxiv_match:
         return f"arxiv:{arxiv_match.group(1)}"
+    legacy_category = (
+        r"(?:astro-ph|cond-mat|cs|gr-qc|hep-ex|hep-lat|hep-ph|hep-th|"
+        r"math-ph|math|nlin|nucl-ex|nucl-th|physics|q-bio|q-fin|quant-ph|stat)"
+    )
+    legacy_match = re.search(
+        rf"(?<![A-Za-z0-9])({legacy_category})\s*[/_:.-]\s*(\d{{7}})(?:v\d+)?(?!\d)",
+        base,
+        flags=re.IGNORECASE,
+    )
+    if legacy_match:
+        return f"arxiv:{legacy_match.group(1).lower()}/{legacy_match.group(2)}"
     return base
+
+
+def _paper_id_input(
+    label: str,
+    default_value: str,
+    source_id: str,
+    key: str,
+    help_text: str,
+) -> str:
+    """Text input that resets its default when the selected source changes."""
+    source_key = f"{key}_source"
+    normalized_source = source_id or "__empty__"
+    if st.session_state.get(source_key) != normalized_source:
+        st.session_state[source_key] = normalized_source
+        st.session_state[key] = default_value or "document"
+    return st.text_input(label, key=key, help=help_text)
+
+
+def _paper_id_compare_key(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _loaded_text_can_be_reused(requested_paper_id: str, loaded_paper_id: str) -> bool:
+    requested_key = _paper_id_compare_key(requested_paper_id)
+    loaded_key = _paper_id_compare_key(loaded_paper_id)
+    return not requested_key or not loaded_key or requested_key == loaded_key
+
+
+def _nvidia_preflight_ok(llm_router: LLMRouter, provider: str, model: str, timeout_seconds: int) -> bool:
+    """Check NVIDIA/NIM connectivity before starting a multi-call extraction."""
+    provider_config = llm_router.provider_config(provider)
+    if provider_config.provider_type != "nvidia":
+        return True
+    is_hosted = "integrate.api.nvidia.com" in provider_config.base_url.lower()
+    ok, error = llm_router.check_provider_auth(
+        provider=provider,
+        model=model,
+        timeout_seconds=min(max(timeout_seconds, 10), 60),
+    )
+    if ok:
+        return True
+    if is_hosted:
+        if LLMRouter.is_auth_error(error):
+            st.error(
+                "NVIDIA authorization failed before extraction. "
+                "Create/rotate a key with Services Included: NGC Catalog and Public API Endpoints, "
+                "then set NVIDIA_API_KEY/NGC_API_KEY or paste the key in the sidebar."
+            )
+        else:
+            st.error(
+                "NVIDIA hosted provider did not complete the preflight check before extraction. "
+                "The key may still be valid; check the provider error for timeout or connectivity details."
+            )
+    else:
+        st.error(
+            "Self-hosted NVIDIA NIM did not answer before extraction. "
+            "Start the NIM container and make sure config.yaml points to its /v1 endpoint."
+        )
+    with st.expander("Provider error", expanded=False):
+        st.code(error or "Unknown NVIDIA provider error")
+    return False
+
+
+def _show_nim_command_result(result: NIMCommandResult, success_message: str) -> None:
+    if result.ok:
+        st.success(success_message)
+    else:
+        st.error(result.output or f"Command failed with exit code {result.returncode}.")
+    with st.expander("Docker command output", expanded=not result.ok):
+        st.code(result.output or "(no output)")
+
+
+def _render_nim_container_controls(provider_config: object) -> NIMContainerConfig:
+    base_config = NIMContainerConfig.from_config_file(CONFIG_PATH)
+    with st.expander("Self-hosted NIM container", expanded=True):
+        image = st.text_input(
+            "NIM image",
+            value=base_config.image,
+            key="nim_container_image",
+        ).strip()
+        container_name = st.text_input(
+            "Container name",
+            value=base_config.container_name,
+            key="nim_container_name",
+        ).strip()
+        host_port = int(
+            st.number_input(
+                "Host port",
+                min_value=1024,
+                max_value=65535,
+                value=int(base_config.host_port),
+                step=1,
+                key="nim_container_host_port",
+            )
+        )
+        cache_dir = st.text_input(
+            "Cache directory",
+            value=base_config.cache_dir,
+            key="nim_container_cache_dir",
+        ).strip()
+        shm_size = st.text_input(
+            "Shared memory",
+            value=base_config.shm_size,
+            key="nim_container_shm_size",
+        ).strip()
+
+        nim_config = base_config.with_overrides(
+            image=image or base_config.image,
+            container_name=container_name or base_config.container_name,
+            host_port=host_port,
+            cache_dir=cache_dir or base_config.cache_dir,
+            shm_size=shm_size or base_config.shm_size,
+        )
+        if hasattr(provider_config, "base_url"):
+            provider_config.base_url = nim_config.base_url
+
+        manager = NIMContainerManager(nim_config)
+        status = manager.status()
+        status_label = "running" if status.running else status.status
+
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Container", status_label)
+        col_b.metric("Endpoint", nim_config.base_url)
+        col_c.metric("NGC key", "loaded" if nim_config.has_api_key else "missing")
+
+        if status.error and status.status not in {"not_created"}:
+            st.warning(status.error)
+        if status.image:
+            st.caption(f"Image: {status.image}")
+
+        with st.expander("Docker run command", expanded=False):
+            st.code(" ".join(manager.redacted_run_command()))
+
+        action_cols = st.columns(4)
+        if action_cols[0].button("Docker login", width="stretch"):
+            _show_nim_command_result(manager.login_registry(), "Docker login to nvcr.io succeeded.")
+        if action_cols[1].button("Pull image", width="stretch"):
+            _show_nim_command_result(manager.pull_image(), "NIM image pull finished.")
+        if action_cols[2].button("Start NIM", width="stretch", type="primary"):
+            _show_nim_command_result(manager.start_container(), "NIM container start requested.")
+        if action_cols[3].button("Stop NIM", width="stretch"):
+            _show_nim_command_result(manager.stop_container(), "NIM container stopped.")
+
+        if st.button("Show NIM logs", width="stretch"):
+            logs = manager.logs(tail=120)
+            _show_nim_command_result(logs, "NIM logs loaded.")
+
+    return nim_config
 
 
 def _paper_year_from_result(result: object) -> int | None:
@@ -450,16 +665,7 @@ def _paper_year_from_result(result: object) -> int | None:
 
 
 def _title_from_parsed_text(text: str, max_lines: int = 5) -> str:
-    lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines()]
-    lines = [line for line in lines if line and not re.match(r"^\d+$", line)]
-    if not lines:
-        return ""
-    title_lines = []
-    for line in lines[:max_lines]:
-        if re.search(r"\b(abstract|presented at|author|university|department)\b", line, flags=re.IGNORECASE):
-            break
-        title_lines.append(line)
-    return " ".join(title_lines or lines[:1])[:240]
+    return EntityExtractor._paper_title_from_text(text)[:240]
 
 
 def _format_duration(total_seconds: float | int | None) -> str:
@@ -521,6 +727,7 @@ def _save_successful_extraction(
         temporal_coverage=result.temporal_coverage,
         mathematical_content=result.mathematical_content,
         raw_response=result.raw_response,
+        error_message=extraction_failure_reason(result),
         duration_seconds=duration,
     )
     return canonical_paper_id, result_id
@@ -738,6 +945,10 @@ def _run_pdf_batch_extraction(
                     paper_text=parsed.text,
                     pdf_path=pdf_path,
                 )
+                failure_reason = extraction_failure_reason(result)
+                if failure_reason:
+                    batch_errors.append(f"{pdf_name}: {failure_reason}")
+                    continue
                 added_vocabulary = _sync_vocabulary_from_concepts(result.concepts)
                 batch_results.append(
                     {
@@ -972,6 +1183,53 @@ with st.sidebar:
         index=providers.index(llm_router.default_provider) if llm_router.default_provider in providers else 0,
         help="Select which LLM provider to use for extraction",
     )
+    selected_provider_config = llm_router.provider_config(selected_provider)
+    selected_provider_is_nvidia = selected_provider_config.provider_type == "nvidia"
+    selected_provider_is_hosted_nvidia = (
+        selected_provider_is_nvidia
+        and "integrate.api.nvidia.com" in selected_provider_config.base_url.lower()
+    )
+
+    if selected_provider_is_hosted_nvidia:
+        st.caption("NVIDIA NIM keys are used only from the environment or this Streamlit session.")
+        env_key_name = "NVIDIA_API_KEY" if os.getenv("NVIDIA_API_KEY") else "NGC_API_KEY"
+        env_key = os.getenv("NVIDIA_API_KEY") or os.getenv("NGC_API_KEY")
+        session_key = st.session_state.get("nvidia_api_key")
+        key_generation = int(st.session_state.get("nvidia_api_key_generation", 0))
+        pasted_key = st.text_input(
+            "NVIDIA API Key",
+            type="password",
+            value="",
+            key=f"nvidia_api_key_input_{key_generation}",
+            help=(
+                "Optional. Paste a key for this UI session only. "
+                "It is not written to config.yaml or any project file."
+            ),
+        ).strip()
+        if pasted_key:
+            st.session_state.nvidia_api_key = pasted_key
+            selected_provider_config.api_key = pasted_key
+            st.success("Using pasted NVIDIA key for this Streamlit session.")
+        elif session_key:
+            selected_provider_config.api_key = str(session_key)
+            st.info("Using NVIDIA key stored in this Streamlit session.")
+        elif env_key:
+            selected_provider_config.api_key = env_key
+            st.success(f"Using {env_key_name} from the environment or local .env.")
+        else:
+            st.warning("No NVIDIA API key configured yet. Set NVIDIA_API_KEY/NGC_API_KEY or paste one above.")
+
+        if session_key and st.button("Forget session NVIDIA key", width="stretch"):
+            st.session_state.pop("nvidia_api_key", None)
+            st.session_state.nvidia_api_key_generation = key_generation + 1
+            selected_provider_config.api_key = env_key
+            st.rerun()
+    elif selected_provider_is_nvidia:
+        st.caption(
+            "Self-hosted NVIDIA NIM selected. PaperKG will call the configured local /v1 endpoint; "
+            "your NGC key is not sent to localhost."
+        )
+        _render_nim_container_controls(selected_provider_config)
 
     refresh_models = st.button("Refresh models manually")
     provider_models = llm_router.provider_model_options(selected_provider, refresh=refresh_models)
@@ -982,6 +1240,15 @@ with st.sidebar:
         index=provider_models.index(default_model) if default_model in provider_models else 0,
         help="Choose the model that should answer the extraction prompt",
     )
+    if selected_provider_is_nvidia:
+        custom_nvidia_model = st.text_input(
+            "Custom NVIDIA model ID (optional)",
+            value="",
+            placeholder="moonshotai/kimi-k2.6",
+            help="Use this when NVIDIA adds or renames a model before config.yaml is updated.",
+        ).strip()
+        if custom_nvidia_model:
+            selected_model = custom_nvidia_model
     recommended_settings = llm_router.recommended_settings(selected_provider, selected_model, refresh=False)
     settings_key = re.sub(r"[^A-Za-z0-9_]+", "_", f"v3_{selected_provider}_{selected_model}")
 
@@ -1046,6 +1313,14 @@ with st.sidebar:
         step=60,
         help="How long Streamlit waits for a local model response before aborting the request.",
     )
+    if selected_provider_is_nvidia and st.button("Test NVIDIA/NIM connection", width="stretch"):
+        if _nvidia_preflight_ok(
+            llm_router,
+            selected_provider,
+            selected_model,
+            request_timeout_seconds,
+        ):
+            st.success("NVIDIA/NIM connection works.")
 
     st.divider()
 
@@ -1136,11 +1411,14 @@ with tabs[0]:
     if st.session_state.get("loaded_paper_text"):
         parse_debug = st.session_state.get("last_parse_debug", {})
         metadata = parse_debug.get("parsed_metadata", {}) if isinstance(parse_debug, dict) else {}
+        loaded_title = _title_from_parsed_text(str(st.session_state.get("loaded_paper_text") or ""))
+        title_suffix = f" | title={loaded_title[:90]}" if loaded_title else ""
         st.info(
             f"Current input: {st.session_state.get('loaded_paper_id', 'document')} | "
             f"{st.session_state.get('loaded_char_count', 0):,} chars | "
             f"parser={parse_debug.get('selected_parser', 'n/a') if isinstance(parse_debug, dict) else 'n/a'} | "
             f"method={metadata.get('extraction_method', 'n/a') if isinstance(metadata, dict) else 'n/a'}"
+            f"{title_suffix}"
         )
         if st.button("Clear loaded input", width="content"):
             _clear_loaded_input()
@@ -1150,6 +1428,7 @@ with tabs[0]:
 
     paper_text = ""
     paper_id = ""
+    selected_input_source: str | None = None
 
     with col1:
         st.subheader("Input Text")
@@ -1173,10 +1452,13 @@ with tabs[0]:
             uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
             if uploaded_file:
-                paper_id = st.text_input(
+                selected_input_source = f"upload:{uploaded_file.name}:{uploaded_file.size}"
+                paper_id = _paper_id_input(
                     "Paper ID",
-                    value=_default_paper_id_from_pdf(uploaded_file.name),
-                    help="Stable ID used to group extraction history and later KG records.",
+                    _default_paper_id_from_pdf(uploaded_file.name),
+                    selected_input_source,
+                    "phase3_upload_paper_id",
+                    "Stable ID used to group extraction history and later KG records.",
                 )
 
                 file_bytes = uploaded_file.getvalue()
@@ -1213,10 +1495,13 @@ with tabs[0]:
 
         elif input_method == "PDF URL":
             pdf_url = st.text_input("PDF URL")
-            paper_id = st.text_input(
+            selected_input_source = f"url:{pdf_url.strip()}"
+            paper_id = _paper_id_input(
                 "Paper ID",
-                value="pdf_from_url",
-                help="Stable ID used to group extraction history and later KG records.",
+                _default_paper_id_from_pdf(pdf_url) if pdf_url.strip() else "pdf_from_url",
+                selected_input_source,
+                "phase3_pdf_url_paper_id",
+                "Stable ID used to group extraction history and later KG records.",
             )
 
             if st.button("Download PDF", width="stretch"):
@@ -1262,12 +1547,14 @@ with tabs[0]:
                 pdf_options = {label: path for label, path in harvested_pdfs}
                 selected_pdf_name = st.selectbox("Select PDF", options=list(pdf_options.keys()), key="phase3_single_harvest_pdf")
                 selected_pdf_path = pdf_options[selected_pdf_name]
+                selected_input_source = str(selected_pdf_path)
 
-                single_paper_id = st.text_input(
+                single_paper_id = _paper_id_input(
                     "Paper ID",
-                    value=_default_paper_id_from_pdf(selected_pdf_name),
-                    key="phase3_single_harvest_paper_id",
-                    help="Stable ID used to group extraction history and later KG records.",
+                    _default_paper_id_from_pdf(selected_pdf_name),
+                    selected_input_source,
+                    "phase3_single_harvest_paper_id",
+                    "Stable ID used to group extraction history and later KG records.",
                 )
 
                 if st.button("Load and Parse PDF", width="stretch"):
@@ -1292,10 +1579,23 @@ with tabs[0]:
             else:
                 st.warning("No harvested PDFs found. Use Harvest tab to download PDFs first.")
 
-        if not paper_text and st.session_state.get("loaded_paper_text"):
-            paper_text = st.session_state.loaded_paper_text
-            paper_id = st.session_state.get("loaded_paper_id", paper_id or "document")
-            st.info(f"Using loaded parsed text for {paper_id}.")
+        loaded_path = str(st.session_state.get("last_pdf_path") or "")
+        selected_source_changed = bool(selected_input_source and loaded_path and str(selected_input_source) != loaded_path)
+        if not paper_text and st.session_state.get("loaded_paper_text") and not selected_source_changed:
+            loaded_paper_id = str(st.session_state.get("loaded_paper_id") or "")
+            requested_paper_id = str(paper_id or "").strip()
+            if _loaded_text_can_be_reused(requested_paper_id, loaded_paper_id):
+                paper_text = st.session_state.loaded_paper_text
+                paper_id = loaded_paper_id or paper_id or "document"
+                st.info(f"Using loaded parsed text for {paper_id}.")
+            else:
+                st.warning(
+                    "Loaded parsed text belongs to "
+                    f"{loaded_paper_id}, but the current Paper ID is {requested_paper_id}. "
+                    "Clear the loaded input or load/parse the selected paper before extraction."
+                )
+        elif selected_source_changed:
+            st.info("Selected input changed. Load/parse it before extraction.")
 
     with col2:
         st.subheader("Extraction Options")
@@ -1336,6 +1636,13 @@ with tabs[0]:
                 }
 
                 try:
+                    if not _nvidia_preflight_ok(
+                        llm_router,
+                        selected_provider,
+                        selected_model,
+                        request_timeout_seconds,
+                    ):
+                        st.stop()
                     result = pipeline.process(
                         paper_id or "document",
                         paper_text,
@@ -1366,19 +1673,26 @@ with tabs[0]:
                             pdf_path=st.session_state.get("last_pdf_path"),
                         )
                         previous_runs = metadata_db.get_paper_extractions(canonical_paper_id, limit=2)
-                    added_vocabulary = _sync_vocabulary_from_concepts(result.concepts)
+                    failure_reason = extraction_failure_reason(result)
+                    added_vocabulary = [] if failure_reason else _sync_vocabulary_from_concepts(result.concepts)
                     previous_snapshot = _snapshot_extraction_result(previous_runs[1]) if len(previous_runs) > 1 else None
 
-                    st.success(
-                        f"Extraction complete. Result ID: {result_id}, Duration: {_format_duration(duration)}"
-                    )
+                    if failure_reason:
+                        st.error(
+                            f"Extraction failed. Result ID: {result_id}, Duration: {_format_duration(duration)}. "
+                            f"{failure_reason}"
+                        )
+                    else:
+                        st.success(
+                            f"Extraction complete. Result ID: {result_id}, Duration: {_format_duration(duration)}"
+                        )
                     if added_vocabulary:
                         st.info(f"Vocabulary grew by {len(added_vocabulary)} concept(s): {', '.join(added_vocabulary[:12])}")
                     st.session_state.last_extraction_previous = previous_snapshot
                     st.session_state.last_extract_paper_id = canonical_paper_id
 
                     claim_texts = [claim.get("statement", "") for claim in result.claims if claim.get("statement")]
-                    if run_conflict_detection and len(claim_texts) >= 2:
+                    if not failure_reason and run_conflict_detection and len(claim_texts) >= 2:
                         detector = init_conflict_detector()
                         st.session_state.last_conflict_analyses = detector.analyze_claims_batch(
                             claim_texts,
@@ -1688,11 +2002,12 @@ with tabs[1]:
         )
         selected_pdf_path = pdf_options[selected_pdf_name]
         selected_path = Path(selected_pdf_path)
-        selected_paper_id = st.text_input(
+        selected_paper_id = _paper_id_input(
             "Paper ID for parsing/extraction",
-            value=_default_paper_id_from_pdf(selected_pdf_name),
-            key="pdf_library_paper_id",
-            help="Stable ID used to group extraction history and later KG records.",
+            _default_paper_id_from_pdf(selected_pdf_name),
+            str(selected_pdf_path),
+            "pdf_library_paper_id",
+            "Stable ID used to group extraction history and later KG records.",
         )
 
         stat_cols = st.columns(3)
@@ -1880,7 +2195,9 @@ with tabs[4]:
         else:
             with st.spinner("Searching papers..."):
                 try:
-                    results = asyncio.run(_search_phase1_papers(harvest_query.strip(), harvest_sources, harvest_limit))
+                    results, search_warnings = asyncio.run(
+                        _search_phase1_papers(harvest_query.strip(), harvest_sources, harvest_limit)
+                    )
                     st.session_state.harvest_results = results
 
                     if save_to_db:
@@ -1891,6 +2208,8 @@ with tabs[4]:
                         downloaded, skipped, failed = asyncio.run(_download_search_results(results))
                         st.info(f"PDF download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}")
 
+                    for warning in search_warnings:
+                        st.warning(warning)
                     st.success(f"Found {len(results)} unique papers")
                 except Exception as exc:
                     st.error(f"Search failed: {exc}")

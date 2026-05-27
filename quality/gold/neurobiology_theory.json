@@ -1,0 +1,118 @@
+{
+  "paper_id": "arxiv:q-bio/0612009",
+  "expected": {
+    "concepts": [
+      {"label": "Thalamocortical system", "entity_type": "System"},
+      {"label": "Mirror neurons", "entity_type": "Phenomenon"},
+      {"label": "von Neumann entropy", "entity_type": "Theory"},
+      {"label": "Quantum mutual information", "entity_type": "Metric"},
+      {"label": "Envariance", "entity_type": "Theory"},
+      {"label": "Einselection", "entity_type": "Phenomenon"},
+      {"label": "Pointer states", "entity_type": "DomainConcept"},
+      {"label": "Schmidt decomposition", "entity_type": "MethodFamily"},
+      {"label": "Temporal entanglement", "entity_type": "Phenomenon"},
+      {"label": "Quantum temporal imaging", "entity_type": "MethodFamily"},
+      {"label": "Two-photon vector soliton", "entity_type": "Phenomenon"},
+      {"label": "Reference picture selection", "entity_type": "MethodFamily"},
+      {"label": "Synesthesia", "entity_type": "Phenomenon"},
+      {"label": "Cross-domain mapping", "entity_type": "DomainConcept"}
+    ],
+    "methods": [
+      {"label": "Inverse kinematic algorithm", "entity_type": "Algorithm", "source_type": "paper_contribution"},
+      {"label": "Cross-phase modulation", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "Directed Acyclic Graph", "entity_type": "Algorithm", "source_type": "reviewed_method"}
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:von-neumann-entropy",
+        "relation_type": "USED_IN",
+        "object_id": "concept:quantum-mutual-information"
+      },
+      {
+        "subject_id": "concept:schmidt-decomposition",
+        "relation_type": "USED_IN",
+        "object_id": "concept:envariance"
+      },
+      {
+        "subject_id": "concept:einselection",
+        "relation_type": "IMPLIES",
+        "object_id": "concept:pointer-states"
+      },
+      {
+        "subject_id": "concept:two-photon-vector-soliton",
+        "relation_type": "CAUSES",
+        "object_id": "concept:temporal-entanglement"
+      },
+      {
+        "subject_id": "concept:quantum-temporal-imaging",
+        "relation_type": "USES",
+        "object_id": "concept:temporal-entanglement"
+      },
+      {
+        "subject_id": "concept:cross-phase-modulation",
+        "relation_type": "USED_FOR",
+        "object_id": "concept:temporal-entanglement"
+      },
+      {
+        "subject_id": "concept:directed-acyclic-graph",
+        "relation_type": "USED_IN",
+        "object_id": "concept:reference-picture-selection"
+      }
+    ],
+    "claims": [
+      {
+        "statement": "The thalamocortical system supports conscious experience through integrative dynamics.",
+        "negated": false
+      },
+      {
+        "statement": "Quantum information principles are used as a theoretical analogy for neural information processing.",
+        "negated": false
+      }
+    ]
+  },
+  "prediction": {
+    "paper_id": "arxiv:q-bio/0612009",
+    "concepts": [
+      {"label": "Thalamocortical system", "entity_type": "System", "canonical_id": "concept:thalamocortical-system", "review_status": "approved"},
+      {"label": "Mirror neurons", "entity_type": "Phenomenon", "canonical_id": "concept:mirror-neurons", "review_status": "approved"},
+      {"label": "von Neumann entropy", "entity_type": "Theory", "canonical_id": "concept:von-neumann-entropy", "review_status": "approved"},
+      {"label": "Quantum mutual information", "entity_type": "Metric", "canonical_id": "concept:quantum-mutual-information", "review_status": "approved"},
+      {"label": "Envariance", "entity_type": "Theory", "canonical_id": "concept:envariance", "review_status": "approved"},
+      {"label": "Einselection", "entity_type": "Phenomenon", "canonical_id": "concept:einselection", "review_status": "approved"},
+      {"label": "Pointer states", "entity_type": "DomainConcept", "canonical_id": "concept:pointer-states", "review_status": "approved"},
+      {"label": "Schmidt decomposition", "entity_type": "MethodFamily", "canonical_id": "concept:schmidt-decomposition", "review_status": "approved"},
+      {"label": "Temporal entanglement", "entity_type": "Phenomenon", "canonical_id": "concept:temporal-entanglement", "review_status": "approved"},
+      {"label": "Quantum temporal imaging", "entity_type": "MethodFamily", "canonical_id": "concept:quantum-temporal-imaging", "review_status": "approved"},
+      {"label": "Two-photon vector soliton", "entity_type": "Phenomenon", "canonical_id": "concept:two-photon-vector-soliton", "review_status": "approved"},
+      {"label": "Reference picture selection", "entity_type": "MethodFamily", "canonical_id": "concept:reference-picture-selection", "review_status": "approved"},
+      {"label": "Synesthesia", "entity_type": "Phenomenon", "canonical_id": "concept:synesthesia", "review_status": "approved"},
+      {"label": "Cross-domain mapping", "entity_type": "DomainConcept", "canonical_id": "concept:cross-domain-mapping", "review_status": "approved"}
+    ],
+    "methods": [
+      {"label": "Inverse kinematic algorithm", "entity_type": "Algorithm", "source_type": "paper_contribution", "canonical_id": "concept:inverse-kinematic-algorithm", "review_status": "approved"},
+      {"label": "Cross-phase modulation", "entity_type": "Algorithm", "source_type": "reviewed_method", "canonical_id": "concept:cross-phase-modulation", "review_status": "approved"},
+      {"label": "Directed Acyclic Graph", "entity_type": "Algorithm", "source_type": "reviewed_method", "canonical_id": "concept:directed-acyclic-graph", "review_status": "approved"}
+    ],
+    "relations": [
+      {"subject_id": "concept:von-neumann-entropy", "relation_type": "USED_IN", "object_id": "concept:quantum-mutual-information"},
+      {"subject_id": "concept:schmidt-decomposition", "relation_type": "USED_IN", "object_id": "concept:envariance"},
+      {"subject_id": "concept:einselection", "relation_type": "IMPLIES", "object_id": "concept:pointer-states"},
+      {"subject_id": "concept:two-photon-vector-soliton", "relation_type": "CAUSES", "object_id": "concept:temporal-entanglement"},
+      {"subject_id": "concept:quantum-temporal-imaging", "relation_type": "USES", "object_id": "concept:temporal-entanglement"},
+      {"subject_id": "concept:cross-phase-modulation", "relation_type": "USED_FOR", "object_id": "concept:temporal-entanglement"},
+      {"subject_id": "concept:directed-acyclic-graph", "relation_type": "USED_IN", "object_id": "concept:reference-picture-selection"}
+    ],
+    "claims": [
+      {
+        "statement": "The thalamocortical system supports conscious experience through integrative dynamics.",
+        "negated": false,
+        "attributed_to": "this_paper"
+      },
+      {
+        "statement": "Quantum information principles are used as a theoretical analogy for neural information processing.",
+        "negated": false,
+        "attributed_to": "this_paper"
+      }
+    ]
+  }
+}

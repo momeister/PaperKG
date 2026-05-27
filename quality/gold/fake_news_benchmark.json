@@ -1,0 +1,262 @@
+{
+  "paper_id": "arxiv:1905.04749",
+  "expected": {
+    "concepts": [
+      {"label": "Dataset Bias", "entity_type": "Phenomenon"},
+      {"label": "Pre-trained Language Models", "entity_type": "MethodFamily"},
+      {"label": "LIAR", "entity_type": "Dataset"},
+      {"label": "Fake or Real News", "entity_type": "Dataset"},
+      {"label": "Combined Corpus", "entity_type": "Dataset"},
+      {"label": "Accuracy", "entity_type": "Metric"},
+      {"label": "Precision", "entity_type": "Metric"},
+      {"label": "Recall", "entity_type": "Metric"},
+      {"label": "F1-score", "entity_type": "Metric"},
+      {"label": "BERT", "entity_type": "ModelArchitecture"},
+      {"label": "RoBERTa", "entity_type": "ModelArchitecture"},
+      {"label": "DistilBERT", "entity_type": "ModelArchitecture"},
+      {"label": "C-LSTM", "entity_type": "ModelArchitecture"}
+    ],
+    "concept_candidates": [
+      {"label": "Transformer", "entity_type": "DomainConcept"},
+      {"label": "False Positive", "entity_type": "Metric"},
+      {"label": "False Negative", "entity_type": "DomainConcept"}
+    ],
+    "methods": [
+      {"label": "Fake News Detection", "entity_type": "Task", "source_type": "paper_contribution"},
+      {"label": "SVM", "entity_type": "Algorithm", "source_type": "baseline"},
+      {"label": "Naive Bayes", "entity_type": "Algorithm", "source_type": "baseline"},
+      {"label": "AdaBoost", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "GloVe", "entity_type": "Algorithm", "source_type": "reviewed_method"},
+      {"label": "Latent Dirichlet Allocation", "entity_type": "Algorithm", "source_type": "reviewed_method"}
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:bert",
+        "relation_type": "IS_A",
+        "object_id": "concept:pre-trained-language-models"
+      },
+      {
+        "subject_id": "concept:distilbert",
+        "relation_type": "DERIVED_FROM",
+        "object_id": "concept:bert"
+      },
+      {
+        "subject_id": "concept:distilbert",
+        "relation_type": "USES",
+        "object_id": "concept:knowledge-distillation"
+      },
+      {
+        "subject_id": "concept:bert",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:liar"
+      },
+      {
+        "subject_id": "concept:roberta",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:combined-corpus"
+      },
+      {
+        "subject_id": "concept:adaboost",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:combined-corpus"
+      }
+    ],
+    "claims": [
+      {
+        "statement": "Advanced pre-trained language models outperform both traditional and deep learning models for fake news detection.",
+        "negated": false
+      },
+      {
+        "statement": "Pre-trained models achieve high performance with very small training datasets compared to traditional or deep learning models.",
+        "negated": false
+      }
+    ]
+  },
+  "prediction": {
+    "paper_id": "arxiv:1905.04749",
+    "concepts": [
+      {
+        "label": "Dataset Bias",
+        "entity_type": "Phenomenon",
+        "canonical_id": "concept:dataset-bias",
+        "review_status": "approved"
+      },
+      {
+        "label": "Pre-trained Language Models",
+        "entity_type": "MethodFamily",
+        "canonical_id": "concept:pre-trained-language-models",
+        "review_status": "approved"
+      },
+      {
+        "label": "LIAR",
+        "entity_type": "Dataset",
+        "canonical_id": "concept:liar",
+        "review_status": "approved"
+      },
+      {
+        "label": "Fake or Real News",
+        "entity_type": "Dataset",
+        "canonical_id": "concept:fake-or-real-news",
+        "review_status": "approved"
+      },
+      {
+        "label": "Combined Corpus",
+        "entity_type": "Dataset",
+        "canonical_id": "concept:combined-corpus",
+        "review_status": "approved"
+      },
+      {
+        "label": "Accuracy",
+        "entity_type": "Metric",
+        "canonical_id": "concept:accuracy",
+        "review_status": "approved"
+      },
+      {
+        "label": "Precision",
+        "entity_type": "Metric",
+        "canonical_id": "concept:precision",
+        "review_status": "approved"
+      },
+      {
+        "label": "Recall",
+        "entity_type": "Metric",
+        "canonical_id": "concept:recall",
+        "review_status": "approved"
+      },
+      {
+        "label": "F1-score",
+        "entity_type": "Metric",
+        "canonical_id": "concept:f1-score",
+        "review_status": "approved"
+      },
+      {
+        "label": "BERT",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:bert",
+        "review_status": "approved"
+      },
+      {
+        "label": "RoBERTa",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:roberta",
+        "review_status": "approved"
+      },
+      {
+        "label": "DistilBERT",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:distilbert",
+        "review_status": "approved"
+      },
+      {
+        "label": "C-LSTM",
+        "entity_type": "ModelArchitecture",
+        "canonical_id": "concept:c-lstm",
+        "review_status": "approved"
+      }
+    ],
+    "concept_candidates": [
+      {"label": "Transformer", "entity_type": "DomainConcept", "review_status": "pending"},
+      {"label": "False Positive", "entity_type": "Metric", "review_status": "pending"},
+      {"label": "False Negative", "entity_type": "DomainConcept", "review_status": "pending"}
+    ],
+    "methods": [
+      {
+        "label": "Fake News Detection",
+        "entity_type": "Task",
+        "canonical_id": "concept:fake-news-detection",
+        "source_type": "paper_contribution"
+      },
+      {
+        "label": "SVM",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:svm",
+        "source_type": "baseline"
+      },
+      {
+        "label": "Naive Bayes",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:naive-bayes",
+        "source_type": "baseline"
+      },
+      {
+        "label": "AdaBoost",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:adaboost",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "GloVe",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:glove",
+        "source_type": "reviewed_method"
+      },
+      {
+        "label": "Latent Dirichlet Allocation",
+        "entity_type": "Algorithm",
+        "canonical_id": "concept:latent-dirichlet-allocation",
+        "source_type": "reviewed_method"
+      }
+    ],
+    "relations": [
+      {
+        "subject_id": "concept:bert",
+        "relation_type": "IS_A",
+        "object_id": "concept:pre-trained-language-models",
+        "review_status": "approved",
+        "evidence_span": "BERT is a pre-trained language model"
+      },
+      {
+        "subject_id": "concept:distilbert",
+        "relation_type": "DERIVED_FROM",
+        "object_id": "concept:bert",
+        "review_status": "approved",
+        "evidence_span": "DistilBERT is a distilled version of BERT"
+      },
+      {
+        "subject_id": "concept:distilbert",
+        "relation_type": "USES",
+        "object_id": "concept:knowledge-distillation",
+        "review_status": "approved",
+        "evidence_span": "DistilBERT uses knowledge distillation"
+      },
+      {
+        "subject_id": "concept:bert",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:liar",
+        "review_status": "approved",
+        "evidence_span": "BERT was evaluated on the LIAR dataset"
+      },
+      {
+        "subject_id": "concept:roberta",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:combined-corpus",
+        "review_status": "approved",
+        "evidence_span": "RoBERTa was evaluated on the Combined Corpus"
+      },
+      {
+        "subject_id": "concept:adaboost",
+        "relation_type": "EVALUATED_ON",
+        "object_id": "concept:combined-corpus",
+        "review_status": "approved",
+        "evidence_span": "AdaBoost was evaluated on the Combined Corpus"
+      }
+    ],
+    "claims": [
+      {
+        "statement": "Advanced pre-trained language models outperform both traditional and deep learning models for fake news detection.",
+        "claim_type": "finding",
+        "evidence_type": "experimental",
+        "negated": false,
+        "attributed_to": "this_paper"
+      },
+      {
+        "statement": "Pre-trained models achieve high performance with very small training datasets compared to traditional or deep learning models.",
+        "claim_type": "finding",
+        "evidence_type": "experimental",
+        "negated": false,
+        "attributed_to": "this_paper"
+      }
+    ],
+    "quality_warnings": []
+  }
+}

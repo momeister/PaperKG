@@ -11,11 +11,13 @@ harvester:
 
   # Semantic Scholar API
   semantic_scholar:
-    api_key: null  # Set via environment variable or config
+    api_key: null  # Prefer SEMANTIC_SCHOLAR_API_KEY or S2_API_KEY in .env
     base_url_graph: "https://api.semanticscholar.org/graph/v1"
     base_url_recommendations: "https://api.semanticscholar.org/recommendations/v1"
-    requests_per_second: 10.0
+    requests_per_second: 1.0
     timeout_seconds: 30
+    max_retries: 3
+    initial_retry_delay_seconds: 2.0
     bubble_extension: true  # Enable automatic recommended papers discovery
     bubble_extension_count: 30  # How many recommended papers to fetch
 
@@ -72,7 +74,7 @@ llm:
   # Default provider for all LLM operations
   default_provider: "lm_studio"
 
-  # Supported providers: ollama, lm_studio, openai, openai_compatible
+  # Supported providers: ollama, lm_studio, openai, openai_compatible, gemini, nvidia
   providers:
     # Ollama - Local open-source models
     ollama:
@@ -137,6 +139,76 @@ llm:
       context_size: 128000
       repeat_penalty: null  # OpenAI doesn't support repeat_penalty
 
+    # Google Gemini API - OpenAI-compatible Gemini Developer API endpoint
+    # Keep the real key in GEMINI_API_KEY (shell env or local .env), never in config.yaml.
+    gemini:
+      provider_type: "openai_compatible"
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+      api_key_env: "GEMINI_API_KEY"
+      timeout_seconds: 900
+      models:
+        - "gemini-3.1-flash-lite"
+        - "gemini-3.1-flash-lite-preview"
+        - "gemini-3-flash-preview"
+
+      model: "gemini-3.1-flash-lite"
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 16384
+      context_size: 1048576
+      repeat_penalty: null
+      extra_options:
+        force_response_format: true
+        omit_extra_body: true
+
+    # NVIDIA NIM / build.nvidia.com - OpenAI-compatible hosted models
+    # Keep the real key in NVIDIA_API_KEY (shell env or local .env), never in config.yaml.
+    nvidia:
+      provider_type: "nvidia"
+      base_url: "https://integrate.api.nvidia.com/v1"
+      api_key_env: "NVIDIA_API_KEY"
+      timeout_seconds: 900
+      models:
+        - "moonshotai/kimi-k2.6"
+        - "moonshotai/kimi-k2-thinking"
+        - "qwen/qwen3.5-397b-a17b"
+        - "minimaxai/minimax-m2.7"
+        - "nvidia/nemotron-3-nano-30b-a3b"
+
+      model: "moonshotai/kimi-k2.6"
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 16384
+      context_size: 256000
+      repeat_penalty: null
+      extra_options:
+        omit_extra_body: true
+        include_reasoning: false
+        chat_template_kwargs:
+          thinking: false
+
+    # NVIDIA self-hosted NIM - run the model locally, then point PaperKG here.
+    # The NGC/NVIDIA key is used by Docker/NIM to pull and cache the model, not sent to localhost.
+    nvidia_local_nim:
+      provider_type: "nvidia"
+      base_url: "http://localhost:8000/v1"
+      api_key: null
+      timeout_seconds: 1800
+      models:
+        - "moonshotai/kimi-k2.6"
+
+      model: "moonshotai/kimi-k2.6"
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 16384
+      context_size: 256000
+      repeat_penalty: null
+      extra_options:
+        omit_extra_body: true
+        include_reasoning: false
+        chat_template_kwargs:
+          thinking: false
+
     # Generic OpenAI-compatible API (e.g., Ollama exposed via proxy, DeepSeek, etc.)
     custom_api:
       provider_type: "openai_compatible"
@@ -152,6 +224,19 @@ llm:
       max_tokens: 8192
       context_size: 16384
       repeat_penalty: 1.05
+
+  # Local Docker controls for the self-hosted NVIDIA NIM provider.
+  nim_container:
+    container_name: "sciencekg-kimi-k2-6-nim"
+    image: "nvcr.io/nim/moonshotai/kimi-k2.6:1.7.0-variant"
+    host: "localhost"
+    host_port: 8000
+    container_port: 8000
+    cache_dir: "~/.cache/nim"
+    shm_size: "32GB"
+    gpus: "all"
+    runtime: "nvidia"
+    env_key_name: "NGC_API_KEY"
 
   # Entity Extraction
   entity_extraction:

@@ -9,8 +9,10 @@ from extraction.entity_extractor import (
     CLAIMS_EXTRACTION_PROMPT,
     EntityExtractor,
     ExtractionResult,
+    ParsedLLMResponse,
     deduplicate_methods,
     enrich_method_domains,
+    extraction_failure_reason,
     filter_concepts,
     safe_llm_extract,
 )
@@ -28,6 +30,7 @@ from extraction.batch_processor import BatchProcessor
 from parsing.parser_router import ParserRouter, ParserType, ParserCharacteristics
 from parsing.marker_parser import MarkerParser
 from query.llm_router import LLMRouter, ProviderConfig, GenerationSettings
+from query.nim_container import NIMContainerConfig, NIMContainerManager
 
 
 class FakeLLMRouter:
@@ -104,6 +107,96 @@ llm:
 
         assert router.provider_model_options("ollama") == ["qwen3.6-35b", "llama3.1:8b"]
         assert router.provider_default_model("ollama") == "qwen3.6-35b"
+
+    def test_from_config_file_loads_nvidia_key_from_env(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+llm:
+  default_provider: nvidia
+  providers:
+    nvidia:
+      provider_type: nvidia
+      base_url: https://integrate.api.nvidia.com/v1
+      api_key_env: NVIDIA_API_KEY
+      model: moonshotai/kimi-k2.6
+""".strip(),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+
+        router = LLMRouter.from_config_file(config_path)
+
+        assert router.provider_config("nvidia").api_key == "nvapi-test"
+        assert router.provider_default_model("nvidia") == "moonshotai/kimi-k2.6"
+
+    def test_from_config_file_uses_ngc_key_fallback_for_nvidia(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+llm:
+  default_provider: nvidia
+  providers:
+    nvidia:
+      provider_type: nvidia
+      base_url: https://integrate.api.nvidia.com/v1
+      api_key_env: NVIDIA_API_KEY
+      model: moonshotai/kimi-k2.6
+""".strip(),
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+        monkeypatch.setenv("NGC_API_KEY", "nvapi-ngc-test")
+
+        router = LLMRouter.from_config_file(config_path)
+
+        assert router.provider_config("nvidia").api_key == "nvapi-ngc-test"
+
+    def test_from_config_file_keeps_ngc_key_out_of_self_hosted_nvidia(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+llm:
+  default_provider: nvidia_local_nim
+  providers:
+    nvidia_local_nim:
+      provider_type: nvidia
+      base_url: http://localhost:8000/v1
+      model: moonshotai/kimi-k2.6
+      api_key: null
+""".strip(),
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+        monkeypatch.setenv("NGC_API_KEY", "nvapi-ngc-test")
+
+        router = LLMRouter.from_config_file(config_path)
+
+        assert router.provider_config("nvidia_local_nim").api_key is None
+
+    def test_from_config_file_loads_gemini_key_from_env(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+llm:
+  default_provider: gemini
+  providers:
+    gemini:
+      provider_type: openai_compatible
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GEMINI_API_KEY
+      model: gemini-3.1-flash-lite
+      models:
+        - gemini-3.1-flash-lite
+""".strip(),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+
+        router = LLMRouter.from_config_file(config_path)
+
+        assert router.provider_config("gemini").api_key == "gemini-test-key"
+        assert router.provider_default_model("gemini") == "gemini-3.1-flash-lite"
 
     def test_discover_provider_models_from_ollama(self):
         response = MagicMock()
@@ -326,6 +419,180 @@ llm:
         payload = client.post.call_args.kwargs["json"]
         assert payload["response_format"] == {"type": "json_object"}
 
+    def test_gemini_endpoint_uses_openai_compat_without_extra_body(self):
+        response = MagicMock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "usage": {"completion_tokens": 4},
+        }
+        response.raise_for_status.return_value = None
+        client = MagicMock()
+        client.post.return_value = response
+        router = LLMRouter(
+            providers={
+                "gemini": ProviderConfig(
+                    provider_type="openai_compatible",
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                    api_key="gemini-test-key",
+                    settings=GenerationSettings(
+                        model="gemini-3.1-flash-lite",
+                        repeat_penalty=None,
+                        extra={"json_mode": True, "force_response_format": True, "omit_extra_body": True},
+                    ),
+                )
+            },
+            default_provider="gemini",
+            client=client,
+        )
+
+        text = router.chat([{"role": "user", "content": "JSON"}])
+
+        call = client.post.call_args
+        payload = call.kwargs["json"]
+        headers = call.kwargs["headers"]
+        assert call.args[0] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        assert text == '{"ok": true}'
+        assert headers["Authorization"] == "Bearer gemini-test-key"
+        assert payload["model"] == "gemini-3.1-flash-lite"
+        assert payload["response_format"] == {"type": "json_object"}
+        assert "extra_body" not in payload
+
+    def test_nvidia_endpoint_omits_extra_body_and_uses_bearer_key(self):
+        response = MagicMock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "usage": {"completion_tokens": 4},
+        }
+        response.raise_for_status.return_value = None
+        client = MagicMock()
+        client.post.return_value = response
+        router = LLMRouter(
+            providers={
+                "nvidia": ProviderConfig(
+                    provider_type="nvidia",
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    api_key="nvapi-test",
+                    settings=GenerationSettings(
+                        model="moonshotai/kimi-k2.6",
+                        repeat_penalty=None,
+                        extra={
+                            "json_mode": True,
+                            "include_reasoning": False,
+                            "response_format": {"type": "json_object"},
+                            "chat_template_kwargs": {"thinking": False, "enable_thinking": False},
+                        },
+                    ),
+                )
+            },
+            default_provider="nvidia",
+            client=client,
+        )
+
+        text = router.chat([{"role": "user", "content": "JSON"}])
+
+        call = client.post.call_args
+        payload = call.kwargs["json"]
+        headers = call.kwargs["headers"]
+        assert call.args[0] == "https://integrate.api.nvidia.com/v1/chat/completions"
+        assert text == '{"ok": true}'
+        assert headers["Authorization"] == "Bearer nvapi-test"
+        assert "extra_body" not in payload
+        assert "response_format" not in payload
+        assert payload["include_reasoning"] is False
+        assert payload["chat_template_kwargs"] == {"thinking": False}
+
+    def test_provider_auth_check_surfaces_forbidden_response_body(self):
+        request = httpx.Request("POST", "https://integrate.api.nvidia.com/v1/chat/completions")
+        response = httpx.Response(
+            403,
+            request=request,
+            json={"status": 403, "title": "Forbidden", "detail": "Authorization failed"},
+        )
+        client = MagicMock()
+        client.post.return_value = response
+        router = LLMRouter(
+            providers={
+                "nvidia": ProviderConfig(
+                    provider_type="nvidia",
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    api_key="nvapi-test",
+                    settings=GenerationSettings(model="moonshotai/kimi-k2.6", repeat_penalty=None),
+                )
+            },
+            default_provider="nvidia",
+            client=client,
+        )
+
+        ok, error = router.check_provider_auth("nvidia", model="moonshotai/kimi-k2.6")
+
+        assert ok is False
+        assert error is not None
+        assert "403 Forbidden" in error
+        assert "Authorization failed" in error
+
+    def test_provider_auth_error_classification_distinguishes_timeouts(self):
+        assert LLMRouter.is_auth_error("403 Forbidden; response_body={\"detail\":\"Authorization failed\"}")
+        assert not LLMRouter.is_auth_error("The read operation timed out")
+
+
+class TestNIMContainerManager:
+    def test_config_infers_local_nim_port_and_uses_kimi_image(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+llm:
+  providers:
+    nvidia_local_nim:
+      provider_type: nvidia
+      base_url: http://localhost:9090/v1
+      model: moonshotai/kimi-k2.6
+""".strip(),
+            encoding="utf-8",
+        )
+
+        config = NIMContainerConfig.from_config_file(config_path)
+
+        assert config.host_port == 9090
+        assert config.image == "nvcr.io/nim/moonshotai/kimi-k2.6:1.7.0-variant"
+        assert config.base_url == "http://localhost:9090/v1"
+
+    def test_config_reads_nvidia_key_without_exposing_it_in_command(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("NGC_API_KEY", raising=False)
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-secret-value")
+        config = NIMContainerConfig(cache_dir=str(tmp_path / "nim-cache"))
+
+        command = NIMContainerManager(config).redacted_run_command()
+
+        assert config.api_key == "nvapi-secret-value"
+        assert "NGC_API_KEY" in command
+        assert "nvapi-secret-value" not in " ".join(command)
+
+    def test_start_container_passes_key_by_environment_only(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NGC_API_KEY", "nvapi-secret-value")
+        calls: list[tuple[list[str], dict[str, Any]]] = []
+
+        def runner(args, **kwargs):
+            calls.append((args, kwargs))
+            if args[1] == "--version":
+                return MagicMock(returncode=0, stdout="Docker version 27", stderr="")
+            if args[1] == "info":
+                return MagicMock(returncode=0, stdout="27.0.0", stderr="")
+            if args[1] == "inspect":
+                return MagicMock(returncode=1, stdout="", stderr="No such object")
+            if args[1] == "run":
+                return MagicMock(returncode=0, stdout="container-id", stderr="")
+            raise AssertionError(f"Unexpected docker command: {args}")
+
+        config = NIMContainerConfig(cache_dir=str(tmp_path / "nim-cache"))
+        result = NIMContainerManager(config, runner=runner).start_container()
+
+        run_args, run_kwargs = calls[-1]
+        assert result.ok is True
+        assert run_args[1] == "run"
+        assert "nvapi-secret-value" not in " ".join(run_args)
+        assert run_kwargs["env"]["NGC_API_KEY"] == "nvapi-secret-value"
+        assert (tmp_path / "nim-cache").exists()
+
 
 class TestEntityExtractor:
     """Test entity extraction with configurable LLM providers."""
@@ -361,6 +628,75 @@ class TestEntityExtractor:
         assert node["title"] == "Emotion in Reinforcement Learning Agents and Robots: A Survey"
         assert node["paper_type"] == "survey"
         assert node["paper_year"] == 2017
+
+    def test_build_paper_node_blocks_conflicting_title_metadata(self):
+        node = EntityExtractor._build_paper_node(
+            paper_id="arxiv:2507.16947",
+            paper_text=(
+                "Assessing workflow impact and clinical utility of AI-assisted brain aneurysm "
+                "detection: a multi-reader study\n\nAbstract\n..."
+            ),
+            paper_type="benchmark",
+            semantic_paper_node={
+                "title": "AI-based Clinical Decision Support for Primary Care: A Real-World Study",
+                "paper_year": 2025,
+            },
+            temporal_coverage={"paper_year": 2025},
+            language_detected="en",
+        )
+        warnings = EntityExtractor._quality_warnings(
+            paper_type="benchmark",
+            concept_count=20,
+            method_count=6,
+            text_length=30000,
+            parse_quality="clean",
+            paper_id="arxiv:2507.16947",
+            paper_node=node,
+        )
+        validation = EntityExtractor._metadata_validation("arxiv:2507.16947", node)
+
+        assert node["title"].startswith("Assessing workflow impact")
+        assert node["detected_title"].startswith("Assessing workflow impact")
+        assert node["llm_paper_title"] == "AI-based Clinical Decision Support for Primary Care: A Real-World Study"
+        assert any("title conflicts" in warning for warning in warnings)
+        assert validation["metadata_status"] == "invalid"
+        assert any(error.startswith("paper_title_mismatch") for error in validation["blocking_errors"])
+
+    def test_build_paper_node_prefers_arxiv_year_over_reference_year(self):
+        node = EntityExtractor._build_paper_node(
+            paper_id="arxiv:2503.17786",
+            paper_text=(
+                "Assessing workflow impact and clinical utility of AI-assisted brain aneurysm "
+                "detection: a multi-reader study\n\nAbstract\n..."
+            ),
+            paper_type="research",
+            semantic_paper_node={
+                "title": (
+                    "Assessing workflow impact and clinical utility of AI-assisted brain aneurysm "
+                    "detection: a multi-reader study"
+                ),
+                "paper_year": 2016,
+            },
+            temporal_coverage={"paper_year": 2016},
+            language_detected="en",
+        )
+        validation = EntityExtractor._metadata_validation("arxiv:2503.17786", node)
+        warnings = EntityExtractor._quality_warnings(
+            paper_type="research",
+            concept_count=20,
+            method_count=6,
+            text_length=30000,
+            parse_quality="clean",
+            paper_id="arxiv:2503.17786",
+            paper_node=node,
+        )
+
+        assert node["paper_year"] == 2025
+        assert node["llm_paper_year"] == 2016
+        assert node["paper_year_source"] == "arxiv_id"
+        assert validation["metadata_status"] == "valid"
+        assert not validation["blocking_errors"]
+        assert any("using arXiv metadata year" in warning for warning in warnings)
 
     def test_quality_warnings_flag_paper_id_metadata_mismatch(self):
         node = EntityExtractor._build_paper_node(
@@ -424,6 +760,38 @@ class TestEntityExtractor:
         assert "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:2602.11092" in validation[
             "blocking_errors"
         ]
+
+    def test_legacy_arxiv_identifier_normalizes_from_storage_filename(self):
+        node = EntityExtractor._build_paper_node(
+            paper_id="arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009",
+            paper_text="arXiv:q-bio/0612009\nThe Neurobiology Of Thinking, Identity, And Geniality\nAbstract\n...",
+            paper_type="theoretical",
+            semantic_paper_node={
+                "title": "The Neurobiology Of Thinking, Identity, And Geniality",
+            },
+            temporal_coverage={"paper_year": 2006},
+            language_detected="en",
+        )
+        validation = EntityExtractor._metadata_validation(
+            "arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009",
+            node,
+        )
+
+        assert node["paper_id"] == "arxiv:q-bio/0612009"
+        assert EntityExtractor._arxiv_publication_year("arxiv:q-bio/0612009") == 2006
+        assert validation["metadata_status"] == "valid"
+
+    def test_merlin_framework_text_overrides_semantic_survey_type_to_benchmark(self):
+        text = (
+            "MerLin: A Discovery Engine for Photonic and Hybrid Quantum Machine Learning\n"
+            "Abstract\n"
+            "We introduce MerLin, an open-source framework designed as a discovery engine. "
+            "The paper evaluates benchmark tasks on MNIST and SST2 datasets and reproduces QGANs."
+        )
+
+        assert EntityExtractor._detect_paper_type(text) == "benchmark"
+        assert EntityExtractor._resolve_paper_type("survey", "benchmark", text) == "benchmark"
+        assert EntityExtractor._resolve_paper_type("research", "survey", "This survey reviews RL.") == "survey"
 
     def test_extract_preserves_extended_scientific_metadata(self):
         """Test extraction keeps paper type, attribution, and formula metadata."""
@@ -509,6 +877,26 @@ class TestEntityExtractor:
         assert mock_router.last_overrides["top_p"] == 0.85
         assert mock_router.last_overrides["extra"]["json_mode"] is True
 
+    def test_failed_structural_calls_trigger_small_retries(self):
+        scan = type("Scan", (), {"concepts": [{"label": "MerLin"}], "methods": []})()
+        failed_call = ParsedLLMResponse(data={}, parse_quality="failed", raw_text="LLM call failed: 422 bad request")
+
+        assert EntityExtractor._should_retry_concepts([], [failed_call], scan)
+        assert EntityExtractor._should_retry_methods([], [failed_call], [{"label": "MerLin"}], scan)
+
+    def test_call_diagnostics_include_failed_excerpt(self):
+        failed_call = ParsedLLMResponse(
+            data={"concepts": [], "methods": []},
+            parse_quality="failed",
+            raw_text="LLM call failed: 422 bad request response_body={\"detail\":\"unknown field\"}",
+        )
+        semantic = ParsedLLMResponse(data={}, parse_quality="failed", raw_text="empty response")
+
+        diagnostics = EntityExtractor._call_diagnostics([failed_call], semantic, claims_pass=None)
+
+        assert diagnostics[0]["raw_excerpt"].startswith("LLM call failed")
+        assert diagnostics[-1]["raw_excerpt"] == "empty response"
+
     def test_extract_handles_llm_errors(self):
         """Test extraction gracefully handles LLM errors."""
         mock_router = FakeLLMRouter()
@@ -521,6 +909,67 @@ class TestEntityExtractor:
         assert "failed" in result.raw_response.lower()
         assert "partial recovery" not in result.raw_response.lower()
         assert len(result.concepts) == 0
+        assert extraction_failure_reason(result)
+
+    def test_failed_llm_result_is_not_linker_enriched(self):
+        """Catastrophic model failures should not be rescued into KG concepts."""
+        mock_router = FakeLLMRouter()
+        mock_router.chat = MagicMock(side_effect=RuntimeError("No models loaded"))
+        pipeline = ExtractionPipeline(mock_router)
+
+        result = pipeline.process(
+            "paper_001",
+            "Machine Learning\n\nAbstract\nThis paper discusses machine learning.",
+            link_concepts=True,
+        )
+
+        assert extraction_failure_reason(result)
+        assert result.concepts == []
+
+    def test_paper_title_from_text_skips_pdf_header_noise(self):
+        text = "\n".join(
+            [
+                "Preprint",
+                "Draft version February 20, 2026",
+                "AI-Based Clinical Decision Support for Primary Care: A Real-World Study",
+                "Abstract",
+            ]
+        )
+
+        assert EntityExtractor._paper_title_from_text(text) == (
+            "AI-Based Clinical Decision Support for Primary Care: A Real-World Study"
+        )
+
+    def test_paper_title_from_text_skips_template_and_conference_headers(self):
+        text = "\n".join(
+            [
+                "Springer Nature 2021 LATEX template",
+                "Learning Curves for Decision Making in Supervised Machine Learning: A Survey",
+                "Abstract",
+            ]
+        )
+        assert EntityExtractor._paper_title_from_text(text) == (
+            "Learning Curves for Decision Making in Supervised Machine Learning: A Survey"
+        )
+
+        conference_text = "\n".join(
+            [
+                "18th CONTECSI - INTERNATIONAL CONFERENCE ON INFORMATION SYSTEMS AND TECHNOLOGY MANAGEMENT",
+                "IT Enabling Factors in a New Industry Design: Open Banking and Digital Economy",
+                "Abstract",
+            ]
+        )
+        assert EntityExtractor._paper_title_from_text(conference_text) == (
+            "IT Enabling Factors in a New Industry Design: Open Banking and Digital Economy"
+        )
+
+    def test_chunked_parse_quality_treats_mixed_chunk_failure_as_partial(self):
+        calls = [
+            ParsedLLMResponse(data={"concepts": []}, parse_quality="clean", raw_text="{}"),
+            ParsedLLMResponse(data={}, parse_quality="failed", raw_text="LLM call failed"),
+        ]
+
+        assert EntityExtractor._chunked_parse_quality(calls) == "partial"
 
     def test_extract_truncates_long_text(self):
         """Test extraction truncates very long paper text."""
@@ -1040,6 +1489,13 @@ class TestEntityExtractor:
                     "negated": False,
                     "attributed_to": "this_paper",
                 },
+                {
+                    "statement": "Photon-native models can substitute gate-based models without significant loss in learning performance.",
+                    "claim_type": "finding",
+                    "evidence_type": "experimental",
+                    "negated": True,
+                    "attributed_to": "this_paper",
+                },
             ]
         )
 
@@ -1047,6 +1503,42 @@ class TestEntityExtractor:
         assert claims[0]["negated"] is False
         assert claims[1]["claim_type"] == "negative_result"
         assert claims[1]["negated"] is True
+        assert claims[2]["claim_type"] == "finding"
+        assert claims[2]["negated"] is False
+
+    def test_terminology_conflicts_drop_unanchored_generic_fillers(self):
+        conflicts = EntityExtractor._merge_terminology_conflicts(
+            [
+                {
+                    "term": "policy",
+                    "this_field": "Not explicitly defined in this paper",
+                    "other_field": "Reinforcement learning action-selection rule",
+                },
+                {
+                    "term": "model",
+                    "this_field": "A photonic quantum circuit or hybrid architecture",
+                    "other_field": "Classical statistical model",
+                },
+                {
+                    "term": "value",
+                    "this_field": "Expected return estimate",
+                    "other_field": "Normative worth",
+                },
+            ],
+            [],
+        )
+
+        filtered = EntityExtractor._filter_terminology_conflicts(
+            conflicts,
+            [{"label": "Variational Quantum Circuit"}],
+        )
+        anchored = EntityExtractor._filter_terminology_conflicts(
+            conflicts,
+            [{"label": "Value function", "canonical_label": "Value function"}],
+        )
+
+        assert filtered == []
+        assert [item["term"] for item in anchored] == ["value"]
 
     def test_extraction_source_text_repairs_page_break_word_fragments(self):
         text = EntityExtractor._clean_extraction_source_text(
@@ -1542,6 +2034,60 @@ class TestEntityLinker:
         assert rendered["concepts"][0]["review_status"] == "approved"
         assert rendered["relations"][0]["subject_id"] == "concept:appraisal-dimensions"
 
+    def test_entity_linker_builds_generic_context_relations(self):
+        extraction = ExtractionResult(
+            paper_id="p1",
+            concepts=[
+                {
+                    "label": "AI Consult",
+                    "entity_type": "System",
+                    "context": "AI Consult is an LLM-based clinical decision support tool evaluated for reducing clinical errors.",
+                    "evidence_span": "LLM-based clinical decision support tool",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "system",
+                    "source_type": "paper_contribution",
+                    "accepted": True,
+                    "review_status": "approved",
+                },
+                {
+                    "label": "Large Language Model",
+                    "entity_type": "ModelArchitecture",
+                    "context": "Large language models are used for clinical decision support.",
+                    "evidence_span": "Large language models",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "model_architecture",
+                    "source_type": "reviewed_method",
+                    "accepted": True,
+                    "review_status": "approved",
+                },
+                {
+                    "label": "Clinical Error",
+                    "entity_type": "DomainConcept",
+                    "context": "diagnostic and treatment errors",
+                    "evidence_span": "clinical errors",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "domain_concept",
+                    "source_type": "paper_contribution",
+                    "mention_count": 2,
+                    "accepted": True,
+                    "review_status": "approved",
+                },
+            ],
+            methods=[],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+
+        assert ("concept:ai-consult", "USES", "concept:large-language-model") in relation_triples
+        assert ("concept:ai-consult", "USED_FOR", "concept:clinical-error") in relation_triples
+
     def test_entity_linker_rescues_exact_ontology_candidates_from_partial_chunks(self):
         extraction = ExtractionResult(
             paper_id="p1",
@@ -1661,6 +2207,35 @@ class TestEntityLinker:
         assert result["entity_type"] == "ModelArchitecture"
         assert result["review_status"] == "approved"
         assert result["canonical_match"]["match_type"] == "exact_alias"
+
+    def test_canonical_resolver_approves_accepted_external_ids_over_llm_pending(self):
+        resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
+
+        result = resolver.resolve(
+            {
+                "label": "Fock space",
+                "entity_type": "DomainConcept",
+                "canonical_id": "concept:fock-space",
+                "confidence": 0.95,
+                "accepted": True,
+                "review_status": "pending",
+                "evidence_span": "operating directly in Fock space",
+            }
+        )
+        rejected = resolver.resolve(
+            {
+                "label": "Noisy concept",
+                "entity_type": "DomainConcept",
+                "canonical_id": "concept:noisy-concept",
+                "confidence": 0.95,
+                "accepted": True,
+                "review_status": "rejected",
+            }
+        )
+
+        assert result["review_status"] == "approved"
+        assert result["canonical_match"]["match_type"] in {"exact_alias", "external_id"}
+        assert rejected["review_status"] == "rejected"
 
     def test_entity_linker_dedupes_cross_prefix_concept_method_labels(self):
         extraction = ExtractionResult(
@@ -1811,6 +2386,7 @@ class TestEntityLinker:
                 {
                     "label": "MerLin",
                     "entity_type": "System",
+                    "canonical_id": "method:merlin",
                     "confidence": 0.95,
                     "salience": "central",
                     "evidence_role": "method_family",
@@ -1847,6 +2423,26 @@ class TestEntityLinker:
                     "accepted": True,
                     "review_status": "pending",
                     "evidence_span": "MNIST dataset",
+                },
+                {
+                    "label": "Quantum Convolutional Neural Networks",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.88,
+                    "salience": "supporting",
+                    "evidence_role": "method_family",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "A photonic QCNN is reproduced using adaptive state injection for pooling.",
+                },
+                {
+                    "label": "Adaptive state injection",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.86,
+                    "salience": "supporting",
+                    "evidence_role": "method_family",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "A photonic QCNN is reproduced using adaptive state injection for pooling.",
                 },
             ],
             methods=[
@@ -1903,6 +2499,11 @@ class TestEntityLinker:
 
         result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
         merlin = next(item for item in result.concepts if item["canonical_id"] == "concept:merlin")
+        concepts_by_id = {
+            item["canonical_id"]: item
+            for item in result.concepts
+            if item.get("canonical_id")
+        }
         qgan_entities = [
             item
             for item in [*result.concepts, *result.methods]
@@ -1915,12 +2516,14 @@ class TestEntityLinker:
 
         assert merlin["review_status"] == "approved"
         assert merlin["accepted_for_kg_write"] is True
+        assert merlin["canonical_id"] == "concept:merlin"
+        assert concepts_by_id["concept:adaptive-state-injection"]["accepted_for_kg_write"] is True
         assert len(qgan_entities) == 1
         assert "QGANs" in qgan_entities[0].get("aliases", [])
         assert ("concept:merlin", "BUILT_ON", "concept:strong-linear-optical-simulation") in relation_triples
         assert ("concept:merlin", "PROVIDES", "concept:quantumlayer") in relation_triples
-        assert ("concept:quantumlayer", "SUPPORTS", "method:angle-encoding") in relation_triples
-        assert ("concept:quantumlayer", "SUPPORTS", "method:amplitude-encoding") in relation_triples
+        assert ("concept:quantumlayer", "SUPPORTS", "concept:angle-encoding") in relation_triples
+        assert ("concept:quantumlayer", "SUPPORTS", "concept:amplitude-encoding") in relation_triples
         assert (
             "concept:merlin",
             "REPRODUCES",
@@ -1931,7 +2534,429 @@ class TestEntityLinker:
             "EVALUATED_ON",
             "concept:mnist",
         ) in relation_triples
-        assert ("method:angle-encoding", "MORE_ROBUST_THAN", "method:amplitude-encoding") in relation_triples
+        assert ("concept:angle-encoding", "MORE_ROBUST_THAN", "concept:amplitude-encoding") in relation_triples
+        assert (
+            "concept:merlin",
+            "REPRODUCES",
+            "concept:quantum-convolutional-neural-network",
+        ) in relation_triples
+        assert (
+            "concept:quantum-convolutional-neural-network",
+            "USES",
+            "concept:adaptive-state-injection",
+        ) in relation_triples
+
+    def test_entity_linker_normalizes_medical_imaging_aliases_and_relations(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:2503.17786",
+            paper_type="research",
+            concepts=[
+                {
+                    "label": "Unruptured intracranial aneurysms",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "domain_concept",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "unruptured intracranial aneurysms are detected in TOF-MRA scans",
+                    "mention_count": 2,
+                },
+                {
+                    "label": "Unruptured Intracranial Aneurysm",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "domain_concept",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "UIAs detection in TOF-MRA scans",
+                    "mention_count": 2,
+                },
+                {
+                    "label": "Time-of-Flight Magnetic Resonance Angiography",
+                    "entity_type": "Dataset",
+                    "confidence": 0.9,
+                    "salience": "central",
+                    "evidence_role": "dataset",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Time-of-Flight Magnetic Resonance Angiography is used for UIA detection",
+                    "mention_count": 1,
+                },
+                {
+                    "label": "TOF-MRA",
+                    "entity_type": "Dataset",
+                    "confidence": 0.9,
+                    "salience": "central",
+                    "evidence_role": "dataset",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "TOF-MRA scans",
+                    "mention_count": 12,
+                },
+                {
+                    "label": "Satisfaction-of-search effect",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.9,
+                    "salience": "supporting",
+                    "evidence_role": "domain_concept",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "satisfaction-of-search effect",
+                    "mention_count": 1,
+                },
+                {
+                    "label": "Satisfaction of Search",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.9,
+                    "salience": "supporting",
+                    "evidence_role": "domain_concept",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "satisfaction of search effect",
+                    "mention_count": 4,
+                },
+                {
+                    "label": "ADAM dataset",
+                    "entity_type": "Dataset",
+                    "confidence": 0.9,
+                    "salience": "supporting",
+                    "evidence_role": "dataset",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "Aneurysm Detection And segMentation Challenge (ADAM)",
+                    "mention_count": 4,
+                },
+                {
+                    "label": "Computer-aided detection",
+                    "entity_type": "System",
+                    "confidence": 0.95,
+                    "salience": "central",
+                    "evidence_role": "method_family",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "computer-aided detection (CAD) tool",
+                    "mention_count": 1,
+                },
+                {
+                    "label": "3D UNET",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.9,
+                    "salience": "central",
+                    "evidence_role": "method",
+                    "accepted": True,
+                    "review_status": "pending",
+                    "evidence_span": "custom 3D UNET trained for UIA detection on the ADAM dataset",
+                    "mention_count": 2,
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concepts_by_id = {concept["canonical_id"]: concept for concept in result.concepts}
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"])
+            for relation in result.relations
+        }
+
+        assert sum(1 for item in result.concepts if item["canonical_id"] == "concept:unruptured-intracranial-aneurysm") == 1
+        assert sum(1 for item in result.concepts if item["canonical_id"] == "concept:tof-mra") == 1
+        assert sum(1 for item in result.concepts if item["canonical_id"] == "concept:satisfaction-of-search") == 1
+        assert concepts_by_id["concept:tof-mra"]["entity_type"] == "MethodFamily"
+        assert "Time-of-Flight Magnetic Resonance Angiography" in concepts_by_id["concept:tof-mra"]["aliases"]
+        assert ("concept:computer-aided-detection", "USES", "concept:3d-u-net") in relation_triples
+        assert ("concept:3d-u-net", "EVALUATED_ON", "concept:adam-dataset") in relation_triples
+
+    def test_qml_deterministic_scan_backfills_datasets_and_architecture_components(self):
+        scan = EntityExtractor._scan_paper_text(
+            """
+            MerLin is a photonic quantum machine learning benchmark framework.
+            Its photonic QCNN uses adaptive state injection and reports results
+            on CIFAR-10, MNIST, and SST2 sentiment analysis.
+            """
+        )
+
+        labels = {item["label"] for item in scan.concepts}
+
+        assert "CIFAR-10" in labels
+        assert "Adaptive state injection" in labels
+        assert "Quantum Convolutional Neural Network" in labels
+
+    def test_qml_exact_candidates_promote_for_benchmark_papers(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:2602.11092",
+            paper_type="benchmark",
+            paper_node={
+                "title": "MerLin: A Discovery Engine for Photonic and Hybrid Quantum Machine Learning"
+            },
+            concepts=[],
+            concept_candidates=[
+                {
+                    "label": "Linear-optical circuits",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.74,
+                    "mention_count": 2,
+                    "salience": "supporting",
+                    "context": "linear-optical circuits into standard PyTorch",
+                },
+                {
+                    "label": "Photonic Quantum Machine Learning",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.52,
+                    "mention_count": 1,
+                    "salience": "passing",
+                    "context": "photonic QML exploits the bosonic nature of light",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concept_ids = {item["canonical_id"] for item in result.concepts}
+        candidate_ids = {item["canonical_id"] for item in result.concept_candidates}
+
+        assert "concept:linear-optical-circuits" in concept_ids
+        assert "concept:photonic-quantum-machine-learning" in concept_ids
+        assert "concept:linear-optical-circuits" not in candidate_ids
+        assert "concept:photonic-quantum-machine-learning" not in candidate_ids
+
+    def test_approved_relations_to_detail_entities_are_downgraded(self):
+        extraction = ExtractionResult(
+            paper_id="paper_001",
+            paper_type="research",
+            concepts=[
+                {
+                    "label": "KL-divergence",
+                    "entity_type": "Metric",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "approved",
+                    "evidence_span": "KL-divergence measures model uncertainty",
+                },
+                {
+                    "label": "Model uncertainty",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "approved",
+                    "evidence_span": "KL-divergence measures model uncertainty",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation = next(
+            item
+            for item in result.relations
+            if item["subject_id"] == "concept:kl-divergence"
+            and item["relation_type"] == "MEASURES"
+            and item["object_id"] == "concept:model-uncertainty"
+        )
+
+        assert relation["review_status"] == "pending"
+        assert relation["kg_block_reason"] == "relation_endpoint_not_kg_writeable"
+
+    def test_entity_linker_builds_fake_news_benchmark_relations(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:1905.04749",
+            paper_type="benchmark",
+            concepts=[
+                {
+                    "label": "BERT",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "source_type": "reviewed_method",
+                    "evidence_span": "BERT was evaluated on the LIAR and Combined Corpus datasets.",
+                },
+                {
+                    "label": "RoBERTa",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "source_type": "reviewed_method",
+                    "evidence_span": "RoBERTa achieved the best accuracy on the Combined Corpus.",
+                },
+                {
+                    "label": "DistilBERT",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "source_type": "reviewed_method",
+                    "evidence_span": "DistilBERT is a distilled version of BERT using knowledge distillation.",
+                },
+                {
+                    "label": "Pre-trained Language Models",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Advanced pre-trained language models outperform traditional models.",
+                },
+                {
+                    "label": "Knowledge Distillation",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "DistilBERT uses the concept of knowledge distillation.",
+                },
+                {
+                    "label": "LIAR",
+                    "entity_type": "Dataset",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "The LIAR benchmark dataset was used for model evaluation.",
+                },
+                {
+                    "label": "Combined Corpus",
+                    "entity_type": "Dataset",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "The Combined Corpus dataset was used for model evaluation.",
+                },
+                {
+                    "label": "Accuracy",
+                    "entity_type": "Metric",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Accuracy is the primary performance metric.",
+                },
+            ],
+            method_candidates=[
+                {
+                    "label": "AdaBoost",
+                    "entity_type": "Algorithm",
+                    "confidence": 0.8,
+                    "source_type": "reviewed_method",
+                    "salience": "supporting",
+                    "mention_count": 4,
+                    "evidence_span": "We also evaluated ensemble learning method like AdaBoost.",
+                }
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concept_ids = {item["canonical_id"] for item in result.concepts}
+        method_ids = {item["canonical_id"] for item in result.methods}
+        relation_triples = {
+            (relation["subject_id"], relation["relation_type"], relation["object_id"], relation["review_status"])
+            for relation in result.relations
+        }
+
+        assert "concept:accuracy" in concept_ids
+        assert "concept:data-accuracy" not in concept_ids
+        assert "concept:adaboost" in method_ids
+        assert ("concept:bert", "IS_A", "concept:pre-trained-language-models", "approved") in relation_triples
+        assert ("concept:distilbert", "DERIVED_FROM", "concept:bert", "approved") in relation_triples
+        assert ("concept:distilbert", "USES", "concept:knowledge-distillation", "approved") in relation_triples
+        assert ("concept:bert", "EVALUATED_ON", "concept:liar", "approved") in relation_triples
+        assert ("concept:roberta", "EVALUATED_ON", "concept:combined-corpus", "approved") in relation_triples
+        assert ("concept:adaboost", "EVALUATED_ON", "concept:combined-corpus", "approved") in relation_triples
+
+    def test_fake_news_deterministic_scan_backfills_clstm(self):
+        scan = EntityExtractor._scan_paper_text(
+            """
+            A benchmark study of machine learning models for online fake news detection.
+            The C-LSTM baseline and BERT were evaluated on the LIAR dataset.
+            """
+        )
+
+        labels = {item["label"] for item in scan.concepts}
+
+        assert "C-LSTM" in labels
+
+    def test_theoretical_scan_backfills_synesthesia_mapping_terms(self):
+        scan = EntityExtractor._scan_paper_text(
+            """
+            The neurobiology paper discusses synesthesia and cross-domain mappings
+            as a possible explanation for unusual conceptual associations.
+            """
+        )
+        labels = {item["label"] for item in scan.concepts}
+
+        assert "Synesthesia" in labels
+        assert "Cross-domain mapping" in labels
+
+    def test_entity_linker_approves_gemini_merlin_core_entities(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:2602.11092",
+            paper_type="benchmark",
+            concepts=[
+                {
+                    "label": "Fock space",
+                    "entity_type": "DomainConcept",
+                    "canonical_id": "concept:fock-space",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_role": "domain_concept",
+                    "mention_count": 9,
+                    "evidence_span": "operating directly in Fock space",
+                },
+                {
+                    "label": "QuantumLayer",
+                    "entity_type": "ModelArchitecture",
+                    "canonical_id": "concept:quantumlayer",
+                    "confidence": 0.98,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_role": "model_architecture",
+                    "mention_count": 5,
+                    "evidence_span": "QuantumLayer, a torch.nn.Module that exposes trainable circuit parameters",
+                },
+                {
+                    "label": "Angle encoding",
+                    "entity_type": "MethodFamily",
+                    "canonical_id": "concept:angle-encoding",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_role": "method_family",
+                    "mention_count": 3,
+                    "evidence_span": "angle encoding maps classical features to phase shifts",
+                },
+                {
+                    "label": "Amplitude encoding",
+                    "entity_type": "MethodFamily",
+                    "canonical_id": "concept:amplitude-encoding",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_role": "method_family",
+                    "mention_count": 7,
+                    "evidence_span": "amplitude encoding initializes the quantum state amplitudes",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concepts_by_id = {concept["canonical_id"]: concept for concept in result.concepts}
+
+        assert concepts_by_id["concept:fock-space"]["review_status"] == "approved"
+        assert concepts_by_id["concept:fock-space"]["accepted_for_kg_write"] is True
+        assert concepts_by_id["concept:quantumlayer"]["review_status"] == "approved"
+        assert concepts_by_id["concept:quantumlayer"]["accepted_for_kg_write"] is True
+        assert concepts_by_id["concept:angle-encoding"]["review_status"] == "approved"
+        assert concepts_by_id["concept:amplitude-encoding"]["review_status"] == "approved"
 
     def test_entity_linker_builds_specific_relation_types(self):
         extraction = ExtractionResult(
@@ -2729,6 +3754,221 @@ class TestEntityLinker:
 
         assert "valency directly influenced" in relation["evidence_span"]
 
+    def test_entity_linker_avoids_generic_quantum_network_evidence_for_qgan_relation(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:2602.11092",
+            paper_type="benchmark",
+            concepts=[
+                {
+                    "label": "MerLin",
+                    "entity_type": "System",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_role": "method_family",
+                    "evidence_span": "MerLin reproduces several photonic quantum machine learning benchmarks.",
+                },
+                {
+                    "label": "Quantum Generative Adversarial Network",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.9,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_role": "method_family",
+                    "evidence_span": "Quantum generative adversarial networks (QGANs) are reproduced on MNIST.",
+                },
+                {
+                    "label": "Quantum Convolutional Neural Networks",
+                    "entity_type": "ModelArchitecture",
+                    "confidence": 0.7,
+                    "accepted": False,
+                    "review_status": "pending",
+                    "salience": "background",
+                    "evidence_role": "possible_concept",
+                    "evidence_span": "quantum convolutional neural networks using QOptCraft were also discussed",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        relation = next(
+            item
+            for item in result.relations
+            if item["subject_id"] == "concept:merlin"
+            and item["relation_type"] == "REPRODUCES"
+            and item["object_id"] == "concept:quantum-generative-adversarial-network"
+        )
+
+        assert "QGAN" in relation["evidence_span"]
+        assert "QOptCraft" not in relation["evidence_span"]
+
+    def test_entity_linker_builds_theoretical_cross_domain_relations(self):
+        extraction = ExtractionResult(
+            paper_id="arxiv:q-bio/0612009",
+            paper_type="theoretical",
+            concepts=[
+                {
+                    "label": "von Neumann entropy",
+                    "entity_type": "Theory",
+                    "confidence": 0.92,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "von Neumann entropy is the basis for defining quantum mutual information.",
+                },
+                {
+                    "label": "Quantum mutual information",
+                    "entity_type": "Metric",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "Quantum mutual information (QMI) measures quantum correlations.",
+                },
+                {
+                    "label": "Envariance",
+                    "entity_type": "Theory",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Envariance is associated with phases of the Schmidt decomposition.",
+                },
+                {
+                    "label": "Einselection",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Environment-induced superselection selects preferred pointer states.",
+                },
+                {
+                    "label": "Schmidt decomposition",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.98,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Schmidt decomposition phases are used in envariance.",
+                },
+                {
+                    "label": "Two-photon vector soliton",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.95,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "A two-photon vector soliton generates temporal entanglement.",
+                },
+                {
+                    "label": "Quantum temporal imaging",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.90,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "The formalism inspires quantum temporal imaging of temporal entanglement.",
+                },
+                {
+                    "label": "Mirror neurons",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.98,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "central",
+                    "evidence_span": "Mirror neurons are part of the mirror neuron system.",
+                },
+                {
+                    "label": "Mirror neuron system",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.90,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "The mirror neuron system supports self-awareness.",
+                },
+                {
+                    "label": "Reference picture selection",
+                    "entity_type": "MethodFamily",
+                    "confidence": 0.92,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "Reference picture selection uses a directed acyclic graph.",
+                },
+            ],
+            methods=[
+                {
+                    "label": "Cross-phase modulation",
+                    "entity_type": "Algorithm",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "Cross-phase modulation offers the possibility of temporal entanglement.",
+                },
+                {
+                    "label": "Directed Acyclic Graph",
+                    "entity_type": "Algorithm",
+                    "source_type": "reviewed_method",
+                    "confidence": 0.75,
+                    "accepted": True,
+                    "review_status": "pending",
+                    "salience": "supporting",
+                    "evidence_span": "A directed acyclic graph is used in reference picture selection.",
+                },
+            ],
+            concept_candidates=[
+                {
+                    "label": "Temporal entanglement",
+                    "entity_type": "Phenomenon",
+                    "confidence": 0.85,
+                    "review_status": "pending",
+                    "accepted": False,
+                    "mention_count": 6,
+                    "salience": "supporting",
+                    "evidence_span": "Temporal entanglement is defined as irreducibility of two-photon amplitudes.",
+                },
+                {
+                    "label": "Pointer states",
+                    "entity_type": "DomainConcept",
+                    "confidence": 0.70,
+                    "review_status": "pending",
+                    "accepted": False,
+                    "mention_count": 3,
+                    "salience": "supporting",
+                    "evidence_span": "Einselection selects a preferred set of pointer states.",
+                },
+            ],
+        )
+
+        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        concept_ids = {item["canonical_id"] for item in result.concepts}
+        kg_write_ids = {
+            item["canonical_id"]
+            for item in result.concepts
+            if item.get("accepted_for_kg_write") is True
+        }
+        relation_triples = {
+            (item["subject_id"], item["relation_type"], item["object_id"], item["review_status"])
+            for item in result.relations
+        }
+
+        assert "concept:temporal-entanglement" in concept_ids
+        assert "concept:pointer-states" in kg_write_ids
+        assert ("concept:von-neumann-entropy", "USED_IN", "concept:quantum-mutual-information", "approved") in relation_triples
+        assert ("concept:schmidt-decomposition", "USED_IN", "concept:envariance", "approved") in relation_triples
+        assert ("concept:einselection", "IMPLIES", "concept:pointer-states", "approved") in relation_triples
+        assert ("concept:two-photon-vector-soliton", "CAUSES", "concept:temporal-entanglement", "approved") in relation_triples
+        assert ("concept:quantum-temporal-imaging", "USES", "concept:temporal-entanglement", "approved") in relation_triples
+        assert ("concept:cross-phase-modulation", "USED_FOR", "concept:temporal-entanglement", "approved") in relation_triples
+        assert ("concept:mirror-neurons", "PART_OF", "concept:mirror-neuron-system", "approved") in relation_triples
+        assert ("concept:directed-acyclic-graph", "USED_IN", "concept:reference-picture-selection", "approved") in relation_triples
+
     def test_canonical_resolver_degrades_hash_embeddings_without_auto_merge(self):
         resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
 
@@ -2752,6 +3992,9 @@ class TestEntityLinker:
         assert ontology.validate_relation_type("LEADS_TO") == "LEADS_TO"
         assert ontology.validate_relation_type("REPRODUCES") == "REPRODUCES"
         assert ontology.validate_relation_type("MORE_ROBUST_THAN") == "MORE_ROBUST_THAN"
+        assert ontology.validate_relation_type("DERIVED_FROM") == "DERIVED_FROM"
+        assert ontology.validate_relation_type("OUTPERFORMS") == "OUTPERFORMS"
+        assert ontology.validate_relation_type("IMPLIES") == "IMPLIES"
         with pytest.raises(ValueError):
             ontology.validate_relation_type("MAKES_UP")
 

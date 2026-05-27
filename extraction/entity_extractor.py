@@ -343,6 +343,38 @@ class ExtractionResult:
     extraction_mode: str = "quality"
 
 
+def extraction_failure_reason(result: ExtractionResult | object) -> str | None:
+    """Return a storage/UI failure reason for catastrophic extraction failures."""
+    diagnostics = getattr(result, "extraction_diagnostics", {}) or {}
+    if not isinstance(diagnostics, dict):
+        return None
+    reason = str(diagnostics.get("failure_reason") or "").strip()
+    if diagnostics.get("fatal_llm_error"):
+        return reason or "LLM extraction failed before usable JSON could be produced."
+    if diagnostics.get("parse_quality") != "failed":
+        return None
+    calls = [
+        call
+        for call in (diagnostics.get("calls") or [])
+        if isinstance(call, dict) and str(call.get("call_type") or "") != "claims_retry"
+    ]
+    failed_calls = [
+        call
+        for call in calls
+        if str(call.get("parse_quality") or "") == "failed"
+    ]
+    if failed_calls and len(failed_calls) == len(calls):
+        excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in failed_calls)
+        if "No models loaded" in excerpts:
+            return "LLM extraction failed: LM Studio has no model loaded."
+        concepts = getattr(result, "concepts", None) or []
+        methods = getattr(result, "methods", None) or []
+        if concepts or methods:
+            return None
+        return "LLM extraction failed for every extraction call; no KG-safe entities were produced."
+    return None
+
+
 @dataclass(frozen=True)
 class ParsedLLMResponse:
     """Parsed model response with the quality of the JSON recovery path."""
@@ -414,6 +446,7 @@ Rules:
 - Never truncate JSON. A short complete object is better than a long malformed one.
 - Put lower-confidence, generic, background, or passing mentions into candidate arrays instead of accepted arrays.
 - Prefer named algorithms, model architectures, mathematical frameworks, scientific theories, metrics, datasets, benchmarks, and domain-specific concepts.
+- Imaging modalities or acquisition techniques are MethodFamily, not Dataset; reserve Dataset for named corpora, cohorts, collections, or benchmarks.
 - Include only items materially discussed in this chunk. Ignore conference names, journal names, section-heading fragments, author lists, and bibliography-only mentions.
 - Never group named items under umbrella labels.
 - For survey papers, extract the reviewed methods as methods with source_type "reviewed_method"; extract the survey taxonomy/framework as source_type "paper_contribution".
@@ -477,6 +510,15 @@ Paper text:
 Each entry: {label, domain, description, source_type}
 Paper text: {paper_text}
 Respond with only the JSON array, no other text."""
+
+    CONCEPTS_ONLY_PROMPT = """Extract named scientific concepts from this paper as JSON array.
+Each entry: {label, entity_type, context, evidence_span, confidence, salience, evidence_role}
+Use only these entity_type values: Algorithm, Theory, MethodFamily, Metric, Dataset, Benchmark, DomainConcept, ApplicationSetting, ModelArchitecture, System, Phenomenon, Task.
+Prefer paper-specific systems, model architectures, algorithms, datasets, benchmarks, metrics, and scientific concepts.
+Treat imaging modalities or acquisition techniques as MethodFamily, not Dataset.
+Return complete valid JSON only. A short complete array is better than a malformed long array.
+Deterministic candidate hints: {candidate_json}
+Paper text: {paper_text}"""
 
     SEMANTIC_LISTS_RETRY_PROMPT = """Extract scientific claims, cross-domain hints, and terminology conflicts from this paper.
 Return only one complete valid JSON object with exactly these keys:
@@ -577,6 +619,13 @@ Paper text: {paper_text}"""
         ("Emotion type classification", r"\bemotion type classification\b"),
         ("BERT", r"\bBERT\b"),
         ("RoBERTa", r"\bRoBERTa\b"),
+        ("DistilBERT", r"\bDistilBERT\b"),
+        ("ELECTRA", r"\bELECTRA\b"),
+        ("ELMo", r"\bELMo\b"),
+        ("Bi-LSTM", r"\bBi[-\s]?LSTM\b|\bBidirectional LSTM\b|\bBidirectional Long Short[-\s]?Term Memory\b"),
+        ("C-LSTM", r"\bC[-\s]?LSTM\b|\bConvolutional LSTM\b"),
+        ("Conv-HAN", r"\bConv[-\s]?HAN\b|\bConvolutional Hierarchical Attention Network\b"),
+        ("HAN", r"\bHAN\b|\bHierarchical Attention Network\b"),
         ("LSTM", r"\bLSTM\b"),
         ("CNN", r"\bCNN\b|\bConvolutional Neural Network(?:s)?\b"),
         ("Transformer", r"\bTransformer(?:s)?\b"),
@@ -611,6 +660,41 @@ Paper text: {paper_text}"""
         ("Derived Data Fields", r"\bderived data fields?\b"),
         ("Data Frequency", r"\bdata frequency\b"),
         ("Data Source Discontinuation", r"\bdiscontinuation\b|\bdiscontinued\b"),
+        ("Quantum Machine Learning", r"\bquantum machine learning\b|\bQML\b"),
+        ("Photonic Quantum Machine Learning", r"\bphotonic (?:and hybrid )?quantum machine learning\b|\bphotonic QML\b"),
+        ("MerLin", r"\bMerLin\b"),
+        ("Fock space", r"\bFock[-\s]?space\b|\bFock space\b"),
+        ("Linear-optical circuits", r"\blinear[-\s]?optical circuits?\b"),
+        ("QuantumLayer", r"\bQuantumLayer\b|\bQuantum Layer\b"),
+        ("Angle encoding", r"\bangle encoding\b|\bphase encoding\b"),
+        ("Amplitude encoding", r"\bamplitude encoding\b|\bamplitude embedding\b"),
+        ("Quantum memristor", r"\bquantum memristors?\b|\bphotonic quantum memristors?\b"),
+        ("Fidelity Kernel", r"\bfidelity[-\s]?based kernel\b|\bfidelity kernel\b|\bquantum fidelity kernel\b"),
+        ("Adaptive state injection", r"\badaptive state injection\b"),
+        ("Quantum Convolutional Neural Network", r"\bQCNNs?\b|\bquantum convolutional neural networks?\b"),
+        ("Quantum Generative Adversarial Network", r"\bQGANs?\b|\bquantum generative adversarial networks?\b"),
+        ("Quantum Long Short-Term Memory", r"\bQLSTM\b|\bQuantum LSTM\b|\bQuantum Long Short[-\s]?Term Memory\b"),
+        ("Quantum Relational Knowledge Distillation", r"\bQRKD\b|\bQuantum Relational Knowledge Distillation\b"),
+        ("Strong Linear Optical Simulation", r"\bSLOS\b|\bStrong Linear Optical Simulation\b"),
+        ("Quantum Reservoir Computing", r"\bquantum reservoir computing\b|\bquantum optical reservoir computing\b"),
+        ("QLOQ", r"\bQLOQ\b"),
+        ("MNIST", r"\bMNIST\b"),
+        ("CIFAR-10", r"\bCIFAR[-\s]?10\b|\bCIFAR10\b"),
+        ("SST2", r"\bSST[-\s]?2\b|\bSST2\b|Stanford Sentiment Treebank 2"),
+        ("Temporal entanglement", r"\btemporal entanglement\b"),
+        ("Pointer states", r"\bpointer states?\b"),
+        ("Synesthesia", r"\bsyn(?:a)?esthesia\b"),
+        ("Cross-domain mapping", r"\bcross[-\s]?domain mappings?\b|\bcross[-\s]?modal mappings?\b"),
+        ("Unruptured Intracranial Aneurysm", r"\bUIAs?\b|\bunruptured intracranial aneurysms?\b"),
+        ("TOF-MRA", r"\bTOF[-\s]?MRA\b|\btime[-\s]?of[-\s]?flight magnetic resonance angiography\b"),
+        ("ADAM dataset", r"\bAneurysm Detection And segMentation\b|\bADAM dataset\b"),
+        ("ADAM challenge", r"\bADAM challenge\b"),
+        ("PHASES score", r"\bPHASES score\b"),
+        ("Computer-aided detection", r"\bcomputer[-\s]?aided detection\b|\bCAD system\b|\bCAD tool\b"),
+        ("3D U-Net", r"\b3D[-\s]?U[-\s]?Net\b|\b3D UNET\b"),
+        ("Satisfaction of Search", r"\bsatisfaction[-\s]?of[-\s]?search(?: effect)?\b"),
+        ("McNemar's test", r"\bMcNemar[’']?s test\b"),
+        ("Wilcoxon signed-rank test", r"\bWilcoxon signed[-\s]?rank tests?\b"),
     )
 
     RL_EMOTION_LABELS = {
@@ -702,6 +786,29 @@ Paper text: {paper_text}"""
         "Data Frequency",
         "Data Source Discontinuation",
     }
+    QML_LABELS = {
+        "Quantum Machine Learning",
+        "Photonic Quantum Machine Learning",
+        "MerLin",
+        "Fock space",
+        "Linear-optical circuits",
+        "QuantumLayer",
+        "Angle encoding",
+        "Amplitude encoding",
+        "Quantum memristor",
+        "Fidelity Kernel",
+        "Adaptive state injection",
+        "Quantum Convolutional Neural Network",
+        "Quantum Generative Adversarial Network",
+        "Quantum Long Short-Term Memory",
+        "Quantum Relational Knowledge Distillation",
+        "Strong Linear Optical Simulation",
+        "Quantum Reservoir Computing",
+        "QLOQ",
+        "MNIST",
+        "CIFAR-10",
+        "SST2",
+    }
 
     GENERIC_ACCEPTED_CONCEPT_BLOCKLIST = {
         "Machine Learning",
@@ -726,6 +833,32 @@ Paper text: {paper_text}"""
         "Actor-Critic",
     }
 
+    TITLE_STOPWORDS = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "based",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "is",
+        "its",
+        "of",
+        "on",
+        "or",
+        "our",
+        "the",
+        "to",
+        "using",
+        "via",
+        "with",
+    }
+
     MATH_PATTERNS: tuple[tuple[str, str], ...] = (
         ("formula", r"\$[^$]{1,300}\$|\\\[[\s\S]{1,600}?\\\]|\\begin\{equation\}"),
         ("formula", r"\bequation\b|\bformula\b"),
@@ -736,11 +869,15 @@ Paper text: {paper_text}"""
         ("optimization_objective", r"\bloss function\b|\bobjective function\b|\barg\s*max\b|\barg\s*min\b"),
         ("probabilistic_model", r"\bBayesian\b|\bprobabilistic\b|\bp\s*\(\s*[^)]+\s*\)"),
     )
+    LEGACY_ARXIV_CATEGORY_RE = (
+        r"(?:astro-ph|cond-mat|cs|gr-qc|hep-ex|hep-lat|hep-ph|hep-th|"
+        r"math-ph|math|nlin|nucl-ex|nucl-th|physics|q-bio|q-fin|quant-ph|stat)"
+    )
 
     def __init__(
         self,
         llm_router: LLMRouter,
-        quality_db_path: str | None = "data/metadata.duckdb",
+        quality_db_path: str | None = None,
     ) -> None:
         """
         Initialize extractor with an LLM router and optional quality database.
@@ -982,6 +1119,18 @@ Paper text: {paper_text}"""
             scan.methods,
             *[self._coerce_list(call.data.get("method_candidates")) for call in structural_calls],
         )
+        concepts_retry: ParsedLLMResponse | None = None
+        if self._should_retry_concepts(concepts, structural_calls, scan):
+            logger.warning("Structural concept extraction failed or was too thin; running concepts-only retry")
+            concepts_retry = self._run_concepts_only_retry(extraction_text, provider, base_overrides, scan)
+            retry_concepts = self._coerce_list(concepts_retry.data.get("concepts"))
+            if retry_concepts:
+                concepts = self._merge_entity_lists(concepts, retry_concepts)
+            else:
+                logger.error(
+                    "Concepts-only retry failed for paper_id=%s; keeping deterministic candidates only",
+                    paper_id,
+                )
         methods_retry: ParsedLLMResponse | None = None
         if self._should_retry_methods(methods, structural_calls, concepts, scan):
             logger.warning("Methods lost in partial recovery — running methods-only retry")
@@ -1090,6 +1239,10 @@ Paper text: {paper_text}"""
                 terminology_conflicts,
                 self._fallback_terminology_conflicts([*concepts, *concept_candidates]),
             )
+            terminology_conflicts = self._filter_terminology_conflicts(
+                terminology_conflicts,
+                [*concepts, *methods, *concept_candidates, *method_candidates],
+            )
 
         mathematical_content = self._coerce_dict(semantic_data.get("mathematical_content"))
         if regex_result.has_formulas:
@@ -1109,9 +1262,7 @@ Paper text: {paper_text}"""
         if scan.paper_year and not temporal_coverage.get("paper_year"):
             temporal_coverage["paper_year"] = scan.paper_year
 
-        paper_type = self._normalize_paper_type(semantic_data.get("paper_type"))
-        if detected_paper_type == "survey" and paper_type == "research":
-            paper_type = "survey"
+        paper_type = self._resolve_paper_type(semantic_data.get("paper_type"), detected_paper_type, extraction_text)
         paper_node = self._build_paper_node(
             paper_id=paper_id,
             paper_text=source_text,
@@ -1120,8 +1271,12 @@ Paper text: {paper_text}"""
             temporal_coverage=temporal_coverage,
             language_detected=str(semantic_data.get("language_detected") or "en"),
         )
+        if paper_node.get("paper_year"):
+            temporal_coverage["paper_year"] = paper_node.get("paper_year")
+        result_paper_id = str(paper_node.get("paper_id") or paper_id)
+        structural_parse_quality = self._chunked_parse_quality(structural_calls)
         parse_quality = self._combined_parse_quality(
-            self._worst_parse_quality([call.parse_quality for call in structural_calls]),
+            structural_parse_quality,
             "clean" if extraction_mode == "quick" else self._worst_parse_quality(
                 [semantic.parse_quality]
                 + ([claims_pass.parse_quality] if claims_pass is not None else [])
@@ -1140,6 +1295,21 @@ Paper text: {paper_text}"""
             parse_quality=parse_quality,
             paper_id=paper_id,
             paper_node=paper_node,
+        )
+
+        call_diagnostics = self._call_diagnostics(
+            structural_calls,
+            semantic,
+            claims_pass,
+            concepts_retry=concepts_retry,
+            methods_retry=methods_retry,
+            semantic_retry=semantic_retry,
+        )
+        fatal_failure_reason = self._fatal_extraction_failure_reason(
+            parse_quality=parse_quality,
+            concepts=concepts,
+            methods=methods,
+            call_diagnostics=call_diagnostics,
         )
 
         result_payload = {
@@ -1164,17 +1334,20 @@ Paper text: {paper_text}"""
             "blocking_errors": metadata_validation["blocking_errors"],
             "chunk_count": len(chunks),
             "extraction_mode": extraction_mode,
-            "call_1_parse_quality": self._worst_parse_quality([call.parse_quality for call in structural_calls]),
+            "call_1_parse_quality": structural_parse_quality,
             "call_2_parse_quality": semantic.parse_quality,
+            "concepts_retry_parse_quality": concepts_retry.parse_quality if concepts_retry else None,
             "methods_retry_parse_quality": methods_retry.parse_quality if methods_retry else None,
             "semantic_retry_parse_quality": semantic_retry.parse_quality if semantic_retry else None,
             "claims_pass_parse_quality": claims_pass.parse_quality if claims_pass else None,
-            "call_diagnostics": self._call_diagnostics(structural_calls, semantic, claims_pass),
+            "fatal_llm_error": bool(fatal_failure_reason),
+            "failure_reason": fatal_failure_reason,
+            "call_diagnostics": call_diagnostics,
         }
 
         self._log_count_warnings(paper_type, len(concepts), warnings)
         self._write_quality_record(
-            paper_id=paper_id,
+            paper_id=result_paper_id,
             payload=result_payload,
             duration_seconds=duration,
             provider=provider,
@@ -1187,7 +1360,7 @@ Paper text: {paper_text}"""
         )
 
         return ExtractionResult(
-            paper_id=paper_id,
+            paper_id=result_paper_id,
             paper_type=paper_type,
             paper_node=paper_node,
             concepts=concepts,
@@ -1210,9 +1383,12 @@ Paper text: {paper_text}"""
                 "parse_quality": parse_quality,
                 "call_1_parse_quality": result_payload["call_1_parse_quality"],
                 "call_2_parse_quality": semantic.parse_quality,
+                "concepts_retry_parse_quality": result_payload["concepts_retry_parse_quality"],
                 "methods_retry_parse_quality": result_payload["methods_retry_parse_quality"],
                 "semantic_retry_parse_quality": result_payload["semantic_retry_parse_quality"],
                 "claims_pass_parse_quality": result_payload["claims_pass_parse_quality"],
+                "fatal_llm_error": bool(fatal_failure_reason),
+                "failure_reason": fatal_failure_reason,
                 "calls": result_payload["call_diagnostics"],
             },
             raw_response=json.dumps(result_payload, indent=2, ensure_ascii=False),
@@ -1259,7 +1435,7 @@ Paper text: {paper_text}"""
                 "method_candidates": [],
             },
         )
-        if parsed.parse_quality == "partial" and retry_split and len(text_summary) > 9000:
+        if parsed.parse_quality in {"partial", "failed"} and retry_split and len(text_summary) > 9000:
             split_calls = [
                 self._run_structural_call(
                     part,
@@ -1424,6 +1600,65 @@ Paper text: {paper_text}"""
             tokens_used=self._last_tokens_used(),
         )
 
+    def _run_concepts_only_retry(
+        self,
+        paper_text: str,
+        provider: str | None,
+        base_overrides: dict[str, Any],
+        scan: DeterministicScanResult,
+    ) -> ParsedLLMResponse:
+        """Retry concept extraction with a smaller array-only prompt."""
+        candidate_json = json.dumps((scan.concepts + scan.methods)[:32], ensure_ascii=False)
+        prompt = (
+            self.CONCEPTS_ONLY_PROMPT
+            .replace("{candidate_json}", candidate_json)
+            .replace("{paper_text}", paper_text or "")
+        )
+        overrides = self._call_overrides(
+            base_overrides,
+            max_tokens=10000,
+            temperature=0.1,
+            top_p=0.85,
+            json_object=False,
+        )
+        try:
+            raw_response = self.llm.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "Return a valid JSON array only. No markdown, no commentary, no hidden reasoning. /no_think",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                provider=provider,
+                overrides=overrides,
+            )
+            raw_text = str(raw_response.get("content") or raw_response) if isinstance(raw_response, dict) else str(raw_response or "")
+        except Exception as exc:
+            logger.exception("Concepts-only retry failed")
+            return ParsedLLMResponse(
+                data={"concepts": []},
+                parse_quality="failed",
+                raw_text=f"LLM concepts-only retry failed: {exc}",
+                tokens_used=None,
+            )
+
+        parsed_array = self._parse_json_array_robust(raw_text)
+        if parsed_array.data:
+            return ParsedLLMResponse(
+                data={"concepts": parsed_array.data},
+                parse_quality=parsed_array.parse_quality,
+                raw_text=raw_text,
+                tokens_used=self._last_tokens_used(),
+            )
+        parsed_object = self._parse_json_robust(raw_text, default={"concepts": []})
+        return ParsedLLMResponse(
+            data={"concepts": self._coerce_list(parsed_object.data.get("concepts"))},
+            parse_quality=parsed_object.parse_quality,
+            raw_text=raw_text,
+            tokens_used=self._last_tokens_used(),
+        )
+
     def _run_semantic_lists_retry(
         self,
         paper_text: str,
@@ -1449,6 +1684,21 @@ Paper text: {paper_text}"""
         )
 
     @classmethod
+    def _should_retry_concepts(
+        cls,
+        concepts: list[dict[str, Any]],
+        structural_calls: list[ParsedLLMResponse],
+        scan: DeterministicScanResult,
+    ) -> bool:
+        """Return true when the main structural prompt produced no concepts."""
+        if concepts:
+            return False
+        structural_quality = cls._worst_parse_quality([call.parse_quality for call in structural_calls])
+        if structural_quality not in {"partial", "failed"}:
+            return False
+        return bool(structural_calls or scan.concepts or scan.methods)
+
+    @classmethod
     def _should_retry_methods(
         cls,
         methods: list[dict[str, Any]],
@@ -1459,12 +1709,12 @@ Paper text: {paper_text}"""
         """Return true when partial Call 1 likely lost method extraction."""
         if methods:
             return False
-        if cls._worst_parse_quality([call.parse_quality for call in structural_calls]) != "partial":
+        if cls._worst_parse_quality([call.parse_quality for call in structural_calls]) not in {"partial", "failed"}:
             return False
         if not (concepts or scan.concepts or scan.methods):
             return False
         for call in structural_calls:
-            if call.parse_quality == "partial":
+            if call.parse_quality in {"partial", "failed"}:
                 return True
         return False
 
@@ -1554,9 +1804,15 @@ Paper text: {paper_text}"""
     @classmethod
     def _normalize_claim_negation(cls, claim: dict[str, Any]) -> bool:
         statement = str(claim.get("statement") or "").lower()
+        if re.search(
+            r"\bwithout\s+(?:a\s+)?(?:significant\s+|substantial\s+|meaningful\s+)?"
+            r"(?:loss|degradation|performance loss|drop|reduction)\b",
+            statement,
+        ) or re.search(r"\bwithout\s+(?:sacrificing|compromising|hurting)\b", statement):
+            return False
         explicit_negation = bool(
             re.search(
-                r"\b(no evidence|no significant|does not|do not|did not|cannot|can not|unable to|failed to|fails to|without)\b",
+                r"\b(no evidence|no significant|does not|do not|did not|cannot|can not|unable to|failed to|fails to)\b",
                 statement,
             )
         )
@@ -1849,11 +2105,14 @@ Paper text: {paper_text}"""
         body_text = cls._text_before_references(paper_text or "")
         is_official_statistics = cls._looks_like_official_statistics(body_text)
         is_rl_emotion = cls._looks_like_rl_emotion_paper(body_text)
+        is_qml = cls._looks_like_quantum_ml_paper(body_text)
 
         for label, pattern in cls.KNOWN_CONCEPT_PATTERNS:
             if label in cls.OFFICIAL_STATISTICS_LABELS and not is_official_statistics:
                 continue
             if label in cls.RL_EMOTION_LABELS and not is_rl_emotion:
+                continue
+            if label in cls.QML_LABELS and not is_qml:
                 continue
             if cls._normalize_label(label) in seen:
                 continue
@@ -2065,6 +2324,54 @@ Paper text: {paper_text}"""
                 seen.add(term)
                 output.append(dict(item))
         return output[:8]
+
+    @classmethod
+    def _filter_terminology_conflicts(
+        cls,
+        conflicts: list[dict[str, Any]],
+        entities: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Drop generic conflict filler unless the term is anchored by extracted entities."""
+        entity_keys: set[str] = set()
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            labels = [
+                entity.get("label"),
+                entity.get("canonical_label"),
+                *list(entity.get("aliases") or []),
+            ]
+            for label in labels:
+                key = cls._normalize_label(str(label or ""))
+                if key:
+                    entity_keys.add(key)
+
+        generic_allowed_anchors = {
+            "bias": {"bias", "selectionbias", "operationalizationbias", "databias"},
+            "model": {"modelbasedrl", "modeluncertainty", "transitionmodel"},
+            "policy": {"policysearch", "policygradient"},
+            "value": {"valuefunction", "statevalue", "stateactionvalue"},
+        }
+        generic_terms = set(generic_allowed_anchors)
+        filtered: list[dict[str, Any]] = []
+        for conflict in conflicts:
+            if not isinstance(conflict, dict):
+                continue
+            term = re.sub(r"\s+", " ", str(conflict.get("term") or "")).strip()
+            key = cls._normalize_label(term)
+            if not key:
+                continue
+            if key in generic_terms:
+                allowed = generic_allowed_anchors.get(key, {key})
+                if key not in entity_keys and not (entity_keys & allowed):
+                    continue
+                this_field = str(conflict.get("this_field") or "").lower()
+                if re.search(r"\bnot explicitly\b|\bnot defined\b", this_field):
+                    continue
+            item = dict(conflict)
+            item["term"] = term
+            filtered.append(item)
+        return filtered[:8]
 
     @classmethod
     def _has_overloaded_terms(cls, concepts: list[dict[str, Any]]) -> bool:
@@ -2684,20 +2991,47 @@ Paper text: {paper_text}"""
     @staticmethod
     def _detect_paper_type(text: str) -> str | None:
         sample = (text or "")[:12000].lower()
-        survey_markers = (
-            "a survey",
-            "this survey",
-            "survey of",
-            "surveyed",
-            "review paper",
-            "systematic review",
-            "literature review",
+        title = EntityExtractor._paper_title_from_text(text).lower()
+        benchmark_markers = (
+            "benchmark",
+            "benchmark task",
+            "benchmark suite",
+            "discovery engine",
+            "open-source framework",
         )
-        if any(marker in sample for marker in survey_markers):
-            return "survey"
-        if "benchmark" in sample and "dataset" in sample:
+        framework_intro = bool(
+            re.search(r"\b(we|this paper|we introduce|we present|we propose)\b", sample)
+            and re.search(r"\b(framework|engine|toolkit|library|platform)\b", sample)
+            and re.search(r"\b(benchmark|dataset|task|evaluate|evaluation|reproduce|reproduces|mnist|sst-?2)\b", sample)
+        )
+        if any(marker in title for marker in benchmark_markers) or framework_intro:
             return "benchmark"
+        survey_markers = (
+            r"\ba survey\b",
+            r"\bthis survey\b",
+            r"\bsurvey of\b",
+            r"\breview paper\b",
+            r"\bsystematic review\b",
+            r"\bliterature review\b",
+            r"\bwe survey\b",
+            r"\bwe review the literature\b",
+        )
+        if any(re.search(marker, title) for marker in survey_markers):
+            return "survey"
+        if any(re.search(marker, sample) for marker in survey_markers):
+            return "survey"
         return None
+
+    @classmethod
+    def _resolve_paper_type(cls, semantic_type: Any, detected_type: str | None, text: str) -> str:
+        """Combine model paper-type output with deterministic safeguards."""
+        paper_type = cls._normalize_paper_type(semantic_type)
+        detected = cls._normalize_paper_type(detected_type) if detected_type else None
+        if detected == "benchmark" and paper_type in {"research", "survey", "benchmark"}:
+            return "benchmark"
+        if detected == "survey" and paper_type == "research":
+            return "survey"
+        return paper_type
 
     @staticmethod
     def _paper_title_from_text(text: str) -> str:
@@ -2707,14 +3041,94 @@ Paper text: {paper_text}"""
             if not line:
                 continue
             lowered = line.lower()
+            if EntityExtractor._is_header_noise_title_line(line):
+                continue
             if lowered in {"abstract", "introduction"}:
                 continue
+            if lowered in {"article", "research article", "original article", "original research", "open access"}:
+                continue
             if re.match(r"^(?:arxiv|doi|http|www\.|journal|conference)\b", lowered):
+                continue
+            if re.match(r"^(?:downloaded from|published by|available online)\b", lowered):
                 continue
             if len(line) < 6 or len(line) > 180:
                 continue
             return line.title() if line.isupper() else line
         return ""
+
+    @staticmethod
+    def _is_header_noise_title_line(line: str) -> bool:
+        """Reject common PDF header/footer lines that precede the real title."""
+        cleaned = re.sub(r"\s+", " ", line or "").strip()
+        lowered = cleaned.lower()
+        if not lowered:
+            return True
+        exact_noise = {
+            "preprint",
+            "draft",
+            "accepted manuscript",
+            "noname manuscript no.",
+            "noname manuscript no",
+            "science china",
+            "conference paper",
+            "technical report",
+            "springer nature latex template",
+        }
+        if lowered in exact_noise:
+            return True
+        noisy_patterns = [
+            r"^draft version\b",
+            r"^accepted for publication\b",
+            r"^accepted manuscript\b",
+            r"^arxiv preprint\b",
+            r"^preprint submitted\b",
+            r"^submitted to\b",
+            r"^published in\b",
+            r"^proceedings of\b",
+            r"^copyright\b",
+            r"^©",
+            r"^cern[-\s]open[-\s]\d",
+            r"^european organization for nuclear research",
+            r"^journal of\b",
+            r"^springer nature\b.*latex template",
+            r"^information research\s*-\s*vol\.",
+            r"^\d+(?:st|nd|rd|th)\s+conte?csi\b",
+            r"^\d+(?:st|nd|rd|th)\s+.*international conference on\b",
+            r"^draft version\s*(?:january|february|march|april|may|june|july|august|september|october|november|december)\b",
+            r"^\d{1,2}\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}$",
+        ]
+        return any(re.search(pattern, lowered) for pattern in noisy_patterns)
+
+    @classmethod
+    def _title_tokens(cls, title: str) -> set[str]:
+        normalized = normalize_scientific_text(title).lower()
+        tokens = re.findall(r"[a-z0-9]+", normalized)
+        return {
+            token
+            for token in tokens
+            if len(token) >= 3 and token not in cls.TITLE_STOPWORDS and not token.isdigit()
+        }
+
+    @classmethod
+    def _titles_conflict(cls, first: str, second: str) -> bool:
+        """Return true only for strong title conflicts, not small formatting drift."""
+        first_clean = re.sub(r"\s+", " ", normalize_scientific_text(first)).strip().lower()
+        second_clean = re.sub(r"\s+", " ", normalize_scientific_text(second)).strip().lower()
+        if not first_clean or not second_clean:
+            return False
+        if cls._normalize_label(first_clean) == cls._normalize_label(second_clean):
+            return False
+
+        first_tokens = cls._title_tokens(first_clean)
+        second_tokens = cls._title_tokens(second_clean)
+        if len(first_tokens) < 3 or len(second_tokens) < 3:
+            return False
+
+        shared = first_tokens & second_tokens
+        overlap = len(shared) / max(1, min(len(first_tokens), len(second_tokens)))
+        jaccard = len(shared) / max(1, len(first_tokens | second_tokens))
+        sequence_similarity = SequenceMatcher(None, first_clean, second_clean).ratio()
+        return overlap < 0.35 and jaccard < 0.25 and sequence_similarity < 0.55
 
     @staticmethod
     def _combined_parse_quality(call_1_quality: str, call_2_quality: str) -> str:
@@ -2724,28 +3138,103 @@ Paper text: {paper_text}"""
         return worst if worst in order else "partial"
 
     @staticmethod
+    def _diagnostic_excerpt(raw_text: str, max_chars: int = 360) -> str:
+        """Return a compact diagnostic excerpt without flooding stored payloads."""
+        excerpt = re.sub(r"\s+", " ", str(raw_text or "")).strip()
+        if len(excerpt) > max_chars:
+            excerpt = excerpt[:max_chars] + "..."
+        return excerpt
+
+    @classmethod
+    def _fatal_extraction_failure_reason(
+        cls,
+        parse_quality: str,
+        concepts: list[dict[str, Any]],
+        methods: list[dict[str, Any]],
+        call_diagnostics: list[dict[str, Any]],
+    ) -> str | None:
+        """Detect model-level failures that should not be written as successes."""
+        if parse_quality != "failed" or concepts or methods:
+            return None
+        calls = [
+            call
+            for call in call_diagnostics
+            if isinstance(call, dict) and str(call.get("call_type") or "") != "claims_retry"
+        ]
+        if not calls:
+            return "LLM extraction failed before usable JSON could be produced."
+        if any(str(call.get("parse_quality") or "") not in {"failed", "skipped"} for call in calls):
+            return None
+        failed_calls = [call for call in calls if str(call.get("parse_quality") or "") == "failed"]
+        if not failed_calls:
+            return None
+        excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in failed_calls)
+        if "No models loaded" in excerpts:
+            return "LLM extraction failed: LM Studio has no model loaded."
+        if "LLM call failed" in excerpts or "retry failed" in excerpts:
+            return "LLM extraction failed for every extraction call; no KG-safe entities were produced."
+        return "LLM extraction failed before usable JSON could be produced."
+
+    @staticmethod
     def _call_diagnostics(
         structural_calls: list[ParsedLLMResponse],
         semantic: ParsedLLMResponse,
         claims_pass: ParsedLLMResponse | None,
+        concepts_retry: ParsedLLMResponse | None = None,
+        methods_retry: ParsedLLMResponse | None = None,
+        semantic_retry: ParsedLLMResponse | None = None,
     ) -> list[dict[str, Any]]:
         """Return per-call parse diagnostics for review and benchmark gates."""
         diagnostics: list[dict[str, Any]] = []
         structural_keys = {"concepts", "methods", "concept_candidates", "method_candidates"}
         for index, call in enumerate(structural_calls, start=1):
             data_keys = set(call.data.keys())
-            diagnostics.append(
-                {
-                    "call_type": "structural",
-                    "chunk_index": index,
-                    "parse_quality": call.parse_quality,
-                    "missing_keys": sorted(structural_keys - data_keys),
-                    "tokens_used": call.tokens_used,
-                    "recovery_strategy": "split_retry"
-                    if "--- SPLIT STRUCTURAL RETRY ---" in call.raw_text
-                    else None,
-                }
-            )
+            row = {
+                "call_type": "structural",
+                "chunk_index": index,
+                "parse_quality": call.parse_quality,
+                "missing_keys": sorted(structural_keys - data_keys),
+                "tokens_used": call.tokens_used,
+                "recovery_strategy": "split_retry"
+                if "--- SPLIT STRUCTURAL RETRY ---" in call.raw_text
+                else None,
+            }
+            if call.parse_quality in {"partial", "failed"}:
+                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(call.raw_text)
+            diagnostics.append(row)
+        if concepts_retry is not None:
+            row = {
+                "call_type": "concepts_retry",
+                "chunk_index": None,
+                "parse_quality": concepts_retry.parse_quality,
+                "missing_keys": [] if "concepts" in concepts_retry.data else ["concepts"],
+                "tokens_used": concepts_retry.tokens_used,
+            }
+            if concepts_retry.parse_quality in {"partial", "failed"}:
+                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(concepts_retry.raw_text)
+            diagnostics.append(row)
+        if methods_retry is not None:
+            row = {
+                "call_type": "methods_retry",
+                "chunk_index": None,
+                "parse_quality": methods_retry.parse_quality,
+                "missing_keys": [] if "methods" in methods_retry.data else ["methods"],
+                "tokens_used": methods_retry.tokens_used,
+            }
+            if methods_retry.parse_quality in {"partial", "failed"}:
+                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(methods_retry.raw_text)
+            diagnostics.append(row)
+        if semantic_retry is not None:
+            row = {
+                "call_type": "semantic_retry",
+                "chunk_index": None,
+                "parse_quality": semantic_retry.parse_quality,
+                "missing_keys": [],
+                "tokens_used": semantic_retry.tokens_used,
+            }
+            if semantic_retry.parse_quality in {"partial", "failed"}:
+                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(semantic_retry.raw_text)
+            diagnostics.append(row)
         semantic_keys = {
             "paper_type",
             "paper_node",
@@ -2756,15 +3245,16 @@ Paper text: {paper_text}"""
             "mathematical_content",
             "language_detected",
         }
-        diagnostics.append(
-            {
-                "call_type": "semantic",
-                "chunk_index": None,
-                "parse_quality": semantic.parse_quality,
-                "missing_keys": sorted(semantic_keys - set(semantic.data.keys())),
-                "tokens_used": semantic.tokens_used,
-            }
-        )
+        semantic_row = {
+            "call_type": "semantic",
+            "chunk_index": None,
+            "parse_quality": semantic.parse_quality,
+            "missing_keys": sorted(semantic_keys - set(semantic.data.keys())),
+            "tokens_used": semantic.tokens_used,
+        }
+        if semantic.parse_quality in {"partial", "failed"}:
+            semantic_row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(semantic.raw_text)
+        diagnostics.append(semantic_row)
         if claims_pass is not None:
             diagnostics.append(
                 {
@@ -2788,14 +3278,30 @@ Paper text: {paper_text}"""
         language_detected: str,
     ) -> dict[str, Any]:
         """Materialize the extraction's Paper node anchor independent of LLM recall."""
-        title = str(semantic_paper_node.get("title") or "").strip()
-        if not title:
-            title = cls._paper_title_from_text(paper_text)
+        semantic_title = str(semantic_paper_node.get("title") or "").strip()
+        text_title = cls._paper_title_from_text(paper_text)
+        title = semantic_title or text_title
+        title_conflict = bool(semantic_title and text_title and cls._titles_conflict(semantic_title, text_title))
+        if title_conflict:
+            title = text_title
         paper_year = semantic_paper_node.get("paper_year") or temporal_coverage.get("paper_year")
         reviewed_period = semantic_paper_node.get("reviewed_period") or temporal_coverage.get("reviewed_period")
+        detected_source_id = cls._extract_front_matter_arxiv_identifier(paper_text)
+        requested_arxiv_id = cls._extract_arxiv_identifier(str(paper_id))
+        canonical_paper_id = requested_arxiv_id or detected_source_id or str(paper_id)
+        authoritative_arxiv_id = ""
+        if requested_arxiv_id and (not detected_source_id or detected_source_id == requested_arxiv_id):
+            authoritative_arxiv_id = requested_arxiv_id
+        elif detected_source_id and not requested_arxiv_id:
+            authoritative_arxiv_id = detected_source_id
+        arxiv_year = cls._arxiv_publication_year(authoritative_arxiv_id)
+        llm_paper_year = cls._coerce_year(paper_year)
+        year_conflict = bool(arxiv_year and llm_paper_year and abs(arxiv_year - llm_paper_year) > 2)
+        if arxiv_year and (paper_year in (None, "") or year_conflict):
+            paper_year = arxiv_year
         node = {
             "node_type": "Paper",
-            "paper_id": str(paper_id),
+            "paper_id": canonical_paper_id,
             "title": title,
             "paper_type": cls._normalize_paper_type(paper_type),
             "paper_year": paper_year,
@@ -2803,10 +3309,14 @@ Paper text: {paper_text}"""
             "language_detected": language_detected or "en",
             "source": "extraction",
         }
-        detected_source_id = cls._extract_front_matter_arxiv_identifier(paper_text)
-        requested_arxiv_id = cls._extract_arxiv_identifier(str(paper_id))
-        if detected_source_id and detected_source_id != requested_arxiv_id:
+        if detected_source_id and requested_arxiv_id and detected_source_id != requested_arxiv_id:
             node["detected_source_id"] = detected_source_id
+        if title_conflict:
+            node["detected_title"] = text_title
+            node["llm_paper_title"] = semantic_title
+        if year_conflict:
+            node["llm_paper_year"] = llm_paper_year
+            node["paper_year_source"] = "arxiv_id"
         return {key: value for key, value in node.items() if value not in (None, "", [], {})}
 
     @staticmethod
@@ -2816,6 +3326,18 @@ Paper text: {paper_text}"""
         order = {"clean": 0, "trimmed": 1, "partial": 2, "failed": 3}
         worst = max(qualities, key=lambda item: order.get(item, 2))
         return worst if worst in order else "partial"
+
+    @classmethod
+    def _chunked_parse_quality(cls, calls: list[ParsedLLMResponse]) -> str:
+        """Aggregate chunked structural calls without letting one failed chunk erase useful chunks."""
+        if not calls:
+            return "partial"
+        qualities = [str(call.parse_quality or "partial") for call in calls]
+        if any(quality == "failed" for quality in qualities) and any(
+            quality in {"clean", "trimmed"} for quality in qualities
+        ):
+            return "partial"
+        return cls._worst_parse_quality(qualities)
 
     @classmethod
     def _quality_warnings(
@@ -2862,12 +3384,24 @@ Paper text: {paper_text}"""
                 f"Paper id {arxiv_id} implies year {arxiv_year}, "
                 f"but extracted paper_year is {paper_year}; verify paper metadata."
             )
+        llm_paper_year = cls._coerce_year(paper_node.get("llm_paper_year"))
+        if arxiv_year and llm_paper_year and abs(arxiv_year - llm_paper_year) > 2:
+            warnings.append(
+                f"LLM extracted paper_year={llm_paper_year}, but paper id {arxiv_id} "
+                f"implies {arxiv_year}; using arXiv metadata year."
+            )
 
         detected_source_id = cls._extract_arxiv_identifier(str(paper_node.get("detected_source_id") or ""))
         if arxiv_id and detected_source_id and detected_source_id != arxiv_id:
             warnings.append(
                 f"Paper text contains {detected_source_id}, "
                 f"but extraction paper_id is {arxiv_id}; verify source identity."
+            )
+        detected_title = str(paper_node.get("detected_title") or "")
+        llm_title = str(paper_node.get("llm_paper_title") or "")
+        if detected_title and llm_title and cls._titles_conflict(detected_title, llm_title):
+            warnings.append(
+                "Parsed paper title conflicts with LLM/external title; verify the selected paper text."
             )
         return warnings
 
@@ -2894,6 +3428,14 @@ Paper text: {paper_text}"""
                 f"extracted paper_year={paper_year}"
             )
 
+        detected_title = str(paper_node.get("detected_title") or "")
+        llm_title = str(paper_node.get("llm_paper_title") or "")
+        if detected_title and llm_title and cls._titles_conflict(detected_title, llm_title):
+            blocking_errors.append(
+                "paper_title_mismatch: parsed title "
+                f"'{detected_title[:120]}' conflicts with LLM/external title '{llm_title[:120]}'"
+            )
+
         return {
             "metadata_status": "invalid" if blocking_errors else "valid",
             "blocking_errors": blocking_errors,
@@ -2907,16 +3449,27 @@ Paper text: {paper_text}"""
             return None
         return year if 1500 <= year <= 3000 else None
 
-    @staticmethod
-    def _extract_arxiv_identifier(value: str) -> str:
+    @classmethod
+    def _extract_arxiv_identifier(cls, value: str) -> str:
         match = re.search(
             r"\b(?:arxiv:\s*)?(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?\b",
             value,
             re.IGNORECASE,
         )
+        if match:
+            return f"arxiv:{match.group(1)}{match.group(2)}.{match.group(3)}"
+        return cls._extract_legacy_arxiv_identifier(value)
+
+    @classmethod
+    def _extract_legacy_arxiv_identifier(cls, value: str) -> str:
+        match = re.search(
+            rf"(?<![A-Za-z0-9])({cls.LEGACY_ARXIV_CATEGORY_RE})\s*[/_:.-]\s*(\d{{7}})(?:v\d+)?(?!\d)",
+            value or "",
+            re.IGNORECASE,
+        )
         if not match:
             return ""
-        return f"arxiv:{match.group(1)}{match.group(2)}.{match.group(3)}"
+        return f"arxiv:{match.group(1).lower()}/{match.group(2)}"
 
     @classmethod
     def _extract_front_matter_arxiv_identifier(cls, paper_text: str) -> str:
@@ -2944,8 +3497,8 @@ Paper text: {paper_text}"""
         fallback_window = front_matter[: abstract_match.end() + 250] if abstract_match else front_matter[:2500]
         return cls._extract_arxiv_identifier(fallback_window)
 
-    @staticmethod
-    def _extract_explicit_arxiv_identifier(value: str) -> str:
+    @classmethod
+    def _extract_explicit_arxiv_identifier(cls, value: str) -> str:
         match = re.search(
             r"\barxiv\s*:\s*(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?\b",
             value or "",
@@ -2957,13 +3510,19 @@ Paper text: {paper_text}"""
                 value or "",
                 re.IGNORECASE,
             )
-        if not match:
-            return ""
-        return f"arxiv:{match.group(1)}{match.group(2)}.{match.group(3)}"
+        if match:
+            return f"arxiv:{match.group(1)}{match.group(2)}.{match.group(3)}"
+        return cls._extract_legacy_arxiv_identifier(value or "")
 
-    @staticmethod
-    def _arxiv_publication_year(arxiv_id: str) -> int | None:
+    @classmethod
+    def _arxiv_publication_year(cls, arxiv_id: str) -> int | None:
         match = re.search(r"\b(?:arxiv:\s*)?(\d{2})(\d{2})\.\d{4,5}", arxiv_id, re.IGNORECASE)
+        if not match:
+            match = re.search(
+                rf"(?<![A-Za-z0-9])(?:arxiv:\s*)?{cls.LEGACY_ARXIV_CATEGORY_RE}\s*/\s*(\d{{2}})(\d{{2}})\d{{3}}",
+                arxiv_id or "",
+                re.IGNORECASE,
+            )
         if not match:
             return None
         year = int(match.group(1))
@@ -3016,6 +3575,7 @@ Paper text: {paper_text}"""
         body_text = cls._text_before_references(text)
         is_official_statistics = cls._looks_like_official_statistics(body_text)
         is_rl_emotion = cls._looks_like_rl_emotion_paper(body_text)
+        is_qml = cls._looks_like_quantum_ml_paper(body_text)
         concepts: list[dict[str, Any]] = []
         methods: list[dict[str, Any]] = []
         seen_concepts: set[str] = set()
@@ -3057,6 +3617,8 @@ Paper text: {paper_text}"""
             if label in cls.OFFICIAL_STATISTICS_LABELS and not is_official_statistics:
                 continue
             if label in cls.RL_EMOTION_LABELS and not is_rl_emotion:
+                continue
+            if label in cls.QML_LABELS and not is_qml:
                 continue
             match = re.search(pattern, body_text, flags=re.IGNORECASE)
             if match:
@@ -3183,6 +3745,26 @@ Paper text: {paper_text}"""
             or "appraisal" in normalized
         )
         return bool(has_rl and has_emotion)
+
+    @classmethod
+    def _looks_like_quantum_ml_paper(cls, text: str) -> bool:
+        normalized = (text or "").lower()
+        has_quantum_context = (
+            "quantum" in normalized
+            or "photonic" in normalized
+            or "fock space" in normalized
+            or "linear-optical" in normalized
+            or re.search(r"\bQML\b", text or "") is not None
+        )
+        has_ml_context = (
+            "machine learning" in normalized
+            or "neural network" in normalized
+            or "neural networks" in normalized
+            or "classification" in normalized
+            or "benchmark" in normalized
+            or "dataset" in normalized
+        )
+        return bool(has_quantum_context and has_ml_context)
 
     @classmethod
     def _is_good_acronym_pair(cls, long_form: str, short_form: str) -> bool:

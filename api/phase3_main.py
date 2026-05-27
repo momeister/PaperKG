@@ -168,6 +168,26 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
         if request.extraction_mode is not None:
             overrides["extraction_mode"] = request.extraction_mode
 
+        provider_cfg = llm_router.provider_config(request.provider)
+        if provider_cfg.provider_type == "nvidia":
+            ok, provider_error = llm_router.check_provider_auth(
+                provider=request.provider,
+                timeout_seconds=min(provider_cfg.timeout_seconds, 60.0),
+            )
+            if not ok:
+                is_hosted = "integrate.api.nvidia.com" in provider_cfg.base_url.lower()
+                detail = (
+                    f"NVIDIA hosted provider authorization failed: {provider_error}"
+                    if is_hosted and llm_router.is_auth_error(provider_error)
+                    else f"NVIDIA hosted provider preflight failed: {provider_error}"
+                    if is_hosted
+                    else f"Self-hosted NVIDIA NIM provider check failed: {provider_error}"
+                )
+                raise HTTPException(
+                    status_code=401 if is_hosted and llm_router.is_auth_error(provider_error) else 503,
+                    detail=detail,
+                )
+
         # Extract entities
         result = extraction_pipeline.process(
             request.paper_id,

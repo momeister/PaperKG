@@ -43,6 +43,9 @@ data/*.parquet
 *.duckdb.wal
 *.duckdb.tmp
 *.kuzu/
+data/nim-cache/
+.nim-cache/
+nim-cache/
 
 # Build / packaging
 build/

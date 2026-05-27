@@ -97,6 +97,35 @@ def field_accuracy(expected_items: list[Any], predicted_items: list[Any], field:
     return matches / len(expected_by_label)
 
 
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def claim_negation_metrics(expected_items: list[Any], predicted_items: list[Any]) -> tuple[float, int, int]:
+    expected_by_statement = {
+        _norm(item.get("statement")): _bool_value(item.get("negated"))
+        for item in expected_items
+        if isinstance(item, dict) and _norm(item.get("statement")) and "negated" in item
+    }
+    if not expected_by_statement:
+        return 1.0, 0, 0
+    predicted_by_statement = {
+        _norm(item.get("statement")): _bool_value(item.get("negated"))
+        for item in predicted_items
+        if isinstance(item, dict) and _norm(item.get("statement"))
+    }
+    matches = sum(
+        1 for statement, negated in expected_by_statement.items() if predicted_by_statement.get(statement) == negated
+    )
+    total = len(expected_by_statement)
+    errors = total - matches
+    return matches / total, errors, total
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -139,6 +168,10 @@ def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> d
         for item in all_entities
         if isinstance(item, dict) and str(item.get("review_status") or "").lower() == "pending"
     )
+    claim_negation_accuracy, claim_negation_errors, claim_negation_total = claim_negation_metrics(
+        expected.get("claims") or [],
+        prediction.get("claims") or [],
+    )
     return {
         "paper_id": gold_payload.get("paper_id") or prediction.get("paper_id") or "",
         "concepts": concepts.to_dict(),
@@ -156,6 +189,9 @@ def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> d
         "duplicate_canonical_rate": round(duplicate_canonical_rate(prediction.get("concepts") or []), 4),
         "pending_rate": round(pending_count / len(all_entities), 4) if all_entities else 0.0,
         "claim_attribution_error_count": len(claim_attribution_errors),
+        "claim_negation_accuracy": round(claim_negation_accuracy, 4),
+        "claim_negation_error_count": claim_negation_errors,
+        "claim_negation_expected_count": claim_negation_total,
         "parser_warning_count": len(parser_warnings),
         "accepted_concept_count": len(prediction.get("concepts") or []),
         "candidate_concept_count": len(prediction.get("concept_candidates") or []),
@@ -174,9 +210,13 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
             "relation_recall": 0.0,
             "duplicate_canonical_rate": 0.0,
             "pending_rate": 0.0,
+            "claim_negation_accuracy": 1.0,
+            "claim_negation_error_count": 0,
+            "claim_attribution_error_count": 0,
             "passes_precision_gate": False,
             "passes_duplicate_gate": True,
             "passes_parser_gate": True,
+            "passes_claim_gate": True,
         }
     concept_precision = sum(case["concepts"]["precision"] for case in case_reports) / len(case_reports)
     concept_recall = sum(case["concepts"]["recall"] for case in case_reports) / len(case_reports)
@@ -187,6 +227,9 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
     dup_rate = sum(case["duplicate_canonical_rate"] for case in case_reports) / len(case_reports)
     pending_rate = sum(case["pending_rate"] for case in case_reports) / len(case_reports)
     parser_warning_count = sum(case["parser_warning_count"] for case in case_reports)
+    claim_negation_accuracy = sum(case["claim_negation_accuracy"] for case in case_reports) / len(case_reports)
+    claim_negation_error_count = sum(case["claim_negation_error_count"] for case in case_reports)
+    claim_attribution_error_count = sum(case["claim_attribution_error_count"] for case in case_reports)
     return {
         "case_count": len(case_reports),
         "concept_precision": round(concept_precision, 4),
@@ -197,9 +240,13 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "relation_recall": round(relation_recall, 4),
         "duplicate_canonical_rate": round(dup_rate, 4),
         "pending_rate": round(pending_rate, 4),
+        "claim_negation_accuracy": round(claim_negation_accuracy, 4),
+        "claim_negation_error_count": claim_negation_error_count,
+        "claim_attribution_error_count": claim_attribution_error_count,
         "passes_precision_gate": concept_precision >= 0.85,
         "passes_duplicate_gate": dup_rate <= 0.05,
         "passes_parser_gate": parser_warning_count == 0,
+        "passes_claim_gate": claim_negation_error_count == 0 and claim_attribution_error_count == 0,
     }
 
 

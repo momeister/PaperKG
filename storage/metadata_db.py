@@ -504,9 +504,26 @@ class MetadataDB:
         return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
     @staticmethod
-    def _extract_arxiv_id(value: str) -> str | None:
-        match = re.search(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", str(value or ""), flags=re.IGNORECASE)
-        return match.group(0) if match else None
+    def _legacy_arxiv_category_re() -> str:
+        return (
+            r"(?:astro-ph|cond-mat|cs|gr-qc|hep-ex|hep-lat|hep-ph|hep-th|"
+            r"math-ph|math|nlin|nucl-ex|nucl-th|physics|q-bio|q-fin|quant-ph|stat)"
+        )
+
+    @classmethod
+    def _extract_arxiv_id(cls, value: str) -> str | None:
+        text = str(value or "")
+        match = re.search(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", text, flags=re.IGNORECASE)
+        if match:
+            return match.group(0)
+        legacy = re.search(
+            rf"(?<![A-Za-z0-9])({cls._legacy_arxiv_category_re()})\s*[/_:.-]\s*(\d{{7}})(?:v\d+)?(?!\d)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if legacy:
+            return f"{legacy.group(1).lower()}/{legacy.group(2)}"
+        return None
 
     @staticmethod
     def _slug(value: str) -> str:
@@ -583,6 +600,8 @@ class MetadataDB:
         """
         Save extraction results to database. Returns the result ID.
         """
+        if error_message is None:
+            error_message = self._infer_extraction_error_message(raw_response)
         status = "success" if error_message is None else "failed"
         
         result_id = self._execute("""
@@ -621,6 +640,41 @@ class MetadataDB:
             )
 
         return int(result_id[0]) if result_id else 0
+
+    @staticmethod
+    def _infer_extraction_error_message(raw_response: str | None) -> str | None:
+        """Infer failed status from extraction payloads that carry fatal diagnostics."""
+        if not raw_response:
+            return None
+        try:
+            payload = json.loads(raw_response)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        reason = str(payload.get("failure_reason") or "").strip()
+        if payload.get("fatal_llm_error"):
+            return reason or "LLM extraction failed before usable JSON could be produced."
+
+        parse_quality = payload.get("extraction_parse_quality") or payload.get("parse_quality")
+        if parse_quality != "failed":
+            return None
+        calls = [
+            call
+            for call in (payload.get("call_diagnostics") or payload.get("calls") or [])
+            if isinstance(call, dict) and str(call.get("call_type") or "") != "claims_retry"
+        ]
+        if calls and all(str(call.get("parse_quality") or "") == "failed" for call in calls):
+            excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in calls)
+            if "No models loaded" in excerpts:
+                return "LLM extraction failed: LM Studio has no model loaded."
+            concepts = payload.get("concepts") or []
+            methods = payload.get("methods") or []
+            if concepts or methods:
+                return None
+            return "LLM extraction failed for every extraction call; no KG-safe entities were produced."
+        return None
 
     def enqueue_pending_entities(
         self,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from quality.benchmark import duplicate_canonical_rate, evaluate_case, run_benchmark
+from quality.benchmark import claim_negation_metrics, duplicate_canonical_rate, evaluate_case, run_benchmark
 
 
 def test_benchmark_evaluates_precision_recall_and_duplicates(tmp_path):
@@ -86,3 +87,42 @@ def test_benchmark_flags_claim_attribution_errors():
     )
 
     assert report["claim_attribution_error_count"] == 1
+
+
+def test_claim_negation_metrics_catch_polarity_errors():
+    accuracy, errors, total = claim_negation_metrics(
+        [{"statement": "Models work without significant loss.", "negated": False}],
+        [{"statement": "Models work without significant loss.", "negated": True}],
+    )
+
+    assert accuracy == 0.0
+    assert errors == 1
+    assert total == 1
+
+
+def test_claim_negation_metrics_accept_string_booleans():
+    accuracy, errors, total = claim_negation_metrics(
+        [{"statement": "Models work without significant loss.", "negated": "false"}],
+        [{"statement": "Models work without significant loss.", "negated": "false"}],
+    )
+
+    assert accuracy == 1.0
+    assert errors == 0
+    assert total == 1
+
+
+def test_real_gold_benchmark_includes_merlin_qml_case():
+    report = run_benchmark(gold_dir=Path("quality/gold"))
+
+    merlin_case = next(case for case in report["cases"] if case["paper_id"] == "arxiv:2602.11092")
+    assert report["summary"]["case_count"] >= 2
+    assert merlin_case["concepts"]["f1"] == 1.0
+    assert merlin_case["concept_candidates"]["f1"] == 1.0
+    assert merlin_case["methods"]["f1"] == 1.0
+    assert merlin_case["relations"]["f1"] == 1.0
+    assert merlin_case["entity_type_accuracy"] == 1.0
+    assert merlin_case["method_source_type_accuracy"] == 1.0
+    assert merlin_case["claim_negation_accuracy"] == 1.0
+    assert merlin_case["claim_negation_error_count"] == 0
+    assert merlin_case["claim_attribution_error_count"] == 0
+    assert merlin_case["parser_warning_count"] == 0
