@@ -1,0 +1,58 @@
+[
+  {
+    "id": "clinical_ai_effects",
+    "question": "How is AI used in clinics, and what measurable effects were reported?",
+    "expected_sources": ["arxiv:2507.16947"],
+    "required_terms": ["AI Consult", "16%", "13%", "22,000", "29,000"],
+    "forbidden_terms": ["provided evidence does not contain specific quantitative"]
+  },
+  {
+    "id": "clinical_deployed_vs_eval_models",
+    "question": "What is the difference between the deployed AI Consult model and models used only for evaluation?",
+    "expected_sources": ["arxiv:2507.16947"],
+    "required_terms": ["AI Consult", "GPT-4.1", "o3", "rater|grader|rating|grading", "evaluation"],
+    "forbidden_terms": ["o3 was deployed", "GPT-4.1 was deployed"]
+  },
+  {
+    "id": "clinical_competency_frameworks",
+    "question": "Which frameworks are proposed for evaluating clinical AI competency?",
+    "expected_sources": ["arxiv:2604.08226"],
+    "required_terms": ["Clinical World Model", "Clinical AI Skill-Mix", "competency"],
+    "forbidden_terms": []
+  },
+  {
+    "id": "reasoning_and_genir",
+    "question": "Which papers in my library discuss efficient reasoning or generative information retrieval?",
+    "expected_sources": ["arxiv:2503.24377", "arxiv:2501.02842"],
+    "required_terms": ["reasoning economy", "GenIR"],
+    "forbidden_terms": ["deployed clinical systems"]
+  },
+  {
+    "id": "active_learning_streams",
+    "question": "What methods are used for active learning in data streams?",
+    "expected_sources": ["arxiv:2302.08893"],
+    "required_terms": ["uncertainty", "Query by Committee", "data streams"],
+    "forbidden_terms": []
+  },
+  {
+    "id": "robotics_adaptation_control",
+    "question": "How do the robotics papers differ in their approach to robot adaptation or control?",
+    "expected_sources": ["arxiv:2502.04012", "arxiv:2112.01942"],
+    "required_terms": ["Malleable Robots", "contact"],
+    "forbidden_terms": []
+  },
+  {
+    "id": "cross_domain_meta_robot_ml",
+    "question": "Are there cross-domain ideas connecting metamaterials, robotics, and machine learning?",
+    "expected_sources": ["arxiv:1807.06006"],
+    "required_terms": ["metamaterials"],
+    "forbidden_terms": ["contains no information regarding metamaterials", "no information regarding metamaterials"]
+  },
+  {
+    "id": "ml_validation_evaluation",
+    "question": "Which papers discuss validation or evaluation methodology for machine learning systems?",
+    "expected_sources": ["arxiv:2006.16189", "arxiv:2201.12150"],
+    "required_terms": ["DOME", "learning curves", "validation"],
+    "forbidden_terms": ["deployed clinical systems"]
+  }
+]

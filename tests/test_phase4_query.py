@@ -43,6 +43,14 @@ class FailingLLMRouter(FakeLLMRouter):
         raise RuntimeError("model unavailable")
 
 
+class TransientThenAnswerLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        if len(self.calls) == 1:
+            raise RuntimeError("503 Service Unavailable: high demand")
+        return "Recovered after transient provider failure [p1]."
+
+
 class EmptyReasoningThenAnswerLLMRouter(FakeLLMRouter):
     def __init__(self) -> None:
         super().__init__()
@@ -261,6 +269,65 @@ def test_kg_retriever_ignores_low_signal_query_matches_when_specific_terms_exist
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_kg_retriever_diversifies_multi_domain_queries() -> None:
+    root = Path("test-output") / f"phase4-diverse-aspects-{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=True)
+    db_path = str(root / "metadata.duckdb")
+    db = MetadataDB(db_path)
+    try:
+        db.insert_paper(
+            {
+                "id": "metamaterials",
+                "source": "fixture",
+                "source_id": "metamaterials",
+                "title": "Programmable Metamaterials for Adaptive Surfaces",
+                "abstract": "Metamaterials and metasurfaces tune physical properties with software commands.",
+                "year": 2021,
+            }
+        )
+        db.insert_paper(
+            {
+                "id": "robotics",
+                "source": "fixture",
+                "source_id": "robotics",
+                "title": "Robot Adaptation in Contact",
+                "abstract": "Robotics methods adapt control policies for manipulation.",
+                "year": 2022,
+            }
+        )
+        db.insert_paper(
+            {
+                "id": "ml",
+                "source": "fixture",
+                "source_id": "ml",
+                "title": "Machine Learning Methods",
+                "abstract": "Machine learning uses machine learning models for learning tasks.",
+                "year": 2023,
+            }
+        )
+        db.save_extraction_result(
+            paper_id="ml",
+            llm_provider="fake",
+            llm_model="fake-model",
+            concepts=[
+                {"label": "Machine learning", "context": "machine learning model learning algorithm"},
+                {"label": "Learning method", "context": "machine learning and model selection"},
+            ],
+        )
+        db.close()
+
+        hits = KGRetriever(metadata_db_path=db_path).search(
+            "Are there ideas connecting metamaterials, robotics, and machine learning?",
+            limit=3,
+        )
+
+        assert {hit.source.paper_id for hit in hits} == {"metamaterials", "robotics", "ml"}
+    finally:
+        if not db.is_closed:
+            db.close()
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_kg_retriever_paper_detail_and_neighborhood() -> None:
     with _phase4_fixture() as db_path:
         retriever = KGRetriever(metadata_db_path=db_path)
@@ -305,6 +372,21 @@ def test_grounded_responder_surfaces_generation_failures() -> None:
         assert answer.no_answer is False
         assert answer.generation_error == "model unavailable"
         assert "Evidence-only fallback" in answer.answer
+
+
+def test_grounded_responder_retries_transient_generation_failures() -> None:
+    with _phase4_fixture() as db_path:
+        fake_llm = TransientThenAnswerLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        answer = responder.answer("What uses graph transformer?")
+
+        assert answer.generation_error is None
+        assert answer.answer == "Recovered after transient provider failure [p1]."
+        assert len(fake_llm.calls) == 2
 
 
 def test_grounded_responder_retries_empty_reasoning_only_responses() -> None:
@@ -403,6 +485,16 @@ def test_phase4_api_endpoints(monkeypatch) -> None:
         )
         detail_response = client.get("/papers/p1", params={"metadata_db_path": db_path})
         neighborhood_response = client.get("/papers/p1/neighborhood", params={"metadata_db_path": db_path})
+        verify_response = client.post(
+            "/sources/verify-answer",
+            json={
+                "metadata_db_path": db_path,
+                "answer": answer_response.json(),
+                "parse_pdfs": False,
+            },
+        )
+        health_response = client.get("/system/health-report", params={"metadata_db_path": db_path})
+        benchmark_response = client.get("/quality/benchmark")
 
         assert search_response.status_code == 200
         assert search_response.json()["hits"][0]["source"]["paper_id"] == "p1"
@@ -412,3 +504,9 @@ def test_phase4_api_endpoints(monkeypatch) -> None:
         assert detail_response.json()["source"]["paper_id"] == "p1"
         assert neighborhood_response.status_code == 200
         assert neighborhood_response.json()["paper_id"] == "p1"
+        assert verify_response.status_code == 200
+        assert verify_response.json()["sources"][0]["paper_id"] == "p1"
+        assert health_response.status_code == 200
+        assert health_response.json()["metadata_db"]["paper_count"] == 3
+        assert benchmark_response.status_code == 200
+        assert benchmark_response.json()["summary"]["case_count"] >= 1

@@ -392,6 +392,8 @@ print(dot(v1,v3)/(norm(v1)*norm(v3)))  # muss < 0.5 sein
 - `ui/chat_interface.py` â€” Streamlit Chat-UI
 - `ui/paper_detail.py` â€” Paper-Detailansicht mit KG-Nachbarschaft
 - `ui/project_manager.py` â€” Projekte anlegen, Paper zuordnen, KG-Merge starten
+- Product-Frontend-Notizen: projektbezogener Markdown-Editor mit Shortcuts, Listenfortsetzung, editierbarer Preview, persistenten Notizen, klickbaren PDF-Zitaten und KI-Schreibhilfe fuer markierte Abschnitte
+- Product-Runner: startet die FastAPI Product API bevorzugt mit der lokalen `.venv`, damit Frontend und Backend dieselben Dependencies und Routen verwenden
 
 #### FÃ¤higkeiten nach Phase 4:
 - NatÃ¼rlichsprachige Fragen gegen den KG ("Was sind die wichtigsten Methoden in diesem Feld?")
@@ -399,7 +401,9 @@ print(dot(v1,v3)/(norm(v1)*norm(v3)))  # muss < 0.5 sein
 - Cross-Domain-Discovery: "Welche Methoden aus anderen Feldern kÃ¶nnten hier anwendbar sein?"
 - Hypothesen-Generierung via R1 auf Basis von Cross-Domain-Edges
 - Paper-Empfehlungen: "Welche Paper sollte ich noch lesen?"
-- Projekt-Management: Mehrere parallele Themenfelder
+- Projekt-Management: Mehrere parallele Themenfelder anlegen, pflegen und loeschen; `Alle Papers` bleibt als globaler Modus reserviert
+- Gesamtbestand-Modus: `Alle Papers` erlaubt projektuebergreifendes Arbeiten ohne `project_id`-Filter inklusive eigener globaler Notiz-Sammlung
+- Schreibvorbereitung: Zu jedem Projekt koennen Markdown-Notizen mit Tabellen, Bildern, Farben, Zitaten und Auswahl-KI gefuehrt werden
 
 #### âœ… Abnahme-Kriterien (Go/No-Go fÃ¼r Phase 5)
 
@@ -412,14 +416,16 @@ print(dot(v1,v3)/(norm(v1)*norm(v3)))  # muss < 0.5 sein
 | Hypothesen-Generierung | "Welche Cross-Domain-Verbindungen gibt es?" anfragen | R1 liefert konkrete Hypothesen mit Quellenangaben, keine vagen Aussagen |
 | Chat-UI nutzbar | Streamlit Ã¶ffnen, 5 Fragen stellen | Alle 5 Antworten kommen zurÃ¼ck, UI hÃ¤ngt sich nicht auf, Antwortzeit < 60s |
 | Paper-Detailansicht | Ein Paper anklicken | Zeigt: Metadaten, Konzepte, Methoden, KG-Nachbarn (zitiert/zitiert von/Ã¤hnlich) |
-| Projekt-Management | Neues Projekt anlegen, Paper zuordnen, KG-Merge starten | Projekt erscheint in Liste, nach Merge sind Paper im Global-KG |
+| Projekt-Management | Neues Projekt anlegen, Paper zuordnen, Projekt loeschen, KG-Merge starten | Projekt erscheint in Liste, nach Merge sind Paper im Global-KG, geloeschte Projekte verschwinden aus UI/API |
 | Paper-Empfehlungen | "Welche Paper sollte ich noch lesen?" | Empfehlungen basieren auf KG-Nachbarschaft, nicht auf LLM-Trainingsdaten |
+| Projekt-Notizen | Notiz anlegen, Assistant-Zitat einfuegen, markierten Abschnitt per KI bearbeiten | Markdown bleibt gespeichert, Zitate sind klickbar und KI-Vorschlag kann per Preview uebernommen werden |
 
 **Was du konkret siehst:**
 - Chat-Interface im Browser, Fragen in natÃ¼rlicher Sprache stellbar
 - Jede Antwort zeigt Paper-Quellen (Titel + DOI/arXiv-Link)
 - Paper-Detailseite zeigt den KG-Kontext: was zitiert es, was zitiert es, welche Konzepte teilt es
 - Hypothesen-Panel zeigt Cross-Domain-VorschlÃ¤ge mit BegrÃ¼ndung
+- Notizen-Tab im Product-Frontend mit Markdown-Toolbar, Preview, PDF-Zitatnavigation und KI-Popup per `Ctrl+Shift+K`
 
 > Hinweis: Dieses Dokument beschreibt Zielarchitektur und Roadmap. Der aktuelle Implementierungsstand steht in `MEMORY.md` und `README.md`. Phase 1-3 sind lokal nutzbar; einzelne Planpunkte wie dauerhaft laufende Celery/Redis-Automation, vollwertige Spezialparser-Modellgewichte und ein live OpenAlex-Embedding-Index bleiben optionale bzw. zukuenftige Integrationen.
 

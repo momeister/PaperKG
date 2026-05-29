@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from itertools import combinations
 from math import log10
 from typing import Any
@@ -19,7 +19,7 @@ class SimilarityEdge:
 def compute_obsolescence_score(year: int | None, citation_count: int, current_year: int | None = None) -> float:
 	if year is None:
 		return 0.5
-	now = current_year or datetime.now(UTC).year
+	now = current_year or datetime.now(timezone.utc).year
 	age = max(0, now - year)
 	citation_term = log10(max(1, citation_count) + 1)
 	raw = age / (1.0 + citation_term)

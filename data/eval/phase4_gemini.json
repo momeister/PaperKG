@@ -1,0 +1,321 @@
+{
+  "providers": [
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "case_count": 8,
+      "summary": {
+        "average_score": 0.95,
+        "pass_count": 6,
+        "case_count": 8,
+        "invalid_citation_cases": [],
+        "missing_source_cases": [],
+        "missing_term_cases": [],
+        "forbidden_hit_cases": [],
+        "generation_error_cases": [
+          "cross_domain_meta_robot_ml",
+          "ml_validation_evaluation"
+        ]
+      },
+      "cases": [
+        {
+          "id": "clinical_ai_effects",
+          "question": "How is AI used in clinics, and what measurable effects were reported?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2507.16947"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "AI Consult",
+            "16%",
+            "13%",
+            "22,000",
+            "29,000"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "In primary care clinics in Nairobi, Kenya, the AI-based clinical decision support tool \"AI Consult\" is used as a safety net to identify potential documentation errors [arxiv:2507.16947]. Successful clinical impact from such tools requires a combination of capable models, clinically-aligned implementation, and active deployment strategies [arxiv:2507.16947].\n\n**Measurable Effects:**\n*   **Error Reduction:** Clinicians with access to AI Consult made 16% fewer diagnostic errors and 13% fewer treatment errors compared to those without [arxiv:2507.16947]. It is estimated that the tool could annually avert 22,000 diagnostic errors and 29,000 treatment errors at the partner clinic network [arxiv:2507.16947].\n*   **Patient Safety:** There were no patient safety reports indicating that AI Consult advice caused harm [arxiv:2507.16947].\n*   **Patient Outcomes:** There was no statistically significant difference in patient-reported outcomes between the AI and non-AI groups [arxiv:2507.16947].\n\n**Evaluation Models:**\nLarge language models, specifically GPT-4.1 and o3, were used as graders to rate clinical documentation and detect errors for the purpose of the study [arxiv:2507.16947]."
+        },
+        {
+          "id": "clinical_deployed_vs_eval_models",
+          "question": "What is the difference between the deployed AI Consult model and models used only for evaluation?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2507.16947"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "AI Consult",
+            "GPT-4.1",
+            "o3",
+            "rater|grader|rating|grading",
+            "evaluation"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "The deployed AI Consult tool is a continuously-running, LLM-based clinical decision support system integrated into Penda Health’s cloud-hosted EMR via an event-driven architecture [arxiv:2507.16947]. It functions as a safety net for clinicians, with its impact evaluated through methods such as \"shadow mode,\" where the tool operates in the background of visits [arxiv:2507.16947].\n\nIn contrast, other models are used specifically for evaluation and rating purposes:\n*   **GPT-4.1** and **o3** are utilized as graders to rate clinical documentation and detect clinical errors [arxiv:2507.16947].\n*   These models are incorporated into statistical analyses, such as GEE regression models, to evaluate clinical outcomes [arxiv:2507.16947].\n\nWhile the deployed AI Consult tool demonstrated a 16% reduction in diagnostic errors and a 13% reduction in treatment errors [arxiv:2507.16947], the evaluation models (GPT-4.1 and o3) serve as the analytical infrastructure to measure these clinical impacts [arxiv:2507.16947]."
+        },
+        {
+          "id": "clinical_competency_frameworks",
+          "question": "Which frameworks are proposed for evaluating clinical AI competency?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2604.08226"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947",
+            "arxiv:2604.08226"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947",
+            "arxiv:2604.08226"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "Clinical World Model",
+            "Clinical AI Skill-Mix",
+            "competency"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "The following frameworks are proposed for evaluating clinical AI competency:\n\n*   **Clinical World Model:** A framework that formalizes care as a tripartite interaction between Patient, Provider, and Ecosystem to connect evaluation, regulation, and system design [arxiv:2604.08226].\n*   **Clinical AI Skill-Mix:** An operational framework used to standardize competency disclosure and specify AI capabilities across eight dimensions [arxiv:2604.08226].\n*   **MedHELM:** A framework for evaluating medical tasks in large language models, which organizes 121 medical tasks into five categories [arxiv:2604.08226].\n\nAdditionally, the **Clinical Competency Space** is used to define the clinical context for AI operation across five dimensions [arxiv:2604.08226]. \n\nIn real-world clinical settings, tools like **AI Consult** are deployed to serve as a safety net for clinicians, with performance evaluated through metrics such as relative risk reduction (RRR) in clinically meaningful errors [arxiv:2507.16947]. For evaluation purposes, models such as **GPT-4.1** have been utilized as graders to detect clinical documentation errors [arxiv:2507.16947]."
+        },
+        {
+          "id": "reasoning_and_genir",
+          "question": "Which papers in my library discuss efficient reasoning or generative information retrieval?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2503.24377",
+            "arxiv:2501.02842"
+          ],
+          "returned_sources": [
+            "arxiv:2501.02842",
+            "arxiv:2503.24377"
+          ],
+          "cited_sources": [
+            "arxiv:2501.02842",
+            "arxiv:2503.24377"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "reasoning economy",
+            "GenIR"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided library, the following papers discuss these topics:\n\n*   **Efficient Reasoning:** The paper *Harnessing the Reasoning Economy: A Survey of Efficient Reasoning for Large Language Models* [arxiv:2503.24377] explores efficient reasoning in large language models, specifically focusing on the transition from intuitive (System 1) to deep (System 2) reasoning.\n*   **Generative Information Retrieval:** The paper *Foundations of GenIR* [arxiv:2501.02842] discusses generative retrieval as a paradigm that replaces traditional term-based indexes with neural network parameter-based indexes, utilizing differentiable indexes and the generation of document IDs [arxiv:2501.02842]."
+        },
+        {
+          "id": "active_learning_streams",
+          "question": "What methods are used for active learning in data streams?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2302.08893"
+          ],
+          "returned_sources": [
+            "arxiv:2201.12150",
+            "arxiv:2302.08893"
+          ],
+          "cited_sources": [
+            "arxiv:2201.12150",
+            "arxiv:2302.08893"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "uncertainty",
+            "Query by Committee",
+            "data streams"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Methods for active learning in data streams include:\n\n*   **Specific Algorithms:** The Selective Sampling Perceptron is an online active learning algorithm that utilizes Bernoulli sampling [arxiv:2302.08893]. Hoeffding Trees are also used as incremental learners for data streams [arxiv:2201.12150].\n*   **Query Strategies:** Strategies for selecting informative data points include uncertainty sampling, diversity sampling, and disagreement-based query strategies (such as query by committee) [arxiv:2302.08893].\n*   **Frameworks and Architectures:** Approaches include disagreement-based active learning, ensemble models, and evolving fuzzy systems for time-varying streams [arxiv:2302.08893]. Additionally, adaptive submodular maximization is used as a framework for Bayesian online active learning [arxiv:2302.08893].\n*   **Synthetic Data Generation:** Membership query synthesis allows learners to generate synthetic instances, and generative adversarial networks (GANs) are used for data augmentation [arxiv:2302.08893].\n*   **Task-Specific Models:** Active learning is applied to online classification and online regression models [arxiv:2302.08893]."
+        },
+        {
+          "id": "robotics_adaptation_control",
+          "question": "How do the robotics papers differ in their approach to robot adaptation or control?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2502.04012",
+            "arxiv:2112.01942"
+          ],
+          "returned_sources": [
+            "arxiv:1904.09266",
+            "arxiv:2111.00944",
+            "arxiv:2112.01942",
+            "arxiv:2302.14334",
+            "arxiv:2502.04012"
+          ],
+          "cited_sources": [
+            "arxiv:1904.09266",
+            "arxiv:2111.00944",
+            "arxiv:2112.01942",
+            "arxiv:2302.14334",
+            "arxiv:2502.04012"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "Malleable Robots",
+            "contact"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "The provided papers approach robot adaptation and control through diverse methodologies tailored to their specific robotic systems:\n\n*   **Continuum and Malleable Robots:** Control is achieved through state estimation using Kalman filters and Koopman operators [arxiv:2502.04012]. Adaptation involves a data-efficient, model-based learning framework capable of achieving high performance with only 100 real-world data samples [arxiv:2502.04012]. These robots also utilize distance-geometry-based kinematics and inverse mapping to compute control inputs [arxiv:2502.04012].\n*   **In-Contact Manipulation:** Control is managed via Operational Space Control, a classical framework for handling in-contact tasks [arxiv:2112.01942]. Adaptation is supported by active learning, where the robot communicates with a teacher to request necessary demonstrations [arxiv:2112.01942].\n*   **Soft and Piezoelectric Robots:** Control is based on quasi-static modeling that accounts for robot shape, displacement, gravity, and ground friction [arxiv:2111.00944]. Performance is optimized by tuning physical parameters, such as substrate thickness to maximize bending curvature [arxiv:2111.00944].\n*   **Sensor-Integrated Systems:** Adaptation is achieved through rotation compensation control, which uses IMU data and a MEMS mirror to stabilize LiDAR scanning against rotational jitter [arxiv:2302.14334].\n*   **Swarm Robotics:** Control and cooperation are managed through a prover-verifier protocol using cryptographic proofs to validate operations between robots [arxiv:1904.09266]."
+        },
+        {
+          "id": "cross_domain_meta_robot_ml",
+          "question": "Are there cross-domain ideas connecting metamaterials, robotics, and machine learning?",
+          "score": 0.8,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:1807.06006"
+          ],
+          "returned_sources": [
+            "arxiv:1807.06006",
+            "arxiv:2006.16189",
+            "arxiv:2201.12150",
+            "arxiv:2306.04338"
+          ],
+          "cited_sources": [
+            "arxiv:1807.06006",
+            "arxiv:2006.16189",
+            "arxiv:2201.12150",
+            "arxiv:2306.04338"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "metamaterials"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "Server error '503 Service Unavailable' for url 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503; response_body=[{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n]",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'Are there cross-domain ideas connecting metamaterials, robotics, and machine learning?':\n- [arxiv:1807.06006] Towards a Circular Economy via Intelligent Metamaterials: Towards a Circular Economy via Intelligent Metamaterials The present study proposes the use of intelligent metasurfaces in the design of products, as enforcers of circular economy principles. Intelligent metasurfaces can tune their physical properties (electromagnetic, acoustic, mechanical) by receiving software commands. When incorporated within products an...\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Learning Curves for Decision Making in Supervised Machine Learning: A Survey Learning curves are a concept from social sciences that has been adopted in the context of machine learning to assess the performance of a learning algorithm with respect to a certain resource, e.g., the number of training examples or the number of training iterations. Learning curv...\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: DOME: Recommendations for supervised machine learning validation in biology Modern biology frequently relies on machine learning to provide predictions and improve decision processes. There have been recent calls for more scrutiny on machine learning performance and possible limitations. Here we present a set of community-wide recommendations aiming to help...\n- [arxiv:2306.04338] Changing Data Sources in the Age of Machine Learning for Official Statistics: Changing Data Sources in the Age of Machine Learning for Official Statistics Data science has become increasingly essential for the production of official statistics, as it enables the automated collection, processing, and analysis of large amounts of data. With such data science practices in place, it enables more timely, more insightful and more flexible r...\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Learning Curve Cross-Validation Method for extrapolating learning curves using convexity assumptions. Machine Learning MethodFamily learning curve cross-validation 5.1.7 reviewed_method central 3 0.75 method method:learning-curve-cross-validation approved True llm_supported_high_precision Learning Curve Cross-Validation True core"
+        },
+        {
+          "id": "ml_validation_evaluation",
+          "question": "Which papers discuss validation or evaluation methodology for machine learning systems?",
+          "score": 0.8,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "returned_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "cited_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "DOME",
+            "learning curves",
+            "validation"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "Server error '503 Service Unavailable' for url 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503; response_body=[{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n]",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'Which papers discuss validation or evaluation methodology for machine learning systems?':\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: DOME: Recommendations for supervised machine learning validation in biology Modern biology frequently relies on machine learning to provide predictions and improve decision processes. There have been recent calls for more scrutiny on machine learning performance and possible limitations. Here we present a set of community-wide recommendations aiming to help...\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Wrapped Progressive Sampling Dynamically discards candidates based on validation accuracy histograms. Machine Learning Algorithm Wrapped Progressive Sampling procedure (WPS) 5.1.1 reviewed_method supporting 1 0.75 method method:wrapped-progressive-sampling approved True llm_supported_high_precision Wrapped Progressive Sampling True core\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Learning Curve Cross-Validation Method for extrapolating learning curves using convexity assumptions. Machine Learning MethodFamily learning curve cross-validation 5.1.7 reviewed_method central 3 0.75 method method:learning-curve-cross-validation approved True llm_supported_high_precision Learning Curve Cross-Validation True core\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: N-fold Cross validation A model validation technique. Machine Learning Algorithm N-fold Cross validation Optimization reviewed_method supporting 1 0.75 method method:n-fold-cross-validation approved True llm_supported_high_precision N-fold Cross validation True core\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: Supervised Machine Learning Focus of the validation recommendations in biology | The primary focus of the DOME framework and recommendations. DomainConcept supervised machine learning validation in biology Abstract 0.95 central domain_concept 3 concept:supervised-machine-learning approved True llm_supported_high_precision Supervised Machine Learning True cor..."
+        }
+      ]
+    }
+  ]
+}

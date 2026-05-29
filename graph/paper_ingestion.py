@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from graph.citation_analysis import compute_obsolescence_score
@@ -111,7 +111,7 @@ def extract_citation_ids(record: dict[str, Any]) -> list[str]:
 
 
 def to_phase2_paper_node(record: dict[str, Any]) -> dict[str, Any]:
-	now = datetime.now(UTC).isoformat(sep=" ", timespec="seconds")
+	now = datetime.now(timezone.utc).isoformat(sep=" ", timespec="seconds")
 	citations = extract_citation_ids(record)
 
 	return {
@@ -141,7 +141,7 @@ def to_phase2_paper_node(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def to_reference_stub_paper_node(reference_id: str) -> dict[str, Any]:
-	now = datetime.now(UTC).isoformat(sep=" ", timespec="seconds")
+	now = datetime.now(timezone.utc).isoformat(sep=" ", timespec="seconds")
 	return {
 		"id": reference_id,
 		"title": "",

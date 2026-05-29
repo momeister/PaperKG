@@ -38,6 +38,7 @@ class GroundedResponder:
 
     MIN_ANSWER_TOKENS = 1200
     MAX_ANSWER_TOKENS = 8192
+    MAX_INVALID_CITATION_RETRIES = 1
 
     SYSTEM_PROMPT = """You are ScienceKG's grounded research assistant.
 
@@ -61,6 +62,7 @@ making claims."""
         provider: str | None = None,
         model: str | None = None,
         overrides: dict[str, Any] | None = None,
+        conversation_context: list[dict[str, Any]] | None = None,
     ) -> GroundedAnswer:
         hits = self.retriever.search(question, limit=limit)
         evidence = self._evidence_for_answer(hits, max_items=24)
@@ -83,6 +85,7 @@ making claims."""
             provider=provider,
             model=model,
             overrides=overrides,
+            conversation_context=conversation_context,
         )
         cited_ids = _cited_paper_ids(answer_text)
         if cited_ids:
@@ -110,11 +113,12 @@ making claims."""
         provider: str | None,
         model: str | None,
         overrides: dict[str, Any] | None,
+        conversation_context: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str | None]:
         if self.llm_router is None:
             return _extractive_answer(question, hits, evidence), None
 
-        prompt = _build_grounded_prompt(question, hits, evidence)
+        prompt = _build_grounded_prompt(question, hits, evidence, conversation_context=conversation_context)
         merged_overrides = {
             "temperature": 0.1,
             "top_p": 0.9,
@@ -125,7 +129,7 @@ making claims."""
             merged_overrides["model"] = model
 
         try:
-            response = self.llm_router.chat(
+            response = self._chat_with_transient_retry(
                 [
                     {"role": "system", "content": self.SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
@@ -151,7 +155,7 @@ making claims."""
             )
             if retry_overrides["max_tokens"] > current_tokens:
                 try:
-                    response = self.llm_router.chat(
+                    response = self._chat_with_transient_retry(
                         [
                             {"role": "system", "content": self.SYSTEM_PROMPT},
                             {"role": "user", "content": prompt},
@@ -168,6 +172,13 @@ making claims."""
                     )
                 response = str(response or "").strip()
 
+        response = self._repair_invalid_citations(
+            response=response,
+            prompt=prompt,
+            provider=provider,
+            overrides=merged_overrides,
+        )
+
         if response:
             return response, None
         return (
@@ -175,6 +186,20 @@ making claims."""
             "Evidence-only fallback:\n" + _extractive_answer(question, hits, evidence),
             "empty_response",
         )
+
+    def _chat_with_transient_retry(
+        self,
+        messages: list[dict[str, str]],
+        provider: str | None,
+        overrides: dict[str, Any],
+    ) -> str:
+        assert self.llm_router is not None
+        try:
+            return self.llm_router.chat(messages, provider=provider, overrides=overrides)
+        except Exception as exc:
+            if not _is_transient_generation_error(str(exc)):
+                raise
+            return self.llm_router.chat(messages, provider=provider, overrides=overrides)
 
     def _default_model(self, provider: str | None) -> str | None:
         if self.llm_router is None:
@@ -222,6 +247,43 @@ making claims."""
 
         evidence.sort(key=lambda item: _answer_evidence_rank(item), reverse=True)
         return evidence[:max_items]
+
+    def _repair_invalid_citations(
+        self,
+        response: str,
+        prompt: str,
+        provider: str | None,
+        overrides: dict[str, Any],
+    ) -> str:
+        if self.llm_router is None or not response:
+            return response
+        if not _invalid_citations(response):
+            return response
+
+        repair_prompt = (
+            f"{prompt}\n\n"
+            "Your previous answer used invalid citations. Rewrite the answer using only "
+            "paper IDs exactly as shown in the evidence, for example [arxiv:2507.16947]. "
+            "Do not cite evidence item numbers like [1] or [4].\n\n"
+            f"Previous answer:\n{response}"
+        )
+        repair_overrides = dict(overrides)
+        repair_overrides["temperature"] = min(float(repair_overrides.get("temperature", 0.1)), 0.05)
+        try:
+            repaired = self.llm_router.chat(
+                [
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": repair_prompt},
+                ],
+                provider=provider,
+                overrides=repair_overrides,
+            )
+        except Exception:
+            return response
+        repaired = str(repaired or "").strip()
+        if repaired and not _invalid_citations(repaired):
+            return repaired
+        return response
 
 
 def _flatten_evidence(hits: list[SearchHit], max_items: int) -> list[Evidence]:
@@ -302,27 +364,48 @@ def _build_grounded_prompt(
     question: str,
     hits: list[SearchHit],
     evidence: list[Evidence],
+    conversation_context: list[dict[str, Any]] | None = None,
 ) -> str:
     source_titles = {
         hit.source.paper_id: hit.source.title or hit.source.paper_id
         for hit in hits
     }
-    lines = [f"Question: {question}", "", "Evidence:"]
+    lines = [f"Question: {question}"]
+    context_lines = _conversation_context_lines(conversation_context)
+    if context_lines:
+        lines.extend(["", "Previous conversation context:", *context_lines])
+    lines.extend(["", "Evidence:"])
     for index, item in enumerate(evidence, start=1):
         title = source_titles.get(item.paper_id, item.paper_id)
         lines.append(
-            f"{index}. [{item.paper_id}] {title} | {item.kind} | {item.text}"
+            f"{index}. [{item.paper_id}] {title} | {item.kind} | {_sanitize_evidence_text(item.text)}"
         )
     lines.extend(
         [
             "",
             "Answer concisely using only this evidence.",
             "Include source paper IDs in square brackets for each substantive claim.",
+            "Use only paper IDs shown in the evidence as citations; never cite evidence item numbers like [1] or [4].",
             "When quantitative findings or metrics are present, include the most important numbers.",
-            "Distinguish deployed clinical systems from models used only for evaluation, rating, or robustness checks.",
         ]
     )
+    if _needs_clinical_model_role_instruction(question, evidence):
+        lines.append(
+            "Distinguish deployed clinical systems from models used only for evaluation, rating, or robustness checks."
+        )
     return "\n".join(lines)
+
+
+def _conversation_context_lines(conversation_context: list[dict[str, Any]] | None) -> list[str]:
+    lines: list[str] = []
+    for item in (conversation_context or [])[-6:]:
+        if not isinstance(item, dict):
+            continue
+        role = "Assistant" if item.get("role") == "assistant" else "User"
+        content = re.sub(r"\s+", " ", str(item.get("content") or "")).strip()
+        if content:
+            lines.append(f"- {role}: {content[:900]}")
+    return lines
 
 
 def _extractive_answer(
@@ -337,8 +420,18 @@ def _extractive_answer(
     lines = [f"Local KG evidence for '{question}':"]
     for item in evidence[:5]:
         title = source_titles.get(item.paper_id, item.paper_id)
-        lines.append(f"- [{item.paper_id}] {title}: {item.text}")
+        lines.append(f"- [{item.paper_id}] {title}: {_sanitize_evidence_text(item.text)}")
     return "\n".join(lines)
+
+
+def _sanitize_evidence_text(text: str) -> str:
+    return re.sub(
+        r"\[([^\]]+)\]",
+        lambda match: match.group(0)
+        if _is_allowed_citation_label(match.group(1).strip())
+        else f"({match.group(1).strip()})",
+        str(text or ""),
+    )
 
 
 def _cited_paper_ids(answer_text: str) -> set[str]:
@@ -349,3 +442,52 @@ def _cited_paper_ids(answer_text: str) -> set[str]:
             if value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p"):
                 ids.add(value)
     return ids
+
+
+def _invalid_citations(answer_text: str) -> list[str]:
+    invalid: list[str] = []
+    for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
+        parts = [part.strip() for part in re.split(r"[,;]\s*", bracketed) if part.strip()]
+        if not parts:
+            continue
+        for part in parts:
+            if re.fullmatch(r"\d+", part):
+                invalid.append(part)
+            elif re.fullmatch(r"\d+(?:\s*[-,]\s*\d+)+", part):
+                invalid.append(part)
+            elif not _is_allowed_citation_label(part):
+                invalid.append(part)
+    return invalid
+
+
+def _is_allowed_citation_label(value: str) -> bool:
+    return value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p")
+
+
+def _is_transient_generation_error(error: str) -> bool:
+    error_lower = str(error or "").lower()
+    return any(
+        marker in error_lower
+        for marker in (
+            "429",
+            "503",
+            "502",
+            "504",
+            "service unavailable",
+            "temporarily",
+            "timeout",
+            "timed out",
+            "rate limit",
+            "high demand",
+        )
+    )
+
+
+def _needs_clinical_model_role_instruction(question: str, evidence: list[Evidence]) -> bool:
+    text = " ".join([question, *(item.text for item in evidence[:8])]).lower()
+    has_clinical = any(term in text for term in ("clinical", "clinic", "clinician", "patient", "physician"))
+    has_model_role = any(
+        term in text
+        for term in ("deployed", "deployment", "evaluation", "rating", "rater", "grader", "gpt-4", "o3", "ai consult")
+    )
+    return has_clinical and has_model_role

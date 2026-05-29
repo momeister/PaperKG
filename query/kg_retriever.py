@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Iterable
@@ -17,25 +18,40 @@ STOPWORDS = {
     "as",
     "at",
     "be",
+    "between",
     "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "discuss",
+    "discusses",
     "for",
     "from",
     "how",
+    "idea",
+    "ideas",
     "in",
     "is",
+    "my",
     "of",
     "on",
     "or",
     "paper",
     "papers",
     "show",
+    "tell",
     "that",
     "the",
+    "there",
+    "their",
     "to",
     "use",
     "used",
     "uses",
     "using",
+    "via",
     "what",
     "which",
     "with",
@@ -46,6 +62,13 @@ LOW_SIGNAL_TERMS = {
     "algorithm",
     "algorithms",
     "artificial",
+    "connect",
+    "connected",
+    "connecting",
+    "connection",
+    "connections",
+    "cross",
+    "domain",
     "intelligence",
     "large",
     "language",
@@ -163,13 +186,15 @@ class KGRetriever:
 
         with MetadataDB(self.metadata_db_path) as db:
             papers = db.list_papers(limit=self.max_papers)
+            extractions = db.list_extraction_results(limit=self.max_extractions) if include_extractions else []
+            token_weights = _query_token_weights(tokens, papers, extractions)
             for record in papers:
                 pid = paper_id(record)
                 paper_cache[pid] = record
-                self._add_paper_evidence(hits, query, tokens, record)
+                self._add_paper_evidence(hits, query, tokens, record, token_weights)
 
             if include_extractions:
-                for extraction in db.list_extraction_results(limit=self.max_extractions):
+                for extraction in extractions:
                     raw_pid = str(extraction.get("paper_id") or "")
                     if not raw_pid:
                         continue
@@ -177,7 +202,7 @@ class KGRetriever:
                     pid = paper_id(resolved) if resolved is not None else raw_pid
                     record = paper_cache.get(pid) or resolved or db.get_paper(pid) or {"id": pid}
                     paper_cache[pid] = record
-                    for evidence in _evidence_from_extraction(extraction, query, tokens):
+                    for evidence in _evidence_from_extraction(extraction, query, tokens, token_weights):
                         evidence = Evidence(
                             paper_id=pid,
                             kind=evidence.kind,
@@ -188,7 +213,7 @@ class KGRetriever:
                         )
                         self._hit_for(hits, record, pid).add_evidence(evidence)
 
-        ordered = sorted(hits.values(), key=lambda item: item.score, reverse=True)
+        ordered = _rank_hits(hits.values(), tokens)
         return ordered[: max(0, int(limit))]
 
     def paper_detail(self, paper_id_value: str) -> dict[str, Any] | None:
@@ -283,15 +308,16 @@ class KGRetriever:
         query: str,
         tokens: list[str],
         record: dict[str, Any],
+        token_weights: dict[str, float] | None = None,
     ) -> None:
         pid = paper_id(record)
         title = str(record.get("title") or "")
         abstract = str(record.get("abstract") or "")
         doi = str(record.get("doi") or "")
         score = (
-            _score_text(query, tokens, title, weight=4.0)
-            + _score_text(query, tokens, abstract, weight=1.5)
-            + _score_text(query, tokens, doi, weight=2.0)
+            _score_text(query, tokens, title, weight=4.0, token_weights=token_weights)
+            + _score_text(query, tokens, abstract, weight=1.5, token_weights=token_weights)
+            + _score_text(query, tokens, doi, weight=2.0, token_weights=token_weights)
         )
         if score <= 0:
             return
@@ -303,6 +329,11 @@ class KGRetriever:
                 field="metadata",
                 text=text or title or pid,
                 score=score,
+                metadata={
+                    "title": title,
+                    "abstract": abstract,
+                    "authors": record.get("authors") or [],
+                },
             )
         )
 
@@ -361,6 +392,7 @@ def _evidence_from_extraction(
     extraction: dict[str, Any],
     query: str,
     tokens: list[str],
+    token_weights: dict[str, float] | None = None,
 ) -> list[Evidence]:
     pid = str(extraction.get("paper_id") or "")
     evidence: list[Evidence] = []
@@ -375,7 +407,7 @@ def _evidence_from_extraction(
     for field_name, kind, weight in fields:
         for item in _iter_items(extraction.get(field_name)):
             text = _item_text(item)
-            score = _score_text(query, tokens, text, weight=weight)
+            score = _score_text(query, tokens, text, weight=weight, token_weights=token_weights)
             if score <= 0:
                 continue
             evidence.append(
@@ -436,8 +468,19 @@ def _parse_json(value: str) -> Any | None:
 
 
 def _tokenize(text: str) -> list[str]:
-    tokens = re.findall(r"[a-z0-9][a-z0-9_-]*", (text or "").lower())
-    return [token for token in tokens if token not in STOPWORDS and len(token) > 1]
+    raw_tokens = re.findall(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", (text or "").lower())
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for raw_token in raw_tokens:
+        candidates = [raw_token.replace("_", "-")]
+        if "-" in raw_token or "_" in raw_token:
+            candidates.extend(part for part in re.split(r"[-_]+", raw_token) if part)
+        for token in candidates:
+            if token in STOPWORDS or len(token) <= 1 or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+    return tokens
 
 
 def _query_tokens(text: str) -> list[str]:
@@ -456,7 +499,60 @@ def _normalize(text: str) -> str:
     return " ".join(_tokenize(text))
 
 
-def _score_text(query: str, tokens: list[str], text: str, weight: float) -> float:
+def _query_token_weights(
+    tokens: list[str],
+    papers: list[dict[str, Any]],
+    extractions: list[dict[str, Any]],
+) -> dict[str, float]:
+    if not tokens:
+        return {}
+
+    paper_text_by_id: dict[str, list[str]] = {}
+    for record in papers:
+        pid = paper_id(record)
+        paper_text_by_id.setdefault(pid, []).append(
+            " ".join(
+                str(record.get(field) or "")
+                for field in ["title", "abstract", "doi"]
+            )
+        )
+
+    for extraction in extractions:
+        pid = str(extraction.get("paper_id") or "")
+        if not pid:
+            continue
+        parts: list[str] = []
+        for field_name, _, _ in [
+            ("concepts", "concept", 3.0),
+            ("methods", "method", 3.0),
+            ("claims", "claim", 2.5),
+            ("cross_domain_hints", "cross_domain_hint", 2.0),
+            ("terminology_conflicts", "terminology_conflict", 1.5),
+        ]:
+            parts.extend(_item_text(item) for item in _iter_items(extraction.get(field_name)))
+        paper_text_by_id.setdefault(pid, []).append(" ".join(parts))
+
+    paper_count = max(len(paper_text_by_id), 1)
+    document_frequency = dict.fromkeys(tokens, 0)
+    for text_parts in paper_text_by_id.values():
+        paper_tokens = set(_tokenize(" ".join(text_parts)))
+        for token in tokens:
+            if token in paper_tokens:
+                document_frequency[token] += 1
+
+    return {
+        token: 1.0 + math.log((paper_count + 1.0) / (document_frequency.get(token, 0) + 1.0))
+        for token in tokens
+    }
+
+
+def _score_text(
+    query: str,
+    tokens: list[str],
+    text: str,
+    weight: float,
+    token_weights: dict[str, float] | None = None,
+) -> float:
     if not text:
         return 0.0
     text_tokens = set(_tokenize(text))
@@ -472,15 +568,61 @@ def _score_text(query: str, tokens: list[str], text: str, weight: float) -> floa
     if query_has_specific_terms and not matched_specific_terms:
         return 0.0
 
+    token_weights = token_weights or {}
+    specific_score = sum(token_weights.get(token, 1.0) for token in matched_specific_terms)
+    low_signal_score = sum(token_weights.get(token, 1.0) for token in matched if token in LOW_SIGNAL_TERMS)
     score = weight * (
-        len(matched_specific_terms)
-        + 0.25 * (len(matched) - len(matched_specific_terms))
+        specific_score
+        + 0.25 * low_signal_score
     )
     query_norm = _normalize(query)
     text_norm = _normalize(text)
     if query_norm and query_norm in text_norm:
         score += weight * max(2, len(tokens))
     return float(score)
+
+
+def _rank_hits(hits: Iterable[SearchHit], tokens: list[str]) -> list[SearchHit]:
+    ordered = sorted(hits, key=lambda item: item.score, reverse=True)
+    specific_tokens = [token for token in tokens if token not in LOW_SIGNAL_TERMS]
+    if len(specific_tokens) < 2:
+        return ordered
+
+    selected: list[SearchHit] = []
+    selected_ids: set[str] = set()
+    covered_tokens: set[str] = set()
+
+    for _ in range(min(len(ordered), len(specific_tokens))):
+        best_hit: SearchHit | None = None
+        best_key: tuple[int, float] | None = None
+        for hit in ordered:
+            if hit.source.paper_id in selected_ids:
+                continue
+            hit_tokens = _hit_tokens(hit)
+            new_coverage = len((hit_tokens & set(specific_tokens)) - covered_tokens)
+            if new_coverage <= 0:
+                continue
+            key = (new_coverage, hit.score)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_hit = hit
+        if best_hit is None:
+            break
+        selected.append(best_hit)
+        selected_ids.add(best_hit.source.paper_id)
+        covered_tokens.update(_hit_tokens(best_hit) & set(specific_tokens))
+
+    selected.extend(hit for hit in ordered if hit.source.paper_id not in selected_ids)
+    return selected
+
+
+def _hit_tokens(hit: SearchHit) -> set[str]:
+    parts = [
+        hit.source.paper_id,
+        hit.source.title,
+        *(evidence.text for evidence in hit.evidence),
+    ]
+    return set(_tokenize(" ".join(part for part in parts if part)))
 
 
 def _snippet(text: str, tokens: list[str], max_chars: int = 360) -> str:

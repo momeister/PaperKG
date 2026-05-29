@@ -1,0 +1,209 @@
+{
+  "summary": {
+    "case_count": 4,
+    "concept_precision": 1.0,
+    "concept_recall": 1.0,
+    "method_precision": 1.0,
+    "method_recall": 1.0,
+    "relation_precision": 1.0,
+    "relation_recall": 1.0,
+    "duplicate_canonical_rate": 0.0,
+    "pending_rate": 0.0,
+    "claim_negation_accuracy": 1.0,
+    "claim_negation_error_count": 0,
+    "claim_attribution_error_count": 0,
+    "passes_precision_gate": true,
+    "passes_duplicate_gate": true,
+    "passes_parser_gate": true,
+    "passes_claim_gate": true
+  },
+  "cases": [
+    {
+      "paper_id": "emotion_rl_survey",
+      "concepts": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 10,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "concept_candidates": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 4,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "methods": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 3,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "relations": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 7,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "entity_type_accuracy": 1.0,
+      "method_source_type_accuracy": 1.0,
+      "duplicate_canonical_rate": 0.0,
+      "pending_rate": 0.0,
+      "claim_attribution_error_count": 0,
+      "claim_negation_accuracy": 1.0,
+      "claim_negation_error_count": 0,
+      "claim_negation_expected_count": 0,
+      "parser_warning_count": 0,
+      "accepted_concept_count": 10,
+      "candidate_concept_count": 4
+    },
+    {
+      "paper_id": "arxiv:1905.04749",
+      "concepts": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 13,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "concept_candidates": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 3,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "methods": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 6,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "relations": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 6,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "entity_type_accuracy": 1.0,
+      "method_source_type_accuracy": 1.0,
+      "duplicate_canonical_rate": 0.0,
+      "pending_rate": 0.0,
+      "claim_attribution_error_count": 0,
+      "claim_negation_accuracy": 1.0,
+      "claim_negation_error_count": 0,
+      "claim_negation_expected_count": 2,
+      "parser_warning_count": 0,
+      "accepted_concept_count": 13,
+      "candidate_concept_count": 3
+    },
+    {
+      "paper_id": "arxiv:2602.11092",
+      "concepts": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 16,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "concept_candidates": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 4,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "methods": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 6,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "relations": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 13,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "entity_type_accuracy": 1.0,
+      "method_source_type_accuracy": 1.0,
+      "duplicate_canonical_rate": 0.0,
+      "pending_rate": 0.0,
+      "claim_attribution_error_count": 0,
+      "claim_negation_accuracy": 1.0,
+      "claim_negation_error_count": 0,
+      "claim_negation_expected_count": 3,
+      "parser_warning_count": 0,
+      "accepted_concept_count": 16,
+      "candidate_concept_count": 4
+    },
+    {
+      "paper_id": "arxiv:q-bio/0612009",
+      "concepts": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 14,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "concept_candidates": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "methods": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 3,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "relations": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "true_positive": 7,
+        "false_positive": 0,
+        "false_negative": 0
+      },
+      "entity_type_accuracy": 1.0,
+      "method_source_type_accuracy": 1.0,
+      "duplicate_canonical_rate": 0.0,
+      "pending_rate": 0.0,
+      "claim_attribution_error_count": 0,
+      "claim_negation_accuracy": 1.0,
+      "claim_negation_error_count": 0,
+      "claim_negation_expected_count": 2,
+      "parser_warning_count": 0,
+      "accepted_concept_count": 14,
+      "candidate_concept_count": 0
+    }
+  ],
+  "warnings": [
+    "Used embedded demo predictions for 4 gold case(s)."
+  ]
+}

@@ -9,11 +9,17 @@ from typing import Any
 import streamlit as st
 import streamlit.components.v1 as components
 
-from parsing.marker_parser import MarkerParser
 from query.grounded_responder import GroundedResponder
 from query.hybrid_retriever import HybridRetriever
 from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
+from query.source_verifier import (
+    best_excerpt as source_best_excerpt,
+    find_pdf_path as source_find_pdf_path,
+    highlightable_terms as source_highlightable_terms,
+    parse_pdf_text,
+    reference_text as source_reference_text,
+)
 
 
 @st.cache_resource
@@ -89,24 +95,12 @@ def _evidence_rows_from_answer(evidence: list[dict[str, Any]]) -> list[dict[str,
 
 @st.cache_data(show_spinner=False)
 def _find_pdf_path(paper_id: str, title: str, pdf_base_dir: str) -> str | None:
-    base = Path(pdf_base_dir)
-    if not base.exists():
-        return None
-
-    tokens = _pdf_lookup_tokens(paper_id, title)
-    candidates = sorted(base.rglob("*.pdf"))
-    for token in tokens:
-        token_lower = token.lower()
-        for candidate in candidates:
-            if token_lower in str(candidate).lower():
-                return str(candidate)
-    return None
+    return source_find_pdf_path(paper_id, title, pdf_base_dir)
 
 
 @st.cache_data(show_spinner=False)
 def _parsed_pdf_text(pdf_path: str, paper_id: str) -> str:
-    parsed = MarkerParser().parse(pdf_path, paper_id)
-    return parsed.text
+    return parse_pdf_text(pdf_path, paper_id)
 
 
 def _render_source_verifier(answer: dict[str, Any], pdf_base_dir: str) -> None:
@@ -191,35 +185,8 @@ def _evidence_label(item: dict[str, Any], index: int) -> str:
     return f"{index}. {kind} | {text[:120]}"
 
 
-def _pdf_lookup_tokens(paper_id: str, title: str) -> list[str]:
-    values = [paper_id]
-    if ":" in paper_id:
-        values.append(paper_id.split(":", 1)[1])
-    if title:
-        words = re.findall(r"[a-z0-9]+", title.lower())
-        if words:
-            values.append("-".join(words[:8]))
-    tokens: list[str] = []
-    for value in values:
-        clean = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("-").lower()
-        if len(clean) >= 4 and clean not in tokens:
-            tokens.append(clean)
-    return tokens
-
-
 def _reference_text(evidence: dict[str, Any]) -> str:
-    metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
-    preferred = [
-        "evidence_span",
-        "context",
-        "statement",
-        "description",
-        "why_applicable",
-        "label",
-    ]
-    parts = [str(metadata.get(key) or "") for key in preferred]
-    parts.append(str(evidence.get("text") or ""))
-    return re.sub(r"\s+", " ", " ".join(part for part in parts if part)).strip()
+    return source_reference_text(evidence)
 
 
 def _render_pdf(pdf_path: str) -> None:
@@ -240,52 +207,7 @@ def _render_pdf(pdf_path: str) -> None:
 
 
 def _best_excerpt(pdf_text: str, reference_text: str, window_chars: int = 1000) -> str:
-    clean = re.sub(r"\s+", " ", pdf_text or "").strip()
-    reference = re.sub(r"\s+", " ", reference_text or "").strip()
-    if not clean or not reference:
-        return ""
-
-    exact = _find_longest_substring(clean, reference)
-    if exact >= 0:
-        start = max(0, exact - window_chars // 3)
-        end = min(len(clean), exact + window_chars)
-        return clean[start:end].strip()
-
-    tokens = _highlightable_terms(reference)
-    if not tokens:
-        return clean[:window_chars]
-
-    best_start = 0
-    best_score = -1
-    step = max(window_chars // 3, 200)
-    lower = clean.lower()
-    for start in range(0, max(len(clean) - window_chars, 1), step):
-        window = lower[start : start + window_chars]
-        score = sum(1 for token in tokens if token in window)
-        if score > best_score:
-            best_score = score
-            best_start = start
-    if best_score <= 0:
-        return ""
-    return clean[best_start : best_start + window_chars].strip()
-
-
-def _find_longest_substring(text: str, reference: str) -> int:
-    lower = text.lower()
-    reference_lower = reference.lower()
-    chunks = [
-        reference_lower[index : index + 120]
-        for index in range(0, max(len(reference_lower) - 120, 1), 80)
-    ]
-    chunks.append(reference_lower[:120])
-    for chunk in sorted(set(chunks), key=len, reverse=True):
-        chunk = chunk.strip()
-        if len(chunk) < 30:
-            continue
-        position = lower.find(chunk)
-        if position >= 0:
-            return position
-    return -1
+    return source_best_excerpt(pdf_text, reference_text, window_chars=window_chars)
 
 
 def _highlight_terms(text: str, reference_text: str) -> str:
@@ -300,29 +222,7 @@ def _highlight_terms(text: str, reference_text: str) -> str:
 
 
 def _highlightable_terms(text: str) -> list[str]:
-    stopwords = {
-        "about",
-        "also",
-        "and",
-        "are",
-        "for",
-        "from",
-        "into",
-        "that",
-        "the",
-        "this",
-        "used",
-        "using",
-        "with",
-    }
-    terms = re.findall(r"[A-Za-z0-9][A-Za-z0-9-]{2,}", text or "")
-    unique: list[str] = []
-    for term in sorted(terms, key=len, reverse=True):
-        lower = term.lower()
-        if lower in stopwords or lower in unique:
-            continue
-        unique.append(lower)
-    return unique
+    return source_highlightable_terms(text)
 
 
 def run_chat_interface() -> None:

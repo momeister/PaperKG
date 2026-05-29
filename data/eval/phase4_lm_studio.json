@@ -1,0 +1,324 @@
+{
+  "providers": [
+    {
+      "provider": "lm_studio",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "case_count": 8,
+      "summary": {
+        "average_score": 1.0,
+        "pass_count": 8,
+        "case_count": 8,
+        "invalid_citation_cases": [],
+        "missing_source_cases": [],
+        "missing_term_cases": [],
+        "forbidden_hit_cases": [],
+        "generation_error_cases": []
+      },
+      "cases": [
+        {
+          "id": "clinical_ai_effects",
+          "question": "How is AI used in clinics, and what measurable effects were reported?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2507.16947"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "AI Consult",
+            "16%",
+            "13%",
+            "22,000",
+            "29,000"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence:\n\n**How AI is used in clinics:** AI Consult, a large language model-based clinical decision support tool, was deployed in primary care clinics in Nairobi, Kenya, to act as a safety net for clinicians by identifying potential clinical and documentation errors [arxiv:2507.16947]. Its implementation relied on active deployment strategies and carefully calibrated alert thresholds to balance clinical sensitivity with alert fatigue [arxiv:2507.16947].\n\n**Measurable effects reported:** Clinicians with access to the AI tool made 16% fewer diagnostic errors and 13% fewer treatment errors compared to a control group [arxiv:2507.16947]. At the Penda Health network, this intervention is projected to avert approximately 22,000 diagnostic errors and 29,000 treatment errors annually [arxiv:2507.16947]. The study reported no statistically significant difference in patient-reported outcomes between the AI and non-AI groups, and no patient safety records indicated that AI advice actively caused harm [arxiv:2507.16947].\n\n**Deployed systems vs. evaluation models:** AI Consult was the live clinical decision support system. In contrast, large language models like GPT-4.1 and OpenAI o3 were used exclusively as external graders to evaluate clinical documentation and detect errors, not as the deployed clinical tool [arxiv:2507.16947]."
+        },
+        {
+          "id": "clinical_deployed_vs_eval_models",
+          "question": "What is the difference between the deployed AI Consult model and models used only for evaluation?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2507.16947"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "AI Consult",
+            "GPT-4.1",
+            "o3",
+            "rater|grader|rating|grading",
+            "evaluation"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, the key differences are:\n\n* **Deployed AI Consult:** Functions as a continuously-running, real-time clinical safety net embedded directly into Penda’s cloud-hosted EMR via an event-driven architecture to actively assist clinicians during live outpatient visits [arxiv:2507.16947]. It is designed for active clinical deployment and has been shown to reduce diagnostic errors by 16% and treatment errors by 13% [arxiv:2507.16947].\n* **Evaluation Models (GPT-4.1 & o3):** Are not deployed for clinical decision support. They are used exclusively as off-line external graders/raters to evaluate clinical documentation and detect errors for research purposes [arxiv:2507.16947]. Their outputs are analyzed using statistical methods like GEE regression to measure the impact of the deployed tool [arxiv:2507.16947].\n\n**Core Distinction:** AI Consult is an active, clinically-integrated deployment strategy designed to improve real-time patient care, whereas GPT-4.1 and o3 serve solely as off-line evaluation and rating tools for post-hoc clinical error assessment [arxiv:2507.16947]."
+        },
+        {
+          "id": "clinical_competency_frameworks",
+          "question": "Which frameworks are proposed for evaluating clinical AI competency?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2604.08226"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947",
+            "arxiv:2604.08226"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947",
+            "arxiv:2604.08226"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "Clinical World Model",
+            "Clinical AI Skill-Mix",
+            "competency"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, the following frameworks and conceptual models are proposed for evaluating clinical AI competency, primarily detailed in [arxiv:2604.08226]:\n\n- **Clinical World Model**: Formalizes care as a tripartite interaction among the Patient, Provider, and Ecosystem to connect evaluation, regulation, and system design [arxiv:2604.08226].\n- **Clinical AI Skill-Mix Framework**: Operationalizes competency through eight dimensions to standardize competency disclosure and specify AI capabilities [arxiv:2604.08226].\n- **Clinical Competency Space**: A theoretical framework defining the clinical context for AI operation across five dimensions [arxiv:2604.08226].\n\nThese frameworks are grounded in supporting taxonomies and concepts, including the **Physician Competency Reference Set** (synthesizing over 150 competency lists) and **Entrustable Professional Activities** [arxiv:2604.08226]. The **MedHELM Framework** is also referenced as a benchmark for evaluating medical tasks in LLMs, organizing 121 tasks into five categories [arxiv:2604.08226].\n\n**Distinction between deployed systems and evaluation tools:**\nThe evidence from [arxiv:2507.16947] describes **AI Consult**, a deployed AI-based clinical decision support system in primary care clinics, rather than a competency evaluation framework. Its clinical impact was measured using metrics like relative risk reduction and Fleiss’ κ, reporting 16% fewer diagnostic errors and 13% fewer treatment errors [arxiv:2507.16947]. Additionally, **GPT-4.1** is noted strictly as a model used for evaluation and rating of clinical documentation and errors, not as a competency framework [arxiv:2507.16947]."
+        },
+        {
+          "id": "reasoning_and_genir",
+          "question": "Which papers in my library discuss efficient reasoning or generative information retrieval?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2503.24377",
+            "arxiv:2501.02842"
+          ],
+          "returned_sources": [
+            "arxiv:2005.11841",
+            "arxiv:2501.02842",
+            "arxiv:2503.24377",
+            "arxiv:2604.08226"
+          ],
+          "cited_sources": [
+            "arxiv:2005.11841",
+            "arxiv:2501.02842",
+            "arxiv:2503.24377",
+            "arxiv:2604.08226"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "reasoning economy",
+            "GenIR"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, the following papers discuss your requested topics:\n\n- **Efficient Reasoning:** `[arxiv:2503.24377]` (Harnessing the Reasoning Economy: A Survey of Efficient Reasoning for Large Language Models) directly addresses this topic, covering the transition from fast System 1 to slow System 2 reasoning in LLMs and discussing efficient multi-modal reasoning for multi-modal large language models [arxiv:2503.24377].\n- **Generative Information Retrieval:** `[arxiv:2501.02842]` (Foundations of GenIR) extensively covers this domain. It introduces generative retrieval as a paradigm that replaces traditional term-based indexes with neural network parameters (differentiable indexes) [arxiv:2501.02842]. The paper also examines the foundational impact of generative AI on information access systems and discusses related retrieval methods such as Retrieval Augmented Generation (RAG) [arxiv:2501.02842], modular RAG [arxiv:2501.02842], dense retrieval [arxiv:2501.02842], and retrieval-augmented fine-tuning [arxiv:2501.02842].\n\nThe remaining papers in the library (`[arxiv:2005.11841]` and `[arxiv:2604.08226]`) do not contain evidence related to efficient reasoning or generative information retrieval."
+        },
+        {
+          "id": "active_learning_streams",
+          "question": "What methods are used for active learning in data streams?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2302.08893"
+          ],
+          "returned_sources": [
+            "arxiv:2302.08893"
+          ],
+          "cited_sources": [
+            "arxiv:2302.08893"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "uncertainty",
+            "Query by Committee",
+            "data streams"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, active learning in data streams primarily relies on the **online active learning** paradigm, which selects the most informative data points to label as they arrive [arxiv:2302.08893]. Key methods and strategies include:\n\n* **Query Strategies:** Uncertainty sampling, diversity sampling, and query by committee (which leverages disagreement among an ensemble of models) [arxiv:2302.08893].\n* **Algorithms & Frameworks:** The Selective Sampling Perceptron algorithm (utilizing Bernoulli sampling), disagreement-based active learning frameworks, and adaptive submodular maximization for Bayesian online active learning [arxiv:2302.08893].\n* **Model Architectures & Techniques:** Evolving fuzzy systems for handling time-varying data streams, and Generative Adversarial Networks (GANs) used to generate synthetic instances for data augmentation [arxiv:2302.08893].\n* **Scenarios & Evaluation:** While pool-based active learning and membership query synthesis are recognized active learning scenarios, pool-based methods are often impractical for dynamic streams due to their static nature [arxiv:2302.08893]. Policy performance is typically evaluated using metrics such as label complexity and regret [arxiv:2302.08893]."
+        },
+        {
+          "id": "robotics_adaptation_control",
+          "question": "How do the robotics papers differ in their approach to robot adaptation or control?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2502.04012",
+            "arxiv:2112.01942"
+          ],
+          "returned_sources": [
+            "arxiv:1904.09266",
+            "arxiv:2111.00944",
+            "arxiv:2112.01942",
+            "arxiv:2302.14334",
+            "arxiv:2502.04012"
+          ],
+          "cited_sources": [
+            "arxiv:1904.09266",
+            "arxiv:2111.00944",
+            "arxiv:2112.01942",
+            "arxiv:2302.14334",
+            "arxiv:2502.04012"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "Malleable Robots",
+            "contact"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, the robotics papers differ in their control and adaptation strategies across several distinct domains:\n\n- **Manipulation & Learning-Based Control:** [arxiv:2112.01942] covers classical frameworks like Operational Space Control for in-contact tasks, alongside Active Learning where the robot proactively communicates to a teacher which demonstrations are required to acquire skills.\n- **Sensor Stabilization & Geometry Decoupling:** [arxiv:2302.14334] adapts control by stabilizing LiDAR scanning during robot motion using a rotation compensation algorithm that fuses MEMS mirror and IMU data, explicitly decoupling sensor geometry from the robot platform to simplify perception.\n- **Malleable/Continuum Robot Control:** [arxiv:2502.04012] employs distance-geometry-based kinematics, inverse mapping, and Kalman filters for state estimation. It introduces a data-efficient model-based learning framework that achieves comparable or better control performance using only 100 real-world data samples. Adaptation is further addressed through extrinsic manual reconfiguration of links and AR-based alignment algorithms.\n- **Soft Robot Shape & Friction Tuning:** [arxiv:2111.00944] approaches control through quasi-static modeling of robot shape, friction, and displacement. Instead of traditional joint control, it tunes ground friction via physical shape changes and optimizes the bending curvature of piezoelectric actuators by adjusting substrate thickness, achieving maximum curvature at 65 μm.\n- **Swarm Cooperative Control:** [arxiv:1904.09266] focuses on secure coordination rather than physical adaptation, implementing a cryptographic prover-verifier workflow where a prover robot provides cryptographic proofs to a verifier robot to validate cooperative operations.\n\nThese approaches range from classical and data-efficient learning control to physical shape/friction tuning, sensor-robot decoupling, and cryptographic swarm coordination."
+        },
+        {
+          "id": "cross_domain_meta_robot_ml",
+          "question": "Are there cross-domain ideas connecting metamaterials, robotics, and machine learning?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:1807.06006"
+          ],
+          "returned_sources": [
+            "arxiv:1807.06006",
+            "arxiv:2006.16189",
+            "arxiv:2112.01942",
+            "arxiv:2302.08893",
+            "arxiv:2306.04338"
+          ],
+          "cited_sources": [
+            "arxiv:1807.06006",
+            "arxiv:2006.16189",
+            "arxiv:2112.01942",
+            "arxiv:2302.08893",
+            "arxiv:2306.04338"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "metamaterials"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, the local knowledge graph highlights methodological overlaps rather than a direct unified framework:\n\n* **Intelligent Metamaterials** can dynamically tune electromagnetic, acoustic, or mechanical properties via software commands, with \"HyperSurfaces\" proposed as a paradigm for software-defined control and programming interfaces [arxiv:1807.06006].\n* **Robotics** relies on machine learning for adaptive manipulation, utilizing Reinforcement Learning to optimize in-contact feedback policies and control parameters, and Active Learning where robots communicate with teachers to request specific demonstrations [arxiv:2112.01942].\n* **Machine Learning** addresses foundational challenges like concept drift, covariance shift, and model staleness, while employing techniques like online active learning to efficiently select informative data points from streams [arxiv:2302.08893, arxiv:2006.16189, arxiv:2306.04338].\n\nThe evidence indicates that machine learning algorithms and software-defined control paradigms serve as the methodological bridge for both dynamic material tuning and robotic decision-making. However, the local KG does not contain enough evidence to describe a direct cross-domain framework explicitly integrating all three fields together."
+        },
+        {
+          "id": "ml_validation_evaluation",
+          "question": "Which papers discuss validation or evaluation methodology for machine learning systems?",
+          "score": 1.0,
+          "passes": true,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 1.0
+          },
+          "expected_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "returned_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150",
+            "arxiv:2302.08893"
+          ],
+          "cited_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150",
+            "arxiv:2302.08893"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "DOME",
+            "learning curves",
+            "validation"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": null,
+          "no_answer": false,
+          "answer": "Based on the provided evidence, the following papers discuss validation or evaluation methodology for machine learning systems:\n\n* **[arxiv:2006.16189]** directly addresses validation methodology by providing community-wide recommendations for supervised machine learning validation in biology. It introduces the DOME framework (Data, Optimization, Model, Evaluation) to structure analysis and explicitly covers validation techniques such as N-fold cross-validation and cross-validation for model evaluation and data splitting [arxiv:2006.16189].\n* **[arxiv:2201.12150]** focuses on evaluation methodology through learning curves to assess algorithm performance relative to resources like training examples or iterations. It details specific evaluation and decision-making methods, including Wrapped Progressive Sampling (which dynamically discards candidates based on validation accuracy histograms), Learning Curve Cross-Validation for extrapolating performance, and Diagonal Model Selection for interleaved candidate evaluation [arxiv:2201.12150].\n* **[arxiv:2302.08893]** covers evaluation strategies in active learning and data stream contexts, specifically utilizing learning curves as a metric to compare asymptotic performance and sample efficiency across different model training scenarios [arxiv:2302.08893]."
+        }
+      ]
+    }
+  ]
+}

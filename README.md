@@ -199,7 +199,7 @@ Alle Clients implementieren:
 2. **Phase 2**: Implementiert - lokaler Kuzu-Citation-Graph, Co-Citation-Similarity und Graph-UI
 3. **Phase 3**: Implementiert - PDF-Parsing, LLM-Extraktion, Entity Linking, Batch-Verarbeitung und Streamlit-UI
 4. **Phase 4**: Implementiert - lokaler Query-Assistent mit KG/Hybrid-Retrieval, grounded Answers, Hypothesen, API und UIs
-5. **Phase 5**: Noch nicht als Produktionsphase implementiert - einzelne Qualitaets- und Wartungsmodule existieren als Vorarbeit
+5. **Phase 5**: Gestartet - Benchmarking, KG-Health-Report und Wartungs-/Automationsmodule entstehen schrittweise
 
 ---
 
@@ -524,7 +524,9 @@ Phase 4 ist implementiert und baut auf den lokalen Phase-1/2/3-Daten auf. Der As
 - Implementiert: grounded Answers, die nur lokale KG-Evidenz verwenden und Paper-IDs als Quellen ausgeben
 - Implementiert: Hypothesen-Generierung aus Cross-Domain-Hints und geteilten Methoden/Konzepten
 - Implementiert: FastAPI-Endpunkte fuer Suche, Antworten, Hypothesen, Paper-Details und Paper-Nachbarschaft
+- Implementiert: API-faehige Quellenverifikation mit PDF-Findung und Evidence-Textlokalisierung fuer ein spaeteres Custom-Frontend
 - Implementiert: Streamlit-UIs fuer Chat, Paper-Detailansicht und Projektverwaltung
+- Hinweis: Streamlit ist ab jetzt primaer Dev-Workbench; wiederverwendbare Produktlogik liegt in `query/`, `quality/` und `api/`.
 
 ### Phase 4 starten
 
@@ -573,8 +575,12 @@ Standard-URLs:
 | POST | `/query/search` | Lokale KG-/Hybrid-Suche |
 | POST | `/query/answer` | Grounded Answer mit Evidenz und Quellen |
 | POST | `/query/hypotheses` | Sourced Cross-Domain-Hypothesen |
+| POST | `/sources/verify-answer` | Quellen/Evidence einer Antwort pruefen, lokale PDF finden und Textstelle lokalisieren |
+| GET | `/paper/pdf` | Lokale PDF-Datei fuer eine Quelle ausliefern |
 | GET | `/papers/{paper_id}` | Paper-Details inklusive letzter Extraktion |
 | GET | `/papers/{paper_id}/neighborhood` | Zitate, cited-by und aehnliche Paper |
+| GET | `/system/health-report` | Phase-5-Health-Metriken fuer KG, Extraktionen, PDFs, Embeddings und Jobs |
+| GET | `/quality/benchmark` | Kuratierten Gold-Benchmark ausfuehren |
 
 ### Beispielabfragen
 
@@ -596,7 +602,159 @@ curl -X POST "http://127.0.0.1:8000/query/answer" `
 uv run pytest tests/test_phase4_query.py -q --tb=short --basetemp=.pytest-tmp-current/phase4
 ```
 
-Zuletzt geprueft: `7 passed`.
+Zuletzt geprueft: `203 passed` fuer die volle Testsuite; die neuen Phase-4/5-API-, Source-Verifier- und Health-Tests liefen ebenfalls gruen.
+
+### Phase 4 Antworten evaluieren
+
+Ein kleines Gold-Fragenset liegt in `quality/phase4_questions.json`. Damit lassen sich lokale/hosted Provider gegen dieselben Fragen pruefen:
+
+```bash
+python -m quality.phase4_eval --provider lm_studio --output data/eval/phase4_lm_studio.json
+python -m quality.phase4_eval --provider gemini --output data/eval/phase4_gemini.json
+```
+
+Mehrere Provider in einem Lauf:
+
+```bash
+python -m quality.phase4_eval --provider lm_studio --provider gemini --output data/eval/phase4_compare.json
+```
+
+Der Report prueft erwartete Quellen, Kernbegriffe/Zahlen, verbotene Aussagen, Generation-Fehler und ungueltige Zitate wie `[1]` statt `[arxiv:...]`.
+
+---
+
+## Phase 5: Qualitaet & Automatisierung
+
+Phase 5 ist als Produktionsphase noch nicht vollstaendig, aber die ersten wiederverwendbaren Bausteine sind vorhanden:
+
+- `quality/benchmark.py`: kuratierter Gold-Benchmark fuer Extraktionsqualitaet
+- `quality/phase4_eval.py`: Gold-Fragenset fuer grounded Answers und Quellenqualitaet
+- `quality/kg_health.py`: KG-Health-Report fuer Paper, PDFs, Extraktionen, Review Queue, Embeddings, Batch Jobs, Graph-Fallback und Quality-Telemetrie
+- `scheduler/nightly_jobs.py`: lokaler Einstiegspunkt fuer geplante Jobs; Celery bleibt optional
+- `maintenance/embedding_reindex.py`: lokaler Entity-Embedding-Reindex aus Extraktionshistorie und Review Queue
+- `maintenance/health_repair.py`: initialisiert Graph-Fallback-State und baut Entity-Embeddings neu auf
+- `maintenance/kg_vacuum.py`, `quality/retraction_checker.py`, `quality/obsolescence_updater.py`: Platzhalter fuer die naechsten Wartungsjobs
+
+Health-Report lokal ausfuehren:
+
+```bash
+python -m quality.kg_health --output data/eval/kg_health.json
+```
+
+Benchmark lokal ausfuehren:
+
+```bash
+python -m quality.benchmark --run --output data/eval/quality_benchmark.json
+```
+
+Die gleichen Funktionen sind ueber die Phase-4-API erreichbar:
+
+```powershell
+curl "http://127.0.0.1:8000/system/health-report"
+curl "http://127.0.0.1:8000/quality/benchmark"
+```
+
+Health-Reparatur lokal/API:
+
+```bash
+python -m maintenance.health_repair
+curl -X POST "http://127.0.0.1:8000/jobs/health-repair" -H "Content-Type: application/json" -d "{}"
+```
+
+### Product Frontend MVP
+
+Das erste Custom-Frontend liegt in `frontend/` und nutzt die neue gebuendelte FastAPI-App `api.product_main:app`.
+Es deckt Projekte, Import/Upload, Library, Assistant mit PDF-Split-View, einklappbaren Quellen/Evidence, nummerierten Zitat-Chips, PDF-Markierung, persistente Projekt-Notizen mit Markdown-Editor, Graph Explorer, Quality, Jobs und Settings ab.
+
+Backend + Frontend gemeinsam starten:
+
+```bash
+python scripts/run_product.py
+```
+
+Der Runner nutzt automatisch die lokale `.venv`-Python-Installation, wenn sie vorhanden ist. Dadurch startet die Product API mit denselben Dependencies wie die Tests und nicht versehentlich mit einem globalen Python.
+
+Einzeln starten:
+
+```bash
+uvicorn api.product_main:app --reload --port 8000
+cd frontend
+npm.cmd install
+npm.cmd run dev -- --port 5173
+```
+
+Standard-URLs:
+
+- Product API: `http://127.0.0.1:8000`
+- Frontend: `http://127.0.0.1:5173`
+
+Die Projekt-Auswahl in der Topbar hat einen dauerhaften `Alle Papers`-Modus. Wenn dieser Eintrag gewaehlt ist, senden Library, Graph und Assistant keine `project_id`-Einschraenkung und arbeiten ueber den gesamten lokalen Paper-Bestand. Notizen sind auch in diesem Modus moeglich; sie werden in einer eigenen globalen Notiz-Sammlung fuer `Alle Papers` gespeichert. Normale Projekte koennen in der Projektuebersicht geloescht werden; `Alle Papers` ist ein reservierter globaler Modus und kann nicht geloescht oder als Projektname neu angelegt werden.
+
+Frontend-Checks:
+
+```bash
+cd frontend
+npm.cmd run build
+npm.cmd test
+npm.cmd run test:e2e
+```
+
+Fuer das Custom-Frontend sind damit API-fertige Bausteine vorhanden: Projekte, Import, Suche, Answering, Hypothesen, Quellenverifikation, PDF-Auslieferung, Paper-Details, Paper-Netzwerk, Health-Dashboard, Health-Repair, Benchmark-Reports, Modelluebersicht, Jobs, persistente Markdown-Notizen, Notiz-KI-Schreibhilfe und eine kleine Review-Schleuse.
+
+Projekt-Endpunkte:
+
+| Methode | Endpoint | Beschreibung |
+|---|---|---|
+| GET/POST | `/projects` | Projekte listen oder anlegen |
+| PATCH/DELETE | `/projects/{project_id}` | Projekt umbenennen/aktualisieren oder loeschen |
+| POST | `/projects/{project_id}/papers` | Paper einem Projekt hinzufuegen |
+
+### Projekt-Notizen und Markdown-Editor
+
+Der Product-Frontend-Tab `Notizen` speichert Notizen projektbezogen in DuckDB und Bilder unter `data/note_assets/`; im Topbar-Modus `Alle Papers` nutzt er eine globale Notiz-Sammlung fuer den gesamten Paper-Bestand. Der Editor unterstuetzt Markdown-Toolbar, Tastaturkuerzel wie `Ctrl+B`, `Ctrl+I`, `Ctrl+E` und `Ctrl+K`, automatische Fortsetzung von Listen/Zitaten beim Enter, Tabellen, Bilder, Farben/Highlights ueber Markdown-kompatibles Inline-HTML, editierbare Preview, Undo ueber gespeicherte Versionen und eine KI-Schreibhilfe fuer markierte Abschnitte. Mit `Ctrl+Shift+K` oeffnet sich fuer die aktuelle Textauswahl ein KI-Fragefeld; die Antwort erscheint zuerst als Vorschau und kann dann angewendet oder eingefuegt werden. KI-Frage/Antwort-Verlaeufe werden pro Notiz gespeichert.
+
+Der Assistant kann Antworten, aktive Evidence-Zitate oder PDF-Excerpts direkt in eine vorhandene Projektnotiz einfuegen oder automatisch eine neue Notiz anlegen. Aus PDF-/Evidence-Zitaten entstehen klickbare `sciencekg://citation/...`-Links in der Markdown-Preview; ein Klick oeffnet die passende lokale PDF im rechten PDF-Panel.
+
+Neue Product-API-Endpunkte:
+
+| Methode | Endpoint | Beschreibung |
+|---|---|---|
+| GET/POST | `/projects/{project_id}/notes` | Projektnotizen listen oder anlegen |
+| GET/PATCH/DELETE | `/notes/{note_id}` | Notiz laden, speichern oder loeschen |
+| POST | `/notes/{note_id}/append` | Markdown und Zitationsmetadaten anhaengen |
+| POST | `/notes/{note_id}/ai-edit` | Markierten Abschnitt mit KI bearbeiten und Verlauf speichern |
+| GET | `/notes/{note_id}/ai-threads` | gespeicherte KI-Fragen einer Notiz abrufen |
+| POST | `/notes/{note_id}/versions/restore-latest` | letzten gespeicherten Markdown-Snapshot wiederherstellen |
+| POST/GET | `/notes/{note_id}/assets`, `/notes/assets/{asset_id}` | Bilder fuer Notizen speichern und ausliefern |
+
+### Zielbild Custom-Frontend
+
+Streamlit bleibt die Dev-Workbench. Das eigene Frontend baut die Produktfunktionen gegen FastAPI und sollte folgende Bereiche nicht vergessen:
+
+| Bereich | Was moeglich sein soll | Backend-Basis |
+|---|---|---|
+| Library Dashboard | Paper-/PDF-/Extraktionsbestand sehen, Health-Warnings erkennen, offene Arbeit einschaetzen | `/system/health-report` |
+| Harvest & Import | Topic-Suche, Paper-Auswahl, PDF-Download, vorhandene Library durchsuchen | Phase-1/3 APIs, bestehende Harvester-Logik |
+| Search | Lokale KG-/Hybrid-Suche mit Quellen, Scores und Evidence-Zeilen | `/query/search` |
+| Assistant | Fragen an den lokalen KG stellen, grounded Answers mit nummerierten Evidence-Zitaten und Notizen erhalten | `/query/answer`, `/tools/rewrite`, `/notes/{note_id}/append` |
+| Notizen | Projektbezogene Markdown-Notizen schreiben, Bilder/Tabellen/Farben nutzen, Auswahl per KI bearbeiten, PDF-Zitate anklicken | `/projects/{project_id}/notes`, `/notes/{note_id}`, `/notes/{note_id}/ai-edit`, `/paper/pdf` |
+| Source Verifier | Zitierte Quelle anklicken, lokale PDF oeffnen, referenzierte Textstelle pruefen und textbasiert hervorheben | `/sources/verify-answer`, `/paper/pdf` |
+| Paper Detail | Metadaten, PDF, Extraktion, Konzepte, Methoden, Claims, Relations und Qualitaetsdaten sehen | `/papers/{paper_id}` |
+| Paper Network | References, cited-by, aehnliche Paper und spaeter Graph-Visualisierung erkunden | `/papers/{paper_id}/neighborhood`, Phase-2 Graph API |
+| Hypotheses | Cross-Domain-Hypothesen mit Begruendung und Quellen ansehen | `/query/hypotheses` |
+| Review Queue | Pending Entities/Methoden/Relationen pruefen, akzeptieren, ablehnen, spaeter mergen und Alias pflegen | `/review/entities`, `/review/entities/actions` |
+| Extraction Workflow | PDFs parsen, Provider/Modell waehlen, Einzel- und Batch-Extraktionen starten, Status sehen | Phase-3 API und Batch-Job-Tabellen |
+| Quality Dashboard | Benchmark, Phase-4-Eval, Providervergleich, Retrieval-/Antwortqualitaet sehen | `/quality/benchmark`, `quality/phase4_eval.py` |
+| Jobs & Automation | Nightly Runs, Graph-Rebuilds, Reindex, Obsolescence, Retraction Checks starten/ueberwachen | `scheduler/nightly_jobs.py`, Maintenance-Module |
+| Settings | Provider, Modelle, API-Keys, lokale Pfade, Retrieval-Limits, PDF-Pfad und Graph-Pfad verwalten | `config.yaml`, API-Request-Parameter |
+
+Offene Frontend-nahe TODOs:
+
+- Review-Queue-Merge/Alias-Werkbank fehlt noch; approve/reject ist als MVP-Schleuse vorhanden.
+- Retraction Checker, Obsolescence Updater und KG Vacuum sind noch nicht produktionsreif.
+- Ein robuster Graph-Explorer fuer Kuzu/Phase-2-Daten muss fuer das Custom-Frontend neu gestaltet werden.
+- Notizen sind jetzt projektbezogen persistent; spaetere Ausbaustufen koennen globale Notizen, Volltextsuche und echte PDF-Koordinatenanker ergaenzen.
+- PDF-Highlighting ist aktuell textbasiert ueber extrahierte Excerpts, Titel/Abstract/Autor-Metadaten und PDF.js-Textitems; echte PDF-Koordinaten/Seitenanker waeren ein spaeterer Ausbau.
 
 ---
 

@@ -1,0 +1,344 @@
+{
+  "providers": [
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "case_count": 8,
+      "summary": {
+        "average_score": 0.7,
+        "pass_count": 0,
+        "case_count": 8,
+        "invalid_citation_cases": [
+          "reasoning_and_genir",
+          "robotics_adaptation_control"
+        ],
+        "missing_source_cases": [
+          "cross_domain_meta_robot_ml"
+        ],
+        "missing_term_cases": [
+          "clinical_competency_frameworks",
+          "active_learning_streams"
+        ],
+        "forbidden_hit_cases": [],
+        "generation_error_cases": [
+          "clinical_ai_effects",
+          "clinical_deployed_vs_eval_models",
+          "clinical_competency_frameworks",
+          "reasoning_and_genir",
+          "active_learning_streams",
+          "robotics_adaptation_control",
+          "cross_domain_meta_robot_ml",
+          "ml_validation_evaluation"
+        ]
+      },
+      "cases": [
+        {
+          "id": "clinical_ai_effects",
+          "question": "How is AI used in clinics, and what measurable effects were reported?",
+          "score": 0.8,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2507.16947"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "AI Consult",
+            "16%",
+            "13%",
+            "22,000",
+            "29,000"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'How is AI used in clinics, and what measurable effects were reported?':\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: Clinicians with access to AI Consult made 16% fewer diagnostic errors and 13% fewer treatment errors compared to those without.\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: The introduction of AI Consult would avert diagnostic errors in 22,000 visits and treatment errors in 29,000 visits annually at Penda.\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: AI-based Clinical Decision Support for Primary Care: A Real-World Study We evaluate the impact of large language model-based clinical decision support in live care. In partnership with Penda Health, a network of primary care clinics in Nairobi, Kenya, we studied AI Consult, a tool that serves as a safety net for clinicians by identifying potential documentat...\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: GPT-4.1 LLM used for evaluating clinical errors in study visits | OpenAI model used as a grader for health-related tasks. | Large language model used as a rater for clinical documentation and error detection. USED_FOR method:gpt-4-1 concept:clinical-error\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: OpenAI models: o3, which is currently OpenAI’s most capable model in health OpenAI model used for rating clinical documentation. | Large language model used as a rater for clinical documentation and error detection. USED_FOR method:o3 concept:clinical-error"
+        },
+        {
+          "id": "clinical_deployed_vs_eval_models",
+          "question": "What is the difference between the deployed AI Consult model and models used only for evaluation?",
+          "score": 0.8,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2507.16947"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "AI Consult",
+            "GPT-4.1",
+            "o3",
+            "rater",
+            "evaluation"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'What is the difference between the deployed AI Consult model and models used only for evaluation?':\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: Clinicians with access to AI Consult made 16% fewer diagnostic errors and 13% fewer treatment errors compared to those without.\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: The introduction of AI Consult would avert diagnostic errors in 22,000 visits and treatment errors in 29,000 visits annually at Penda.\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: GPT-4.1 LLM used for evaluating clinical errors in study visits | OpenAI model used as a grader for health-related tasks. | Large language model used as a rater for clinical documentation and error detection. USED_FOR method:gpt-4-1 concept:clinical-error\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: OpenAI models: o3, which is currently OpenAI’s most capable model in health OpenAI model used for rating clinical documentation. | Large language model used as a rater for clinical documentation and error detection. USED_FOR method:o3 concept:clinical-error\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: There was no statistically significant difference in patient-reported outcomes between the AI and non-AI groups."
+        },
+        {
+          "id": "clinical_competency_frameworks",
+          "question": "Which frameworks are proposed for evaluating clinical AI competency?",
+          "score": 0.7333,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 0.6666666666666666,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2604.08226"
+          ],
+          "returned_sources": [
+            "arxiv:2507.16947",
+            "arxiv:2601.16513",
+            "arxiv:2604.08226"
+          ],
+          "cited_sources": [
+            "arxiv:2507.16947",
+            "arxiv:2601.16513",
+            "arxiv:2604.08226"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "Clinical World Model",
+            "Clinical AI Skill-Mix",
+            "competency"
+          ],
+          "missing_terms": [
+            "Clinical AI Skill-Mix"
+          ],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'Which frameworks are proposed for evaluating clinical AI competency?':\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: Clinicians with access to AI Consult made 16% fewer diagnostic errors and 13% fewer treatment errors compared to those without.\n- [arxiv:2507.16947] AI-based Clinical Decision Support for Primary Care: A Real-World Study: The introduction of AI Consult would avert diagnostic errors in 22,000 visits and treatment errors in 29,000 visits annually at Penda.\n- [arxiv:2604.08226] Grounding Clinical AI Competency in Human Cognition Through the Clinical World Model and Skill-Mix Framework: ...t agent is bounded by its formal account of the world in which it operates. Clinical AI lacks such an account. Existing frameworks address evaluation, regulation, or system design in isolation, without a shared model of the clinical world to connect them. We introduce the Clinical World Model, a framework that formalizes care as a tripartite interaction amon...\n- [arxiv:2601.16513] Competing Visions of Ethical AI: A Case Study of OpenAI: The semantic meaning of 'policy' in OpenAI's corpus shifted from technical reinforcement learning contexts (2017-2018) to governance and compliance contexts (2023-2024).\n- [arxiv:2604.08226] Grounding Clinical AI Competency in Human Cognition Through the Clinical World Model and Skill-Mix Framework: ...tecture of Patient, Provider, and Ecosystem. | Reference model for clinical care dynamics | A theoretical framework for evaluating clinical AI systems across competency coordinates. Theory Clinical World Model, a framework that formalizes care as a tripartite interaction Abstract 0.98 central theory 21 concept:clinical-world-model approved True llm_supported..."
+        },
+        {
+          "id": "reasoning_and_genir",
+          "question": "Which papers in my library discuss efficient reasoning or generative information retrieval?",
+          "score": 0.6,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 0.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2503.24377",
+            "arxiv:2501.02842"
+          ],
+          "returned_sources": [
+            "arxiv:2501.02842",
+            "arxiv:2503.24377"
+          ],
+          "cited_sources": [
+            "arxiv:2501.02842",
+            "arxiv:2503.24377"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "reasoning economy",
+            "GenIR"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [
+            "13"
+          ],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'Which papers in my library discuss efficient reasoning or generative information retrieval?':\n- [arxiv:2503.24377] Harnessing the Reasoning Economy: A Survey of Efficient Reasoning for Large Language Models: Harnessing the Reasoning Economy: A Survey of Efficient Reasoning for Large Language Models Recent advancements in Large Language Models (LLMs) have significantly enhanced their ability to perform complex reasoning tasks, transitioning from fast and intuitive thinking (System 1) to slow and deep reasoning (System 2). While System 2 reasoning improves task ac...\n- [arxiv:2501.02842] Foundations of GenIR: Information Retrieval foundational impact of generative AI on IA systems DomainConcept foundational impact of modern generative AI models on information access (IA) systems Abstract 0.9 central domain_concept 3 concept:information-retrieval approved True llm_supported_high_precision Information Retrieval True core\n- [arxiv:2501.02842] Foundations of GenIR: Sparse Transformer [13] employs sparse attention uses sparse attention patterns to reduce complexity USES method:sparse-transformer concept:transformer\n- [arxiv:2501.02842] Foundations of GenIR: GPT-2 Proposed next token prediction for zero-shot generalization USED_FOR method:gpt-2 concept:next-token-prediction\n- [arxiv:2503.24377] Harnessing the Reasoning Economy: A Survey of Efficient Reasoning for Large Language Models: PPO (Schulman et al., 2017) policy optimization algorithm USED_IN method:ppo concept:reinforcement-learning"
+        },
+        {
+          "id": "active_learning_streams",
+          "question": "What methods are used for active learning in data streams?",
+          "score": 0.6667,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 0.3333333333333333,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2302.08893"
+          ],
+          "returned_sources": [
+            "arxiv:2302.08893"
+          ],
+          "cited_sources": [
+            "arxiv:2302.08893"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "uncertainty",
+            "Query by Committee",
+            "data streams"
+          ],
+          "missing_terms": [
+            "uncertainty",
+            "Query by Committee"
+          ],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'What methods are used for active learning in data streams?':\n- [arxiv:2302.08893] Active learning for data streams: a survey: Active learning for data streams: a survey Online active learning is a paradigm in machine learning that aims to select the most informative data points to label from a data stream. The problem of minimizing the cost associated with collecting labeled observations has gained a lot of attention in recent years, particularly in real-world applications where da...\n- [arxiv:2302.08893] Active learning for data streams: a survey: ...s a rapidly evolving and highly relevant area of research in machine learning. Task online active learning Introduction/Methods 0.98 central domain_concept 89 concept:online-active-learning approved True llm_supported_high_precision Online Active Learning True core\n- [arxiv:2302.08893] Active learning for data streams: a survey: Selective Sampling Perceptron An online active learning algorithm for data streams using Bernoulli sampling. Machine Learning Algorithm Selective sampling perceptron Methods reviewed_method central 3 0.75 method method:selective-sampling-perceptron approved True llm_supported_high_precision Selective Sampling Perceptron True core\n- [arxiv:2302.08893] Active learning for data streams: a survey: Data stream The survey outlines the challenge of conducting active learning with data streams. DomainConcept active learning with data streams 6 Summary and future directions 0.95 central domain_concept 41 concept:data-stream approved True llm_supported_high_precision Data stream True core\n- [arxiv:2302.08893] Active learning for data streams: a survey: Online active learning is essential for real-world applications where data arrives in streams and labeling is costly, as traditional pool-based methods are often impractical due to their static nature. review contribution False this_paper"
+        },
+        {
+          "id": "robotics_adaptation_control",
+          "question": "How do the robotics papers differ in their approach to robot adaptation or control?",
+          "score": 0.6,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 0.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2502.04012",
+            "arxiv:2112.01942"
+          ],
+          "returned_sources": [
+            "arxiv:2111.00944",
+            "arxiv:2112.01942",
+            "arxiv:2302.14334",
+            "arxiv:2502.04012"
+          ],
+          "cited_sources": [
+            "arxiv:2111.00944",
+            "arxiv:2112.01942",
+            "arxiv:2302.14334",
+            "arxiv:2502.04012"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "Malleable Robots",
+            "contact"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [
+            "72"
+          ],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'How do the robotics papers differ in their approach to robot adaptation or control?':\n- [arxiv:2502.04012] Malleable Robots: A real-world data-efficient model-based learning framework for continuum robot control can achieve comparable or better performance than policies trained with thousands of data points using only 100 real-world data samples.\n- [arxiv:2111.00944] Piezoelectric Soft Robot Inchworm Motion by Tuning Ground Friction through Robot Shape: Quasi-Static Modeling and Experimental Validation: The bending curvature of the trilayer piezoelectric actuator is optimized by tuning the substrate thickness, with a maximum curvature achieved at 65 μm.\n- [arxiv:2112.01942] A Survey of Robot Manipulation in Contact: Operational Space Control classical control method for in-contact tasks control framework for robot manipulation Robotics MethodFamily operational space control [ 72] 5.2 reviewed_method supporting 1 0.75 method method:operational-space-control approved True llm_supported_high_precision Operational Space Control True core\n- [arxiv:2302.14334] Design of an Adaptive Lightweight LiDAR to Decouple Robot-Camera Geometry: ...orithm to stabilize LiDAR scanning under robot motion Uses MEMS mirror and IMU data to compensate for rotational jitter Robotics Algorithm rotation compensation control algorithm that uses the MEMS mirror scanning LiDAR IV-G paper_contribution central 1 0.75 method method:rotation-compensation-control approved True llm_supported_high_precision Rotation compe...\n- [arxiv:2502.04012] Malleable Robots: Human-Robot Interaction field of study for collaborative robotic systems Robotics ApplicationSetting Human-in-the-loop robotic assistance and control, or otherwise commonly known as a form of human robot interaction 7.4.1 0.95 central domain_concept 1 concept:human-robot-interaction approved True llm_supported_high_precision Human-robot interaction True core"
+        },
+        {
+          "id": "cross_domain_meta_robot_ml",
+          "question": "Are there cross-domain ideas connecting metamaterials, robotics, and machine learning?",
+          "score": 0.6,
+          "passes": false,
+          "score_parts": {
+            "sources": 0.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:1807.06006"
+          ],
+          "returned_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150",
+            "arxiv:2304.02381",
+            "arxiv:2306.04338"
+          ],
+          "cited_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150",
+            "arxiv:2304.02381",
+            "arxiv:2306.04338"
+          ],
+          "missing_sources": [
+            "arxiv:1807.06006"
+          ],
+          "required_terms": [
+            "metamaterials"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'Are there cross-domain ideas connecting metamaterials, robotics, and machine learning?':\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: ...in biology Modern biology frequently relies on machine learning to provide predictions and improve decision processes. There have been recent calls for more scrutiny on machine learning performance and possible limitations. Here we present a set of community-wide recommendations aiming to help establish standards of supervised machine learning validation in...\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Learning Curves for Decision Making in Supervised Machine Learning: A Survey Learning curves are a concept from social sciences that has been adopted in the context of machine learning to assess the performance of a learning algorithm with respect to a certain resource, e.g., the number of training examples or the number of training iterations. Learning curv...\n- [arxiv:2306.04338] Changing Data Sources in the Age of Machine Learning for Official Statistics: Changing Data Sources in the Age of Machine Learning for Official Statistics Data science has become increasingly essential for the production of official statistics, as it enables the automated collection, processing, and analysis of large amounts of data. With such data science practices in place, it enables more timely, more insightful and more flexible r...\n- [arxiv:2304.02381] Physics-Inspired Interpretability Of Machine Learning Models: Physics-Inspired Interpretability Of Machine Learning Models The ability to explain decisions made by machine learning models remains one of the most significant hurdles towards widespread adoption of AI in highly sensitive areas such as medicine, cybersecurity or autonomous driving. Great interest exists in understanding which features of the input data pro...\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Provost et al (1999) propose a dynamic programming approach (called DP), Provost et al (1999) propose a dynamic programming approach (called DP), USED_IN concept:dynamic-programming concept:reinforcement-learning"
+        },
+        {
+          "id": "ml_validation_evaluation",
+          "question": "Which papers discuss validation or evaluation methodology for machine learning systems?",
+          "score": 0.8,
+          "passes": false,
+          "score_parts": {
+            "sources": 1.0,
+            "required_terms": 1.0,
+            "forbidden_terms": 1.0,
+            "citations": 1.0,
+            "generation": 0.0
+          },
+          "expected_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "returned_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "cited_sources": [
+            "arxiv:2006.16189",
+            "arxiv:2201.12150"
+          ],
+          "missing_sources": [],
+          "required_terms": [
+            "DOME",
+            "learning curves",
+            "validation"
+          ],
+          "missing_terms": [],
+          "forbidden_hits": [],
+          "invalid_citations": [],
+          "generation_error": "[WinError 10013] Der Zugriff auf einen Socket war aufgrund der Zugriffsrechte des Sockets unzulässig",
+          "no_answer": false,
+          "answer": "I could not generate a synthesized answer because the configured LLM call failed. Evidence-only fallback:\nLocal KG evidence for 'Which papers discuss validation or evaluation methodology for machine learning systems?':\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: DOME: Recommendations for supervised machine learning validation in biology Modern biology frequently relies on machine learning to provide predictions and improve decision processes. There have been recent calls for more scrutiny on machine learning performance and possible limitations. Here we present a set of community-wide recommendations aiming to help...\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Wrapped Progressive Sampling Dynamically discards candidates based on validation accuracy histograms. Machine Learning Algorithm Wrapped Progressive Sampling procedure (WPS) 5.1.1 reviewed_method supporting 1 0.75 method method:wrapped-progressive-sampling approved True llm_supported_high_precision Wrapped Progressive Sampling True core\n- [arxiv:2201.12150] Learning Curves for Decision Making in Supervised Machine Learning: A Survey: Diagonal Model Selection Interleaved evaluation of candidates allowing pause and continue. Machine Learning MethodFamily Diagonal Model Selection... evaluation of different candidates can be interleaved. 4.1.3 reviewed_method supporting 1 0.75 method method:diagonal-model-selection approved True llm_supported_high_precision Diagonal Model Selection True core\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: N-fold Cross validation A model validation technique. Machine Learning Algorithm N-fold Cross validation Optimization reviewed_method supporting 1 0.75 method method:n-fold-cross-validation approved True llm_supported_high_precision N-fold Cross validation True core\n- [arxiv:2006.16189] DOME: Recommendations for supervised machine learning validation in biology: DOME Structured methods description for machine learning based on data, optimization, model, evaluation | A framework for structuring supervised machine learning analysis in biology. MethodFamily Data, Optimization, Model and Evaluation (DOME) Abstract 0.98 central method_family 13 concept:dome approved True llm_supported_high_precision DOME True core"
+        }
+      ]
+    }
+  ]
+}

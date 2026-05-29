@@ -1,0 +1,65 @@
+{
+  "status": "warning",
+  "metadata_db": {
+    "path": "data\\metadata.duckdb",
+    "exists": true,
+    "paper_count": 25
+  },
+  "graph_db": {
+    "path": "data\\graphs\\global_kg",
+    "exists": false
+  },
+  "pdf_library": {
+    "path": "data\\pdfs",
+    "exists": true,
+    "pdf_count": 25
+  },
+  "papers": {
+    "total": 25,
+    "with_full_text": 25,
+    "full_text_coverage": 1.0,
+    "retracted": 0,
+    "conflicts": 0,
+    "missing_title": 0,
+    "missing_year": 0,
+    "high_obsolescence": 0,
+    "duplicate_doi_groups": 0
+  },
+  "extractions": {
+    "total": 25,
+    "by_status": {
+      "success": 25
+    },
+    "papers_with_success": 25,
+    "paper_success_coverage": 1.0,
+    "avg_duration_seconds": 30.4157,
+    "latest_extraction_timestamp": "2026-05-23 00:24:22.124027"
+  },
+  "review_queue": {
+    "pending": 352,
+    "total": 352
+  },
+  "embeddings": {
+    "total": 0,
+    "model_count": 0,
+    "latest_version": 0
+  },
+  "batch_jobs": {
+    "by_status": {},
+    "latest": []
+  },
+  "quality_telemetry": {
+    "total": 25,
+    "by_parse_quality": {
+      "clean": 23,
+      "partial": 2
+    },
+    "avg_duration_seconds": 30.3978,
+    "latest_timestamp": "2026-05-23 00:24:22.080658"
+  },
+  "warnings": [
+    "Kuzu graph path does not exist; graph-only features may be unavailable.",
+    "Entity review queue has pending items.",
+    "No entity embeddings are stored; hybrid semantic retrieval may be weaker."
+  ]
+}
