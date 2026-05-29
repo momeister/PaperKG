@@ -578,6 +578,57 @@ def patch_note_ai_thread(note_id: str, thread_id: str, request: NoteAiThreadPatc
     return {"thread": updated}
 
 
+@app.delete("/notes/{note_id}/ai-threads/{thread_id}")
+def delete_note_ai_thread(
+    note_id: str,
+    thread_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    return _delete_note_ai_thread(note_id, thread_id, metadata_db_path)
+
+
+@app.post("/notes/{note_id}/ai-threads/{thread_id}/delete")
+def delete_note_ai_thread_action(
+    note_id: str,
+    thread_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    return _delete_note_ai_thread(note_id, thread_id, metadata_db_path)
+
+
+def _delete_note_ai_thread(note_id: str, thread_id: str, metadata_db_path: str) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        thread = db.get_note_ai_thread(thread_id)
+        if thread is None or str(thread.get("note_id")) != note_id:
+            raise HTTPException(status_code=404, detail=f"AI thread not found: {thread_id}")
+        db.delete_note_ai_thread(thread_id)
+    return {"deleted": True}
+
+
+@app.delete("/notes/{note_id}/ai-threads")
+def delete_note_ai_threads(
+    note_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    return _delete_note_ai_threads(note_id, metadata_db_path)
+
+
+@app.post("/notes/{note_id}/ai-threads/delete-all")
+def delete_note_ai_threads_action(
+    note_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    return _delete_note_ai_threads(note_id, metadata_db_path)
+
+
+def _delete_note_ai_threads(note_id: str, metadata_db_path: str) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        if db.get_note(note_id) is None:
+            raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
+        deleted = db.delete_note_ai_threads(note_id)
+    return {"deleted": deleted}
+
+
 @app.post("/notes/{note_id}/ai-threads/{thread_id}/messages")
 def append_note_ai_message(note_id: str, thread_id: str, request: NoteAiMessageRequest) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
@@ -668,7 +719,7 @@ def _create_note_ai_thread(note_id: str, request: NoteAiThreadRequest) -> dict[s
             anchor_start=request.anchor_start,
             anchor_end=request.anchor_end,
             anchor_quote=request.anchor_quote or selected[:2000],
-            ui_state={"collapsed": False},
+            ui_state={"collapsed": True},
         )
     return thread
 
@@ -1005,9 +1056,62 @@ def _run_note_ai_chat(
     )
     try:
         response = llm_router.chat(messages, provider=provider, overrides=overrides)
+        if _note_ai_response_needs_retry(response, selected_text):
+            retry_overrides = _note_ai_retry_overrides(overrides)
+            retry_messages = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "Die vorige Antwort war leer oder hat nur den markierten Text wiederholt. "
+                        "Antworte jetzt direkt auf die Aufgabe. Wiederhole den markierten Text nicht. "
+                        "Denke nicht lange intern nach. Gib sofort die finale Antwort aus. "
+                        "Wenn eine Zusammenfassung verlangt wird, schreibe 2-4 kurze Saetze in einfacher Sprache."
+                    ),
+                },
+            ]
+            response = llm_router.chat(retry_messages, provider=provider, overrides=retry_overrides)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI edit failed: {exc}") from exc
-    return str(response or "").strip()
+    response_text = str(response or "").strip()
+    if _note_ai_response_needs_retry(response_text, selected_text):
+        raise HTTPException(
+            status_code=502,
+            detail="AI edit failed: provider returned an empty or unchanged answer.",
+        )
+    return response_text
+
+
+def _note_ai_response_needs_retry(response: Any, selected_text: str) -> bool:
+    response_text = str(response or "").strip()
+    if not response_text:
+        return True
+    selected = _normalize_note_ai_echo_text(selected_text)
+    answer = _normalize_note_ai_echo_text(response_text)
+    if not selected or len(selected) < 24:
+        return False
+    if answer == selected:
+        return True
+    if len(answer) >= int(len(selected) * 0.9) and (answer in selected or selected in answer):
+        return True
+    return False
+
+
+def _note_ai_retry_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
+    retry = dict(overrides)
+    retry["temperature"] = min(float(retry.get("temperature", 0.18)), 0.08)
+    retry["max_tokens"] = max(int(retry.get("max_tokens") or 0) * 4, 2048)
+    extra = dict(retry.get("extra") or {})
+    extra["include_reasoning"] = False
+    extra["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
+    retry["extra"] = extra
+    return retry
+
+
+def _normalize_note_ai_echo_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+    text = re.sub(r"^[>*\-\s]+", "", text)
+    return text
 
 
 def _note_ai_model(request: NoteAiEditRequest | NoteAiMessageRequest) -> str:

@@ -352,6 +352,7 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
     assert thread.status_code == 200
     thread_id = thread.json()["thread"]["id"]
     assert thread.json()["thread"]["messages"][0]["role"] == "user"
+    assert thread.json()["thread"]["ui_state"]["collapsed"] is True
     followup = client.post(
         f"/notes/{note_id}/ai-threads/{thread_id}/messages",
         json={
@@ -365,3 +366,72 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
     threads = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
     assert threads.status_code == 200
     assert threads.json()["total"] == 2
+    thread_ids = [item["id"] for item in threads.json()["items"]]
+
+    ui_patch = client.patch(
+        f"/notes/{note_id}/ai-threads/{thread_ids[-1]}",
+        json={"metadata_db_path": str(db_path), "ui_state": {"collapsed": False}},
+    )
+    assert ui_patch.status_code == 200
+    after_ui_patch = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    assert [item["id"] for item in after_ui_patch.json()["items"]] == thread_ids
+
+    delete_one = client.post(f"/notes/{note_id}/ai-threads/{thread_id}/delete", params={"metadata_db_path": str(db_path)})
+    assert delete_one.status_code == 200
+    after_delete_one = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    assert after_delete_one.json()["total"] == 1
+
+    delete_all = client.post(f"/notes/{note_id}/ai-threads/delete-all", params={"metadata_db_path": str(db_path)})
+    assert delete_all.status_code == 200
+    assert delete_all.json()["deleted"] == 1
+    after_delete_all = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    assert after_delete_all.json()["total"] == 0
+
+
+def test_note_ai_retries_empty_response_before_storing_thread(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    _fixture_db(db_path)
+    client = TestClient(product_main.app)
+    created = client.post(
+        "/projects/demo/notes",
+        params={"metadata_db_path": str(db_path)},
+        json={"title": "Vorbereitung", "markdown": "# Start"},
+    )
+    assert created.status_code == 200
+    note_id = created.json()["note"]["id"]
+
+    class BlankThenUsefulRouter:
+        default_provider = "fake"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.overrides: list[dict[str, object]] = []
+
+        def chat(self, messages, provider=None, overrides=None):
+            self.calls += 1
+            self.overrides.append(dict(overrides or {}))
+            assert "Markierter Text" in messages[-1]["content"] or "vorige Antwort" in messages[-1]["content"]
+            if self.calls == 1:
+                return ""
+            return "Der Abschnitt sagt: Lernen ist wichtiger als starres Befolgen eines Protokolls."
+
+        def provider_default_model(self, provider=None):
+            return "fake-model"
+
+    router = BlankThenUsefulRouter()
+    monkeypatch.setattr(product_main, "llm_router", router)
+    response = client.post(
+        f"/notes/{note_id}/ai-threads",
+        json={
+            "selected_text": "learning rather than narrow protocol adherence. These findings show that people used the tool as a learning aid.",
+            "instruction": "Fasse mir das in einfacher Sprache zusammen",
+            "metadata_db_path": str(db_path),
+        },
+    )
+    assert response.status_code == 200
+    assert router.calls == 2
+    assert int(router.overrides[1]["max_tokens"]) >= 2048
+    assert router.overrides[1]["extra"]["include_reasoning"] is False
+    assert router.overrides[1]["extra"]["chat_template_kwargs"]["thinking"] is False
+    assert response.json()["replacement_text"].startswith("Der Abschnitt sagt")
+    assert response.json()["thread"]["messages"][1]["content"].startswith("Der Abschnitt sagt")

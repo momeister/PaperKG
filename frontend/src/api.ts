@@ -156,6 +156,14 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
+  deleteNoteAiThread: (noteId: string, threadId: string) =>
+    request<{ deleted: boolean }>(`/notes/${encodeURIComponent(noteId)}/ai-threads/${encodeURIComponent(threadId)}/delete`, {
+      method: "POST"
+    }),
+  deleteNoteAiThreads: (noteId: string) =>
+    request<{ deleted: number }>(`/notes/${encodeURIComponent(noteId)}/ai-threads/delete-all`, {
+      method: "POST"
+    }),
   noteAiEdit: (noteId: string, payload: { selected_text: string; instruction: string; provider?: string; model?: string; use_kg_evidence?: boolean }) =>
     request<NoteAiEditResponse>(`/notes/${encodeURIComponent(noteId)}/ai-edit`, {
       method: "POST",

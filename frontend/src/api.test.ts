@@ -35,4 +35,18 @@ describe("api client", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("/notes/n1/append");
     expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
   });
+
+  it("deletes note AI threads via POST action routes", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ deleted: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+
+    await api.deleteNoteAiThread("n1", "thread-1");
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/notes/n1/ai-threads/thread-1/delete");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+  });
 });

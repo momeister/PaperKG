@@ -15,9 +15,10 @@ type TextareaHighlightLayerProps = {
   ranges?: TextHighlightRange[];
   insertions?: TextHighlightInsertion[];
   scrollTop?: number;
+  scrollLeft?: number;
 };
 
-export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scrollTop = 0 }: TextareaHighlightLayerProps) {
+export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scrollTop = 0, scrollLeft = 0 }: TextareaHighlightLayerProps) {
   const normalizedRanges = ranges
     .map((range) => ({
       ...range,
@@ -34,7 +35,7 @@ export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scr
 
   return (
     <div className="textarea-highlight-layer" aria-hidden="true">
-      <div style={{ transform: `translateY(-${scrollTop}px)` }}>
+      <div style={{ transform: `translate(${-scrollLeft}px, -${scrollTop}px)` }}>
         {points.map((point, index) => {
           const nextPoint = points[index + 1];
           const insertionsAtPoint = normalizedInsertions.filter((insertion) => insertion.index === point);

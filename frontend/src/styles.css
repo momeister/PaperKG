@@ -164,6 +164,11 @@ button {
   min-width: 0;
 }
 
+.button-compact {
+  min-height: 32px;
+  padding: 6px 9px;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -330,6 +335,12 @@ h1 {
 .button:hover,
 .icon-button:hover {
   border-color: #98a7b6;
+}
+
+.icon-button.active {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: #e8f0ff;
+  color: var(--blue);
 }
 
 .button-primary {
@@ -972,6 +983,7 @@ h1 {
   background: #ffffff;
   line-height: 1.5;
   font: inherit;
+  overflow-wrap: break-word;
 }
 
 .notes-editor--highlighted,
@@ -979,14 +991,14 @@ h1 {
   position: relative;
   z-index: 2;
   background: transparent;
-  color: transparent;
+  color: var(--text);
   caret-color: var(--text);
   scrollbar-gutter: stable;
 }
 
 .notes-editor--highlighted::selection,
 .markdown-editor--highlighted::selection {
-  color: transparent;
+  color: var(--text);
   background: rgba(37, 99, 235, 0.26);
 }
 
@@ -1156,10 +1168,12 @@ h1 {
   overflow: hidden;
   pointer-events: none;
   border: 1px solid transparent;
-  color: var(--text);
+  color: transparent;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   scrollbar-gutter: stable;
+  width: 100%;
+  height: 100%;
 }
 
 .markdown-editor-wrap .textarea-highlight-layer {
@@ -1174,7 +1188,7 @@ h1 {
 }
 
 .textarea-highlight-layer mark {
-  color: inherit;
+  color: transparent;
   background: rgba(37, 99, 235, 0.14);
   border-radius: 3px;
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.28);
@@ -1184,15 +1198,22 @@ h1 {
   background: rgba(37, 99, 235, 0.16) !important;
 }
 
+.textarea-highlight-range--selection-pinned {
+  background: rgba(37, 99, 235, 0.28) !important;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.5), 0 0 0 1px rgba(37, 99, 235, 0.14);
+}
+
 .textarea-ghost-insertion {
-  color: rgba(96, 112, 128, 0.72);
-  background: rgba(232, 237, 242, 0.72);
-  border-left: 3px solid #9ca9b6;
+  color: rgba(82, 96, 110, 0.58);
+  background: rgba(238, 242, 247, 0.86);
+  border-left: 3px solid #b7c3d0;
+  border-radius: 3px;
   white-space: pre-wrap;
+  box-decoration-break: clone;
 }
 
 .textarea-ghost-insertion--ai {
-  color: rgba(64, 80, 95, 0.68);
+  color: rgba(64, 80, 95, 0.6);
 }
 
 .markdown-editor {
@@ -1205,6 +1226,24 @@ h1 {
   color: var(--text);
   background: #ffffff;
   font: 14px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  overflow-wrap: break-word;
+}
+
+.notes-editor.notes-editor--highlighted,
+.markdown-editor.markdown-editor--highlighted {
+  background: transparent;
+}
+
+.markdown-editor-wrap[data-insert-preview="true"] .markdown-editor--highlighted {
+  color: transparent;
+}
+
+.markdown-editor-wrap[data-insert-preview="true"] .textarea-highlight-layer {
+  color: var(--text);
+}
+
+.markdown-editor-wrap[data-insert-preview="true"] .textarea-highlight-layer mark {
+  color: var(--text);
 }
 
 .selection-ai-popover {
@@ -1385,7 +1424,7 @@ h1 {
 
 .note-context-panel {
   display: grid;
-  grid-template-rows: minmax(130px, 0.34fr) minmax(340px, 1fr);
+  grid-template-rows: minmax(92px, 0.28fr) minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
 }
@@ -1393,6 +1432,10 @@ h1 {
 .citation-panel {
   min-height: 0;
   overflow: auto;
+}
+
+.citation-panel--compact {
+  overflow: hidden;
 }
 
 .note-history-panel {
@@ -1422,25 +1465,38 @@ h1 {
 
 .ai-thread-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+  align-content: start;
   min-height: 0;
   overflow: auto;
   padding-right: 2px;
 }
 
 .ai-thread-card {
-  resize: vertical;
-  overflow: auto;
+  overflow: hidden;
   min-width: 260px;
   max-width: 100%;
-  min-height: 150px;
-  max-height: 540px;
+  min-height: 0;
   border-left: 3px solid #9ca9b6;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(32, 43, 54, 0.04);
+}
+
+.ai-thread-card--compact {
+  gap: 6px;
 }
 
 .ai-thread-card--active {
   border-color: var(--blue);
   background: #f7fbff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.34);
+}
+
+.ai-thread-topline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
 }
 
 .ai-thread-header {
@@ -1451,26 +1507,72 @@ h1 {
   color: inherit;
   padding: 0;
   text-align: left;
+  cursor: pointer;
+}
+
+.ai-thread-header strong {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.ai-thread-header span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.ai-thread-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.icon-button--compact {
+  width: 31px;
+  min-height: 31px;
+}
+
+.ai-thread-preview {
+  display: grid;
+  gap: 3px;
+}
+
+.ai-thread-preview p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ai-thread-answer-preview {
+  color: #40505f !important;
+  border-left: 2px solid #c9d7e6;
+  padding-left: 7px;
 }
 
 .ai-thread-messages {
   display: grid;
-  gap: 8px;
-  max-height: 280px;
+  gap: 6px;
+  max-height: 220px;
   overflow: auto;
 }
 
 .ai-thread-message {
   display: grid;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #ffffff;
+  gap: 3px;
+  padding: 6px 0 6px 8px;
+  border-left: 2px solid #c9d7e6;
 }
 
 .ai-thread-message--assistant {
-  border-left: 3px solid var(--blue);
+  border-left-color: var(--blue);
 }
 
 .ai-thread-message span {

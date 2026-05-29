@@ -95,15 +95,16 @@ export function PdfPane({
   const [searchTerm, setSearchTerm] = useState("");
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const resizeFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setDocument(null);
     setPageCount(0);
-      setMatches({});
-      setCurrentPage(1);
-      setZoom(1);
-      setError("");
+    setMatches({});
+    setCurrentPage(1);
+    setZoom(1);
+    setError("");
     if (!url) {
       return;
     }
@@ -139,6 +140,7 @@ export function PdfPane({
   const evidencePages = matches[activeEvidenceIndex] ?? [];
   const activeQuery = evidenceQueries[activeEvidenceIndex] ?? { phrases: [], terms: [] };
   const visibleQuery = showingSearch ? searchQuery : activeQuery;
+  const evidenceTargetPage = showingSearch ? null : evidencePages[0] ?? null;
 
   useEffect(() => {
     setMatches({});
@@ -154,9 +156,22 @@ export function PdfPane({
     if (typeof ResizeObserver === "undefined") {
       return;
     }
-    const observer = new ResizeObserver(updateWidth);
+    const observer = new ResizeObserver(() => {
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        updateWidth();
+      });
+    });
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+    };
   }, [document, url]);
 
   useEffect(() => {
@@ -259,7 +274,7 @@ export function PdfPane({
           <button className="icon-button" type="button" aria-label="Nächste Zitation" onClick={() => stepEvidence(1)}>
             <ChevronRight size={18} />
           </button>
-          <span>{evidencePages.length ? `Seite ${evidencePages.join(", ")}` : "keine Textstelle gefunden"}</span>
+          <span>{evidencePages.length ? `Seite ${evidencePages[0]}` : "keine Textstelle gefunden"}</span>
         </div>
       ) : null}
 
@@ -326,6 +341,7 @@ export function PdfPane({
                 fitMode={fitMode}
                 evidenceQuery={visibleQuery}
                 activeEvidenceIndex={visibleHighlightIndex}
+                targetPage={evidenceTargetPage}
                 onMatch={updateMatch}
                 setPageRef={(node) => {
                   pageRefs.current[pageNumber] = node;
@@ -359,6 +375,7 @@ function PdfPage({
   fitMode,
   evidenceQuery,
   activeEvidenceIndex,
+  targetPage,
   onMatch,
   setPageRef
 }: {
@@ -369,12 +386,38 @@ function PdfPage({
   fitMode: "width" | "page";
   evidenceQuery: HighlightQuery;
   activeEvidenceIndex: number;
+  targetPage?: number | null;
   onMatch: (evidenceIndex: number, pageNumber: number, hasMatch: boolean) => void;
   setPageRef: (node: HTMLDivElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const [isNearViewport, setIsNearViewport] = useState(pageNumber <= 2);
   const [boxes, setBoxes] = useState<HighlightBox[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const combinedPageRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      pageRef.current = node;
+      setPageRef(node);
+    },
+    [setPageRef]
+  );
+
+  useEffect(() => {
+    const node = pageRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setIsNearViewport(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsNearViewport(entry.isIntersecting);
+      },
+      { root: null, rootMargin: "900px 0px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -406,15 +449,19 @@ function PdfPage({
       if (cancelled) {
         return;
       }
-      const task = page.render({ canvasContext: context, viewport });
-      renderTask = task;
-      try {
-        await task.promise;
-      } catch (error) {
-        if (cancelled || String(error).toLowerCase().includes("cancel")) {
-          return;
+      if (isNearViewport) {
+        const task = page.render({ canvasContext: context, viewport });
+        renderTask = task;
+        try {
+          await task.promise;
+        } catch (error) {
+          if (cancelled || String(error).toLowerCase().includes("cancel")) {
+            return;
+          }
+          throw error;
         }
-        throw error;
+      } else {
+        context.clearRect(0, 0, canvas.width, canvas.height);
       }
 
       const textContent = await page.getTextContent();
@@ -424,7 +471,7 @@ function PdfPage({
 
       const match = findPageMatch(textContent.items, evidenceQuery, viewport, activeEvidenceIndex);
       onMatch(activeEvidenceIndex, pageNumber, match.hasMatch);
-      setBoxes(match.boxes);
+      setBoxes(targetPage && pageNumber !== targetPage ? [] : match.boxes);
     }
 
     renderPage();
@@ -432,10 +479,10 @@ function PdfPage({
       cancelled = true;
       renderTask?.cancel?.();
     };
-  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, activeEvidenceIndex, onMatch]);
+  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, activeEvidenceIndex, targetPage, onMatch, isNearViewport]);
 
   return (
-    <div className="pdf-page" ref={setPageRef} style={{ width: size.width || undefined }}>
+    <div className="pdf-page" ref={combinedPageRef} style={{ width: size.width || undefined }}>
       <div className="pdf-page-label">Seite {pageNumber}</div>
       <div className="pdf-page-surface" style={{ width: size.width || undefined, height: size.height || undefined }}>
         <canvas ref={canvasRef} />
@@ -597,16 +644,11 @@ function uniqueBoxes(boxes: HighlightBox[]) {
 function buildHighlightQuery(evidence: VerificationEvidence): HighlightQuery {
   const explicit = (evidence.matched_terms ?? []).map(normalizeText).filter(Boolean);
   const reference = compactText(evidence.reference_text);
-  const excerpt = compactText(evidence.pdf_excerpt);
   const referenceTerms = extractTerms(reference);
-  const phrases = extractPhrases(reference, 170).slice(0, 4);
-  const excerptPhrases = extractPhrases(excerpt)
-    .filter((phrase) => phrase.length <= 190)
-    .slice(0, 4);
-  const namedPhrases = extractNamedPhrases(`${reference} ${excerpt}`).slice(0, 4);
-  const terms = extractTerms(`${explicit.join(" ")} ${reference} ${namedPhrases.join(" ")}`).filter(isAnchorTerm);
+  const phrases = extractPhrases(reference, 160).slice(0, 3);
+  const terms = extractTerms(`${explicit.join(" ")} ${reference}`).filter(isAnchorTerm);
   return {
-    phrases: Array.from(new Set([...phrases, ...excerptPhrases, ...namedPhrases])).slice(0, 10),
+    phrases: Array.from(new Set(phrases)).slice(0, 4),
     terms: Array.from(new Set([...explicit, ...referenceTerms, ...terms])).filter(isAnchorTerm).slice(0, 18)
   };
 }
@@ -648,14 +690,6 @@ function isAnchorTerm(term: string) {
 
 function isStrongFallbackTerm(term: string) {
   return /\d/.test(term) || term.includes("-") || term.length >= 10;
-}
-
-function extractNamedPhrases(text: string): string[] {
-  const matches = text.match(/\b[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){1,5}\b/g) ?? [];
-  const blocked = new Set(["Artificial Intelligence", "Clinical Decision", "Primary Care"]);
-  return Array.from(new Set(matches.map((item) => compactText(item))))
-    .filter((item) => !blocked.has(item) && item.length <= 120)
-    .sort((left, right) => right.split(" ").length - left.split(" ").length);
 }
 
 function compactText(text: string) {

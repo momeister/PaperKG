@@ -1398,12 +1398,30 @@ class MetadataDB:
         next_ui_state = ui_state if ui_state is not None else current.get("ui_state") or {}
         next_replacement = replacement_text if replacement_text is not None else current.get("replacement_text")
         next_response = response_text if response_text is not None else current.get("response_text")
+        content_changed = replacement_text is not None or response_text is not None
+        next_updated = datetime.now() if content_changed else current.get("updated_timestamp")
         self._execute("""
             UPDATE note_ai_threads
             SET ui_state = ?, replacement_text = ?, response_text = ?, updated_timestamp = ?
             WHERE id = ?
-        """, [json.dumps(next_ui_state), next_replacement, next_response, datetime.now(), thread_id])
+        """, [json.dumps(next_ui_state), next_replacement, next_response, next_updated, thread_id])
         return self.get_note_ai_thread(thread_id)
+
+    def delete_note_ai_thread(self, thread_id: str) -> bool:
+        current = self.get_note_ai_thread(thread_id)
+        if current is None:
+            return False
+        self._execute("DELETE FROM note_ai_messages WHERE thread_id = ?", [thread_id])
+        self._execute("DELETE FROM note_ai_threads WHERE id = ?", [thread_id])
+        return True
+
+    def delete_note_ai_threads(self, note_id: str) -> int:
+        threads = self.list_note_ai_threads(note_id, limit=10000)
+        if not threads:
+            return 0
+        self._execute("DELETE FROM note_ai_messages WHERE note_id = ?", [note_id])
+        self._execute("DELETE FROM note_ai_threads WHERE note_id = ?", [note_id])
+        return len(threads)
 
     def add_note_ai_message(
         self,

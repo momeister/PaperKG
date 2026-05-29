@@ -8,6 +8,8 @@ from typing import Any
 from parsing.marker_parser import MarkerParser
 
 _PDF_TEXT_CACHE: dict[tuple[str, float, int], str] = {}
+MAX_REFERENCE_CHARS = 220
+DEFAULT_EXCERPT_CHARS = 260
 
 
 @dataclass(frozen=True)
@@ -105,11 +107,13 @@ def verify_answer_sources(
         source_evidence = [
             item for item in evidence
             if str(item.get("paper_id") or "") == paper_id
-        ][:max_evidence_per_source]
-        locations = [
-            locate_evidence(item, pdf_text)
-            for item in source_evidence
         ]
+        locations: list[EvidenceLocation] = []
+        for item in source_evidence:
+            remaining = max_evidence_per_source - len(locations)
+            if remaining <= 0:
+                break
+            locations.extend(locate_evidence_fragments(item, pdf_text, max_fragments=remaining))
         verifications.append(
             SourceVerification(
                 paper_id=paper_id,
@@ -130,7 +134,22 @@ def verify_answer_sources(
 
 
 def locate_evidence(evidence: dict[str, Any], pdf_text: str = "") -> EvidenceLocation:
-    reference = reference_text(evidence)
+    return locate_evidence_fragments(evidence, pdf_text, max_fragments=1)[0]
+
+
+def locate_evidence_fragments(
+    evidence: dict[str, Any],
+    pdf_text: str = "",
+    max_fragments: int = 3,
+) -> list[EvidenceLocation]:
+    fragments = reference_fragments(evidence, max_fragments=max_fragments) or [reference_text(evidence)]
+    locations: list[EvidenceLocation] = []
+    for reference in fragments[:max_fragments]:
+        locations.append(_location_for_reference(evidence, reference, pdf_text))
+    return locations or [_location_for_reference(evidence, reference_text(evidence), pdf_text)]
+
+
+def _location_for_reference(evidence: dict[str, Any], reference: str, pdf_text: str = "") -> EvidenceLocation:
     excerpt = best_excerpt(pdf_text, reference) if pdf_text else ""
     terms = highlightable_terms(reference)
     return EvidenceLocation(
@@ -192,49 +211,83 @@ def parse_pdf_text(pdf_path: str, paper_id: str) -> str:
 
 
 def reference_text(evidence: dict[str, Any]) -> str:
+    fragments = reference_fragments(evidence, max_fragments=1)
+    return fragments[0] if fragments else ""
+
+
+def reference_fragments(evidence: dict[str, Any], max_fragments: int = 3) -> list[str]:
     metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
-    authors = metadata.get("authors")
-    author_text = ""
-    if isinstance(authors, list):
-        author_text = ", ".join(str(author) for author in authors[:12] if author)
-    elif authors:
-        author_text = str(authors)
-    preferred = [
-        "title",
-        "abstract",
+    kind = str(evidence.get("kind") or "").lower()
+    title = str(metadata.get("title") or "")
+    preferred_anchor_keys = [
         "evidence_span",
-        "context",
         "statement",
+        "context",
         "description",
         "why_applicable",
-        "label",
     ]
-    parts = [str(metadata.get(key) or "") for key in preferred]
-    if author_text:
-        parts.insert(1, author_text)
-    parts.append(str(evidence.get("text") or ""))
-    return re.sub(r"\s+", " ", " ".join(part for part in parts if part)).strip()
+    anchor_parts: list[str] = []
+    if kind == "paper":
+        anchor_parts.append(str(metadata.get("abstract") or ""))
+    anchor_parts.extend(str(metadata.get(key) or "") for key in preferred_anchor_keys)
+
+    fragments: list[str] = []
+    for part in anchor_parts:
+        for fragment in _short_reference_fragments(_remove_title_prefix(part, title)):
+            if _is_duplicate_fragment(fragment, fragments):
+                continue
+            fragments.append(fragment)
+            if len(fragments) >= max_fragments:
+                return fragments
+    if fragments:
+        return fragments
+
+    direct_parts = [str(evidence.get("text") or ""), str(metadata.get("label") or "")]
+    for part in direct_parts:
+        for fragment in _short_reference_fragments(_remove_title_prefix(part, title)):
+            if _is_duplicate_fragment(fragment, fragments):
+                continue
+            fragments.append(fragment)
+            if len(fragments) >= max_fragments:
+                return fragments
+    if fragments:
+        return fragments
+
+    # Metadata-only evidence can still be useful, but keep title-only anchors
+    # as the absolute last resort; they highlight title pages instead of the
+    # sentence that carries the actual claim.
+    fallback_parts = [str(metadata.get("abstract") or ""), title]
+    for part in fallback_parts:
+        for fragment in _short_reference_fragments(_remove_title_prefix(part, title)):
+            if _is_duplicate_fragment(fragment, fragments):
+                continue
+            fragments.append(fragment)
+            if len(fragments) >= max_fragments:
+                return fragments
+    return fragments
 
 
-def best_excerpt(pdf_text: str, reference: str, window_chars: int = 1000) -> str:
+def best_excerpt(pdf_text: str, reference: str, window_chars: int = DEFAULT_EXCERPT_CHARS) -> str:
     clean = re.sub(r"\s+", " ", pdf_text or "").strip()
     reference_clean = re.sub(r"\s+", " ", reference or "").strip()
     if not clean or not reference_clean:
         return ""
 
     exact = _find_longest_substring(clean, reference_clean)
-    if exact >= 0:
-        start = max(0, exact - window_chars // 3)
-        end = min(len(clean), exact + window_chars)
-        return clean[start:end].strip()
+    if exact is not None:
+        position, length = exact
+        matched = clean[position : position + length].strip()
+        if _is_complete_sentence(matched):
+            return matched
+        return _excerpt_around(clean, position, length, window_chars)
 
     tokens = highlightable_terms(reference_clean)
     if not tokens:
-        return clean[:window_chars]
+        return _truncate_at_sentence(clean, window_chars)
 
     best_start = 0
     best_score = -1
-    step = max(window_chars // 3, 200)
+    step = max(window_chars // 2, 120)
     lower = clean.lower()
     for start in range(0, max(len(clean) - window_chars, 1), step):
         window = lower[start : start + window_chars]
@@ -244,7 +297,7 @@ def best_excerpt(pdf_text: str, reference: str, window_chars: int = 1000) -> str
             best_start = start
     if best_score <= 0:
         return ""
-    return clean[best_start : best_start + window_chars].strip()
+    return _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
 
 
 def highlightable_terms(text: str) -> list[str]:
@@ -273,7 +326,110 @@ def highlightable_terms(text: str) -> list[str]:
     return unique
 
 
-def _find_longest_substring(text: str, reference: str) -> int:
+def _short_reference_fragments(text: str, max_chars: int = MAX_REFERENCE_CHARS) -> list[str]:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return []
+
+    fragments: list[str] = []
+    for sentence in _sentences(clean):
+        for fragment in _split_long_sentence(sentence, max_chars):
+            if fragment:
+                fragments.append(fragment)
+    return [fragment for fragment in fragments if fragment]
+
+
+def _sentences(text: str) -> list[str]:
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    if not clean:
+        return []
+    matches = re.findall(r"[^.!?]+(?:[.!?]+(?=\s|$)|$)", clean)
+    return [match.strip() for match in matches if match.strip()] or [clean]
+
+
+def _truncate_at_sentence(text: str, max_chars: int) -> str:
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    if len(clean) <= max_chars:
+        return clean
+    boundary = max(clean.rfind(". ", 0, max_chars), clean.rfind("! ", 0, max_chars), clean.rfind("? ", 0, max_chars))
+    if boundary >= max(80, max_chars // 2):
+        return clean[: boundary + 1].strip()
+    return clean[: max_chars - 3].rstrip() + "..."
+
+
+def _split_long_sentence(sentence: str, max_chars: int) -> list[str]:
+    clean = re.sub(r"\s+", " ", sentence or "").strip()
+    if not clean:
+        return []
+    if len(clean) <= max_chars:
+        return [clean]
+    clauses = [
+        clause.strip(" ;:,")
+        for clause in re.split(r"(?:;\s+|:\s+|\s+-\s+|\s+\u2013\s+|\s+\u2014\s+)", clean)
+        if clause.strip(" ;:,")
+    ]
+    if len(clauses) > 1:
+        output: list[str] = []
+        for clause in clauses:
+            if len(clause) <= max_chars:
+                output.append(clause)
+            else:
+                output.append(_truncate_at_sentence(clause, max_chars))
+        return output
+    return [_truncate_at_sentence(clean, max_chars)]
+
+
+def _is_complete_sentence(text: str) -> bool:
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    return bool(clean) and clean[-1:] in {".", "!", "?"}
+
+
+def _remove_title_prefix(text: str, title: str) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    title_clean = re.sub(r"\s+", " ", title or "").strip()
+    if not clean or not title_clean:
+        return clean
+    if clean.lower() == title_clean.lower():
+        return ""
+    if clean.lower().startswith(title_clean.lower()):
+        return clean[len(title_clean):].lstrip(" .:-")
+    return clean
+
+
+def _excerpt_around(text: str, position: int, match_length: int, window_chars: int) -> str:
+    half_context = max(40, (window_chars - match_length) // 2)
+    raw_start = max(0, position - half_context)
+    raw_end = min(len(text), position + match_length + half_context)
+    start = _nearest_sentence_start(text, raw_start, position)
+    end = _nearest_sentence_end(text, raw_end)
+    excerpt = text[start:end].strip()
+    if len(excerpt) > window_chars:
+        excerpt = _truncate_at_sentence(excerpt, window_chars)
+    return excerpt
+
+
+def _nearest_sentence_start(text: str, raw_start: int, match_start: int) -> int:
+    if raw_start <= 0:
+        return 0
+    candidates = [text.rfind(". ", raw_start, match_start), text.rfind("! ", raw_start, match_start), text.rfind("? ", raw_start, match_start)]
+    candidate = max(candidates)
+    return candidate + 2 if candidate >= 0 else raw_start
+
+
+def _nearest_sentence_end(text: str, raw_end: int) -> int:
+    if raw_end >= len(text):
+        return len(text)
+    candidates = [text.find(". ", raw_end), text.find("! ", raw_end), text.find("? ", raw_end)]
+    candidates = [candidate + 1 for candidate in candidates if candidate >= 0]
+    return min(candidates) if candidates else raw_end
+
+
+def _is_duplicate_fragment(fragment: str, existing: list[str]) -> bool:
+    normalized = re.sub(r"\W+", " ", fragment).strip().lower()
+    return any(normalized == re.sub(r"\W+", " ", item).strip().lower() for item in existing)
+
+
+def _find_longest_substring(text: str, reference: str) -> tuple[int, int] | None:
     lower = text.lower()
     reference_lower = reference.lower()
     chunks = [
@@ -287,8 +443,8 @@ def _find_longest_substring(text: str, reference: str) -> int:
             continue
         position = lower.find(chunk)
         if position >= 0:
-            return position
-    return -1
+            return position, len(chunk)
+    return None
 
 
 def _cited_paper_ids(answer_text: str) -> set[str]:

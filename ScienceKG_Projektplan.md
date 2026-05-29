@@ -392,12 +392,13 @@ print(dot(v1,v3)/(norm(v1)*norm(v3)))  # muss < 0.5 sein
 - `ui/chat_interface.py` â€” Streamlit Chat-UI
 - `ui/paper_detail.py` â€” Paper-Detailansicht mit KG-Nachbarschaft
 - `ui/project_manager.py` â€” Projekte anlegen, Paper zuordnen, KG-Merge starten
-- Product-Frontend-Notizen: projektbezogener Markdown-Editor mit Shortcuts, Listenfortsetzung, editierbarer Preview, persistenten Notizen, klickbaren PDF-Zitaten und KI-Schreibhilfe fuer markierte Abschnitte
+- Product-Frontend-Notizen: projektbezogener Markdown-Editor mit Shortcuts/Undo, Listenfortsetzung, editierbarer Preview, persistenten Notizen, klickbaren PDF-Zitaten, KI-Schreibhilfe fuer visuell gepinnte Auswahlbereiche, stabil sortierter/loeschbarer kompakter KI-Verlaufshistorie und temporaerer Ghost-Einfuegen-Vorschau am spaeteren Einfuegepunkt
 - Product-Runner: startet die FastAPI Product API bevorzugt mit der lokalen `.venv`, damit Frontend und Backend dieselben Dependencies und Routen verwenden
 
 #### FÃ¤higkeiten nach Phase 4:
 - NatÃ¼rlichsprachige Fragen gegen den KG ("Was sind die wichtigsten Methoden in diesem Feld?")
 - Grounded Answers: Jede Aussage mit Paper-Referenz belegt
+- Satzgenaue Belege: Assistant-Zitate bleiben viele kurze, atomare Evidence-Anker statt seitenuebergreifender Abstract-/Metadaten-Bloecke
 - Cross-Domain-Discovery: "Welche Methoden aus anderen Feldern kÃ¶nnten hier anwendbar sein?"
 - Hypothesen-Generierung via R1 auf Basis von Cross-Domain-Edges
 - Paper-Empfehlungen: "Welche Paper sollte ich noch lesen?"
@@ -418,7 +419,7 @@ print(dot(v1,v3)/(norm(v1)*norm(v3)))  # muss < 0.5 sein
 | Paper-Detailansicht | Ein Paper anklicken | Zeigt: Metadaten, Konzepte, Methoden, KG-Nachbarn (zitiert/zitiert von/Ã¤hnlich) |
 | Projekt-Management | Neues Projekt anlegen, Paper zuordnen, Projekt loeschen, KG-Merge starten | Projekt erscheint in Liste, nach Merge sind Paper im Global-KG, geloeschte Projekte verschwinden aus UI/API |
 | Paper-Empfehlungen | "Welche Paper sollte ich noch lesen?" | Empfehlungen basieren auf KG-Nachbarschaft, nicht auf LLM-Trainingsdaten |
-| Projekt-Notizen | Notiz anlegen, Assistant-Zitat einfuegen, markierten Abschnitt per KI bearbeiten | Markdown bleibt gespeichert, Zitate sind klickbar und KI-Vorschlag kann per Preview uebernommen werden |
+| Projekt-Notizen | Notiz anlegen, Assistant-Zitat einfuegen, markierten Abschnitt per KI bearbeiten, KI-Verlauf nutzen | Markdown bleibt gespeichert, Zitate sind klickbar, die Textauswahl bleibt sichtbar und wird fuer die KI-Frage visuell gepinnt, KI-Verlauf startet kompakt, bleibt beim Oeffnen in seiner Reihenfolge, kann geloescht werden und `Einfuegen` zeigt nur beim Hover/Fokus eine temporaere Editor-Vorschau |
 
 **Was du konkret siehst:**
 - Chat-Interface im Browser, Fragen in natÃ¼rlicher Sprache stellbar

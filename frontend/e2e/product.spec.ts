@@ -22,6 +22,37 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     citation_count: 0,
     asset_count: 0
   };
+  const projects: Array<{ id: string; name: string; paper_ids: string[]; paper_count: number; year_min: number | null; year_max: number | null }> = [];
+  const aiThread = {
+    id: "thread-1",
+    note_id: "global-note",
+    selected_text: "Direkt",
+    instruction: "Fasse kurz zusammen",
+    response_text: "Ausfuehrliche Antwort, die im kompakten Verlauf nicht sofort sichtbar sein soll.",
+    replacement_text: "Kompakte Antwort",
+    answer_payload: {},
+    anchor_start: 2,
+    anchor_end: 8,
+    anchor_quote: "Direkt",
+    ui_state: {},
+    messages: [
+      {
+        id: "msg-user",
+        thread_id: "thread-1",
+        note_id: "global-note",
+        role: "user",
+        content: "Fasse kurz zusammen"
+      },
+      {
+        id: "msg-assistant",
+        thread_id: "thread-1",
+        note_id: "global-note",
+        role: "assistant",
+        content: "Kompakte Antwort"
+      }
+    ]
+  };
+  let aiThreads = [aiThread];
 
   await page.route("**/query/answer", async (route) => {
     await route.fulfill({
@@ -63,6 +94,24 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     });
   });
 
+  await page.route(/\/projects(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "POST") {
+      const payload = route.request().postDataJSON() as { name: string; paper_ids?: string[] };
+      const project = {
+        id: payload.name,
+        name: payload.name,
+        paper_ids: payload.paper_ids ?? [],
+        paper_count: payload.paper_ids?.length ?? 0,
+        year_min: null,
+        year_max: null
+      };
+      projects.push(project);
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ project }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects }) });
+  });
+
   await page.route("**/projects/__all_papers__/notes", async (route) => {
     if (route.request().method() === "POST") {
       const payload = route.request().postDataJSON() as { title?: string; markdown?: string };
@@ -91,6 +140,39 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     });
   });
 
+  await page.route("**/notes/global-note/ai-threads**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "POST" && pathname.endsWith(`/ai-threads/${aiThread.id}/delete`)) {
+      aiThreads = aiThreads.filter((thread) => thread.id !== aiThread.id);
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ deleted: true })
+      });
+      return;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/ai-threads/delete-all")) {
+      const deleted = aiThreads.length;
+      aiThreads = [];
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ deleted })
+      });
+      return;
+    }
+    if (request.method() === "GET" && pathname.endsWith("/ai-threads")) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ items: aiThreads, total: aiThreads.length })
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: aiThreads, total: aiThreads.length })
+    });
+  });
+
   await page.goto("/");
   await expect(page.getByText("ScienceKG")).toBeVisible();
 
@@ -109,6 +191,11 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await editor.press("Control+A");
   await editor.press("Control+B");
   await expect(editor).toHaveValue("**Alpha**");
+  await editor.press("Control+Z");
+  await expect(editor).toHaveValue("Alpha");
+  await editor.press("Control+A");
+  await editor.press("Control+B");
+  await expect(editor).toHaveValue("**Alpha**");
   await editor.fill("- erster Punkt");
   await editor.press("End");
   await editor.press("Enter");
@@ -118,6 +205,30 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await previewBlock.fill("Direkt in Preview");
   await page.getByRole("button", { name: "Edit" }).click();
   await expect(editor).toHaveValue("- Direkt in Preview");
+  const spellButton = page.getByRole("button", { name: "Rechtschreibkontrolle ausschalten" });
+  await expect(spellButton).toHaveAttribute("aria-pressed", "true");
+  await spellButton.click();
+  await expect(page.getByRole("button", { name: "Rechtschreibkontrolle einschalten" })).toHaveAttribute("aria-pressed", "false");
+  await editor.click();
+  await editor.press("Control+A");
+  await page.getByPlaceholder("KI-Frage zu dieser Auswahl").click();
+  await expect(page.locator(".textarea-highlight-range--selection").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "KI-Verlauf", exact: true }).click();
+  await expect(page.getByText("Fasse kurz zusammen")).toBeVisible();
+  await expect(page.getByText("Ausfuehrliche Antwort, die im kompakten Verlauf nicht sofort sichtbar sein soll.")).not.toBeVisible();
+  const historyPanel = page.locator(".note-history-panel");
+  await expect(historyPanel.locator(".ai-thread-header span")).toHaveCount(0);
+  await expect(historyPanel.locator(".ai-thread-preview p", { hasText: "Direkt" })).toHaveCount(1);
+  const insertButton = page.getByRole("button", { name: "Einfuegen", exact: true }).first();
+  await insertButton.hover();
+  await expect(page.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
+  await expect(page.locator(".textarea-ghost-insertion--ai")).toBeVisible();
+  await insertButton.click();
+  await expect(editor).toHaveValue(/Kompakte Antwort/);
+  await page.getByRole("button", { name: "KI-Verlauf loeschen" }).click();
+  await expect(page.getByText("Noch keine KI-Fragen")).toBeVisible();
+  await expect(page.getByText("Fasse kurz zusammen")).not.toBeVisible();
 
   await page.getByRole("link", { name: /Import/ }).click();
   await page.locator('input[type="file"]').setInputFiles({

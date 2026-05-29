@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bold,
   Code,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Download,
   FilePlus2,
   Highlighter,
@@ -18,6 +20,7 @@ import {
   PanelRightOpen,
   Quote,
   Redo2,
+  SpellCheck2,
   Sparkles,
   Table2,
   Trash2,
@@ -39,6 +42,11 @@ type SelectionRange = {
   text: string;
 };
 
+type NoteAiThreadsResult = {
+  items: NoteAiThread[];
+  total: number;
+};
+
 export function NotesPage() {
   const { activeProject, provider, model } = useAppState();
   const scopedProjectId = noteProjectId(activeProject);
@@ -50,6 +58,7 @@ export function NotesPage() {
   const [dirty, setDirty] = useState(false);
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
   const [selection, setSelection] = useState<SelectionRange | null>(null);
+  const [selectionPinned, setSelectionPinned] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiPreview, setAiPreview] = useState("");
   const [undoStack, setUndoStack] = useState<string[]>([]);
@@ -58,9 +67,13 @@ export function NotesPage() {
   const [notesListOpen, setNotesListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
   const [contextOpen, setContextOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
   const [notePdfOpen, setNotePdfOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
+  const [citationListOpen, setCitationListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
+  const [spellcheckEnabled, setSpellcheckEnabled] = useState(() => loadBooleanUiState("spellcheckEnabled", true));
   const [activeThreadId, setActiveThreadId] = useState("");
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [editorScrollTop, setEditorScrollTop] = useState(0);
+  const [editorScrollLeft, setEditorScrollLeft] = useState(0);
+  const [insertPreview, setInsertPreview] = useState<{ index: number; content: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -68,6 +81,8 @@ export function NotesPage() {
   const previewRef = useRef<HTMLElement | null>(null);
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
   const dirtyRef = useRef(false);
+  const lastCursorRef = useRef<number | null>(null);
+  const threadsQueryKey = ["note-ai-threads", activeNoteId] as const;
 
   const notesQuery = useQuery({
     queryKey: ["notes", scopedProjectId],
@@ -79,7 +94,7 @@ export function NotesPage() {
     enabled: Boolean(activeNoteId)
   });
   const threadsQuery = useQuery({
-    queryKey: ["note-ai-threads", activeNoteId],
+    queryKey: threadsQueryKey,
     queryFn: () => api.listNoteAiThreads(activeNoteId),
     enabled: Boolean(activeNoteId)
   });
@@ -94,6 +109,7 @@ export function NotesPage() {
       setUndoStack([]);
       setAiPreview("");
       setSelection(null);
+      setSelectionPinned(false);
       loadedNoteIdRef.current = note.id;
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
@@ -147,11 +163,11 @@ export function NotesPage() {
         anchor_quote: stripHighlightMarkers(selection?.text ?? "").slice(0, 2000) || null
       }),
     onSuccess: (payload) => {
-      markSelectionInline();
+      setSelectionPinned(true);
       setAiPreview(payload.replacement_text);
       setActiveThreadId(payload.thread.id);
       setHistoryOpen(true);
-      queryClient.invalidateQueries({ queryKey: ["note-ai-threads", activeNoteId] });
+      queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
   const followUp = useMutation({
@@ -166,14 +182,63 @@ export function NotesPage() {
       setActiveThreadId(payload.thread.id);
       setAiPreview(payload.replacement_text);
       setFollowUpDrafts((current) => ({ ...current, [variables.threadId]: "" }));
-      queryClient.invalidateQueries({ queryKey: ["note-ai-threads", activeNoteId] });
+      queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
   const updateThreadUi = useMutation({
     mutationFn: ({ thread, collapsed }: { thread: NoteAiThread; collapsed: boolean }) =>
       api.updateNoteAiThread(activeNoteId, thread.id, { ui_state: { ...(thread.ui_state ?? {}), collapsed } }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["note-ai-threads", activeNoteId] });
+      queryClient.invalidateQueries({ queryKey: threadsQueryKey });
+    }
+  });
+  const deleteThread = useMutation({
+    mutationFn: (threadId: string) => api.deleteNoteAiThread(activeNoteId, threadId),
+    onMutate: async (threadId) => {
+      await queryClient.cancelQueries({ queryKey: threadsQueryKey });
+      const previous = queryClient.getQueryData<NoteAiThreadsResult>(threadsQueryKey);
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+        if (!current) {
+          return current;
+        }
+        const nextItems = current.items.filter((thread) => thread.id !== threadId);
+        return { ...current, items: nextItems, total: nextItems.length };
+      });
+      setActiveThreadId((current) => (current === threadId ? "" : current));
+      setFollowUpDrafts((current) => {
+        const next = { ...current };
+        delete next[threadId];
+        return next;
+      });
+      return { previous };
+    },
+    onError: (_error, _threadId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(threadsQueryKey, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: threadsQueryKey });
+    }
+  });
+  const deleteAllThreads = useMutation({
+    mutationFn: () => api.deleteNoteAiThreads(activeNoteId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: threadsQueryKey });
+      const previous = queryClient.getQueryData<NoteAiThreadsResult>(threadsQueryKey);
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => current ? { ...current, items: [], total: 0 } : current);
+      setActiveThreadId("");
+      setFollowUpDrafts({});
+      setAiPreview("");
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(threadsQueryKey, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
   const uploadAsset = useMutation({
@@ -202,6 +267,7 @@ export function NotesPage() {
     setNotesListOpen(loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
     setContextOpen(loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
     setNotePdfOpen(loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
+    setCitationListOpen(loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
   }, [scopedProjectId]);
 
   useEffect(() => {
@@ -217,6 +283,14 @@ export function NotesPage() {
   }, [notePdfOpen, scopedProjectId]);
 
   useEffect(() => {
+    saveBooleanUiState(`${scopedProjectId}.citationListOpen`, citationListOpen);
+  }, [citationListOpen, scopedProjectId]);
+
+  useEffect(() => {
+    saveBooleanUiState("spellcheckEnabled", spellcheckEnabled);
+  }, [spellcheckEnabled]);
+
+  useEffect(() => {
     if (!selection) {
       return;
     }
@@ -226,6 +300,7 @@ export function NotesPage() {
         return;
       }
       setSelection(null);
+      setSelectionPinned(false);
       setAiPreview("");
       setAiInstruction("");
     };
@@ -257,6 +332,7 @@ export function NotesPage() {
     setUndoStack([]);
     setAiPreview("");
     setSelection(null);
+    setSelectionPinned(false);
     setActiveThreadId("");
   }, [currentNote?.id, currentNote?.markdown, currentNote?.title, currentNote?.updated_timestamp, dirty, markdown, title]);
 
@@ -309,6 +385,7 @@ export function NotesPage() {
   function updateMarkdown(value: string) {
     setMarkdown(value);
     setDirtyState(true);
+    setInsertPreview(null);
   }
 
   function updateTitle(value: string) {
@@ -326,15 +403,21 @@ export function NotesPage() {
   function captureSelection() {
     const node = textareaRef.current;
     if (!node || node.selectionStart === node.selectionEnd) {
-      setSelection(null);
+      if (node) {
+        lastCursorRef.current = node.selectionStart;
+      }
       return null;
     }
+    lastCursorRef.current = node.selectionEnd;
     const next = {
       start: node.selectionStart,
       end: node.selectionEnd,
       text: markdown.slice(node.selectionStart, node.selectionEnd)
     };
     setSelection(next);
+    setSelectionPinned(false);
+    setAiPreview("");
+    setAiInstruction("");
     return next;
   }
 
@@ -353,6 +436,11 @@ export function NotesPage() {
       if (key === "b") {
         event.preventDefault();
         applyWrap("**");
+        return;
+      }
+      if (key === "z") {
+        event.preventDefault();
+        undo();
         return;
       }
       if (key === "i") {
@@ -394,32 +482,32 @@ export function NotesPage() {
     setAiInstruction("");
   }
 
-  function markSelectionInline() {
+  function clearEditorSelection() {
+    setSelection(null);
+    setSelectionPinned(false);
+    setAiInstruction("");
+    setAiPreview("");
+  }
+
+  function handleEditorPointerDown() {
+    if (aiPreview) {
+      setInsertPreview(null);
+      return;
+    }
+    clearEditorSelection();
+  }
+
+  function pinSelectionForQuestion() {
     if (!selection) {
       return;
     }
-    const selected = markdown.slice(selection.start, selection.end);
-    if (!selected.trim()) {
-      return;
-    }
-    const alreadyMarked = markdown.slice(Math.max(0, selection.start - 2), selection.start) === "==" && markdown.slice(selection.end, selection.end + 2) === "==";
-    if (alreadyMarked) {
-      return;
-    }
-    const marked = `==${selected}==`;
-    pushUndo();
-    updateMarkdown(`${markdown.slice(0, selection.start)}${marked}${markdown.slice(selection.end)}`);
-    setSelection({
-      start: selection.start,
-      end: selection.start + marked.length,
-      text: marked
-    });
+    setSelectionPinned(true);
   }
 
   function appendThreadAnswer(thread: NoteAiThread) {
     const text = latestThreadAnswer(thread);
     if (text) {
-      insertAtSelection(`\n\n${text}`);
+      insertThreadAnswer(thread, text);
     }
   }
 
@@ -436,36 +524,94 @@ export function NotesPage() {
 
   function insertAtSelection(value: string) {
     const node = textareaRef.current;
-    const start = node?.selectionStart ?? markdown.length;
-    const end = node?.selectionEnd ?? markdown.length;
+    const fallback = lastCursorRef.current ?? markdown.length;
+    const start = node?.selectionStart ?? fallback;
+    const end = node?.selectionEnd ?? fallback;
+    insertAtRange(start, end, value);
+  }
+
+  function insertAtRange(start: number, end: number, value: string) {
     pushUndo();
     updateMarkdown(`${markdown.slice(0, start)}${value}${markdown.slice(end)}`);
+    lastCursorRef.current = start + value.length;
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(start + value.length, start + value.length);
     });
   }
 
-  function insertAfterSelection(value: string) {
-    if (!selection) {
-      insertAtSelection(`\n\n${value}`);
+  function insertThreadAnswer(thread: NoteAiThread, answer: string) {
+    const content = threadInsertionContent(answer);
+    const index = insertionPointForThread(thread);
+    insertAtRange(index, index, content);
+  }
+
+  function previewThreadAnswer(thread: NoteAiThread) {
+    const answer = latestThreadAnswer(thread);
+    if (!answer) {
+      setInsertPreview(null);
       return;
     }
-    const insertText = `\n\n${value}`;
+    setInsertPreview({ index: insertionPointForThread(thread), content: threadInsertionContent(answer) });
+  }
+
+  function clearInsertPreview() {
+    setInsertPreview(null);
+  }
+
+  function threadInsertionContent(answer: string) {
+    return `\n\n${answer.trim()}`;
+  }
+
+  function insertionPointForThread(thread: NoteAiThread) {
+    if (lastCursorRef.current !== null) {
+      return Math.max(0, Math.min(markdown.length, lastCursorRef.current));
+    }
+    const quote = stripHighlightMarkers(thread.anchor_quote || thread.selected_text || "").trim();
+    if (quote) {
+      const quoteIndex = markdown.indexOf(quote);
+      if (quoteIndex >= 0) {
+        const end = quoteIndex + quote.length;
+        return markdown.slice(end, end + 2) === "==" ? end + 2 : end;
+      }
+    }
+    const anchorEnd = thread.anchor_end === null || thread.anchor_end === undefined ? NaN : Number(thread.anchor_end);
+    if (Number.isFinite(anchorEnd) && anchorEnd >= 0 && anchorEnd <= markdown.length) {
+      return anchorEnd;
+    }
+    const node = textareaRef.current;
+    const cursor = node ? node.selectionStart : lastCursorRef.current;
+    return Math.max(0, Math.min(markdown.length, cursor ?? markdown.length));
+  }
+
+  function insertAfterSelection(value: string) {
+    const insertText = `\n\n${value.trim()}`;
+    if (!selection) {
+      insertAtSelection(insertText);
+      return;
+    }
     const start = selection.end;
     pushUndo();
     updateMarkdown(`${markdown.slice(0, start)}${insertText}${markdown.slice(start)}`);
+    lastCursorRef.current = start + insertText.length;
     setSelection({
       start,
       end: start + insertText.length,
       text: insertText
     });
+    setSelectionPinned(false);
     setAiPreview("");
     setAiInstruction("");
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(start + insertText.length, start + insertText.length);
     });
+  }
+
+  function previewAfterSelection(value: string) {
+    const content = `\n\n${value.trim()}`;
+    const index = selection ? selection.end : Math.max(0, Math.min(markdown.length, lastCursorRef.current ?? markdown.length));
+    setInsertPreview({ index, content });
   }
 
   function replaceTextareaRange(start: number, end: number, value: string, cursorOffset = value.length) {
@@ -598,15 +744,14 @@ export function NotesPage() {
   }
 
   function clearSelectionAi() {
-    setSelection(null);
-    setAiInstruction("");
-    setAiPreview("");
+    clearEditorSelection();
   }
 
   function handleSelectionQuestionKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
       if (aiInstruction.trim() && !aiEdit.isPending) {
+        pinSelectionForQuestion();
         aiEdit.mutate();
       }
       return;
@@ -618,11 +763,17 @@ export function NotesPage() {
   }
 
   const selectionPreview = stripHighlightMarkers(selection?.text ?? "");
-  const editorHighlightRanges = selection ? [{ start: selection.start, end: selection.end, className: "textarea-highlight-range--selection" }] : [];
-  const editorGhostInsertions =
-    selection && aiPreview
-      ? [{ index: selection.end, content: `\n\n${aiPreview}`, className: "textarea-ghost-insertion--ai" }]
-      : [];
+  const editorHighlightRanges = selection
+    ? [
+        {
+          start: selection.start,
+          end: selection.end,
+          className: selectionPinned ? "textarea-highlight-range--selection textarea-highlight-range--selection-pinned" : "textarea-highlight-range--selection"
+        }
+      ]
+    : [];
+  const editorGhostInsertions = insertPreview ? [{ ...insertPreview, className: "textarea-ghost-insertion--ai" }] : [];
+  const contextPanelRows = historyOpen ? undefined : citationListOpen ? undefined : "auto minmax(0, 1fr)";
 
   return (
     <section className="page notes-page">
@@ -630,16 +781,6 @@ export function NotesPage() {
         <div>
           <span>{scopeLabel}</span>
           <h1>Notizen</h1>
-        </div>
-        <div className="button-row">
-          <button className="button" type="button" onClick={() => createNote.mutate()} disabled={createNote.isPending}>
-            <FilePlus2 size={17} />
-            <span>Neu</span>
-          </button>
-          <button className="button" type="button" disabled={!activeNoteId || !markdown.trim()} onClick={exportCurrentNote}>
-            <Download size={17} />
-            <span>Export</span>
-          </button>
         </div>
       </div>
       {createNote.isError ? <div className="inline-error">Notiz konnte nicht angelegt werden: {formatError(createNote.error)}</div> : null}
@@ -655,9 +796,15 @@ export function NotesPage() {
                   <span>Projektnotizen</span>
                   <strong>{notes.length}</strong>
                 </div>
-                <button className="icon-button" type="button" aria-label="Projektnotizen einklappen" onClick={() => setNotesListOpen(false)}>
-                  <ChevronLeft size={17} />
-                </button>
+                <div className="button-row">
+                  <button className="button button-compact" type="button" onClick={() => createNote.mutate()} disabled={createNote.isPending} aria-label="Neu">
+                    <FilePlus2 size={16} />
+                    <span>Neu</span>
+                  </button>
+                  <button className="icon-button" type="button" aria-label="Projektnotizen einklappen" onClick={() => setNotesListOpen(false)}>
+                    <ChevronLeft size={17} />
+                  </button>
+                </div>
               </div>
               <div className="list">
                 {notes.map((note) => (
@@ -689,6 +836,10 @@ export function NotesPage() {
               <div className="note-editor-header">
                 <input className="note-title-input" value={title} onChange={(event) => updateTitle(event.target.value)} placeholder="Titel" />
                 <div className="button-row">
+                  <button className="button button-compact" type="button" disabled={!activeNoteId || !markdown.trim()} onClick={exportCurrentNote} aria-label="Export">
+                    <Download size={16} />
+                    <span>Export</span>
+                  </button>
                   <button className="icon-button" type="button" aria-label="Undo" onClick={undo}>
                     <Undo2 size={17} />
                   </button>
@@ -726,6 +877,15 @@ export function NotesPage() {
                 <button className="icon-button" type="button" aria-label="Highlight" onClick={() => applyWrap("==")}>
                   <Highlighter size={17} />
                 </button>
+                <button
+                  className={`icon-button ${spellcheckEnabled ? "active" : ""}`}
+                  type="button"
+                  aria-label={spellcheckEnabled ? "Rechtschreibkontrolle ausschalten" : "Rechtschreibkontrolle einschalten"}
+                  aria-pressed={spellcheckEnabled}
+                  onClick={() => setSpellcheckEnabled((current) => !current)}
+                >
+                  <SpellCheck2 size={17} />
+                </button>
                 <select aria-label="Textfarbe" onChange={(event) => event.target.value && applyWrap(`<span style="color:${event.target.value}">`, "</span>")} defaultValue="">
                   <option value="">Farbe</option>
                   <option value="#2563eb">Blau</option>
@@ -752,20 +912,25 @@ export function NotesPage() {
 
               <div className="markdown-editor-grid">
                 {editorMode === "edit" ? (
-                  <div className="markdown-editor-wrap markdown-editor-wrap--highlighted" ref={editorWrapRef}>
-                    <TextareaHighlightLayer text={markdown} ranges={editorHighlightRanges} insertions={editorGhostInsertions} scrollTop={editorScrollTop} />
+                  <div className="markdown-editor-wrap markdown-editor-wrap--highlighted" data-insert-preview={insertPreview ? "true" : undefined} ref={editorWrapRef}>
+                    <TextareaHighlightLayer text={markdown} ranges={editorHighlightRanges} insertions={editorGhostInsertions} scrollTop={editorScrollTop} scrollLeft={editorScrollLeft} />
                     <textarea
                       ref={textareaRef}
                       className="markdown-editor markdown-editor--highlighted"
                       value={markdown}
                       onChange={(event) => updateMarkdown(event.target.value)}
                       onSelect={captureSelection}
-                      onScroll={(event) => setEditorScrollTop(event.currentTarget.scrollTop)}
+                      onPointerDown={handleEditorPointerDown}
+                      onScroll={(event) => {
+                        setEditorScrollTop(event.currentTarget.scrollTop);
+                        setEditorScrollLeft(event.currentTarget.scrollLeft);
+                      }}
                       onKeyDown={handleEditorKeyDown}
+                      spellCheck={spellcheckEnabled}
                       placeholder="Markdown schreiben"
                     />
                     {selection ? (
-                      <div className="selection-ai-popover">
+                      <div className="selection-ai-popover" onPointerDown={pinSelectionForQuestion}>
                         <div>
                           <Sparkles size={16} />
                           <strong>{selectionPreview.length} Zeichen markiert</strong>
@@ -776,14 +941,24 @@ export function NotesPage() {
                             <input
                               value={aiInstruction}
                               onChange={(event) => setAiInstruction(event.target.value)}
+                              onFocus={pinSelectionForQuestion}
                               onKeyDown={handleSelectionQuestionKeyDown}
                               placeholder="KI-Frage zu dieser Auswahl"
                             />
-                            <button className="button button-primary" type="button" disabled={!aiInstruction.trim() || aiEdit.isPending} onClick={() => aiEdit.mutate()}>
+                            <button
+                              className="button button-primary"
+                              type="button"
+                              disabled={!aiInstruction.trim() || aiEdit.isPending}
+                              onClick={() => {
+                                pinSelectionForQuestion();
+                                aiEdit.mutate();
+                              }}
+                            >
                               Fragen
                             </button>
                           </div>
                         ) : null}
+                        {aiEdit.isError ? <div className="inline-error">KI-Antwort fehlgeschlagen: {formatError(aiEdit.error)}</div> : null}
                         {aiPreview ? (
                           <div className="ai-preview-card">
                             <span>Antwort</span>
@@ -792,7 +967,17 @@ export function NotesPage() {
                               <button className="button button-primary" type="button" onClick={() => replaceSelection(aiPreview)}>
                                 Ersetzen
                               </button>
-                              <button className="button" type="button" onClick={() => insertAfterSelection(aiPreview)}>
+                              <button
+                                className="button"
+                                type="button"
+                                onClick={() => insertAfterSelection(aiPreview)}
+                                onMouseEnter={() => previewAfterSelection(aiPreview)}
+                                onMouseLeave={clearInsertPreview}
+                                onPointerEnter={() => previewAfterSelection(aiPreview)}
+                                onPointerLeave={clearInsertPreview}
+                                onFocus={() => previewAfterSelection(aiPreview)}
+                                onBlur={clearInsertPreview}
+                              >
                                 Darunter einfuegen
                               </button>
                               <button className="button" type="button" onClick={() => setAiPreview("")}>
@@ -824,7 +1009,7 @@ export function NotesPage() {
           )}
         </main>
 
-        <aside className={`note-context-panel ${contextOpen ? "" : "note-context-panel--collapsed"}`}>
+        <aside className={`note-context-panel ${contextOpen ? "" : "note-context-panel--collapsed"}`} style={contextPanelRows ? { gridTemplateRows: contextPanelRows } : undefined}>
           {!contextOpen ? (
             <button className="collapsed-panel-tab" type="button" onClick={() => setContextOpen(true)}>
               <PanelRightOpen size={17} />
@@ -837,10 +1022,25 @@ export function NotesPage() {
                   <span>KI-Verlauf</span>
                   <strong>{threadsQuery.data?.total ?? 0}</strong>
                 </div>
-                <button className="icon-button" type="button" aria-label="Quellen anzeigen" onClick={() => setHistoryOpen(false)}>
-                  <Quote size={17} />
-                </button>
+                <div className="button-row">
+                  <button className="icon-button" type="button" aria-label="Quellen anzeigen" onClick={() => setHistoryOpen(false)}>
+                    <Quote size={17} />
+                  </button>
+                  <button
+                    className="button button-compact"
+                    type="button"
+                    aria-label="Alle KI-Verlaeufe loeschen"
+                    onClick={() => deleteAllThreads.mutate()}
+                    disabled={!threads.length || deleteAllThreads.isPending}
+                  >
+                    <Trash2 size={16} />
+                    <span>Alle</span>
+                  </button>
+                </div>
               </div>
+              {deleteThread.isError ? <div className="inline-error">KI-Verlauf konnte nicht geloescht werden: {formatError(deleteThread.error)}</div> : null}
+              {deleteAllThreads.isError ? <div className="inline-error">KI-Verlaeufe konnten nicht geloescht werden: {formatError(deleteAllThreads.error)}</div> : null}
+              {followUp.isError ? <div className="inline-error">Folgefrage fehlgeschlagen: {formatError(followUp.error)}</div> : null}
               <AiThreadList
                 threads={threads}
                 activeThreadId={activeThreadId}
@@ -850,18 +1050,30 @@ export function NotesPage() {
                 onDraftChange={(threadId, value) => setFollowUpDrafts((current) => ({ ...current, [threadId]: value }))}
                 onFollowUp={submitFollowUp}
                 onInsert={appendThreadAnswer}
-                onToggleCollapse={(thread) => updateThreadUi.mutate({ thread, collapsed: !Boolean(thread.ui_state?.collapsed) })}
+                onPreviewInsert={previewThreadAnswer}
+                onPreviewClear={clearInsertPreview}
+                onCollapseChange={(thread, collapsed) => updateThreadUi.mutate({ thread, collapsed })}
+                onDelete={(thread) => deleteThread.mutate(thread.id)}
+                deletingThreadId={deleteThread.isPending ? deleteThread.variables ?? "" : ""}
               />
             </section>
           ) : (
             <>
-              <section className="panel citation-panel">
+              <section className={`panel citation-panel ${citationListOpen ? "" : "citation-panel--compact"}`}>
                 <div className="panel-heading">
                   <div>
                     <span>Quellen</span>
                     <strong>{citations.length}</strong>
                   </div>
                   <div className="button-row">
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={citationListOpen ? "Quellenliste einklappen" : "Quellenliste ausklappen"}
+                      onClick={() => setCitationListOpen((current) => !current)}
+                    >
+                      {citationListOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+                    </button>
                     <button className="icon-button" type="button" aria-label={notePdfOpen ? "PDF einklappen" : "PDF anzeigen"} onClick={() => setNotePdfOpen((current) => !current)}>
                       {notePdfOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
                     </button>
@@ -870,16 +1082,18 @@ export function NotesPage() {
                     </button>
                   </div>
                 </div>
-                <div className="list">
-                  {citations.map((citation) => (
-                    <button className="list-row note-citation-row" type="button" key={citation.id} onClick={() => openCitation(citation)}>
-                      <strong>{citation.title || citation.paper_id}</strong>
-                      <span>{citation.reference_text || citation.kind}</span>
-                      <small>{citation.paper_id}</small>
-                    </button>
-                  ))}
-                  {!citations.length ? <div className="muted-row">Keine Quellen in dieser Notiz</div> : null}
-                </div>
+                {citationListOpen ? (
+                  <div className="list">
+                    {citations.map((citation) => (
+                      <button className="list-row note-citation-row" type="button" key={citation.id} onClick={() => openCitation(citation)}>
+                        <strong>{citation.title || citation.paper_id}</strong>
+                        <span>{citation.reference_text || citation.kind}</span>
+                        <small>{citation.paper_id}</small>
+                      </button>
+                    ))}
+                    {!citations.length ? <div className="muted-row">Keine Quellen in dieser Notiz</div> : null}
+                  </div>
+                ) : null}
               </section>
               {notePdfOpen ? (
                 <PdfPane
@@ -912,7 +1126,11 @@ function AiThreadList({
   onDraftChange,
   onFollowUp,
   onInsert,
-  onToggleCollapse
+  onPreviewInsert,
+  onPreviewClear,
+  onCollapseChange,
+  onDelete,
+  deletingThreadId
 }: {
   threads: NoteAiThread[];
   activeThreadId: string;
@@ -922,7 +1140,11 @@ function AiThreadList({
   onDraftChange: (threadId: string, value: string) => void;
   onFollowUp: (thread: NoteAiThread) => void;
   onInsert: (thread: NoteAiThread) => void;
-  onToggleCollapse: (thread: NoteAiThread) => void;
+  onPreviewInsert: (thread: NoteAiThread) => void;
+  onPreviewClear: () => void;
+  onCollapseChange: (thread: NoteAiThread, collapsed: boolean) => void;
+  onDelete: (thread: NoteAiThread) => void;
+  deletingThreadId?: string;
 }) {
   if (!threads.length) {
     return <div className="muted-row">Noch keine KI-Fragen</div>;
@@ -930,27 +1152,67 @@ function AiThreadList({
   return (
     <div className="ai-thread-list">
       {threads.map((thread) => {
-        const collapsed = Boolean(thread.ui_state?.collapsed);
+        const storedCollapsed = threadCollapsed(thread);
+        const collapsed = storedCollapsed || activeThreadId !== thread.id;
         const answer = latestThreadAnswer(thread);
         const messages = threadDisplayMessages(thread);
+        const context = shortThreadContext(thread.anchor_quote || thread.selected_text);
+        const answerPreview = shortThreadContext(answer);
         return (
           <article
-            className={`note-thread-row ai-thread-card ${activeThreadId === thread.id ? "ai-thread-card--active" : ""}`}
+            className={`note-thread-row ai-thread-card ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""}`}
             key={thread.id}
             style={threadSizeStyle(thread)}
             onFocus={() => onActiveThreadChange(thread.id)}
           >
-            <button className="ai-thread-header" type="button" onClick={() => onActiveThreadChange(thread.id)}>
-              <strong>{thread.instruction}</strong>
-              <span>{thread.anchor_quote || thread.selected_text}</span>
-            </button>
-            <div className="button-row">
-              <button className="button" type="button" onClick={() => onToggleCollapse(thread)}>
-                {collapsed ? "Oeffnen" : "Einklappen"}
+            <div className="ai-thread-topline">
+              <button className="ai-thread-header" type="button" title={context || undefined} onClick={() => onActiveThreadChange(thread.id)}>
+                <strong>{thread.instruction}</strong>
               </button>
-              <button className="button" type="button" onClick={() => onInsert(thread)} disabled={!answer}>
-                Einfuegen
-              </button>
+              <div className="ai-thread-actions">
+                <button
+                  className="button button-compact"
+                  type="button"
+                  onClick={() => {
+                    onActiveThreadChange(thread.id);
+                    onCollapseChange(thread, !collapsed);
+                  }}
+                >
+                  {collapsed ? "Oeffnen" : "Einklappen"}
+                </button>
+                <button
+                  className="button button-compact"
+                  type="button"
+                  onClick={() => onInsert(thread)}
+                  onMouseEnter={() => onPreviewInsert(thread)}
+                  onMouseOver={() => onPreviewInsert(thread)}
+                  onMouseLeave={onPreviewClear}
+                  onPointerEnter={() => onPreviewInsert(thread)}
+                  onPointerOver={() => onPreviewInsert(thread)}
+                  onPointerLeave={onPreviewClear}
+                  onFocus={() => onPreviewInsert(thread)}
+                  onBlur={onPreviewClear}
+                  disabled={!answer}
+                >
+                  Einfuegen
+                </button>
+                <button
+                  className="icon-button icon-button--compact"
+                  type="button"
+                  aria-label="KI-Verlauf loeschen"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(thread);
+                  }}
+                  disabled={deletingThreadId === thread.id}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            </div>
+            <div className="ai-thread-preview">
+              {context ? <p>{context}</p> : null}
+              {answerPreview ? <p className="ai-thread-answer-preview">{answerPreview}</p> : null}
             </div>
             {!collapsed ? (
               <>
@@ -1150,13 +1412,14 @@ function latestThreadAnswer(thread: NoteAiThread) {
 
 function threadDisplayMessages(thread: NoteAiThread) {
   const messages = thread.messages?.length ? thread.messages : legacyThreadMessages(thread);
+  const cleanedMessages = messages.filter((message) => message.role !== "assistant" || message.content.trim());
   const answer = (thread.replacement_text || thread.response_text || "").trim();
-  const hasAssistantText = messages.some((message) => message.role === "assistant" && message.content.trim());
+  const hasAssistantText = cleanedMessages.some((message) => message.role === "assistant" && message.content.trim());
   if (!answer || hasAssistantText) {
-    return messages;
+    return cleanedMessages;
   }
   return [
-    ...messages.filter((message) => message.role !== "assistant" || message.content.trim()),
+    ...cleanedMessages,
     {
       id: `${thread.id}:assistant:fallback`,
       thread_id: thread.id,
@@ -1166,6 +1429,15 @@ function threadDisplayMessages(thread: NoteAiThread) {
       created_timestamp: thread.updated_timestamp ?? thread.created_timestamp
     }
   ];
+}
+
+function threadCollapsed(thread: NoteAiThread) {
+  return thread.ui_state?.collapsed !== false;
+}
+
+function shortThreadContext(value: string) {
+  const text = stripHighlightMarkers(value || "").replace(/\s+/g, " ").trim();
+  return text.length <= 170 ? text : `${text.slice(0, 167)}...`;
 }
 
 function legacyThreadMessages(thread: NoteAiThread) {
@@ -1191,10 +1463,8 @@ function legacyThreadMessages(thread: NoteAiThread) {
 
 function threadSizeStyle(thread: NoteAiThread) {
   const width = Number(thread.ui_state?.width || 0);
-  const height = Number(thread.ui_state?.height || 0);
   return {
     width: width > 260 ? `${width}px` : undefined,
-    minHeight: height > 120 ? `${height}px` : undefined
   };
 }
 

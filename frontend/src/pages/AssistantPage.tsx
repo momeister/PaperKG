@@ -71,6 +71,8 @@ export function AssistantPage() {
   const queryClient = useQueryClient();
   const assistantScopeRef = useRef(scopedProjectId);
   const latestSidecarRef = useRef({ noteId: "", title: "", markdown: "" });
+  const splitFrameRef = useRef<number | null>(null);
+  const notesResizeFrameRef = useRef<number | null>(null);
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<AssistantTurn[]>(() => loadAssistantSession(scopedProjectId).history);
   const [activeTurnId, setActiveTurnId] = useState(() => loadAssistantSession(scopedProjectId).activeTurnId);
@@ -315,7 +317,14 @@ export function AssistantPage() {
     const startSplit = split;
     const move = (moveEvent: globalThis.PointerEvent) => {
       const delta = ((moveEvent.clientX - startX) / window.innerWidth) * 100;
-      setSplit(Math.min(70, Math.max(35, startSplit + delta)));
+      const nextSplit = Math.min(70, Math.max(35, startSplit + delta));
+      if (splitFrameRef.current !== null) {
+        window.cancelAnimationFrame(splitFrameRef.current);
+      }
+      splitFrameRef.current = window.requestAnimationFrame(() => {
+        splitFrameRef.current = null;
+        setSplit(nextSplit);
+      });
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
@@ -331,7 +340,14 @@ export function AssistantPage() {
     const move = (moveEvent: globalThis.PointerEvent) => {
       const delta = startX - moveEvent.clientX;
       const maxWidth = Math.max(360, Math.round(window.innerWidth * 0.72));
-      setNotesWidth(Math.min(maxWidth, Math.max(320, startWidth + delta)));
+      const nextWidth = Math.min(maxWidth, Math.max(320, startWidth + delta));
+      if (notesResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(notesResizeFrameRef.current);
+      }
+      notesResizeFrameRef.current = window.requestAnimationFrame(() => {
+        notesResizeFrameRef.current = null;
+        setNotesWidth(nextWidth);
+      });
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
@@ -765,6 +781,7 @@ function NotesSidecar({
   const [aiError, setAiError] = useState("");
   const [isAskingSelection, setIsAskingSelection] = useState(false);
   const [editorScrollTop, setEditorScrollTop] = useState(0);
+  const [editorScrollLeft, setEditorScrollLeft] = useState(0);
   const noteEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -778,8 +795,6 @@ function NotesSidecar({
   function captureSelection() {
     const node = noteEditorRef.current;
     if (!node || node.selectionStart === node.selectionEnd) {
-      setSelection(null);
-      setAiPreview("");
       return;
     }
     const next = {
@@ -790,6 +805,45 @@ function NotesSidecar({
     setSelection(next);
     setAiPreview("");
     setAiError("");
+  }
+
+  function clearEditorSelection() {
+    setSelection(null);
+    setAiInstruction("");
+    setAiPreview("");
+    setAiError("");
+  }
+
+  function markSelectionInline() {
+    if (!selection) {
+      return null;
+    }
+    const selected = notes.slice(selection.start, selection.end);
+    if (!selected.trim()) {
+      return null;
+    }
+    const alreadyMarked =
+      (selected.startsWith("==") && selected.endsWith("==")) ||
+      (notes.slice(Math.max(0, selection.start - 2), selection.start) === "==" && notes.slice(selection.end, selection.end + 2) === "==");
+    if (alreadyMarked) {
+      return selection;
+    }
+    const marked = `==${selected}==`;
+    const nextSelection = {
+      start: selection.start,
+      end: selection.start + marked.length,
+      text: marked
+    };
+    setNotes(`${notes.slice(0, selection.start)}${marked}${notes.slice(selection.end)}`);
+    setSelection(nextSelection);
+    return nextSelection;
+  }
+
+  function pinSelectionForQuestion() {
+    if (!selection) {
+      return;
+    }
+    markSelectionInline();
   }
 
   useEffect(() => {
@@ -845,15 +899,13 @@ function NotesSidecar({
   }
 
   function clearSelectionAi() {
-    setSelection(null);
-    setAiInstruction("");
-    setAiPreview("");
-    setAiError("");
+    clearEditorSelection();
   }
 
   function handleSelectionQuestionKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
+      pinSelectionForQuestion();
       void askAiAboutSelection();
       return;
     }
@@ -978,14 +1030,18 @@ function NotesSidecar({
       ) : null}
       {editorMode === "edit" ? (
         <div className="notes-editor-wrap notes-editor-wrap--highlighted" ref={editorWrapRef}>
-          <TextareaHighlightLayer text={notes} ranges={highlightRanges} insertions={ghostInsertions} scrollTop={editorScrollTop} />
+          <TextareaHighlightLayer text={notes} ranges={highlightRanges} insertions={ghostInsertions} scrollTop={editorScrollTop} scrollLeft={editorScrollLeft} />
           <textarea
             ref={noteEditorRef}
             className="notes-editor notes-editor--highlighted"
             value={notes}
             onChange={(event) => setNotes(event.target.value)}
             onSelect={captureSelection}
-            onScroll={(event) => setEditorScrollTop(event.currentTarget.scrollTop)}
+            onPointerDown={clearEditorSelection}
+            onScroll={(event) => {
+              setEditorScrollTop(event.currentTarget.scrollTop);
+              setEditorScrollLeft(event.currentTarget.scrollLeft);
+            }}
             placeholder="Notizen"
           />
           {selection ? (
@@ -1000,10 +1056,19 @@ function NotesSidecar({
                   <input
                     value={aiInstruction}
                     onChange={(event) => setAiInstruction(event.target.value)}
+                    onFocus={pinSelectionForQuestion}
                     onKeyDown={handleSelectionQuestionKeyDown}
                     placeholder="KI-Frage zu dieser Auswahl"
                   />
-                  <button className="button button-primary" type="button" disabled={!aiInstruction.trim() || isAskingSelection} onClick={askAiAboutSelection}>
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    disabled={!aiInstruction.trim() || isAskingSelection}
+                    onClick={() => {
+                      pinSelectionForQuestion();
+                      void askAiAboutSelection();
+                    }}
+                  >
                     Fragen
                   </button>
                 </div>
