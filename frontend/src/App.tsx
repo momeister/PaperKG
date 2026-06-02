@@ -6,6 +6,7 @@ import {
   Bot,
   BrainCircuit,
   Briefcase,
+  Columns3,
   FileText,
   GitBranch,
   Import,
@@ -29,6 +30,7 @@ import { NotesPage } from "./pages/NotesPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { QualityPage } from "./pages/QualityPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { WorkspacePage } from "./pages/WorkspacePage";
 
 const navigation = [
   { to: "/projects", label: "Projekte", icon: Briefcase },
@@ -36,6 +38,7 @@ const navigation = [
   { to: "/library", label: "Library", icon: Library },
   { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/notes", label: "Notizen", icon: NotebookPen },
+  { to: "/workspace", label: "Arbeitsplatz", icon: Columns3 },
   { to: "/graph", label: "Graph", icon: GitBranch },
   { to: "/quality", label: "Quality", icon: BarChart3 },
   { to: "/jobs", label: "Jobs", icon: BrainCircuit },
@@ -164,6 +167,7 @@ export default function App() {
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/assistant" element={<AssistantPage />} />
             <Route path="/notes" element={<NotesPage />} />
+            <Route path="/workspace" element={<WorkspacePage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/quality" element={<QualityPage />} />
             <Route path="/jobs" element={<JobsPage />} />

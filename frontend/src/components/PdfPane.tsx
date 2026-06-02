@@ -215,7 +215,19 @@ export function PdfPane({
     }
     const page = Math.min(pageCount, Math.max(1, pageNumber));
     setCurrentPage(page);
-    pageRefs.current[page]?.scrollIntoView({ block, behavior: "smooth" });
+    const root = canvasWrapRef.current;
+    const pageNode = pageRefs.current[page];
+    if (!root || !pageNode) {
+      return;
+    }
+    const rootRect = root.getBoundingClientRect();
+    const pageRect = pageNode.getBoundingClientRect();
+    const relativeTop = pageRect.top - rootRect.top + root.scrollTop;
+    const centeredTop = relativeTop - Math.max(0, (root.clientHeight - pageNode.clientHeight) / 2);
+    root.scrollTo({
+      top: Math.max(0, block === "center" ? centeredTop : relativeTop - 12),
+      behavior: "smooth"
+    });
   }
 
   const updateCurrentPageFromScroll = useCallback(() => {
@@ -279,51 +291,47 @@ export function PdfPane({
       ) : null}
 
       {pageCount ? (
-        <div className="pdf-page-nav">
-          <button className="icon-button" type="button" aria-label="Vorherige Seite" onClick={() => jumpToPage(currentPage - 1)}>
-            <ChevronLeft size={18} />
-          </button>
-          <select aria-label="Seite" value={currentPage} onChange={(event) => jumpToPage(Number(event.target.value))}>
-            {Array.from({ length: pageCount }, (_, index) => (
-              <option key={index + 1} value={index + 1}>
-                Seite {index + 1}
-              </option>
-            ))}
-          </select>
-          <button className="icon-button" type="button" aria-label="Naechste Seite" onClick={() => jumpToPage(currentPage + 1)}>
-            <ChevronRight size={18} />
-          </button>
-        </div>
-      ) : null}
-
-      {pageCount ? (
-        <div className="pdf-search-row">
-          <Search size={17} />
-          <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="In PDF suchen" />
-          <button className={`icon-button ${searchTerm ? "" : "pdf-search-clear--hidden"}`} type="button" aria-label="Suche leeren" onClick={() => setSearchTerm("")} disabled={!searchTerm}>
-            <X size={17} />
-          </button>
-          <span>{showingSearch ? (activePages.length ? `Treffer auf Seite ${activePages.join(", ")}` : "keine Treffer") : ""}</span>
-        </div>
-      ) : null}
-
-      {pageCount ? (
-        <div className="pdf-zoom-nav">
-          <button className="icon-button" type="button" aria-label="Verkleinern" onClick={() => setZoom((current) => Math.max(0.65, current - 0.1))}>
-            <ZoomOut size={18} />
-          </button>
-          <button className={`button ${fitMode === "width" ? "button-primary" : ""}`} type="button" onClick={() => setFitMode("width")}>
-            Breite
-          </button>
-          <button className={`button ${fitMode === "page" ? "button-primary" : ""}`} type="button" onClick={() => setFitMode("page")}>
-            Seite
-          </button>
-          <button className="icon-button" type="button" aria-label="Vergroessern" onClick={() => setZoom((current) => Math.min(2.2, current + 0.1))}>
-            <ZoomIn size={18} />
-          </button>
-          <button className="icon-button" type="button" aria-label="Zoom zuruecksetzen" onClick={() => setZoom(1)}>
-            <Maximize2 size={17} />
-          </button>
+        <div className="pdf-control-stack">
+          <div className="pdf-page-nav">
+            <button className="icon-button" type="button" aria-label="Vorherige Seite" onClick={() => jumpToPage(currentPage - 1)}>
+              <ChevronLeft size={18} />
+            </button>
+            <select aria-label="Seite" value={currentPage} onChange={(event) => jumpToPage(Number(event.target.value))}>
+              {Array.from({ length: pageCount }, (_, index) => (
+                <option key={index + 1} value={index + 1}>
+                  Seite {index + 1}
+                </option>
+              ))}
+            </select>
+            <button className="icon-button" type="button" aria-label="Naechste Seite" onClick={() => jumpToPage(currentPage + 1)}>
+              <ChevronRight size={18} />
+            </button>
+          </div>
+          <div className="pdf-search-row">
+            <Search size={17} />
+            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="In PDF suchen" />
+            <button className={`icon-button ${searchTerm ? "" : "pdf-search-clear--hidden"}`} type="button" aria-label="Suche leeren" onClick={() => setSearchTerm("")} disabled={!searchTerm}>
+              <X size={17} />
+            </button>
+            <span>{showingSearch ? (activePages.length ? `Treffer auf Seite ${activePages.join(", ")}` : "keine Treffer") : ""}</span>
+          </div>
+          <div className="pdf-zoom-nav">
+            <button className="icon-button" type="button" aria-label="Verkleinern" onClick={() => setZoom((current) => Math.max(0.65, current - 0.1))}>
+              <ZoomOut size={18} />
+            </button>
+            <button className={`button ${fitMode === "width" ? "button-primary" : ""}`} type="button" onClick={() => setFitMode("width")}>
+              Breite
+            </button>
+            <button className={`button ${fitMode === "page" ? "button-primary" : ""}`} type="button" onClick={() => setFitMode("page")}>
+              Seite
+            </button>
+            <button className="icon-button" type="button" aria-label="Vergroessern" onClick={() => setZoom((current) => Math.min(2.2, current + 0.1))}>
+              <ZoomIn size={18} />
+            </button>
+            <button className="icon-button" type="button" aria-label="Zoom zuruecksetzen" onClick={() => setZoom(1)}>
+              <Maximize2 size={17} />
+            </button>
+          </div>
         </div>
       ) : null}
 

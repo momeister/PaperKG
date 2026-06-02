@@ -36,7 +36,7 @@ import { noteProjectId } from "../projectScope";
 import { useAppState } from "../state";
 import type { Answer, Note, VerificationSource } from "../types";
 
-type AssistantAnswerBlock = {
+export type AssistantAnswerBlock = {
   id: string;
   question: string;
   answer: Answer;
@@ -44,7 +44,7 @@ type AssistantAnswerBlock = {
   createdAt: string;
 };
 
-type AssistantTurn = {
+export type AssistantTurn = {
   id: string;
   question: string;
   answer: Answer;
@@ -1214,7 +1214,7 @@ function renderAssistantInline(text: string) {
   });
 }
 
-function answerLimitFor(question: string, mode: string) {
+export function answerLimitFor(question: string, mode: string) {
   if (mode !== "auto") {
     return Number(mode);
   }
@@ -1228,7 +1228,7 @@ function answerLimitFor(question: string, mode: string) {
   return 16;
 }
 
-function verificationLimits(answer: Answer) {
+export function verificationLimits(answer: Answer) {
   const sourceCount = Math.max(1, answer.sources.length);
   const evidenceCount = Math.max(answer.evidence.length, sourceCount * 4);
   return {
@@ -1237,13 +1237,13 @@ function verificationLimits(answer: Answer) {
   };
 }
 
-function formatNoteQuote(quote: string, source: VerificationSource, evidenceIndex: number, citationId: string) {
+export function formatNoteQuote(quote: string, source: VerificationSource, evidenceIndex: number, citationId: string) {
   const text = cleanCitationText(quote);
   const title = source.title || source.paper_id;
   return `> ${text}\n\nQuelle: [Z${evidenceIndex + 1} - ${title}](sciencekg://citation/${citationId}) (${source.paper_id})`;
 }
 
-function noteCitation(source: VerificationSource, evidence: VerificationSource["evidence"][number], evidenceIndex: number) {
+export function noteCitation(source: VerificationSource, evidence: VerificationSource["evidence"][number], evidenceIndex: number) {
   return {
     id: stableCitationId(source, evidence, evidenceIndex),
     paper_id: source.paper_id,
@@ -1255,7 +1255,7 @@ function noteCitation(source: VerificationSource, evidence: VerificationSource["
   };
 }
 
-function formatAnswerForNote(answer: Answer, verification: VerificationSource[]) {
+export function formatAnswerForNote(answer: Answer, verification: VerificationSource[]) {
   const citations = new Map<string, Record<string, unknown>>();
   const markdown = answer.answer.replace(/\[([^\]]+)\]/g, (match, rawCitation: string, offset: number, fullText: string) => {
     const context = fullText.slice(Math.max(0, offset - 350), Math.min(fullText.length, offset + match.length + 350));
@@ -1288,7 +1288,7 @@ function stableHash(value: string) {
   return (hash >>> 0).toString(16);
 }
 
-function turnBlocks(turn: AssistantTurn): AssistantAnswerBlock[] {
+export function turnBlocks(turn: AssistantTurn): AssistantAnswerBlock[] {
   if (turn.blocks?.length) {
     return turn.blocks;
   }
@@ -1303,7 +1303,7 @@ function turnBlocks(turn: AssistantTurn): AssistantAnswerBlock[] {
   ];
 }
 
-function mergeVerification(sources: VerificationSource[]) {
+export function mergeVerification(sources: VerificationSource[]) {
   const merged = new Map<string, VerificationSource>();
   for (const source of sources) {
     const existing = merged.get(source.paper_id);
@@ -1325,7 +1325,7 @@ function mergeVerification(sources: VerificationSource[]) {
   return Array.from(merged.values());
 }
 
-function turnContext(turn: AssistantTurn) {
+export function turnContext(turn: AssistantTurn) {
   return turnBlocks(turn)
     .flatMap((block) => [
       { role: "user", content: block.question },
@@ -1334,14 +1334,14 @@ function turnContext(turn: AssistantTurn) {
     .slice(-8);
 }
 
-function cleanCitationText(value: string) {
+export function cleanCitationText(value: string) {
   return dedupeRepeatedText(value)
     .replace(/\b(?:authors?|author names?)\s*:\s*/gi, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function cleanAnswerQuote(value: string) {
+export function cleanAnswerQuote(value: string) {
   return value
     .replace(/\[[^\]]+\]/g, "")
     .replace(/\s+/g, " ")
@@ -1398,7 +1398,7 @@ function notesStorageKey(projectId: string) {
   return `sciencekg.assistant.notes.${projectId}`;
 }
 
-function loadAssistantSession(projectId: string): { history: AssistantTurn[]; activeTurnId: string } {
+export function loadAssistantSession(projectId: string): { history: AssistantTurn[]; activeTurnId: string } {
   try {
     const raw = window.localStorage.getItem(assistantStorageKey(projectId));
     if (!raw) {
@@ -1415,7 +1415,7 @@ function loadAssistantSession(projectId: string): { history: AssistantTurn[]; ac
   }
 }
 
-function saveAssistantSession(projectId: string, session: { history: AssistantTurn[]; activeTurnId: string }) {
+export function saveAssistantSession(projectId: string, session: { history: AssistantTurn[]; activeTurnId: string }) {
   try {
     window.localStorage.setItem(
       assistantStorageKey(projectId),
@@ -1470,7 +1470,7 @@ function suggestNoteTitle(markdown: string) {
   return text.split(/\s+/).slice(0, 8).join(" ").slice(0, 72);
 }
 
-function formatTurnTime(value: string) {
+export function formatTurnTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return "";
@@ -1478,7 +1478,7 @@ function formatTurnTime(value: string) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function AnswerText({
+export function AnswerText({
   answer,
   onCitationClick,
   getCitationMeta
@@ -1487,7 +1487,60 @@ function AnswerText({
   onCitationClick: (citation: string, context?: string, quote?: string) => void;
   getCitationMeta: (citation: string, context?: string) => { source: VerificationSource; evidenceIndex: number } | null;
 }) {
+  const [hoverCitation, setHoverCitation] = useState<{
+    key: string;
+    label: string;
+    title: string;
+    subtitle: string;
+    text: string;
+    evidenceIndex: number;
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
+  const closeHoverTimerRef = useRef<number | null>(null);
   const parts = answer.split(/(\[[^\]]+\])/g);
+
+  function cancelCitationHoverClose() {
+    if (closeHoverTimerRef.current !== null) {
+      window.clearTimeout(closeHoverTimerRef.current);
+      closeHoverTimerRef.current = null;
+    }
+  }
+
+  function scheduleCitationHoverClose() {
+    cancelCitationHoverClose();
+    closeHoverTimerRef.current = window.setTimeout(() => {
+      closeHoverTimerRef.current = null;
+      setHoverCitation(null);
+    }, 80);
+  }
+
+  function showCitationHover(key: string, label: string, meta: { source: VerificationSource; evidenceIndex: number }, event: ReactPointerEvent<HTMLElement>) {
+    const evidence = meta.source.evidence[meta.evidenceIndex];
+    if (!evidence) {
+      return;
+    }
+    cancelCitationHoverClose();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const width = Math.min(360, Math.max(240, window.innerWidth - 24));
+    const expectedHeight = Math.min(220, Math.max(120, window.innerHeight - 24));
+    const left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12));
+    const belowTop = rect.bottom + 8;
+    const top = belowTop + expectedHeight > window.innerHeight ? Math.max(12, rect.top - expectedHeight - 8) : belowTop;
+    setHoverCitation({
+      key,
+      label,
+      title: meta.source.title || meta.source.paper_id,
+      subtitle: `${label} - ${evidence.kind || "Evidence"} - ${meta.source.paper_id}`,
+      text: evidence.pdf_excerpt || evidence.reference_text,
+      evidenceIndex: meta.evidenceIndex,
+      left,
+      top,
+      width
+    });
+  }
+
   return (
     <>
       {parts.map((part, index) => {
@@ -1499,18 +1552,48 @@ function AnswerText({
         const quote = citationQuoteFromParts(parts, index);
         const meta = getCitationMeta(match[1], context);
         const label = meta ? `Z${meta.evidenceIndex + 1}` : "?";
+        const evidence = meta?.source.evidence[meta.evidenceIndex];
+        const hoverKey = `${part}-${index}`;
         return (
-          <button
-            key={`${part}-${index}`}
-            className={`citation-link ${meta ? "citation-link--mapped" : ""}`}
-            type="button"
-            onClick={() => onCitationClick(match[1], context, quote)}
-            style={meta ? evidenceColorVars(meta.evidenceIndex) : undefined}
-            title={meta ? `${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}` : undefined}
-          >
-            <span className="citation-index">{label}</span>
-            <span className="citation-paper">{shortCitationLabel(match[1])}</span>
-          </button>
+          <span className="citation-link-wrap" key={hoverKey}>
+            <button
+              className={`citation-link ${meta ? "citation-link--mapped" : ""}`}
+              type="button"
+              onClick={() => {
+                cancelCitationHoverClose();
+                setHoverCitation(null);
+                onCitationClick(match[1], context, quote);
+              }}
+              onPointerEnter={meta ? (event) => showCitationHover(hoverKey, label, meta, event) : undefined}
+              onPointerLeave={meta ? scheduleCitationHoverClose : undefined}
+              style={meta ? evidenceColorVars(meta.evidenceIndex) : undefined}
+              title={meta ? `${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}` : undefined}
+            >
+              <span className="citation-index">{label}</span>
+              <span className="citation-paper">{shortCitationLabel(match[1])}</span>
+            </button>
+            {meta && evidence && hoverCitation?.key === hoverKey ? (
+              <span
+                className="citation-hover-card citation-hover-card--visible"
+                role="tooltip"
+                onPointerEnter={cancelCitationHoverClose}
+                onPointerLeave={scheduleCitationHoverClose}
+                style={{
+                  ...evidenceColorVars(hoverCitation.evidenceIndex),
+                  left: hoverCitation.left,
+                  top: hoverCitation.top,
+                  width: hoverCitation.width
+                }}
+              >
+                <strong>{hoverCitation.title}</strong>
+                <span>{hoverCitation.subtitle}</span>
+                <span className="citation-hover-card__legacy" aria-hidden="true">
+                  {label} · {evidence.kind || "Evidence"} · {meta.source.paper_id}
+                </span>
+                <p>{hoverCitation.text}</p>
+              </span>
+            ) : null}
+          </span>
         );
       })}
     </>
@@ -1525,7 +1608,7 @@ function shortCitationLabel(value: string) {
   return `${clean.slice(0, 16)}...`;
 }
 
-function shortTitle(value: string) {
+export function shortTitle(value: string) {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length <= 56 ? text : `${text.slice(0, 53)}...`;
 }
@@ -1557,14 +1640,14 @@ function leadingSentenceFragment(value: string) {
   return stop >= 0 ? trimmed.slice(0, stop + 1) : "";
 }
 
-function citationIds(citation: string) {
+export function citationIds(citation: string) {
   return citation
     .split(/[;,]/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function sameCitation(sourceId: string, citation: string) {
+export function sameCitation(sourceId: string, citation: string) {
   const left = normalizeCitation(sourceId);
   const right = normalizeCitation(citation);
   return left === right || left.endsWith(right) || right.endsWith(left);
@@ -1574,7 +1657,7 @@ function normalizeCitation(value: string) {
   return value.toLowerCase().replace(/^https?:\/\/arxiv\.org\/abs\//, "arxiv:").replace(/\s+/g, "");
 }
 
-function bestEvidenceIndex(source: VerificationSource, context: string) {
+export function bestEvidenceIndex(source: VerificationSource, context: string) {
   if (!source.evidence.length) {
     return 0;
   }
@@ -1600,7 +1683,7 @@ function textTerms(text: string) {
   return Array.from(new Set(normalizeText(text).split(" "))).filter((term) => term.length >= 5 && !stopwords.has(term)).slice(0, 36);
 }
 
-function shortEvidenceText(value: string) {
+export function shortEvidenceText(value: string) {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > 92 ? `${text.slice(0, 89)}...` : text;
 }

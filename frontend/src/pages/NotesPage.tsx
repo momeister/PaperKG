@@ -1,5 +1,6 @@
 import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, MutableRefObject, RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bold,
@@ -24,17 +25,19 @@ import {
   Sparkles,
   Table2,
   Trash2,
-  Undo2
+  Undo2,
+  X
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
+import { evidenceColorVars } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { PdfPane } from "../components/PdfPane";
 import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
 import { downloadMarkdownFile } from "../download";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
-import type { NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
+import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
 
 type SelectionRange = {
   start: number;
@@ -42,13 +45,99 @@ type SelectionRange = {
   text: string;
 };
 
+type EditorMode = "edit" | "preview" | "split";
+
 type NoteAiThreadsResult = {
   items: NoteAiThread[];
   total: number;
 };
 
+type CitationMarkdownRef = {
+  id: string;
+  label: string;
+  badge: string;
+  title: string;
+  start: number;
+  end: number;
+};
+
+export type ThreadAnchorMeta = {
+  label: string;
+  colorIndex: number;
+};
+
+export type NoteCitationRow = {
+  citation: NoteCitation;
+  badge: string;
+  label: string;
+  title: string;
+  evidence: string;
+};
+
+export type NotesSurfaceSnapshot = {
+  activeNoteId: string;
+  title: string;
+  notes: Array<{ id: string; title: string; excerpt?: string; citation_count?: number; updated_timestamp?: string }>;
+  notesLoading: boolean;
+  currentNote: Note | null;
+  citations: NoteCitation[];
+  citationRows: NoteCitationRow[];
+  selectedCitation: NoteCitation | null;
+  threads: NoteAiThread[];
+  activeThreadId: string;
+  threadMeta: Map<string, ThreadAnchorMeta>;
+  followUpDrafts: Record<string, string>;
+  isFollowUpPending: boolean;
+  deletingThreadId: string;
+};
+
+export type NotesSurfaceActions = {
+  createNote: () => void;
+  selectNote: (noteId: string) => void;
+  openCitation: (citation: NoteCitation) => void;
+  clearCitation: () => void;
+  activateThread: (threadId: string) => void;
+  setActiveThread: (threadId: string) => void;
+  toggleThreadCollapsed: (threadId: string) => void;
+  setFollowUpDraft: (threadId: string, value: string) => void;
+  submitFollowUp: (threadId: string) => void;
+  insertThreadAnswer: (threadId: string) => void;
+  previewThreadAnswer: (threadId: string) => void;
+  insertThreadMessage: (threadId: string, messageId: string) => void;
+  previewThreadMessage: (threadId: string, messageId: string) => void;
+  hideThreadMessage: (threadId: string, messageId: string) => void;
+  previewAppendMarkdown: (markdown: string) => void;
+  insertMarkdownAtCursor: (markdown: string, citations?: Record<string, unknown>[]) => Promise<string | null>;
+  clearInsertPreview: () => void;
+  deleteThread: (threadId: string) => void;
+  deleteAllThreads: () => void;
+};
+
+type NotesSurfaceProps = {
+  variant?: "page" | "workspace";
+  controlledNoteId?: string;
+  requestedCitationId?: string;
+  onActiveNoteChange?: (noteId: string) => void;
+  onCitationOpen?: (citation: NoteCitation | null) => void;
+  onStateChange?: (snapshot: NotesSurfaceSnapshot) => void;
+  actionsRef?: MutableRefObject<NotesSurfaceActions | null>;
+};
+
 export function NotesPage() {
+  return <NotesSurface />;
+}
+
+export function NotesSurface({
+  variant = "page",
+  controlledNoteId,
+  requestedCitationId,
+  onActiveNoteChange,
+  onCitationOpen,
+  onStateChange,
+  actionsRef
+}: NotesSurfaceProps = {}) {
   const { activeProject, provider, model } = useAppState();
+  const embedded = variant === "workspace";
   const scopedProjectId = noteProjectId(activeProject);
   const scopeLabel = projectScopeLabel(activeProject);
   const queryClient = useQueryClient();
@@ -56,30 +145,40 @@ export function NotesPage() {
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
+  const [editorMode, setEditorMode] = useState<EditorMode>("edit");
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [selectionPinned, setSelectionPinned] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiPreview, setAiPreview] = useState("");
+  const [aiPopoverBottomPadding, setAiPopoverBottomPadding] = useState(0);
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [selectedCitation, setSelectedCitation] = useState<NoteCitation | null>(null);
+  const [activeEditorCitationId, setActiveEditorCitationId] = useState("");
+  const [inlineThreadId, setInlineThreadId] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [notesListOpen, setNotesListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
   const [contextOpen, setContextOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
   const [notePdfOpen, setNotePdfOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
   const [citationListOpen, setCitationListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
   const [spellcheckEnabled, setSpellcheckEnabled] = useState(() => loadBooleanUiState("spellcheckEnabled", true));
+  const [contextWidth, setContextWidth] = useState(() => loadNumberUiState(`${scopedProjectId}.contextWidth`, 430));
   const [activeThreadId, setActiveThreadId] = useState("");
+  const [threadMetaById, setThreadMetaById] = useState<Record<string, ThreadAnchorMeta>>({});
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [editorScrollLeft, setEditorScrollLeft] = useState(0);
   const [insertPreview, setInsertPreview] = useState<{ index: number; content: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
+  const selectionPopoverRef = useRef<HTMLDivElement | null>(null);
+  const citationPanelRef = useRef<HTMLElement | null>(null);
+  const citationRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const loadedNoteIdRef = useRef("");
   const previewRef = useRef<HTMLElement | null>(null);
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
+  const markdownRef = useRef(markdown);
+  const contextResizeFrameRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const lastCursorRef = useRef<number | null>(null);
   const threadsQueryKey = ["note-ai-threads", activeNoteId] as const;
@@ -110,6 +209,7 @@ export function NotesPage() {
       setAiPreview("");
       setSelection(null);
       setSelectionPinned(false);
+      setInlineThreadId("");
       loadedNoteIdRef.current = note.id;
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
@@ -163,15 +263,35 @@ export function NotesPage() {
         anchor_quote: stripHighlightMarkers(selection?.text ?? "").slice(0, 2000) || null
       }),
     onSuccess: (payload) => {
-      setSelectionPinned(true);
-      setAiPreview(payload.replacement_text);
+      const currentMarkdown = markdownRef.current;
+      const anchor = threadAnchorRange(payload.thread, currentMarkdown);
+      if (anchor) {
+        setSelection({
+          start: anchor.start,
+          end: anchor.end,
+          text: currentMarkdown.slice(anchor.start, anchor.end)
+        });
+      } else {
+        setSelection(null);
+      }
+      setSelectionPinned(Boolean(anchor));
+      setAiInstruction("");
+      setAiPreview(payload.replacement_text || latestThreadAnswer(payload.thread));
       setActiveThreadId(payload.thread.id);
-      setHistoryOpen(true);
+      setInlineThreadId("");
+      setThreadMetaById((current) => assignMissingThreadMeta(current, [payload.thread.id]));
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+        if (!current) {
+          return { items: [payload.thread], total: 1 };
+        }
+        const nextItems = [payload.thread, ...current.items.filter((thread) => thread.id !== payload.thread.id)];
+        return { ...current, items: nextItems, total: nextItems.length };
+      });
       queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
   const followUp = useMutation({
-    mutationFn: ({ threadId, message }: { threadId: string; message: string }) =>
+    mutationFn: ({ threadId, message }: { threadId: string; message: string; source?: "inline" | "history" }) =>
       api.appendNoteAiMessage(activeNoteId, threadId, {
         message,
         provider,
@@ -180,15 +300,37 @@ export function NotesPage() {
       }),
     onSuccess: (payload, variables) => {
       setActiveThreadId(payload.thread.id);
-      setAiPreview(payload.replacement_text);
+      if (variables.source === "inline") {
+        setInlineThreadId(payload.thread.id);
+        setAiPreview(payload.replacement_text);
+      } else {
+        setInlineThreadId("");
+        setSelection(null);
+        setSelectionPinned(false);
+        setAiPreview("");
+      }
       setFollowUpDrafts((current) => ({ ...current, [variables.threadId]: "" }));
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+        if (!current) {
+          return { items: [payload.thread], total: 1 };
+        }
+        const nextItems = current.items.map((thread) => (thread.id === payload.thread.id ? payload.thread : thread));
+        return { ...current, items: nextItems, total: nextItems.length };
+      });
       queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
   const updateThreadUi = useMutation({
-    mutationFn: ({ thread, collapsed }: { thread: NoteAiThread; collapsed: boolean }) =>
-      api.updateNoteAiThread(activeNoteId, thread.id, { ui_state: { ...(thread.ui_state ?? {}), collapsed } }),
-    onSuccess: () => {
+    mutationFn: ({ thread, uiState }: { thread: NoteAiThread; uiState: Record<string, unknown> }) =>
+      api.updateNoteAiThread(activeNoteId, thread.id, { ui_state: { ...(thread.ui_state ?? {}), ...uiState } }),
+    onSuccess: ({ thread }) => {
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+        if (!current) {
+          return current;
+        }
+        const nextItems = current.items.map((item) => (item.id === thread.id ? thread : item));
+        return { ...current, items: nextItems };
+      });
       queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
@@ -205,6 +347,7 @@ export function NotesPage() {
         return { ...current, items: nextItems, total: nextItems.length };
       });
       setActiveThreadId((current) => (current === threadId ? "" : current));
+      setInlineThreadId((current) => (current === threadId ? "" : current));
       setFollowUpDrafts((current) => {
         const next = { ...current };
         delete next[threadId];
@@ -228,6 +371,7 @@ export function NotesPage() {
       const previous = queryClient.getQueryData<NoteAiThreadsResult>(threadsQueryKey);
       queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => current ? { ...current, items: [], total: 0 } : current);
       setActiveThreadId("");
+      setInlineThreadId("");
       setFollowUpDrafts({});
       setAiPreview("");
       return { previous };
@@ -252,23 +396,95 @@ export function NotesPage() {
   const notes = notesQuery.data?.items ?? [];
   const currentNote = noteQuery.data?.note;
   const citations = currentNote?.citations ?? [];
+  const threads = threadsQuery.data?.items ?? [];
+  const citationRefs = useMemo(() => parseMarkdownCitationRefs(markdown), [markdown]);
+  const citationLookup = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
+  const citationRows = useMemo(
+    () =>
+      citations.map((citation, index) => {
+        const ref = citationRefs.find((item) => item.id === citation.id);
+        const fallbackBadge = `Z${Number(citation.evidence_index ?? index) + 1}`;
+        const badge = ref?.badge || fallbackBadge;
+        const label = ref?.label || badge;
+        const title = ref?.title || citation.title || citation.paper_id;
+        const evidence = citation.pdf_excerpt || citation.reference_text || citation.kind || "";
+        return { citation, badge, label, title: shortText(title, 96), evidence: shortText(evidence, 150) };
+      }),
+    [citationRefs, citations]
+  );
+  const activeEditorCitation = activeEditorCitationId ? citationLookup.get(activeEditorCitationId) ?? null : null;
+  const activeEditorCitationRow = activeEditorCitation
+    ? citationRows.find((row) => row.citation.id === activeEditorCitation.id) ?? null
+    : null;
+  const activeCitationRefs = selectedCitation ? citationRefs.filter((item) => item.id === selectedCitation.id) : [];
+  const threadAnchors = useMemo(
+    () =>
+      threads
+        .map((thread, index) => {
+          const range = threadAnchorRange(thread, markdown);
+          return range ? { thread, index, ...range } : null;
+        })
+        .filter((anchor): anchor is { thread: NoteAiThread; index: number; start: number; end: number } => Boolean(anchor)),
+    [markdown, threads]
+  );
+  const threadAnchorMeta = useMemo(
+    () =>
+      new Map<string, ThreadAnchorMeta>(
+        threadAnchors.map((anchor, index) => [
+          anchor.thread.id,
+          threadMetaById[anchor.thread.id] ?? {
+            label: `N${index + 1}`,
+            colorIndex: index
+          }
+        ])
+      ),
+    [threadAnchors, threadMetaById]
+  );
 
   useEffect(() => {
+    if (!activeNoteId || !threadAnchors.length) {
+      return;
+    }
+    setThreadMetaById((current) => assignMissingThreadMeta(current, threadAnchors.map((anchor) => anchor.thread.id)));
+  }, [activeNoteId, threadAnchors]);
+
+  useEffect(() => {
+    markdownRef.current = markdown;
     latestDraftRef.current = { noteId: activeNoteId, title, markdown };
   }, [activeNoteId, markdown, title]);
 
   useEffect(() => {
     setActiveNoteId("");
     setSelectedCitation(null);
+    setInlineThreadId("");
     loadedNoteIdRef.current = "";
   }, [scopedProjectId]);
+
+  useEffect(() => {
+    if (controlledNoteId && controlledNoteId !== activeNoteId) {
+      setActiveNoteId(controlledNoteId);
+    }
+  }, [activeNoteId, controlledNoteId]);
+
+  useEffect(() => {
+    onActiveNoteChange?.(activeNoteId);
+  }, [activeNoteId, onActiveNoteChange]);
 
   useEffect(() => {
     setNotesListOpen(loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
     setContextOpen(loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
     setNotePdfOpen(loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
     setCitationListOpen(loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
+    setContextWidth(loadNumberUiState(`${scopedProjectId}.contextWidth`, 430));
   }, [scopedProjectId]);
+
+  useEffect(() => {
+    if (!activeNoteId) {
+      setThreadMetaById({});
+      return;
+    }
+    setThreadMetaById(loadThreadMetaUiState(`${scopedProjectId}.${activeNoteId}.threadMeta`, {}));
+  }, [activeNoteId, scopedProjectId]);
 
   useEffect(() => {
     saveBooleanUiState(`${scopedProjectId}.notesListOpen`, notesListOpen);
@@ -287,11 +503,44 @@ export function NotesPage() {
   }, [citationListOpen, scopedProjectId]);
 
   useEffect(() => {
+    saveNumberUiState(`${scopedProjectId}.contextWidth`, contextWidth);
+  }, [contextWidth, scopedProjectId]);
+
+  useEffect(() => {
+    if (!activeNoteId) {
+      return;
+    }
+    saveThreadMetaUiState(`${scopedProjectId}.${activeNoteId}.threadMeta`, threadMetaById);
+  }, [activeNoteId, scopedProjectId, threadMetaById]);
+
+  useEffect(() => {
     saveBooleanUiState("spellcheckEnabled", spellcheckEnabled);
   }, [spellcheckEnabled]);
 
   useEffect(() => {
+    if (!selectedCitation || !citationListOpen || historyOpen) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const row = citationRowRefs.current[selectedCitation.id];
+      const panel = citationPanelRef.current;
+      if (!row || !panel) {
+        return;
+      }
+      const rowRect = row.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      if (rowRect.top < panelRect.top + 10 || rowRect.bottom > panelRect.bottom - 10) {
+        panel.scrollTo({
+          top: Math.max(0, panel.scrollTop + rowRect.top - panelRect.top - 12),
+          behavior: "smooth"
+        });
+      }
+    });
+  }, [citationListOpen, historyOpen, selectedCitation]);
+
+  useEffect(() => {
     if (!selection) {
+      setAiPopoverBottomPadding(0);
       return;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -307,6 +556,45 @@ export function NotesPage() {
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [selection]);
+
+  useEffect(() => {
+    if (!selection) {
+      setAiPopoverBottomPadding(0);
+      return;
+    }
+    const popover = selectionPopoverRef.current;
+    const wrap = editorWrapRef.current;
+    if (!popover || !wrap) {
+      return;
+    }
+    let frame: number | null = null;
+    const measure = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const popoverRect = popover.getBoundingClientRect();
+        const wrapRect = wrap.getBoundingClientRect();
+        const bottomGap = Math.max(0, wrapRect.bottom - popoverRect.bottom);
+        const popoverRoom = popoverRect.height + bottomGap + 24;
+        setAiPopoverBottomPadding(Math.ceil(popoverRoom));
+      });
+    };
+    measure();
+    const ResizeObserverCtor = window.ResizeObserver;
+    const observer = ResizeObserverCtor ? new ResizeObserverCtor(measure) : null;
+    observer?.observe(popover);
+    observer?.observe(wrap);
+    window.addEventListener("resize", measure);
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [aiEdit.isPending, aiInstruction, aiPreview, selection]);
 
   useEffect(() => {
     if (!activeNoteId && notes[0]) {
@@ -334,6 +622,7 @@ export function NotesPage() {
     setSelection(null);
     setSelectionPinned(false);
     setActiveThreadId("");
+    setInlineThreadId("");
   }, [currentNote?.id, currentNote?.markdown, currentNote?.title, currentNote?.updated_timestamp, dirty, markdown, title]);
 
   useEffect(() => {
@@ -383,9 +672,11 @@ export function NotesPage() {
   }
 
   function updateMarkdown(value: string) {
+    markdownRef.current = value;
     setMarkdown(value);
     setDirtyState(true);
     setInsertPreview(null);
+    setActiveEditorCitationId("");
   }
 
   function updateTitle(value: string) {
@@ -405,10 +696,12 @@ export function NotesPage() {
     if (!node || node.selectionStart === node.selectionEnd) {
       if (node) {
         lastCursorRef.current = node.selectionStart;
+        setActiveEditorCitationId(citationRefAtPosition(citationRefs, node.selectionStart)?.id ?? "");
       }
       return null;
     }
     lastCursorRef.current = node.selectionEnd;
+    setActiveEditorCitationId("");
     const next = {
       start: node.selectionStart,
       end: node.selectionEnd,
@@ -494,6 +787,7 @@ export function NotesPage() {
       setInsertPreview(null);
       return;
     }
+    setInlineThreadId("");
     clearEditorSelection();
   }
 
@@ -504,6 +798,43 @@ export function NotesPage() {
     setSelectionPinned(true);
   }
 
+  function toggleInlineThread(threadId: string) {
+    if (inlineThreadId === threadId) {
+      setInlineThreadId("");
+      return;
+    }
+    setInlineThreadId(threadId);
+    setActiveThreadId(threadId);
+    setSelection(null);
+    setSelectionPinned(false);
+    setAiPreview("");
+    setAiInstruction("");
+  }
+
+  function activateThreadFromHistory(threadId: string) {
+    setActiveThreadId(threadId);
+    setInlineThreadId(threadId);
+    setSelection(null);
+    setSelectionPinned(false);
+    setAiPreview("");
+    setAiInstruction("");
+    const anchor = threadAnchors.find((item) => item.thread.id === threadId);
+    if (!anchor) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) {
+        return;
+      }
+      node.focus();
+      node.setSelectionRange(anchor.start, anchor.start);
+      node.scrollTop = estimatedTextareaScrollTop(markdown, anchor.start, node);
+      setEditorScrollTop(node.scrollTop);
+      setEditorScrollLeft(node.scrollLeft);
+    });
+  }
+
   function appendThreadAnswer(thread: NoteAiThread) {
     const text = latestThreadAnswer(thread);
     if (text) {
@@ -511,16 +842,63 @@ export function NotesPage() {
     }
   }
 
-  function submitFollowUp(thread: NoteAiThread) {
+  function submitFollowUp(thread: NoteAiThread, source: "inline" | "history" = "inline") {
     const message = (followUpDrafts[thread.id] ?? "").trim();
     if (!message) {
       return;
     }
-    followUp.mutate({ threadId: thread.id, message });
+    followUp.mutate({ threadId: thread.id, message, source });
   }
 
-  const workspaceColumns = `${notesListOpen ? "minmax(230px, 0.32fr)" : "46px"} minmax(420px, 1fr) ${contextOpen ? "minmax(320px, 0.44fr)" : "46px"}`;
-  const threads = threadsQuery.data?.items ?? [];
+  function setThreadCollapsed(thread: NoteAiThread, collapsed: boolean) {
+    updateThreadUi.mutate({ thread, uiState: { collapsed } });
+  }
+
+  function hideThreadMessage(thread: NoteAiThread, messageId: string) {
+    updateThreadUi.mutate({
+      thread,
+      uiState: {
+        hidden_message_ids: Array.from(new Set([...hiddenThreadMessageIds(thread), messageId]))
+      }
+    });
+  }
+
+  function appendThreadMessage(thread: NoteAiThread, message: NoteAiMessage) {
+    insertThreadAnswer(thread, message.content);
+  }
+
+  function previewThreadMessage(thread: NoteAiThread, message: NoteAiMessage) {
+    setInsertPreview({ index: insertionPointForThread(thread), content: threadInsertionContent(message.content) });
+  }
+
+  const workspaceColumns = `${notesListOpen ? "minmax(230px, 0.32fr)" : "46px"} minmax(360px, 1fr) 6px ${contextOpen ? `minmax(320px, ${contextWidth}px)` : "46px"}`;
+
+  function startContextResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!contextOpen) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = contextWidth;
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      const delta = startX - moveEvent.clientX;
+      const maxWidth = Math.max(360, Math.round(window.innerWidth * 0.68));
+      const nextWidth = Math.min(maxWidth, Math.max(320, startWidth + delta));
+      if (contextResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(contextResizeFrameRef.current);
+      }
+      contextResizeFrameRef.current = window.requestAnimationFrame(() => {
+        contextResizeFrameRef.current = null;
+        setContextWidth(nextWidth);
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
 
   function insertAtSelection(value: string) {
     const node = textareaRef.current;
@@ -559,8 +937,89 @@ export function NotesPage() {
     setInsertPreview(null);
   }
 
+  function previewAppendMarkdown(value: string) {
+    const content = value.trim();
+    if (!content) {
+      setInsertPreview(null);
+      return;
+    }
+    const { start } = externalInsertRange();
+    setInsertPreview({ index: start, content: markdownBlockInsertion(markdown, start, content) });
+  }
+
+  async function insertMarkdownAtCursor(value: string, citations: Record<string, unknown>[] = []) {
+    const content = value.trim();
+    if (!content) {
+      return activeNoteId || null;
+    }
+    const currentMarkdown = markdownRef.current;
+    const { start, end } = externalInsertRange();
+    const insertText = markdownBlockInsertion(currentMarkdown, start, content);
+    const nextMarkdown = `${currentMarkdown.slice(0, start)}${insertText}${currentMarkdown.slice(end)}`;
+    const nextCursor = start + insertText.length;
+    pushUndo();
+    markdownRef.current = nextMarkdown;
+    setMarkdown(nextMarkdown);
+    setInsertPreview(null);
+    setActiveEditorCitationId("");
+    setDirtyState(true);
+    lastCursorRef.current = nextCursor;
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+
+    const nextTitle = noteTitleForSave(title, nextMarkdown);
+    if (!activeNoteId) {
+      const created = await api.createNote(scopedProjectId, { title: nextTitle, markdown: nextMarkdown });
+      const note = citations.length ? (await api.appendNote(created.note.id, { markdown: " ", citations })).note : created.note;
+      setActiveNoteId(note.id);
+      setTitle(note.title);
+      setMarkdown(note.markdown);
+      markdownRef.current = note.markdown;
+      setDirtyState(false);
+      loadedNoteIdRef.current = note.id;
+      queryClient.setQueryData(["note", note.id], { note });
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      queryClient.invalidateQueries({ queryKey: ["note", note.id] });
+      return note.id;
+    }
+
+    if (nextTitle !== title) {
+      setTitle(nextTitle);
+    }
+    const saved = await api.updateNote(activeNoteId, { title: nextTitle, markdown: nextMarkdown });
+    const note = citations.length ? (await api.appendNote(activeNoteId, { markdown: " ", citations })).note : saved.note;
+    setTitle(note.title);
+    setMarkdown(note.markdown);
+    markdownRef.current = note.markdown;
+    setDirtyState(false);
+    loadedNoteIdRef.current = note.id;
+    queryClient.setQueryData(["note", note.id], { note });
+    queryClient.invalidateQueries({ queryKey: ["notes"] });
+    queryClient.invalidateQueries({ queryKey: ["note", note.id] });
+    return note.id;
+  }
+
   function threadInsertionContent(answer: string) {
     return `\n\n${answer.trim()}`;
+  }
+
+  function externalInsertRange() {
+    const currentMarkdown = markdownRef.current;
+    const node = textareaRef.current;
+    const fallback = Math.max(0, Math.min(currentMarkdown.length, lastCursorRef.current ?? currentMarkdown.length));
+    const start = Math.max(0, Math.min(currentMarkdown.length, node?.selectionStart ?? fallback));
+    const end = Math.max(start, Math.min(currentMarkdown.length, node?.selectionEnd ?? start));
+    return { start, end };
+  }
+
+  function markdownBlockInsertion(source: string, index: number, content: string) {
+    const before = source.slice(0, index);
+    const after = source.slice(index);
+    const prefix = before.trim() ? (before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n") : "";
+    const suffix = after.trim() ? (after.startsWith("\n\n") ? "" : after.startsWith("\n") ? "\n" : "\n\n") : "";
+    return `${prefix}${content.trim()}${suffix}`;
   }
 
   function insertionPointForThread(thread: NoteAiThread) {
@@ -664,8 +1123,8 @@ export function NotesPage() {
     return true;
   }
 
-  function switchEditorMode(mode: "edit" | "preview") {
-    if (editorMode === "preview" && mode === "edit") {
+  function switchEditorMode(mode: EditorMode) {
+    if (editorMode === "preview" && mode !== "preview") {
       flushPreviewEdits();
     }
     setEditorMode(mode);
@@ -684,7 +1143,11 @@ export function NotesPage() {
         if (!block || isComplexPreviewBlock(block.raw)) {
           return null;
         }
-        return { blockIndex, nextRaw: previewTextToMarkdown(block.raw, node.innerText) };
+        const nextRaw = previewElementToMarkdown(block.raw, node);
+        if (nextRaw === block.raw) {
+          return null;
+        }
+        return { blockIndex, nextRaw };
       })
       .filter((edit): edit is { blockIndex: number; nextRaw: string } => Boolean(edit));
     if (!edits.length) {
@@ -711,14 +1174,18 @@ export function NotesPage() {
     }
   }
 
-  function updatePreviewBlock(blockIndex: number, nextRaw: string) {
-    const blocks = splitMarkdownBlocks(markdown);
+  function updatePreviewBlock(blockIndex: number, nextRaw: string, expectedRaw?: string) {
+    const currentMarkdown = markdownRef.current;
+    const blocks = splitMarkdownBlocks(currentMarkdown);
     const block = blocks[blockIndex];
     if (!block) {
       return;
     }
-    const nextMarkdown = `${markdown.slice(0, block.start)}${nextRaw}${markdown.slice(block.end)}`;
-    if (nextMarkdown !== markdown) {
+    if (expectedRaw !== undefined && block.raw !== expectedRaw) {
+      return;
+    }
+    const nextMarkdown = `${currentMarkdown.slice(0, block.start)}${nextRaw}${currentMarkdown.slice(block.end)}`;
+    if (nextMarkdown !== currentMarkdown) {
       pushUndo();
       updateMarkdown(nextMarkdown);
     }
@@ -741,7 +1208,25 @@ export function NotesPage() {
     setSelectedCitation(citation);
     setContextOpen(true);
     setHistoryOpen(false);
+    setCitationListOpen(true);
+    setNotePdfOpen(true);
+    onCitationOpen?.(citation);
   }
+
+  function clearCitation() {
+    setSelectedCitation(null);
+    onCitationOpen?.(null);
+  }
+
+  useEffect(() => {
+    if (!requestedCitationId || selectedCitation?.id === requestedCitationId) {
+      return;
+    }
+    const citation = citations.find((item) => item.id === requestedCitationId);
+    if (citation) {
+      openCitation(citation);
+    }
+  }, [citations, requestedCitationId, selectedCitation?.id]);
 
   function clearSelectionAi() {
     clearEditorSelection();
@@ -763,20 +1248,174 @@ export function NotesPage() {
   }
 
   const selectionPreview = stripHighlightMarkers(selection?.text ?? "");
-  const editorHighlightRanges = selection
-    ? [
-        {
-          start: selection.start,
-          end: selection.end,
-          className: selectionPinned ? "textarea-highlight-range--selection textarea-highlight-range--selection-pinned" : "textarea-highlight-range--selection"
+  const editorHighlightRanges = [
+    ...(selection
+      ? [
+          {
+            start: selection.start,
+            end: selection.end,
+            className: selectionPinned ? "textarea-highlight-range--selection textarea-highlight-range--selection-pinned" : "textarea-highlight-range--selection"
+          }
+        ]
+      : []),
+    ...threadAnchors
+      .filter((anchor) => anchor.thread.id === inlineThreadId)
+      .map((anchor) => ({
+        start: anchor.start,
+        end: anchor.end,
+        className: "textarea-highlight-range--thread-anchor textarea-highlight-range--thread-anchor-active",
+        style: evidenceColorVars(threadAnchorMeta.get(anchor.thread.id)?.colorIndex ?? 0)
+      })),
+    ...activeCitationRefs.map((ref) => ({
+      start: ref.start,
+      end: ref.end,
+      className: "textarea-highlight-range--citation-active"
+    }))
+  ];
+  const threadAnchorInsertions = threadAnchors.map((anchor) => {
+    const meta = threadAnchorMeta.get(anchor.thread.id) ?? { label: "N?", colorIndex: 0 };
+    return {
+      index: anchor.end,
+      className: "textarea-thread-anchor-insertion",
+      content: (
+        <ThreadAnchorMarker
+          key={anchor.thread.id}
+          label={meta.label}
+          thread={anchor.thread}
+          placement={threadAnchorPlacement(markdown, anchor.end)}
+          open={inlineThreadId === anchor.thread.id}
+          active={inlineThreadId === anchor.thread.id}
+          style={evidenceColorVars(meta.colorIndex)}
+          followUpDraft={followUpDrafts[anchor.thread.id] ?? ""}
+          isSubmitting={followUp.isPending && followUp.variables?.threadId === anchor.thread.id}
+          deleting={deleteThread.isPending && deleteThread.variables === anchor.thread.id}
+          onToggle={() => toggleInlineThread(anchor.thread.id)}
+          onClose={() => setInlineThreadId("")}
+          onDraftChange={(value) => setFollowUpDrafts((current) => ({ ...current, [anchor.thread.id]: value }))}
+          onFollowUp={() => submitFollowUp(anchor.thread)}
+          onDelete={() => deleteThread.mutate(anchor.thread.id)}
+        />
+      )
+    };
+  });
+  const editorGhostInsertions = [
+    ...(insertPreview ? [{ ...insertPreview, className: "textarea-ghost-insertion--ai" }] : []),
+    ...threadAnchorInsertions
+  ];
+  const sourcePanelRows = citationListOpen ? undefined : "auto minmax(0, 1fr)";
+  const editorBottomStyle = {
+    "--note-editor-extra-bottom": selection ? `max(68vh, ${Math.max(aiPopoverBottomPadding, 96)}px)` : "68vh"
+  } as CSSProperties;
+  const showEditor = editorMode === "edit" || editorMode === "split";
+  const showPreview = editorMode === "preview" || editorMode === "split";
+  const pageClassName = embedded ? "page notes-page notes-page--embedded" : "page notes-page";
+
+  useEffect(() => {
+    if (!actionsRef) {
+      return;
+    }
+    const findThread = (threadId: string) => threads.find((thread) => thread.id === threadId);
+    actionsRef.current = {
+      createNote: () => createNote.mutate(),
+      selectNote: setActiveNoteId,
+      openCitation,
+      clearCitation,
+      activateThread: activateThreadFromHistory,
+      setActiveThread: setActiveThreadId,
+      toggleThreadCollapsed: (threadId: string) => {
+        const thread = findThread(threadId);
+        if (thread) {
+          setThreadCollapsed(thread, !threadCollapsed(thread));
         }
-      ]
-    : [];
-  const editorGhostInsertions = insertPreview ? [{ ...insertPreview, className: "textarea-ghost-insertion--ai" }] : [];
-  const contextPanelRows = historyOpen ? undefined : citationListOpen ? undefined : "auto minmax(0, 1fr)";
+      },
+      setFollowUpDraft: (threadId: string, value: string) => setFollowUpDrafts((current) => ({ ...current, [threadId]: value })),
+      submitFollowUp: (threadId: string) => {
+        const thread = findThread(threadId);
+        if (thread) {
+          submitFollowUp(thread, "history");
+        }
+      },
+      insertThreadAnswer: (threadId: string) => {
+        const thread = findThread(threadId);
+        if (thread) {
+          appendThreadAnswer(thread);
+        }
+      },
+      previewThreadAnswer: (threadId: string) => {
+        const thread = findThread(threadId);
+        if (thread) {
+          previewThreadAnswer(thread);
+        }
+      },
+      insertThreadMessage: (threadId: string, messageId: string) => {
+        const thread = findThread(threadId);
+        const message = thread ? threadDisplayMessages(thread).find((item) => item.id === messageId) : null;
+        if (thread && message) {
+          appendThreadMessage(thread, message);
+        }
+      },
+      previewThreadMessage: (threadId: string, messageId: string) => {
+        const thread = findThread(threadId);
+        const message = thread ? threadDisplayMessages(thread).find((item) => item.id === messageId) : null;
+        if (thread && message) {
+          previewThreadMessage(thread, message);
+        }
+      },
+      hideThreadMessage: (threadId: string, messageId: string) => {
+        const thread = findThread(threadId);
+        if (thread) {
+          hideThreadMessage(thread, messageId);
+        }
+      },
+      previewAppendMarkdown,
+      insertMarkdownAtCursor,
+      clearInsertPreview,
+      deleteThread: (threadId: string) => deleteThread.mutate(threadId),
+      deleteAllThreads: () => deleteAllThreads.mutate()
+    };
+    return () => {
+      actionsRef.current = null;
+    };
+  });
+
+  useEffect(() => {
+    onStateChange?.({
+      activeNoteId,
+      title,
+      notes,
+      notesLoading: notesQuery.isLoading,
+      currentNote: currentNote ?? null,
+      citations,
+      citationRows,
+      selectedCitation,
+      threads,
+      activeThreadId,
+      threadMeta: threadAnchorMeta,
+      followUpDrafts,
+      isFollowUpPending: followUp.isPending,
+      deletingThreadId: deleteThread.isPending ? deleteThread.variables ?? "" : ""
+    });
+  }, [
+    activeNoteId,
+    title,
+    notes,
+    notesQuery.isLoading,
+    currentNote,
+    citations,
+    citationRows,
+    selectedCitation,
+    threads,
+    activeThreadId,
+    threadAnchorMeta,
+    followUpDrafts,
+    followUp.isPending,
+    deleteThread.isPending,
+    deleteThread.variables,
+    onStateChange
+  ]);
 
   return (
-    <section className="page notes-page">
+    <section className={pageClassName}>
       <div className="page-title">
         <div>
           <span>{scopeLabel}</span>
@@ -907,13 +1546,28 @@ export function NotesPage() {
                   <button type="button" className={editorMode === "preview" ? "active" : ""} onClick={() => switchEditorMode("preview")}>
                     Preview
                   </button>
+                  <button type="button" className={editorMode === "split" ? "active" : ""} onClick={() => switchEditorMode("split")}>
+                    Split
+                  </button>
                 </div>
               </div>
 
-              <div className="markdown-editor-grid">
-                {editorMode === "edit" ? (
-                  <div className="markdown-editor-wrap markdown-editor-wrap--highlighted" data-insert-preview={insertPreview ? "true" : undefined} ref={editorWrapRef}>
-                    <TextareaHighlightLayer text={markdown} ranges={editorHighlightRanges} insertions={editorGhostInsertions} scrollTop={editorScrollTop} scrollLeft={editorScrollLeft} />
+              <div className={`markdown-editor-grid markdown-editor-grid--${editorMode}`}>
+                {showEditor ? (
+                  <div
+                    className={`markdown-editor-wrap markdown-editor-wrap--highlighted ${selection ? "markdown-editor-wrap--selection-active" : ""}`}
+                    data-insert-preview={insertPreview ? "true" : undefined}
+                    ref={editorWrapRef}
+                    style={editorBottomStyle}
+                  >
+                    <TextareaHighlightLayer
+                      text={markdown}
+                      ranges={editorHighlightRanges}
+                      insertions={editorGhostInsertions}
+                      scrollTop={editorScrollTop}
+                      scrollLeft={editorScrollLeft}
+                      interactive={threadAnchorInsertions.length > 0}
+                    />
                     <textarea
                       ref={textareaRef}
                       className="markdown-editor markdown-editor--highlighted"
@@ -929,8 +1583,19 @@ export function NotesPage() {
                       spellCheck={spellcheckEnabled}
                       placeholder="Markdown schreiben"
                     />
+                    {activeEditorCitation && activeEditorCitationRow && !selection ? (
+                      <button
+                        className="editor-citation-chip"
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => openCitation(activeEditorCitation)}
+                      >
+                        <Quote size={15} />
+                        <span>{activeEditorCitationRow.badge} öffnen</span>
+                      </button>
+                    ) : null}
                     {selection ? (
-                      <div className="selection-ai-popover" onPointerDown={pinSelectionForQuestion}>
+                      <div className="selection-ai-popover" ref={selectionPopoverRef} onPointerDown={pinSelectionForQuestion}>
                         <div>
                           <Sparkles size={16} />
                           <strong>{selectionPreview.length} Zeichen markiert</strong>
@@ -962,7 +1627,7 @@ export function NotesPage() {
                         {aiPreview ? (
                           <div className="ai-preview-card">
                             <span>Antwort</span>
-                            <pre>{aiPreview}</pre>
+                            <textarea className="ai-preview-output" value={aiPreview} readOnly aria-label="KI-Antwort" />
                             <div className="button-row">
                               <button className="button button-primary" type="button" onClick={() => replaceSelection(aiPreview)}>
                                 Ersetzen
@@ -992,16 +1657,18 @@ export function NotesPage() {
                       </div>
                     ) : null}
                   </div>
-                ) : (
+                ) : null}
+                {showPreview ? (
                   <MarkdownPreview
-                    previewRef={previewRef}
+                    previewRef={editorMode === "preview" ? previewRef : undefined}
                     markdown={markdown}
                     citations={citations}
+                    activeCitationId={selectedCitation?.id ?? ""}
                     onCitationClick={openCitation}
-                    editable
-                    onBlockChange={updatePreviewBlock}
+                    editable={editorMode === "preview"}
+                    onBlockChange={editorMode === "preview" ? updatePreviewBlock : undefined}
                   />
-                )}
+                ) : null}
               </div>
             </>
           ) : (
@@ -1009,106 +1676,130 @@ export function NotesPage() {
           )}
         </main>
 
-        <aside className={`note-context-panel ${contextOpen ? "" : "note-context-panel--collapsed"}`} style={contextPanelRows ? { gridTemplateRows: contextPanelRows } : undefined}>
+        <div
+          className={`split-handle notes-context-resize-handle ${contextOpen ? "" : "split-handle--idle"}`}
+          role="separator"
+          aria-label="Notizen und Quellen/PDF Breite anpassen"
+          aria-orientation="vertical"
+          onPointerDown={contextOpen ? startContextResize : undefined}
+        />
+
+        <aside className={`note-context-panel ${contextOpen ? "" : "note-context-panel--collapsed"}`}>
           {!contextOpen ? (
             <button className="collapsed-panel-tab" type="button" onClick={() => setContextOpen(true)}>
               <PanelRightOpen size={17} />
               <span>Quellen</span>
             </button>
           ) : historyOpen ? (
-            <section className="panel note-history-panel">
-              <div className="panel-heading">
-                <div>
-                  <span>KI-Verlauf</span>
-                  <strong>{threadsQuery.data?.total ?? 0}</strong>
-                </div>
-                <div className="button-row">
-                  <button className="icon-button" type="button" aria-label="Quellen anzeigen" onClick={() => setHistoryOpen(false)}>
-                    <Quote size={17} />
-                  </button>
-                  <button
-                    className="button button-compact"
-                    type="button"
-                    aria-label="Alle KI-Verlaeufe loeschen"
-                    onClick={() => deleteAllThreads.mutate()}
-                    disabled={!threads.length || deleteAllThreads.isPending}
-                  >
-                    <Trash2 size={16} />
-                    <span>Alle</span>
-                  </button>
-                </div>
-              </div>
-              {deleteThread.isError ? <div className="inline-error">KI-Verlauf konnte nicht geloescht werden: {formatError(deleteThread.error)}</div> : null}
-              {deleteAllThreads.isError ? <div className="inline-error">KI-Verlaeufe konnten nicht geloescht werden: {formatError(deleteAllThreads.error)}</div> : null}
-              {followUp.isError ? <div className="inline-error">Folgefrage fehlgeschlagen: {formatError(followUp.error)}</div> : null}
-              <AiThreadList
+            <>
+              <NoteContextToolbar
+                historyOpen={historyOpen}
+                citationCount={citations.length}
+                threadCount={threadsQuery.data?.total ?? 0}
+                selectedCitation={selectedCitation}
+                citationListOpen={citationListOpen}
+                notePdfOpen={notePdfOpen}
                 threads={threads}
-                activeThreadId={activeThreadId}
-                followUpDrafts={followUpDrafts}
-                isSubmitting={followUp.isPending}
-                onActiveThreadChange={setActiveThreadId}
-                onDraftChange={(threadId, value) => setFollowUpDrafts((current) => ({ ...current, [threadId]: value }))}
-                onFollowUp={submitFollowUp}
-                onInsert={appendThreadAnswer}
-                onPreviewInsert={previewThreadAnswer}
-                onPreviewClear={clearInsertPreview}
-                onCollapseChange={(thread, collapsed) => updateThreadUi.mutate({ thread, collapsed })}
-                onDelete={(thread) => deleteThread.mutate(thread.id)}
-                deletingThreadId={deleteThread.isPending ? deleteThread.variables ?? "" : ""}
+                deleteAllPending={deleteAllThreads.isPending}
+                onShowSources={() => setHistoryOpen(false)}
+                onShowHistory={() => setHistoryOpen(true)}
+                onToggleCitationList={() => setCitationListOpen((current) => !current)}
+                onTogglePdf={() => setNotePdfOpen((current) => !current)}
+                onClearCitation={clearCitation}
+                onDeleteAllThreads={() => deleteAllThreads.mutate()}
               />
-            </section>
+              <section className="panel note-history-panel">
+                {deleteThread.isError ? <div className="inline-error">KI-Verlauf konnte nicht geloescht werden: {formatError(deleteThread.error)}</div> : null}
+                {deleteAllThreads.isError ? <div className="inline-error">KI-Verlaeufe konnten nicht geloescht werden: {formatError(deleteAllThreads.error)}</div> : null}
+                {followUp.isError ? <div className="inline-error">Folgefrage fehlgeschlagen: {formatError(followUp.error)}</div> : null}
+                <AiThreadList
+                  threads={threads}
+                  activeThreadId={activeThreadId}
+                  threadMeta={threadAnchorMeta}
+                  followUpDrafts={followUpDrafts}
+                  isSubmitting={followUp.isPending}
+                  onActiveThreadChange={setActiveThreadId}
+                  onLocateThread={activateThreadFromHistory}
+                  onDraftChange={(threadId, value) => setFollowUpDrafts((current) => ({ ...current, [threadId]: value }))}
+                  onFollowUp={(thread) => submitFollowUp(thread, "history")}
+                  onInsert={appendThreadAnswer}
+                  onPreviewInsert={previewThreadAnswer}
+                  onPreviewClear={clearInsertPreview}
+                  onCollapseChange={setThreadCollapsed}
+                  onInsertMessage={appendThreadMessage}
+                  onPreviewMessage={previewThreadMessage}
+                  onHideMessage={hideThreadMessage}
+                  onDelete={(thread) => deleteThread.mutate(thread.id)}
+                  deletingThreadId={deleteThread.isPending ? deleteThread.variables ?? "" : ""}
+                />
+              </section>
+            </>
           ) : (
             <>
-              <section className={`panel citation-panel ${citationListOpen ? "" : "citation-panel--compact"}`}>
-                <div className="panel-heading">
-                  <div>
-                    <span>Quellen</span>
-                    <strong>{citations.length}</strong>
-                  </div>
-                  <div className="button-row">
-                    <button
-                      className="icon-button"
-                      type="button"
-                      aria-label={citationListOpen ? "Quellenliste einklappen" : "Quellenliste ausklappen"}
-                      onClick={() => setCitationListOpen((current) => !current)}
-                    >
-                      {citationListOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
-                    </button>
-                    <button className="icon-button" type="button" aria-label={notePdfOpen ? "PDF einklappen" : "PDF anzeigen"} onClick={() => setNotePdfOpen((current) => !current)}>
-                      {notePdfOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
-                    </button>
-                    <button className="icon-button" type="button" aria-label="KI-Verlauf anzeigen" onClick={() => setHistoryOpen(true)}>
-                      <Sparkles size={17} />
-                    </button>
-                  </div>
-                </div>
-                {citationListOpen ? (
-                  <div className="list">
-                    {citations.map((citation) => (
-                      <button className="list-row note-citation-row" type="button" key={citation.id} onClick={() => openCitation(citation)}>
-                        <strong>{citation.title || citation.paper_id}</strong>
-                        <span>{citation.reference_text || citation.kind}</span>
-                        <small>{citation.paper_id}</small>
-                      </button>
-                    ))}
-                    {!citations.length ? <div className="muted-row">Keine Quellen in dieser Notiz</div> : null}
-                  </div>
-                ) : null}
-              </section>
-              {notePdfOpen ? (
-                <PdfPane
-                  url={selectedCitation ? api.paperPdfUrl(selectedCitation.paper_id, selectedCitation.title ?? "") : null}
-                  title={selectedCitation?.title ?? selectedCitation?.paper_id}
-                  evidences={activeEvidence}
-                  activeEvidenceIndex={0}
-                  onCollapse={() => setNotePdfOpen(false)}
-                />
-              ) : (
-                <button className="collapsed-panel-tab collapsed-panel-tab--horizontal" type="button" onClick={() => setNotePdfOpen(true)}>
-                  <PanelRightOpen size={17} />
-                  <span>PDF</span>
-                </button>
-              )}
+              <NoteContextToolbar
+                historyOpen={historyOpen}
+                citationCount={citations.length}
+                threadCount={threadsQuery.data?.total ?? 0}
+                selectedCitation={selectedCitation}
+                citationListOpen={citationListOpen}
+                notePdfOpen={notePdfOpen}
+                threads={threads}
+                deleteAllPending={deleteAllThreads.isPending}
+                onShowSources={() => setHistoryOpen(false)}
+                onShowHistory={() => setHistoryOpen(true)}
+                onToggleCitationList={() => setCitationListOpen((current) => !current)}
+                onTogglePdf={() => setNotePdfOpen((current) => !current)}
+                onClearCitation={clearCitation}
+                onDeleteAllThreads={() => deleteAllThreads.mutate()}
+              />
+              <div className="note-source-view" style={sourcePanelRows ? { gridTemplateRows: sourcePanelRows } : undefined}>
+                <section ref={citationPanelRef} className={`panel citation-panel ${citationListOpen ? "" : "citation-panel--compact"}`}>
+                  {citationListOpen ? (
+                    <div className="list">
+                      {citationRows.map(({ citation, badge, label, title, evidence }) => (
+                        <button
+                          className={`list-row note-citation-row ${selectedCitation?.id === citation.id ? "note-citation-row--active" : ""}`}
+                          type="button"
+                          key={citation.id}
+                          ref={(node) => {
+                            citationRowRefs.current[citation.id] = node;
+                          }}
+                          onClick={() => openCitation(citation)}
+                          aria-label={`Quelle ${badge} öffnen`}
+                          aria-pressed={selectedCitation?.id === citation.id}
+                        >
+                          <span className="note-citation-row__title">
+                            <span className="citation-badge">{badge}</span>
+                            <strong>{title}</strong>
+                          </span>
+                          <span>{evidence || label}</span>
+                          <small>
+                            {citation.paper_id}
+                            {label !== badge ? ` - ${label}` : ""}
+                          </small>
+                        </button>
+                      ))}
+                      {!citations.length ? <div className="muted-row">Keine Quellen in dieser Notiz</div> : null}
+                    </div>
+                  ) : (
+                    <div className="muted-row">Quellenliste eingeklappt</div>
+                  )}
+                </section>
+                {notePdfOpen ? (
+                  <PdfPane
+                    url={selectedCitation ? api.paperPdfUrl(selectedCitation.paper_id, selectedCitation.title ?? "") : null}
+                    title={selectedCitation?.title ?? selectedCitation?.paper_id}
+                    evidences={activeEvidence}
+                    activeEvidenceIndex={0}
+                    onCollapse={() => setNotePdfOpen(false)}
+                  />
+                ) : (
+                  <button className="collapsed-panel-tab collapsed-panel-tab--horizontal" type="button" onClick={() => setNotePdfOpen(true)}>
+                    <PanelRightOpen size={17} />
+                    <span>PDF</span>
+                  </button>
+                )}
+              </div>
             </>
           )}
         </aside>
@@ -1117,32 +1808,221 @@ export function NotesPage() {
   );
 }
 
+function ThreadAnchorMarker({
+  label,
+  thread,
+  placement,
+  open,
+  active,
+  style,
+  followUpDraft,
+  isSubmitting,
+  deleting,
+  onToggle,
+  onClose,
+  onDraftChange,
+  onFollowUp,
+  onDelete
+}: {
+  label: string;
+  thread: NoteAiThread;
+  placement: "left" | "right";
+  open: boolean;
+  active: boolean;
+  style?: CSSProperties;
+  followUpDraft: string;
+  isSubmitting: boolean;
+  deleting: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  onDraftChange: (value: string) => void;
+  onFollowUp: () => void;
+  onDelete: () => void;
+}) {
+  const messages = threadDisplayMessages(thread);
+  const context = shortThreadContext(thread.anchor_quote || thread.selected_text);
+  return (
+    <span className="textarea-thread-anchor-wrap" style={style}>
+      <button
+        className={`textarea-thread-anchor-button ${active ? "textarea-thread-anchor-button--active" : ""}`}
+        type="button"
+        aria-label={`KI-Notiz ${label} öffnen`}
+        aria-expanded={open}
+        title={context || "KI-Notiz"}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggle();
+        }}
+      >
+        {label}
+      </button>
+      {open ? (
+        <span className={`thread-anchor-popover thread-anchor-popover--${placement}`} role="dialog" aria-label={`KI-Notiz ${label}`}>
+          <span className="thread-anchor-popover__header">
+            <span>
+              <strong>{label}</strong>
+              <small>{context || "Markierter Bereich"}</small>
+            </span>
+            <span className="thread-anchor-popover__actions">
+              <button className="icon-button" type="button" aria-label="KI-Notiz einklappen" onMouseDown={(event) => event.preventDefault()} onClick={onClose}>
+                <ChevronDown size={16} />
+              </button>
+              <button className="icon-button" type="button" aria-label="KI-Notiz loeschen" disabled={deleting} onMouseDown={(event) => event.preventDefault()} onClick={onDelete}>
+                <Trash2 size={16} />
+              </button>
+            </span>
+          </span>
+          <span className="thread-anchor-messages">
+            {messages.map((message) => (
+              <span className={`thread-anchor-message thread-anchor-message--${message.role === "assistant" ? "assistant" : "user"}`} key={message.id}>
+                <small>{message.role === "assistant" ? "Antwort" : "Frage"}</small>
+                <span>{message.content}</span>
+              </span>
+            ))}
+          </span>
+          <form
+            className="thread-anchor-followup"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (followUpDraft.trim() && !isSubmitting) {
+                onFollowUp();
+              }
+            }}
+          >
+            <input
+              value={followUpDraft}
+              onChange={(event) => onDraftChange(event.target.value)}
+              onMouseDown={(event) => event.stopPropagation()}
+              placeholder="Weiterfragen"
+            />
+            <button className="button button-primary" type="submit" disabled={!followUpDraft.trim() || isSubmitting}>
+              Fragen
+            </button>
+          </form>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function NoteContextToolbar({
+  historyOpen,
+  citationCount,
+  threadCount,
+  selectedCitation,
+  citationListOpen,
+  notePdfOpen,
+  threads,
+  deleteAllPending,
+  onShowSources,
+  onShowHistory,
+  onToggleCitationList,
+  onTogglePdf,
+  onClearCitation,
+  onDeleteAllThreads
+}: {
+  historyOpen: boolean;
+  citationCount: number;
+  threadCount: number;
+  selectedCitation: NoteCitation | null;
+  citationListOpen: boolean;
+  notePdfOpen: boolean;
+  threads: NoteAiThread[];
+  deleteAllPending: boolean;
+  onShowSources: () => void;
+  onShowHistory: () => void;
+  onToggleCitationList: () => void;
+  onTogglePdf: () => void;
+  onClearCitation: () => void;
+  onDeleteAllThreads: () => void;
+}) {
+  return (
+    <div className="note-context-toolbar">
+      <div className="segmented note-context-tabs" aria-label="Kontextansicht">
+        <button type="button" className={!historyOpen ? "active" : ""} onClick={onShowSources}>
+          <Quote size={15} />
+          <span>Quellen</span>
+          <strong>{citationCount}</strong>
+        </button>
+        <button type="button" className={historyOpen ? "active" : ""} onClick={onShowHistory}>
+          <Sparkles size={15} />
+          <span>KI</span>
+          <strong>{threadCount}</strong>
+        </button>
+      </div>
+      <div className="note-context-actions">
+        {!historyOpen ? (
+          <>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={citationListOpen ? "Quellenliste einklappen" : "Quellenliste ausklappen"}
+              onClick={onToggleCitationList}
+            >
+              {citationListOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+            </button>
+            <button className="icon-button" type="button" aria-label={notePdfOpen ? "PDF einklappen" : "PDF anzeigen"} onClick={onTogglePdf}>
+              {notePdfOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+            </button>
+            <button className="button button-compact" type="button" onClick={onClearCitation} disabled={!selectedCitation} aria-label="Keine Quelle aktiv">
+              <X size={15} />
+              <span>Keine</span>
+            </button>
+          </>
+        ) : (
+          <button
+            className="button button-compact"
+            type="button"
+            aria-label="Alle KI-Verlaeufe loeschen"
+            onClick={onDeleteAllThreads}
+            disabled={!threads.length || deleteAllPending}
+          >
+            <Trash2 size={16} />
+            <span>Alle</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AiThreadList({
   threads,
   activeThreadId,
+  threadMeta,
   followUpDrafts,
   isSubmitting,
   onActiveThreadChange,
+  onLocateThread,
   onDraftChange,
   onFollowUp,
   onInsert,
   onPreviewInsert,
   onPreviewClear,
   onCollapseChange,
+  onInsertMessage,
+  onPreviewMessage,
+  onHideMessage,
   onDelete,
   deletingThreadId
 }: {
   threads: NoteAiThread[];
   activeThreadId: string;
+  threadMeta: Map<string, ThreadAnchorMeta>;
   followUpDrafts: Record<string, string>;
   isSubmitting: boolean;
   onActiveThreadChange: (threadId: string) => void;
+  onLocateThread: (threadId: string) => void;
   onDraftChange: (threadId: string, value: string) => void;
   onFollowUp: (thread: NoteAiThread) => void;
   onInsert: (thread: NoteAiThread) => void;
   onPreviewInsert: (thread: NoteAiThread) => void;
   onPreviewClear: () => void;
   onCollapseChange: (thread: NoteAiThread, collapsed: boolean) => void;
+  onInsertMessage: (thread: NoteAiThread, message: NoteAiMessage) => void;
+  onPreviewMessage: (thread: NoteAiThread, message: NoteAiMessage) => void;
+  onHideMessage: (thread: NoteAiThread, messageId: string) => void;
   onDelete: (thread: NoteAiThread) => void;
   deletingThreadId?: string;
 }) {
@@ -1153,21 +2033,28 @@ function AiThreadList({
     <div className="ai-thread-list">
       {threads.map((thread) => {
         const storedCollapsed = threadCollapsed(thread);
-        const collapsed = storedCollapsed || activeThreadId !== thread.id;
+        const collapsed = storedCollapsed;
         const answer = latestThreadAnswer(thread);
         const messages = threadDisplayMessages(thread);
         const context = shortThreadContext(thread.anchor_quote || thread.selected_text);
         const answerPreview = shortThreadContext(answer);
+        const meta = threadMeta.get(thread.id);
         return (
           <article
-            className={`note-thread-row ai-thread-card ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""}`}
+            className={`note-thread-row ai-thread-card ${meta ? "ai-thread-card--anchored" : ""} ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""}`}
             key={thread.id}
-            style={threadSizeStyle(thread)}
-            onFocus={() => onActiveThreadChange(thread.id)}
+            style={{ ...(meta ? evidenceColorVars(meta.colorIndex) : {}), ...threadSizeStyle(thread) }}
           >
             <div className="ai-thread-topline">
-              <button className="ai-thread-header" type="button" title={context || undefined} onClick={() => onActiveThreadChange(thread.id)}>
-                <strong>{thread.instruction}</strong>
+              <button className="ai-thread-header" type="button" title={context || undefined} onClick={() => onLocateThread(thread.id)}>
+                <span className="ai-thread-header-line">
+                  {meta ? (
+                    <span className="ai-thread-anchor-badge" aria-label={`KI-Notiz ${meta.label}`}>
+                      {meta.label}
+                    </span>
+                  ) : null}
+                  <strong>{thread.instruction}</strong>
+                </span>
               </button>
               <div className="ai-thread-actions">
                 <button
@@ -1178,7 +2065,7 @@ function AiThreadList({
                     onCollapseChange(thread, !collapsed);
                   }}
                 >
-                  {collapsed ? "Oeffnen" : "Einklappen"}
+                  {collapsed ? "Öffnen" : "Einklappen"}
                 </button>
                 <button
                   className="button button-compact"
@@ -1194,7 +2081,7 @@ function AiThreadList({
                   onBlur={onPreviewClear}
                   disabled={!answer}
                 >
-                  Einfuegen
+                  Einfügen
                 </button>
                 <button
                   className="icon-button icon-button--compact"
@@ -1219,8 +2106,37 @@ function AiThreadList({
                 <div className="ai-thread-messages">
                   {messages.map((message) => (
                     <div className={`ai-thread-message ai-thread-message--${message.role === "assistant" ? "assistant" : "user"}`} key={message.id}>
-                      <span>{message.role === "assistant" ? "KI" : "Du"}</span>
+                      <div className="ai-thread-message-topline">
+                        <span>{message.role === "assistant" ? "KI" : "Du"}</span>
+                      </div>
                       <p>{message.content}</p>
+                      {message.role === "assistant" ? (
+                        <div className="ai-thread-message-actions">
+                          <button
+                            className="button button-compact"
+                            type="button"
+                            onClick={() => onInsertMessage(thread, message)}
+                            onMouseEnter={() => onPreviewMessage(thread, message)}
+                            onMouseOver={() => onPreviewMessage(thread, message)}
+                            onMouseLeave={onPreviewClear}
+                            onPointerEnter={() => onPreviewMessage(thread, message)}
+                            onPointerOver={() => onPreviewMessage(thread, message)}
+                            onPointerLeave={onPreviewClear}
+                            onFocus={() => onPreviewMessage(thread, message)}
+                            onBlur={onPreviewClear}
+                          >
+                            Einfügen
+                          </button>
+                          <button
+                            className="icon-button icon-button--compact"
+                            type="button"
+                            aria-label="KI-Antwort ausblenden"
+                            onClick={() => onHideMessage(thread, message.id)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -1253,6 +2169,7 @@ function MarkdownPreview({
   previewRef,
   markdown,
   citations,
+  activeCitationId,
   onCitationClick,
   editable = false,
   onBlockChange
@@ -1260,16 +2177,17 @@ function MarkdownPreview({
   previewRef?: RefObject<HTMLElement>;
   markdown: string;
   citations: NoteCitation[];
+  activeCitationId?: string;
   onCitationClick: (citation: NoteCitation) => void;
   editable?: boolean;
-  onBlockChange?: (blockIndex: number, nextRaw: string) => void;
+  onBlockChange?: (blockIndex: number, nextRaw: string, expectedRaw?: string) => void;
 }) {
   const citationById = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
   const blocks = useMemo(() => splitMarkdownBlocks(markdown), [markdown]);
   return (
     <article ref={previewRef} className={`markdown-preview ${editable ? "markdown-preview--editable" : ""}`}>
       {blocks.map((block, index) => {
-        const rendered = renderBlock(block.raw, `${index}`, citationById, onCitationClick);
+        const rendered = renderBlock(block.raw, `${index}`, citationById, onCitationClick, activeCitationId ?? "");
         if (!editable || !rendered) {
           return rendered;
         }
@@ -1283,9 +2201,12 @@ function MarkdownPreview({
             suppressContentEditableWarning
             onBlur={(event) => {
               if (canEditBlock) {
-                const editedText = event.currentTarget.innerText;
+                const nextRaw = previewElementToMarkdown(block.raw, event.currentTarget);
+                if (nextRaw === block.raw) {
+                  return;
+                }
                 window.setTimeout(() => {
-                  onBlockChange?.(index, previewTextToMarkdown(block.raw, editedText));
+                  onBlockChange?.(index, nextRaw, block.raw);
                 }, 0);
               }
             }}
@@ -1303,7 +2224,7 @@ function MarkdownPreview({
   );
 }
 
-function renderBlock(block: string, key: string, citations: Map<string, NoteCitation>, onCitationClick: (citation: NoteCitation) => void) {
+function renderBlock(block: string, key: string, citations: Map<string, NoteCitation>, onCitationClick: (citation: NoteCitation) => void, activeCitationId = "") {
   const trimmed = block.trim();
   if (!trimmed) {
     return null;
@@ -1313,13 +2234,13 @@ function renderBlock(block: string, key: string, citations: Map<string, NoteCita
     return <img key={key} className="markdown-preview-image" alt={match?.[1] ?? ""} src={match?.[2]} />;
   }
   if (trimmed.startsWith("# ")) {
-    return <h1 key={key}>{renderInline(trimmed.slice(2), citations, onCitationClick)}</h1>;
+    return <h1 key={key}>{renderInline(trimmed.slice(2), citations, onCitationClick, activeCitationId)}</h1>;
   }
   if (trimmed.startsWith("## ")) {
-    return <h2 key={key}>{renderInline(trimmed.slice(3), citations, onCitationClick)}</h2>;
+    return <h2 key={key}>{renderInline(trimmed.slice(3), citations, onCitationClick, activeCitationId)}</h2>;
   }
   if (trimmed.startsWith(">")) {
-    return <blockquote key={key}>{renderInline(trimmed.replace(/^>\s?/gm, ""), citations, onCitationClick)}</blockquote>;
+    return <blockquote key={key}>{renderInline(trimmed.replace(/^>\s?/gm, ""), citations, onCitationClick, activeCitationId)}</blockquote>;
   }
   if (/^\|.+\|\n\|[-:|\s]+\|/.test(trimmed)) {
     const rows = trimmed.split("\n").filter((line) => line.trim().startsWith("|"));
@@ -1330,7 +2251,7 @@ function renderBlock(block: string, key: string, citations: Map<string, NoteCita
             <tr key={`${key}-${rowIndex}`}>
               {row.split("|").slice(1, -1).map((cell, cellIndex) => {
                 const Tag = rowIndex === 0 ? "th" : "td";
-                return <Tag key={`${key}-${rowIndex}-${cellIndex}`}>{renderInline(cell.trim(), citations, onCitationClick)}</Tag>;
+                return <Tag key={`${key}-${rowIndex}-${cellIndex}`}>{renderInline(cell.trim(), citations, onCitationClick, activeCitationId)}</Tag>;
               })}
             </tr>
           ))}
@@ -1342,22 +2263,31 @@ function renderBlock(block: string, key: string, citations: Map<string, NoteCita
     return (
       <ul key={key}>
         {trimmed.split("\n").map((line, itemIndex) => (
-          <li key={`${key}-${itemIndex}`}>{renderInline(line.replace(/^- /, ""), citations, onCitationClick)}</li>
+          <li key={`${key}-${itemIndex}`}>{renderInline(line.replace(/^- /, ""), citations, onCitationClick, activeCitationId)}</li>
         ))}
       </ul>
     );
   }
-  return <p key={key}>{renderInline(trimmed, citations, onCitationClick)}</p>;
+  return <p key={key}>{renderInline(trimmed, citations, onCitationClick, activeCitationId)}</p>;
 }
 
-function renderInline(text: string, citations: Map<string, NoteCitation>, onCitationClick: (citation: NoteCitation) => void) {
+function renderInline(text: string, citations: Map<string, NoteCitation>, onCitationClick: (citation: NoteCitation) => void, activeCitationId = "") {
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|==[^=]+==|<mark(?:\s+[^>]*)?>.*?<\/mark>|<span style="color:[^"]+">.*?<\/span>|\[[^\]]+\]\([^)]+\))/g);
   return parts.map((part, index) => {
     const citationMatch = /^\[([^\]]+)\]\(sciencekg:\/\/citation\/([^)]+)\)$/.exec(part);
     if (citationMatch) {
       const citation = citations.get(citationMatch[2]);
       return (
-        <button key={`${part}-${index}`} type="button" className="citation-link citation-link--mapped" onClick={() => citation && onCitationClick(citation)}>
+        <button
+          key={`${part}-${index}`}
+          type="button"
+          className={`citation-link citation-link--mapped ${citationMatch[2] === activeCitationId ? "citation-link--active" : ""}`}
+          contentEditable={false}
+          data-citation-id={citationMatch[2]}
+          data-citation-label={citationMatch[1]}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => citation && onCitationClick(citation)}
+        >
           {citationMatch[1]}
         </button>
       );
@@ -1365,7 +2295,7 @@ function renderInline(text: string, citations: Map<string, NoteCitation>, onCita
     const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
     if (linkMatch) {
       return (
-        <a key={`${part}-${index}`} href={linkMatch[2]} target="_blank" rel="noreferrer">
+        <a key={`${part}-${index}`} href={linkMatch[2]} target="_blank" rel="noreferrer" data-link-href={linkMatch[2]}>
           {linkMatch[1]}
         </a>
       );
@@ -1387,10 +2317,89 @@ function renderInline(text: string, citations: Map<string, NoteCitation>, onCita
     }
     const colorMatch = /^<span style="color:([^"]+)">(.*)<\/span>$/.exec(part);
     if (colorMatch) {
-      return <span key={`${part}-${index}`} style={{ color: colorMatch[1] }}>{colorMatch[2]}</span>;
+      return <span key={`${part}-${index}`} style={{ color: colorMatch[1] }} data-color={colorMatch[1]}>{colorMatch[2]}</span>;
     }
     return <span key={`${part}-${index}`}>{part}</span>;
   });
+}
+
+function previewElementToMarkdown(original: string, root: HTMLElement) {
+  const directChild = Array.from(root.children).find((child): child is HTMLElement => child instanceof HTMLElement);
+  if (!directChild) {
+    return previewTextToMarkdown(original, root.innerText);
+  }
+  const tag = directChild.tagName.toLowerCase();
+  const originalTrimmed = original.trim();
+  if (tag === "h1") {
+    return `# ${firstLine(serializePreviewInline(directChild))}`;
+  }
+  if (tag === "h2") {
+    return `## ${firstLine(serializePreviewInline(directChild))}`;
+  }
+  if (tag === "blockquote") {
+    return serializePreviewInline(directChild)
+      .split(/\n+/)
+      .map((line) => `> ${line}`)
+      .join("\n");
+  }
+  if (tag === "ul") {
+    const items = Array.from(directChild.querySelectorAll(":scope > li"));
+    if (items.length) {
+      return items.map((item) => `- ${serializePreviewInline(item).replace(/^[-*+]\s+/, "")}`).join("\n");
+    }
+  }
+  if (tag === "p") {
+    return serializePreviewInline(directChild).trimEnd();
+  }
+  if (originalTrimmed.startsWith("# ") || originalTrimmed.startsWith("## ") || originalTrimmed.startsWith(">") || /^- /m.test(originalTrimmed)) {
+    return previewTextToMarkdown(original, root.innerText);
+  }
+  return serializePreviewInline(root).trimEnd();
+}
+
+function serializePreviewInline(node: Node): string {
+  return Array.from(node.childNodes).map(serializePreviewNode).join("").replace(/\u00a0/g, " ");
+}
+
+function serializePreviewNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? "";
+  }
+  if (!(node instanceof HTMLElement)) {
+    return "";
+  }
+  const tag = node.tagName.toLowerCase();
+  const inner = serializePreviewInline(node);
+  if (tag === "br") {
+    return "\n";
+  }
+  if (tag === "button" && node.dataset.citationId) {
+    const label = (node.dataset.citationLabel || node.innerText || "Quelle").trim();
+    return `[${label}](sciencekg://citation/${node.dataset.citationId})`;
+  }
+  if (tag === "a") {
+    const href = node.dataset.linkHref || node.getAttribute("href") || "";
+    return href ? `[${inner}](${href})` : inner;
+  }
+  if (tag === "strong" || tag === "b") {
+    return `**${inner}**`;
+  }
+  if (tag === "em" || tag === "i") {
+    return `*${inner}*`;
+  }
+  if (tag === "code") {
+    return `\`${inner}\``;
+  }
+  if (tag === "mark") {
+    return `==${inner}==`;
+  }
+  if (tag === "span" && (node.dataset.color || node.style.color)) {
+    return `<span style="color:${node.dataset.color || node.style.color}">${inner}</span>`;
+  }
+  if (tag === "div" || tag === "p") {
+    return inner;
+  }
+  return inner;
 }
 
 function absoluteUrl(value: string) {
@@ -1404,18 +2413,86 @@ function stripHighlightMarkers(value: string) {
   return value.replace(/^==([\s\S]*)==$/, "$1");
 }
 
+function parseMarkdownCitationRefs(markdown: string): CitationMarkdownRef[] {
+  const refs: CitationMarkdownRef[] = [];
+  const pattern = /\[([^\]]+)\]\(sciencekg:\/\/citation\/([^)]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(markdown)) !== null) {
+    const label = match[1].trim();
+    refs.push({
+      id: match[2],
+      label,
+      badge: citationBadgeFromLabel(label),
+      title: citationTitleFromLabel(label),
+      start: match.index,
+      end: match.index + match[0].length
+    });
+  }
+  return refs;
+}
+
+function citationRefAtPosition(refs: CitationMarkdownRef[], position: number) {
+  return refs.find((ref) => position >= ref.start && position <= ref.end) ?? null;
+}
+
+function threadAnchorRange(thread: NoteAiThread, markdown: string) {
+  const quote = stripHighlightMarkers(thread.anchor_quote || thread.selected_text || "").trim();
+  const anchorStart = thread.anchor_start === null || thread.anchor_start === undefined ? NaN : Number(thread.anchor_start);
+  const anchorEnd = thread.anchor_end === null || thread.anchor_end === undefined ? NaN : Number(thread.anchor_end);
+  if (Number.isFinite(anchorStart) && Number.isFinite(anchorEnd) && anchorStart >= 0 && anchorEnd > anchorStart && anchorEnd <= markdown.length) {
+    if (!quote || markdown.slice(anchorStart, anchorEnd).includes(quote) || quote.includes(markdown.slice(anchorStart, anchorEnd).trim())) {
+      return { start: anchorStart, end: anchorEnd };
+    }
+  }
+  if (quote) {
+    const index = markdown.indexOf(quote);
+    if (index >= 0) {
+      return { start: index, end: index + quote.length };
+    }
+  }
+  return null;
+}
+
+function threadAnchorPlacement(markdown: string, index: number): "left" | "right" {
+  const lineStart = markdown.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
+  return index - lineStart > 48 ? "left" : "right";
+}
+
+function citationBadgeFromLabel(label: string) {
+  return label.match(/\bZ\d+\b/i)?.[0].toUpperCase() ?? "Quelle";
+}
+
+function citationTitleFromLabel(label: string) {
+  const stripped = label.replace(/^\s*Z\d+\s*[-:]\s*/i, "").trim();
+  return stripped || label.trim();
+}
+
+function shortText(value: string | null | undefined, max = 88) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
+}
+
+function estimatedTextareaScrollTop(markdown: string, index: number, node: HTMLTextAreaElement) {
+  const lineHeight = parseFloat(window.getComputedStyle(node).lineHeight) || 22;
+  const linesBefore = markdown.slice(0, Math.max(0, index)).split("\n").length - 1;
+  return Math.max(0, linesBefore * lineHeight - node.clientHeight * 0.32);
+}
+
 function latestThreadAnswer(thread: NoteAiThread) {
-  const messages = thread.messages?.length ? thread.messages : legacyThreadMessages(thread);
+  const messages = visibleThreadMessages(thread);
   const answer = [...messages].reverse().find((message) => message.role === "assistant")?.content;
-  return (answer || thread.replacement_text || thread.response_text || "").trim();
+  return (answer || "").trim();
 }
 
 function threadDisplayMessages(thread: NoteAiThread) {
-  const messages = thread.messages?.length ? thread.messages : legacyThreadMessages(thread);
+  const hiddenIds = hiddenThreadMessageIds(thread);
+  const messages = visibleThreadMessages(thread);
   const cleanedMessages = messages.filter((message) => message.role !== "assistant" || message.content.trim());
   const answer = (thread.replacement_text || thread.response_text || "").trim();
   const hasAssistantText = cleanedMessages.some((message) => message.role === "assistant" && message.content.trim());
-  if (!answer || hasAssistantText) {
+  const hiddenStoredAssistant = Boolean(thread.messages?.some((message) => message.role === "assistant" && hiddenIds.has(message.id)));
+  const fallbackId = `${thread.id}:assistant:fallback`;
+  if (!answer || hasAssistantText || hiddenStoredAssistant || hiddenIds.has(fallbackId)) {
     return cleanedMessages;
   }
   return [
@@ -1429,6 +2506,19 @@ function threadDisplayMessages(thread: NoteAiThread) {
       created_timestamp: thread.updated_timestamp ?? thread.created_timestamp
     }
   ];
+}
+
+function visibleThreadMessages(thread: NoteAiThread) {
+  const hiddenIds = hiddenThreadMessageIds(thread);
+  return (thread.messages?.length ? thread.messages : legacyThreadMessages(thread)).filter((message) => !hiddenIds.has(message.id));
+}
+
+function hiddenThreadMessageIds(thread: NoteAiThread) {
+  const value = thread.ui_state?.hidden_message_ids;
+  if (!Array.isArray(value)) {
+    return new Set<string>();
+  }
+  return new Set(value.map((item) => String(item)));
 }
 
 function threadCollapsed(thread: NoteAiThread) {
@@ -1468,6 +2558,30 @@ function threadSizeStyle(thread: NoteAiThread) {
   };
 }
 
+function assignMissingThreadMeta(current: Record<string, ThreadAnchorMeta>, threadIds: string[]) {
+  let next = current;
+  let maxNumber = Object.values(current).reduce((max, meta) => Math.max(max, threadMetaNumber(meta)), 0);
+  for (const threadId of threadIds) {
+    if (next[threadId]) {
+      continue;
+    }
+    if (next === current) {
+      next = { ...current };
+    }
+    maxNumber += 1;
+    next[threadId] = {
+      label: `N${maxNumber}`,
+      colorIndex: maxNumber - 1
+    };
+  }
+  return next;
+}
+
+function threadMetaNumber(meta: ThreadAnchorMeta) {
+  const match = /^N(\d+)$/i.exec(meta.label);
+  return match ? Number(match[1]) : meta.colorIndex + 1;
+}
+
 function uiStateKey(key: string) {
   return `sciencekg.notes.ui.${key}`;
 }
@@ -1484,6 +2598,51 @@ function loadBooleanUiState(key: string, fallback: boolean) {
 function saveBooleanUiState(key: string, value: boolean) {
   try {
     window.localStorage.setItem(uiStateKey(key), String(value));
+  } catch {
+    // Local storage can be unavailable in private/browser test contexts.
+  }
+}
+
+function loadNumberUiState(key: string, fallback: number) {
+  try {
+    const value = Number(window.localStorage.getItem(uiStateKey(key)));
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveNumberUiState(key: string, value: number) {
+  try {
+    window.localStorage.setItem(uiStateKey(key), String(value));
+  } catch {
+    // Local storage can be unavailable in private/browser test contexts.
+  }
+}
+
+function loadThreadMetaUiState(key: string, fallback: Record<string, ThreadAnchorMeta>) {
+  try {
+    const raw = window.localStorage.getItem(uiStateKey(key));
+    if (!raw) {
+      return fallback;
+    }
+    const parsed = JSON.parse(raw) as Record<string, ThreadAnchorMeta>;
+    if (!parsed || typeof parsed !== "object") {
+      return fallback;
+    }
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([, value]) => value && typeof value.label === "string" && Number.isFinite(value.colorIndex))
+        .map(([threadId, value]) => [threadId, { label: value.label, colorIndex: value.colorIndex }])
+    );
+  } catch {
+    return fallback;
+  }
+}
+
+function saveThreadMetaUiState(key: string, value: Record<string, ThreadAnchorMeta>) {
+  try {
+    window.localStorage.setItem(uiStateKey(key), JSON.stringify(value));
   } catch {
     // Local storage can be unavailable in private/browser test contexts.
   }

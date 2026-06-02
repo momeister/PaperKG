@@ -1,12 +1,15 @@
+import type { CSSProperties, ReactNode } from "react";
+
 export type TextHighlightRange = {
   start: number;
   end: number;
   className?: string;
+  style?: CSSProperties;
 };
 
 export type TextHighlightInsertion = {
   index: number;
-  content: string;
+  content: ReactNode;
   className?: string;
 };
 
@@ -16,9 +19,10 @@ type TextareaHighlightLayerProps = {
   insertions?: TextHighlightInsertion[];
   scrollTop?: number;
   scrollLeft?: number;
+  interactive?: boolean;
 };
 
-export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scrollTop = 0, scrollLeft = 0 }: TextareaHighlightLayerProps) {
+export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scrollTop = 0, scrollLeft = 0, interactive = false }: TextareaHighlightLayerProps) {
   const normalizedRanges = ranges
     .map((range) => ({
       ...range,
@@ -34,7 +38,7 @@ export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scr
   ).sort((left, right) => left - right);
 
   return (
-    <div className="textarea-highlight-layer" aria-hidden="true">
+    <div className={`textarea-highlight-layer ${interactive ? "textarea-highlight-layer--interactive" : ""}`} aria-hidden={interactive ? undefined : true}>
       <div style={{ transform: `translate(${-scrollLeft}px, -${scrollTop}px)` }}>
         {points.map((point, index) => {
           const nextPoint = points[index + 1];
@@ -47,7 +51,7 @@ export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scr
                   {insertion.content}
                 </span>
               ))}
-              {nextPoint !== undefined ? renderSegment(text.slice(point, nextPoint), range?.className) : null}
+              {nextPoint !== undefined ? renderSegment(text.slice(point, nextPoint), range?.className, range?.style) : null}
             </span>
           );
         })}
@@ -56,9 +60,15 @@ export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scr
   );
 }
 
-function renderSegment(value: string, className?: string) {
+function renderSegment(value: string, className?: string, style?: CSSProperties) {
   if (!value) {
     return null;
   }
-  return className ? <mark className={className}>{value}</mark> : <span>{value}</span>;
+  return className ? (
+    <mark className={className} style={style}>
+      {value}
+    </mark>
+  ) : (
+    <span>{value}</span>
+  );
 }
