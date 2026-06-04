@@ -17,6 +17,7 @@ type PdfDocument = {
 type HighlightBox = {
   id: string;
   evidenceIndex: number;
+  colorIndex: number;
   left: number;
   top: number;
   width: number;
@@ -131,11 +132,14 @@ export function PdfPane({
     };
   }, [url]);
 
-  const evidenceQueries = useMemo(() => evidences.map(buildHighlightQuery), [evidences]);
+  const evidenceSignature = evidenceListSignature(evidences);
+  const evidenceQueries = useMemo(() => evidences.map(buildHighlightQuery), [evidenceSignature]);
   const searchQuery = useMemo(() => buildSearchQuery(searchTerm), [searchTerm]);
   const showingSearch = Boolean(searchTerm.trim());
   const visibleHighlightIndex = showingSearch ? -1 : activeEvidenceIndex;
   const activeEvidence = evidences[activeEvidenceIndex];
+  const activeEvidenceColorIndex = evidenceColorIndex(activeEvidence, activeEvidenceIndex);
+  const visibleHighlightColorIndex = showingSearch ? visibleHighlightIndex : activeEvidenceColorIndex;
   const activePages = matches[visibleHighlightIndex] ?? [];
   const evidencePages = matches[activeEvidenceIndex] ?? [];
   const activeQuery = evidenceQueries[activeEvidenceIndex] ?? { phrases: [], terms: [] };
@@ -144,7 +148,7 @@ export function PdfPane({
 
   useEffect(() => {
     setMatches({});
-  }, [evidenceQueries, searchTerm]);
+  }, [evidenceSignature, searchTerm, url]);
 
   useEffect(() => {
     const node = canvasWrapRef.current;
@@ -272,7 +276,7 @@ export function PdfPane({
       </div>
 
       {evidences.length ? (
-        <div className="pdf-evidence-nav" style={evidenceColorVars(activeEvidenceIndex)}>
+        <div className="pdf-evidence-nav" style={evidenceColorVars(activeEvidenceColorIndex)}>
           <button className="icon-button" type="button" aria-label="Vorherige Zitation" onClick={() => stepEvidence(-1)}>
             <ChevronLeft size={18} />
           </button>
@@ -349,6 +353,7 @@ export function PdfPane({
                 fitMode={fitMode}
                 evidenceQuery={visibleQuery}
                 activeEvidenceIndex={visibleHighlightIndex}
+                evidenceColorIndex={visibleHighlightColorIndex}
                 targetPage={evidenceTargetPage}
                 onMatch={updateMatch}
                 setPageRef={(node) => {
@@ -366,7 +371,7 @@ export function PdfPane({
 
       {error ? <div className="inline-error">{error}</div> : null}
       {activeEvidence ? (
-        <div className="excerpt-panel" style={evidenceColorVars(activeEvidenceIndex)}>
+        <div className="excerpt-panel" style={evidenceColorVars(activeEvidenceColorIndex)}>
           <span>Aktive Textstelle</span>
           <p>{highlightTerms(activeEvidence.pdf_excerpt || activeEvidence.reference_text, activeQuery.terms)}</p>
         </div>
@@ -383,6 +388,7 @@ function PdfPage({
   fitMode,
   evidenceQuery,
   activeEvidenceIndex,
+  evidenceColorIndex,
   targetPage,
   onMatch,
   setPageRef
@@ -394,6 +400,7 @@ function PdfPage({
   fitMode: "width" | "page";
   evidenceQuery: HighlightQuery;
   activeEvidenceIndex: number;
+  evidenceColorIndex: number;
   targetPage?: number | null;
   onMatch: (evidenceIndex: number, pageNumber: number, hasMatch: boolean) => void;
   setPageRef: (node: HTMLDivElement | null) => void;
@@ -477,7 +484,7 @@ function PdfPage({
         return;
       }
 
-      const match = findPageMatch(textContent.items, evidenceQuery, viewport, activeEvidenceIndex);
+      const match = findPageMatch(textContent.items, evidenceQuery, viewport, activeEvidenceIndex, evidenceColorIndex);
       onMatch(activeEvidenceIndex, pageNumber, match.hasMatch);
       setBoxes(targetPage && pageNumber !== targetPage ? [] : match.boxes);
     }
@@ -487,7 +494,7 @@ function PdfPage({
       cancelled = true;
       renderTask?.cancel?.();
     };
-  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, activeEvidenceIndex, targetPage, onMatch, isNearViewport]);
+  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, activeEvidenceIndex, evidenceColorIndex, targetPage, onMatch, isNearViewport]);
 
   return (
     <div className="pdf-page" ref={combinedPageRef} style={{ width: size.width || undefined }}>
@@ -499,7 +506,7 @@ function PdfPage({
             <span
               key={box.id}
               className={`pdf-highlight ${box.evidenceIndex === activeEvidenceIndex ? "pdf-highlight--active" : ""}`}
-              style={{ left: box.left, top: box.top, width: box.width, height: box.height, ...evidenceColorVars(box.evidenceIndex) }}
+              style={{ left: box.left, top: box.top, width: box.width, height: box.height, ...evidenceColorVars(box.colorIndex) }}
               aria-hidden="true"
             />
           ))}
@@ -509,7 +516,7 @@ function PdfPage({
   );
 }
 
-function textItemBox(item: unknown, viewport: any, itemIndex: number, evidenceIndex: number): HighlightBox | null {
+function textItemBox(item: unknown, viewport: any, itemIndex: number, evidenceIndex: number, colorIndex = evidenceIndex): HighlightBox | null {
   const textItem = item as { transform?: number[]; width?: number; height?: number; str?: string };
   if (!textItem.transform) {
     return null;
@@ -522,6 +529,7 @@ function textItemBox(item: unknown, viewport: any, itemIndex: number, evidenceIn
   return {
     id: `${evidenceIndex}-${itemIndex}-${left}-${top}`,
     evidenceIndex,
+    colorIndex,
     left: Math.max(0, left - 1),
     top: Math.max(0, top - 2),
     width: width + 3,
@@ -529,17 +537,17 @@ function textItemBox(item: unknown, viewport: any, itemIndex: number, evidenceIn
   };
 }
 
-function findPageMatch(textItems: unknown[], query: HighlightQuery, viewport: any, evidenceIndex: number) {
+function findPageMatch(textItems: unknown[], query: HighlightQuery, viewport: any, evidenceIndex: number, colorIndex = evidenceIndex) {
   const indexed = indexTextItems(textItems);
   if (!indexed.text || (!query.phrases.length && !query.terms.length)) {
     return { hasMatch: false, boxes: [] as HighlightBox[] };
   }
 
-  const phraseBoxes = boxesForPhraseMatches(indexed.items, indexed.text, query.phrases, viewport, evidenceIndex);
+  const phraseBoxes = boxesForPhraseMatches(indexed.items, indexed.text, query.phrases, viewport, evidenceIndex, colorIndex);
   if (phraseBoxes.length) {
     const supplementalTerms = query.terms.filter((term) => indexed.text.includes(term)).filter(isStrongFallbackTerm).slice(0, 4);
-    const supplementalBoxes = boxesForTerms(indexed.items, supplementalTerms, viewport, evidenceIndex, Math.max(0, 30 - phraseBoxes.length));
-    return { hasMatch: true, boxes: uniqueBoxes([...phraseBoxes, ...supplementalBoxes]).slice(0, 34) };
+    const supplementalBoxes = boxesForTerms(indexed.items, supplementalTerms, viewport, evidenceIndex, colorIndex, Math.max(0, 30 - phraseBoxes.length));
+    return { hasMatch: true, boxes: mergeOverlappingBoxes(uniqueBoxes([...phraseBoxes, ...supplementalBoxes])).slice(0, 34) };
   }
 
   const matchedTerms = query.terms.filter((term) => indexed.text.includes(term));
@@ -554,7 +562,7 @@ function findPageMatch(textItems: unknown[], query: HighlightQuery, viewport: an
 
   const anchors = strongTerms.slice(0, 5);
   const fallbackTerms = anchors.length ? anchors : matchedTerms.slice(0, 3);
-  return { hasMatch: true, boxes: boxesForTerms(indexed.items, fallbackTerms, viewport, evidenceIndex, 14) };
+  return { hasMatch: true, boxes: mergeOverlappingBoxes(boxesForTerms(indexed.items, fallbackTerms, viewport, evidenceIndex, colorIndex, 14)) };
 }
 
 function indexTextItems(items: unknown[]): { items: IndexedTextItem[]; text: string } {
@@ -580,7 +588,8 @@ function boxesForPhraseMatches(
   pageText: string,
   phrases: string[],
   viewport: any,
-  evidenceIndex: number
+  evidenceIndex: number,
+  colorIndex = evidenceIndex
 ): HighlightBox[] {
   const boxes: HighlightBox[] = [];
   for (const phrase of phrases) {
@@ -592,10 +601,10 @@ function boxesForPhraseMatches(
     while (position >= 0) {
       const end = position + normalizedPhrase.length;
       for (const item of items) {
-        if (item.end < position || item.start > end) {
+        if (item.end <= position || item.start >= end) {
           continue;
         }
-        const box = textItemBox(item.item, viewport, item.index, evidenceIndex);
+        const box = textItemBox(item.item, viewport, item.index, evidenceIndex, colorIndex);
         if (box) {
           boxes.push(box);
         }
@@ -614,6 +623,7 @@ function boxesForTerms(
   terms: string[],
   viewport: any,
   evidenceIndex: number,
+  colorIndex: number,
   limit: number
 ): HighlightBox[] {
   if (!terms.length || limit <= 0) {
@@ -624,7 +634,7 @@ function boxesForTerms(
     if (!terms.some((term) => item.text.includes(term))) {
       continue;
     }
-    const box = textItemBox(item.item, viewport, item.index, evidenceIndex);
+    const box = textItemBox(item.item, viewport, item.index, evidenceIndex, colorIndex);
     if (box) {
       boxes.push(box);
     }
@@ -649,16 +659,68 @@ function uniqueBoxes(boxes: HighlightBox[]) {
   return output;
 }
 
+function mergeOverlappingBoxes(boxes: HighlightBox[]) {
+  const ordered = [...boxes].sort((left, right) => left.top - right.top || left.left - right.left);
+  const merged: HighlightBox[] = [];
+  for (const box of ordered) {
+    const target = merged.find((candidate) => boxesTouch(candidate, box));
+    if (!target) {
+      merged.push({ ...box });
+      continue;
+    }
+    const left = Math.min(target.left, box.left);
+    const top = Math.min(target.top, box.top);
+    const right = Math.max(target.left + target.width, box.left + box.width);
+    const bottom = Math.max(target.top + target.height, box.top + box.height);
+    target.left = left;
+    target.top = top;
+    target.width = right - left;
+    target.height = bottom - top;
+  }
+  return merged;
+}
+
+function boxesTouch(left: HighlightBox, right: HighlightBox) {
+  const pad = 2;
+  return (
+    left.left <= right.left + right.width + pad &&
+    left.left + left.width + pad >= right.left &&
+    left.top <= right.top + right.height + pad &&
+    left.top + left.height + pad >= right.top
+  );
+}
+
 function buildHighlightQuery(evidence: VerificationEvidence): HighlightQuery {
   const explicit = (evidence.matched_terms ?? []).map(normalizeText).filter(Boolean);
+  const excerpt = compactText(evidence.pdf_excerpt);
   const reference = compactText(evidence.reference_text);
-  const referenceTerms = extractTerms(reference);
-  const phrases = extractPhrases(reference, 160).slice(0, 3);
-  const terms = extractTerms(`${explicit.join(" ")} ${reference}`).filter(isAnchorTerm);
+  const referenceTerms = extractTerms(`${excerpt} ${reference}`);
+  const phrases = [...extractPhrases(excerpt, 180), ...extractPhrases(reference, 160)].slice(0, 5);
+  const terms = extractTerms(`${explicit.join(" ")} ${excerpt} ${reference}`).filter(isAnchorTerm);
   return {
     phrases: Array.from(new Set(phrases)).slice(0, 4),
     terms: Array.from(new Set([...explicit, ...referenceTerms, ...terms])).filter(isAnchorTerm).slice(0, 18)
   };
+}
+
+function evidenceListSignature(evidences: VerificationEvidence[]) {
+  return evidences
+    .map((evidence) =>
+      [
+        evidence.paper_id,
+        evidence.kind,
+        evidence.evidence_index ?? "",
+        evidence.reference_text,
+        evidence.pdf_excerpt,
+        (evidence.matched_terms ?? []).join(",")
+      ].join("|")
+    )
+    .join("\u001f");
+}
+
+function evidenceColorIndex(evidence: VerificationEvidence | undefined, fallbackIndex: number) {
+  const index = Number(evidence?.evidence_index);
+  return Number.isFinite(index) ? index : fallbackIndex;
 }
 
 function buildSearchQuery(term: string): HighlightQuery {

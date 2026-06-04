@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -135,6 +136,133 @@ def test_product_projects_papers_dashboard_review_and_graph(tmp_path) -> None:
     assert deleted.json()["deleted"] is True
     projects_after_delete = client.get("/projects", params=common)
     assert projects_after_delete.json()["projects"] == []
+
+
+def test_product_papers_include_pdf_display_fallbacks(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / "Sparse_Science_Paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    with MetadataDB(str(db_path)) as db:
+        db.insert_paper(
+            {
+                "id": "sparse-paper",
+                "source": "fixture",
+                "source_id": "sparse-paper",
+                "title": "   ",
+                "year": 2026,
+                "pdf_url": str(pdf_path),
+                "has_full_text": True,
+            }
+        )
+
+    client = TestClient(product_main.app)
+    response = client.get(
+        "/papers",
+        params={
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+            "has_full_text": True,
+        },
+    )
+
+    assert response.status_code == 200
+    paper = response.json()["items"][0]
+    assert paper["display_title"] == "Sparse Science Paper"
+    assert paper["pdf_filename"] == "Sparse_Science_Paper.pdf"
+    assert paper["pdf_path"] == str(pdf_path)
+
+
+def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    with MetadataDB(str(db_path)) as db:
+        db.ensure_paper_record("paper-1", title="Phase Three Paper", pdf_path=str(pdf_path))
+
+    class FakeParser:
+        def parse(self, file_path, paper_id, force_parser=None):
+            assert Path(file_path) == pdf_path
+            return SimpleNamespace(
+                paper_id=paper_id,
+                parser="marker",
+                text="Phase Three Paper\n\nGraph Transformer methods produce claims.",
+                page_count=2,
+                metadata={"extraction_method": "fake"},
+            )
+
+    class FakePipeline:
+        def process(self, paper_id, text, provider=None, overrides=None, link_concepts=True):
+            assert paper_id == "paper-1"
+            assert "Graph Transformer" in text
+            assert overrides["model"] == "fake-model"
+            return SimpleNamespace(
+                paper_id=paper_id,
+                paper_type="research",
+                concepts=[{"label": "Graph Transformer", "confidence": 0.95, "review_status": "approved"}],
+                methods=[{"label": "Attention", "confidence": 0.9, "review_status": "approved"}],
+                concept_candidates=[],
+                method_candidates=[],
+                relations=[],
+                claims=[{"statement": "Graph Transformer methods produce claims."}],
+                cross_domain_hints=[],
+                terminology_conflicts=[],
+                temporal_coverage={"paper_year": 2026},
+                mathematical_content={"has_formulas": False},
+                language_detected="en",
+                quality_warnings=[],
+                metadata_status="valid",
+                blocking_errors=[],
+                candidate_count=0,
+                extraction_diagnostics={"mode": "fake"},
+                raw_response="{}",
+            )
+
+    monkeypatch.setattr(product_main, "parser_router", FakeParser())
+    monkeypatch.setattr(product_main, "extraction_pipeline", FakePipeline())
+    client = TestClient(product_main.app)
+
+    library = client.get("/extraction/library", params={"metadata_db_path": str(db_path), "pdf_base_dir": str(pdf_dir)})
+    assert library.status_code == 200
+    assert library.json()["items"][0]["paper_id"] == "paper-1"
+
+    parsed = client.post(
+        "/extraction/parse",
+        json={
+            "paper_id": "paper-1",
+            "pdf_path": str(pdf_path),
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+        },
+    )
+    assert parsed.status_code == 200
+    assert parsed.json()["page_count"] == 2
+    assert "Graph Transformer" in parsed.json()["text"]
+
+    extracted = client.post(
+        "/extraction/extract",
+        json={
+            "paper_id": "paper-1",
+            "text": parsed.json()["text"],
+            "provider": "fake",
+            "model": "fake-model",
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+        },
+    )
+    assert extracted.status_code == 200
+    payload = extracted.json()
+    assert payload["status"] == "success"
+    assert payload["result"]["concepts"][0]["label"] == "Graph Transformer"
+
+    history = client.get("/extraction/history", params={"metadata_db_path": str(db_path), "paper_id": "paper-1"})
+    assert history.status_code == 200
+    assert history.json()["items"][0]["concepts"][0]["label"] == "Graph Transformer"
 
 
 def test_product_upload_models_jobs_and_harvest(tmp_path, monkeypatch) -> None:
@@ -435,3 +563,44 @@ def test_note_ai_retries_empty_response_before_storing_thread(tmp_path, monkeypa
     assert router.overrides[1]["extra"]["chat_template_kwargs"]["thinking"] is False
     assert response.json()["replacement_text"].startswith("Der Abschnitt sagt")
     assert response.json()["thread"]["messages"][1]["content"].startswith("Der Abschnitt sagt")
+
+
+def test_note_ask_stores_whole_note_thread_without_anchor(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    _fixture_db(db_path)
+    client = TestClient(product_main.app)
+    created = client.post(
+        "/projects/demo/notes",
+        params={"metadata_db_path": str(db_path)},
+        json={"title": "Vorbereitung", "markdown": "# Vorbereitung\n\nGraph Transformer und Citation Networks."},
+    )
+    assert created.status_code == 200
+    note_id = created.json()["note"]["id"]
+
+    class NoteAskRouter:
+        default_provider = "fake"
+
+        def chat(self, messages, provider=None, overrides=None):
+            assert "Ganze Notiz" in messages[-1]["content"]
+            assert "Graph Transformer" in messages[-1]["content"]
+            return "Die Notiz verbindet Graph Transformer mit Citation Networks [p1]."
+
+        def provider_default_model(self, provider=None):
+            return "fake-model"
+
+    monkeypatch.setattr(product_main, "llm_router", NoteAskRouter())
+    response = client.post(
+        f"/notes/{note_id}/ask",
+        json={
+            "question": "Was ist der Kern der Notiz?",
+            "metadata_db_path": str(db_path),
+            "use_kg_evidence": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["replacement_text"].startswith("Die Notiz verbindet")
+    assert payload["thread"]["selected_text"] == ""
+    assert payload["thread"]["anchor_quote"] == ""
+    assert payload["thread"]["ui_state"]["scope"] == "note"

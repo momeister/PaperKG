@@ -328,6 +328,17 @@ def test_kg_retriever_diversifies_multi_domain_queries() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_kg_retriever_filters_to_allowed_paper_ids() -> None:
+    with _phase4_fixture() as db_path:
+        retriever = HybridRetriever(KGRetriever(metadata_db_path=db_path))
+
+        hits = retriever.search("representation learning graph transformer", limit=5, paper_ids=["p2"])
+
+        assert hits
+        assert {hit.source.paper_id for hit in hits} == {"p2"}
+        assert all(item.paper_id == "p2" for hit in hits for item in hit.evidence)
+
+
 def test_kg_retriever_paper_detail_and_neighborhood() -> None:
     with _phase4_fixture() as db_path:
         retriever = KGRetriever(metadata_db_path=db_path)

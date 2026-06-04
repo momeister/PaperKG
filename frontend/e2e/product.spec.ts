@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 test("project, upload, assistant evidence, quality, and settings flow", async ({ page }) => {
   const projectName = `e2e-${Date.now()}`;
@@ -20,7 +20,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     kind: "concept",
     reference_text: "Clinical AI competency evidence",
     pdf_excerpt: "Clinical AI evidence in PDF text for citation navigation.",
-    evidence_index: 12
+    evidence_index: 1
   };
   const defaultGlobalNote = {
     id: "global-note",
@@ -40,8 +40,32 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
       year: 2024,
       has_full_text: true,
       project_ids: []
+    },
+    {
+      id: "p2",
+      title: "   ",
+      pdf_filename: "AI-based Clinical Decision Support.pdf",
+      year: 2025,
+      has_full_text: true,
+      project_ids: []
     }
   ];
+  let extractionHistory = [
+    {
+      id: 1,
+      paper_id: "p1",
+      llm_provider: "fake",
+      llm_model: "fake-model",
+      extraction_status: "success",
+      extraction_timestamp: "2026-06-04T10:00:00",
+      concepts: [{ label: "Graph Transformer", confidence: 0.95 }],
+      methods: [{ label: "Attention", confidence: 0.9 }],
+      claims: [{ statement: "Graph Transformer evidence is grounded." }]
+    }
+  ];
+  let vocabulary = [{ canonical_label: "Graph Transformer", aliases: ["GT"], domain: "ML", openalx_id: null, confidence: 1 }];
+  const workspaceLongAnswer =
+    "Das bedeutet in einfachen Worten: Es ist eine kurze Erklaerung. Diese Antwort bleibt im Notiz-Assistenten voll sichtbar, damit laengere KI-Notizen als Chat gelesen werden koennen. Sie enthaelt mehrere Saetze, eine zweite Erklaerungsebene und einen eindeutigen Schluss: vollstaendig sichtbarer Langtext endet hier.";
   const aiThread = {
     id: "thread-1",
     note_id: "global-note",
@@ -73,8 +97,12 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   };
   let aiThreads = [aiThread];
   let followUpCount = 0;
+  let lastAnswerPayload: { paper_ids?: string[] } | null = null;
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
 
   await page.route("**/query/answer", async (route) => {
+    lastAnswerPayload = route.request().postDataJSON() as { paper_ids?: string[] };
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -155,6 +183,130 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     });
   });
 
+  await page.route(/\/extraction\/library(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: papers.map((paper, index) => ({
+          paper_id: paper.id,
+          title: paper.title.trim() || paper.pdf_filename?.replace(/\.pdf$/i, "") || paper.id,
+          filename: paper.pdf_filename ?? `${paper.id}.pdf`,
+          pdf_path: `library/${paper.id}.pdf`,
+          size_bytes: 2048 + index,
+          modified_timestamp: "2026-06-04T10:00:00",
+          latest_extraction_status: index === 0 ? "success" : null,
+          known_paper: true
+        })),
+        total: papers.length
+      })
+    });
+  });
+
+  await page.route("**/extraction/parse", async (route) => {
+    const payload = route.request().postDataJSON() as { paper_id?: string; pdf_path?: string };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        paper_id: payload.paper_id ?? "p1",
+        pdf_path: payload.pdf_path ?? "library/p1.pdf",
+        text: "Graph Transformer methods produce grounded science claims.",
+        page_count: 2,
+        parser: "marker",
+        metadata: { extraction_method: "fake" },
+        excerpt: "Graph Transformer methods produce grounded science claims."
+      })
+    });
+  });
+
+  await page.route("**/extraction/extract", async (route) => {
+    const payload = route.request().postDataJSON() as { paper_id?: string };
+    const item = {
+      id: extractionHistory.length + 1,
+      paper_id: payload.paper_id ?? "p1",
+      llm_provider: "fake",
+      llm_model: "fake-model",
+      extraction_status: "success",
+      extraction_timestamp: "2026-06-04T10:01:00",
+      concepts: [{ label: "Graph Transformer", confidence: 0.95, review_status: "approved" }],
+      methods: [{ label: "Attention", confidence: 0.9, review_status: "approved" }],
+      claims: [{ statement: "Graph Transformer methods produce grounded science claims." }]
+    };
+    extractionHistory = [item, ...extractionHistory];
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        result_id: item.id,
+        paper_id: item.paper_id,
+        status: "success",
+        duration_seconds: 1.2,
+        result: {
+          paper_id: item.paper_id,
+          paper_type: "research",
+          concepts: item.concepts,
+          methods: item.methods,
+          concept_candidates: [],
+          method_candidates: [],
+          relations: [],
+          claims: item.claims,
+          cross_domain_hints: [],
+          terminology_conflicts: [],
+          temporal_coverage: { paper_year: 2026 },
+          mathematical_content: { has_formulas: false },
+          language_detected: "en",
+          quality_warnings: [],
+          metadata_status: "valid",
+          blocking_errors: [],
+          candidate_count: 0,
+          extraction_diagnostics: { mode: "fake" },
+          raw_response: "{}"
+        }
+      })
+    });
+  });
+
+  await page.route(/\/extraction\/history(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: extractionHistory, total: extractionHistory.length })
+    });
+  });
+
+  await page.route(/\/extraction\/vocabulary(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "POST") {
+      const payload = route.request().postDataJSON() as { canonical_label: string; aliases?: string[]; domain?: string; openalx_id?: string };
+      vocabulary = [
+        ...vocabulary,
+        {
+          canonical_label: payload.canonical_label,
+          aliases: payload.aliases ?? [],
+          domain: payload.domain ?? "",
+          openalx_id: payload.openalx_id ?? null,
+          confidence: 1
+        }
+      ];
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: vocabulary, total: vocabulary.length })
+    });
+  });
+
+  await page.route("**/extraction/batch", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          job_id: "extract-job-1",
+          status: "completed",
+          papers_total: 1,
+          papers_processed: 1,
+          papers_failed: 0
+        },
+        items: [{ paper_id: "p1", status: "completed" }]
+      })
+    });
+  });
+
   await page.route("**/projects/__all_papers__/notes", async (route) => {
     if (route.request().method() === "POST") {
       const payload = route.request().postDataJSON() as { title?: string; markdown?: string };
@@ -200,9 +352,11 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   });
 
   await page.route("**/paper/pdf**", async (route) => {
+    const paperId = new URL(route.request().url()).searchParams.get("paper_id") ?? "";
+    const pdfText = paperId === "arxiv:2604.08226" ? "Clinical AI evidence in PDF text for citation navigation." : "Graph Transformer evidence in the parsed PDF text.";
     await route.fulfill({
       contentType: "application/pdf",
-      body: tinyPdf("Graph Transformer evidence in the parsed PDF text.")
+      body: tinyPdf(pdfText)
     });
   });
 
@@ -230,13 +384,14 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
         anchor_end?: number | null;
         anchor_quote?: string | null;
       };
+      const responseText = payload.instruction === "Arbeitsplatz erklaeren" ? workspaceLongAnswer : "Das bedeutet in einfachen Worten: Es ist eine kurze Erklaerung.";
       const thread = {
         id: `thread-${aiThreads.length + 1}`,
         note_id: "global-note",
         selected_text: payload.selected_text ?? "",
         instruction: payload.instruction ?? "",
-        response_text: "Das bedeutet in einfachen Worten: Es ist eine kurze Erklaerung.",
-        replacement_text: "Das bedeutet in einfachen Worten: Es ist eine kurze Erklaerung.",
+        response_text: responseText,
+        replacement_text: responseText,
         answer_payload: {},
         anchor_start: payload.anchor_start ?? null,
         anchor_end: payload.anchor_end ?? null,
@@ -255,7 +410,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
             thread_id: `thread-${aiThreads.length + 1}`,
             note_id: "global-note",
             role: "assistant",
-            content: "Das bedeutet in einfachen Worten: Es ist eine kurze Erklaerung."
+            content: responseText
           }
         ]
       };
@@ -370,31 +525,39 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.getByRole("button", { name: "Edit" }).click();
   await expect(editor).toHaveValue("- Direkt in Preview");
   const formattedMarkdown =
-    '**Bold** ==Mark== <span style="color:#2563eb">Blue</span> Quelle: [Z13 - Grounding Clinical AI Competency](sciencekg://citation/cite-clinical)';
+    '**Bold** ==Mark== <span style="color:#2563eb">Blue</span> Quelle: [Z2 - Grounding Clinical AI Competency](sciencekg://citation/cite-clinical)';
   await editor.fill(formattedMarkdown);
   await page.getByRole("button", { name: "Preview" }).click();
   await expect(page.locator(".markdown-preview strong", { hasText: "Bold" })).toBeVisible();
   await expect(page.locator(".markdown-preview mark", { hasText: "Mark" })).toBeVisible();
-  await expect(page.locator(".citation-link", { hasText: "Z13 - Grounding Clinical AI Competency" })).toBeVisible();
+  await expect(page.locator(".citation-link", { hasText: "Z2 - Grounding Clinical AI Competency" })).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).click();
   await expect(editor).toHaveValue(formattedMarkdown);
   await page.getByRole("button", { name: "Split" }).click();
   await expect(editor).toBeVisible();
-  await expect(page.locator(".markdown-preview", { hasText: "Z13 - Grounding Clinical AI Competency" })).toBeVisible();
+  await expect(page.locator(".markdown-preview", { hasText: "Z2 - Grounding Clinical AI Competency" })).toBeVisible();
   await editor.fill(`${formattedMarkdown}\n\nLive Split`);
   await expect(page.locator(".markdown-preview", { hasText: "Live Split" })).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).click();
   await editor.evaluate((node: HTMLTextAreaElement) => {
-    const index = node.value.indexOf("Z13");
+    const index = node.value.indexOf("Z2");
     node.focus();
     node.setSelectionRange(index + 2, index + 2);
     node.dispatchEvent(new Event("select", { bubbles: true }));
   });
-  await expect(page.getByRole("button", { name: /Z13 öffnen/ })).toBeVisible();
-  await page.getByRole("button", { name: /Quelle Z13 öffnen/ }).click();
-  await expect(page.locator(".note-citation-row--active", { hasText: "Z13" })).toBeVisible();
-  await expect(page.locator(".textarea-highlight-range--citation-active")).toBeVisible();
-  await expect(page.locator(".excerpt-panel", { hasText: "Clinical AI evidence in PDF text for citation navigation." })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Z2 öffnen/ })).toBeVisible();
+  await page.getByRole("button", { name: /Quelle Z2 öffnen/ }).click();
+  const activeNoteCitationRow = page.locator(".note-citation-row--active", { hasText: "Z2" });
+  const activeNoteCitationHighlight = page.locator(".textarea-highlight-range--citation-active");
+  const activeNotePdfExcerpt = page.locator(".excerpt-panel", { hasText: "Clinical AI evidence in PDF text for citation navigation." });
+  await expect(activeNoteCitationRow).toBeVisible();
+  await expect(activeNoteCitationHighlight).toBeVisible();
+  await expect(activeNotePdfExcerpt).toBeVisible();
+  await expect(page.locator(".pdf-highlight--active").first()).toBeVisible();
+  const activeNoteColor = await evidenceColor(activeNoteCitationRow);
+  expect(await evidenceColor(activeNoteCitationHighlight.first())).toBe(activeNoteColor);
+  expect(await evidenceColor(activeNotePdfExcerpt)).toBe(activeNoteColor);
+  expect(await evidenceColor(page.locator(".pdf-highlight--active").first())).toBe(activeNoteColor);
   await expect(page.getByRole("button", { name: "Fett" })).toBeVisible();
   await page.getByRole("button", { name: "Keine Quelle aktiv" }).click();
   await expect(page.locator(".note-citation-row--active")).toHaveCount(0);
@@ -434,6 +597,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   const inlineNote = page.getByRole("dialog", { name: new RegExp(`KI-Notiz ${markerLabel}`) });
   await expect(inlineNote).not.toBeVisible();
   await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toHaveCount(0);
+  await expect(page.locator(".textarea-highlight-range--thread-anchor")).toHaveCount(0);
   await expect(page.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
   await expect(page.getByRole("button", { name: "Ersetzen" })).toBeVisible();
   await marker.click();
@@ -471,7 +635,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(anchoredThread).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
   await page.locator(".note-context-toolbar").getByRole("button", { name: /Quellen/ }).click();
   await marker.click();
-  await inlineNote.getByRole("button", { name: "KI-Notiz loeschen" }).click();
+  await inlineNote.getByRole("button", { name: /KI-Notiz (loeschen|löschen)/ }).click();
   await expect(page.getByRole("dialog", { name: new RegExp(`KI-Notiz ${markerLabel}`) })).not.toBeVisible();
   const spellButton = page.getByRole("button", { name: "Rechtschreibkontrolle ausschalten" });
   await expect(spellButton).toHaveAttribute("aria-pressed", "true");
@@ -506,6 +670,29 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   });
   await expect(page.getByText("success")).toBeVisible();
 
+  await page.getByRole("link", { name: /Extraktion/ }).click();
+  await expect(page.getByRole("heading", { name: "Extraktion" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Extract/ })).toHaveClass(/active/);
+  await page.getByLabel("PDF").selectOption("library/p1.pdf");
+  await page.getByRole("button", { name: "Parsen" }).click();
+  await expect(page.getByPlaceholder("Paper-Text")).toHaveValue(/Graph Transformer methods/);
+  await page.getByRole("button", { name: "Extrahieren" }).click();
+  await expect(page.locator(".extraction-result-panel")).toContainText("Graph Transformer");
+  await expect(page.locator(".extraction-result-panel")).toContainText("Attention");
+  await page.getByRole("button", { name: /PDFs/ }).click();
+  await expect(page.locator(".extraction-library-table")).toContainText("Graph Transformer for Science");
+  await page.getByRole("button", { name: /Batch/ }).click();
+  await page.locator(".extraction-library-table input[type='checkbox']").first().check();
+  await page.getByRole("button", { name: "Start" }).click();
+  await expect(page.locator(".status-strip", { hasText: "1/1" })).toBeVisible();
+  await page.getByRole("button", { name: /Vocabulary/ }).click();
+  await page.getByLabel("Canonical Label").fill("Citation Network");
+  await page.getByLabel("Aliases").fill("citation graph");
+  await page.getByRole("button", { name: "Hinzufuegen" }).click();
+  await expect(page.locator(".extraction-vocabulary-table")).toContainText("Citation Network");
+  await page.getByRole("button", { name: /History/ }).click();
+  await expect(page.locator(".extraction-history-table")).toContainText("p1");
+
   await expect(page.getByRole("link", { name: /Arbeitsplatz/ })).toBeVisible();
   await page.getByRole("link", { name: /Arbeitsplatz/ }).click();
   const workspace = page.locator(".workspace-page");
@@ -520,25 +707,55 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(workspaceNav.getByRole("button", { name: /^Notizen/ })).toBeVisible();
   await expect(workspaceNav.locator(".note-list-row").first()).toBeVisible();
   await expect(workspaceEditor).toBeVisible();
-  await workspaceEditor.fill("Workspace Alpha\n\nQuelle: [Z13 - Grounding Clinical AI Competency](sciencekg://citation/cite-clinical)");
+  await workspaceEditor.fill(
+    "Workspace Alpha\n\nErste Quelle: [Z2 - Grounding Clinical AI Competency](sciencekg://citation/cite-clinical)\n\nZweite Quelle: [Z2 - Grounding Clinical AI Competency](sciencekg://citation/cite-clinical)"
+  );
   await workspaceNotes.getByRole("button", { name: "Preview" }).click();
   await expect(workspaceNotes.locator(".markdown-preview", { hasText: "Workspace Alpha" })).toBeVisible();
   await workspaceNotes.getByRole("button", { name: "Split" }).click();
   await expect(workspaceEditor).toBeVisible();
   await expect(workspaceNotes.locator(".markdown-preview", { hasText: "Workspace Alpha" })).toBeVisible();
-  await workspaceNotes.locator(".citation-link", { hasText: "Z13" }).click();
+  const workspaceClickedCitation = workspaceNotes.locator(".citation-link", { hasText: "Z2" }).nth(1);
+  await workspaceClickedCitation.click();
+  const workspaceCitationHighlight = workspaceNotes.locator(".textarea-highlight-range--citation-active");
+  await expect(workspaceCitationHighlight).toHaveCount(1);
   await expect(workspacePdf).toContainText("Grounding Clinical AI Competency");
+  await expect(workspacePdf.locator(".excerpt-panel")).toContainText("Clinical AI evidence in PDF text for citation navigation.");
+  await expect(workspacePdf.locator(".pdf-highlight--active").first()).toBeVisible();
+  const workspaceCitationColor = await evidenceColor(workspaceClickedCitation);
+  expect(await evidenceColor(workspaceCitationHighlight.first())).toBe(workspaceCitationColor);
+  expect(await evidenceColor(workspacePdf.locator(".excerpt-panel"))).toBe(workspaceCitationColor);
+  expect(await evidenceColor(workspacePdf.locator(".pdf-highlight--active").first())).toBe(workspaceCitationColor);
   await expect.poll(() => globalNote?.markdown ?? "").toContain("Workspace Alpha");
 
+  await workspaceNav.getByRole("button", { name: /PDFs/ }).click();
+  expect(pageErrors).toEqual([]);
+  await expect(workspaceNav.locator(".workspace-paper-row", { hasText: "AI based Clinical Decision Support" })).toBeVisible();
+  const graphPdfRow = workspaceNav.locator(".workspace-paper-row", { hasText: "Graph Transformer for Science" });
+  await expect(graphPdfRow.locator(".workspace-paper-select input")).toBeVisible();
+  await expect(graphPdfRow.locator(".workspace-paper-main")).toContainText("p1 - 2024");
+  await graphPdfRow.press("Enter");
+  await expect(workspacePdf).toContainText("Graph Transformer for Science");
+  await graphPdfRow.locator(".workspace-paper-select").click();
+  await workspaceAssistant.getByRole("button", { name: "Auswahl" }).click();
   await workspaceAssistant.getByPlaceholder("Frage an den lokalen KG").fill("What connects graph transformers and citations?");
   await workspaceAssistant.getByRole("button", { name: "Senden" }).click();
   await expect(workspaceAssistant.locator(".answer-text")).toContainText("Graph Transformer evidence is grounded");
+  expect(lastAnswerPayload?.paper_ids).toEqual(["p1"]);
   const workspaceAssistantCitation = workspaceAssistant.locator(".citation-link", { hasText: "Z1" });
   await workspaceAssistantCitation.hover();
   await expect(workspaceAssistant.locator(".citation-hover-card")).toContainText("Graph Transformer evidence in the parsed PDF text.");
+  const hoverCardInsert = workspaceAssistant.locator(".citation-hover-card").getByRole("button", { name: "In Notiz" });
+  await expect(hoverCardInsert).toBeVisible();
+  await hoverCardInsert.hover();
+  await expect(workspaceNotes.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
+  await expect
+    .poll(() => workspaceNotes.locator(".textarea-highlight-layer").evaluate((node) => node.scrollWidth <= node.clientWidth + 1))
+    .toBe(true);
   await workspaceAssistantCitation.click();
-  await expect(workspacePdf).toContainText("Grounding Clinical AI Competency");
-  await workspaceAssistant.getByRole("button", { name: "PDF-Nachweis öffnen" }).click();
+  await expect(workspaceAssistantCitation).toHaveClass(/citation-link--active/);
+  await expect(workspaceAssistant.locator(".evidence-dock:not(.evidence-dock--collapsed)")).toBeVisible();
+  await expect(workspaceAssistant.locator(".evidence-row.list-row--active", { hasText: "Graph Transformer evidence" })).toBeVisible();
   await expect(workspacePdf).toContainText("Graph Transformer for Science");
   await expect(workspacePdf.locator(".excerpt-panel")).toContainText("Graph Transformer evidence in the parsed PDF text.");
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).hover();
@@ -554,41 +771,133 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await workspaceNav.getByRole("button", { name: /PDFs/ }).click();
   await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Z1");
   await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Graph Transformer for Science");
-  await workspaceNav.locator(".note-citation-row", { hasText: "Z13" }).click();
+  await workspaceNav.locator(".note-citation-row", { hasText: "Z2" }).click();
+  const activeWorkspaceCitationRow = workspaceNav.locator(".note-citation-row--active", { hasText: "Z2" });
+  await expect(activeWorkspaceCitationRow).toBeVisible();
   await expect(workspacePdf).toContainText("Grounding Clinical AI Competency");
-  await workspaceNav.locator(".note-list-row", { hasText: "Graph Transformer for Science" }).click();
+  await expect(workspacePdf.locator(".excerpt-panel")).toContainText("Clinical AI evidence in PDF text for citation navigation.");
+  expect(await evidenceColor(activeWorkspaceCitationRow)).toBe(workspaceCitationColor);
+  expect(await evidenceColor(workspacePdf.locator(".excerpt-panel"))).toBe(workspaceCitationColor);
+  await workspaceNav.locator(".workspace-paper-row", { hasText: "Graph Transformer for Science" }).click();
   await expect(workspacePdf).toContainText("Graph Transformer for Science");
   await workspacePdf.getByPlaceholder("In PDF suchen").fill("Graph");
   await workspacePdf.getByRole("button", { name: "Vergroessern" }).click();
 
-  await workspaceEditor.fill("Workspace Auswahltext");
-  await workspaceEditor.click();
-  await workspaceEditor.press("End");
-  for (let index = 0; index < "Auswahltext".length; index += 1) {
-    await workspaceEditor.press("Shift+ArrowLeft");
-  }
+  const workspaceLongSelection =
+    "Auswahltext mit einem langen markierten Bereich, der im Notiz-Assistenten nicht gekuerzt werden darf. Er enthaelt mehrere Saetze, damit die Vorschau nicht nur den Anfang zeigt, und endet mit Volltext-Endmarke-7.";
+  await workspaceEditor.fill(`Workspace ${workspaceLongSelection}`);
+  await workspaceEditor.evaluate(
+    (node: HTMLTextAreaElement, selectedText) => {
+      const start = node.value.indexOf(selectedText);
+      node.focus();
+      node.setSelectionRange(start, start + selectedText.length);
+      node.dispatchEvent(new Event("select", { bubbles: true }));
+    },
+    workspaceLongSelection
+  );
   await expect(workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl")).toBeVisible();
   await workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl").fill("Arbeitsplatz erklaeren");
   await workspaceNotes.getByRole("button", { name: "Fragen" }).click();
   await expect(workspaceNotes.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
-  await workspaceNav.getByRole("button", { name: /KI-Notizen/ }).click();
-  const workspaceThread = workspaceNav.locator(".ai-thread-card", { hasText: "Arbeitsplatz erklaeren" }).first();
+  await workspaceNotes.getByRole("button", { name: "Schliessen" }).click();
+  await workspaceEditor.click();
+  await workspaceEditor.press("Home");
+  for (let index = 0; index < "Workspace".length; index += 1) {
+    await workspaceEditor.press("Shift+ArrowRight");
+  }
+  await expect(workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl")).toBeVisible();
+  await workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl").fill("Zweite Notiz");
+  await workspaceNotes.getByRole("button", { name: "Fragen" }).click();
+  await expect(workspaceNotes.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
+  await expect(workspaceNav.getByRole("button", { name: /KI-Notizen/ })).toHaveCount(0);
+  await workspaceAssistant.getByRole("button", { name: "Notiz-Assistent" }).click();
+  await expect(workspaceAssistant.getByRole("button", { name: "Notiz-Assistent" })).toHaveClass(/active/);
+  await expect(workspaceAssistant.getByText("Grounded KG")).toHaveCount(0);
+  const workspaceThread = workspaceAssistant.locator(".ai-thread-card", { hasText: "Arbeitsplatz erklaeren" }).first();
   await expect(workspaceThread).toBeVisible();
-  await workspaceThread.getByRole("button", { name: "Oeffnen" }).click();
-  await workspaceThread.getByPlaceholder("Folgefrage zu dieser Auswahl").fill("Noch kuerzer?");
-  await workspaceThread.getByRole("button", { name: "Fragen" }).click();
-  await expect(workspaceThread).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
-  const workspaceThreadInsert = workspaceThread.getByRole("button", { name: "Einfuegen" }).first();
+  await expect(workspaceAssistant.locator(".workspace-notes-assistant-panel")).toBeVisible();
+  await expect(workspaceAssistant.locator(".ai-thread-card", { hasText: "Arbeitsplatz erklaeren" })).toBeVisible();
+  await expect(workspaceEditor).toBeVisible();
+  await expect.poll(() => workspaceAssistant.locator(".workspace-notes-assistant-list").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("auto");
+  await expect(workspaceAssistant.locator(".ai-thread-card").first()).toContainText("Zweite Notiz");
+  await workspaceThread.getByRole("button", { name: "KI-Notiz anpinnen" }).click();
+  await expect(workspaceThread).toHaveClass(/ai-thread-card--pinned/);
+  await expect(workspaceAssistant.locator(".ai-thread-card").first()).toContainText("Arbeitsplatz erklaeren");
+  await workspaceThread.getByRole("button", { name: "Öffnen" }).click();
+  await expect(workspaceNotes.locator(".thread-anchor-popover")).toHaveCount(0);
+  await expect.poll(() => workspaceNotes.locator(".textarea-highlight-range--thread-anchor-active").count()).toBeGreaterThan(0);
+  await expect(workspaceThread).toContainText("Markierter Bereich");
+  await expect(workspaceThread.locator(".ai-thread-info-block--selection")).toContainText("Volltext-Endmarke-7");
+  await expect(workspaceThread).toContainText("Deine Frage");
+  await expect(workspaceThread).toContainText("KI-Antwort");
+  await expect(workspaceThread).toContainText("vollstaendig sichtbarer Langtext endet hier.");
+  await workspaceThread.getByRole("button", { name: "KI-Notiz gross anzeigen" }).click();
+  const focusedWorkspaceThread = workspaceAssistant.locator(".workspace-notes-assistant-card--focused", { hasText: "Arbeitsplatz erklaeren" });
+  await expect(focusedWorkspaceThread).toBeVisible();
+  await expect(workspaceAssistant.locator(".workspace-notes-assistant-panel--focused")).toBeVisible();
+  await expect.poll(() => focusedWorkspaceThread.locator(".ai-thread-messages").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("visible");
+  await expect.poll(() => workspaceAssistant.locator(".workspace-notes-assistant-list").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("auto");
+  await focusedWorkspaceThread.getByPlaceholder("Folgefrage zu dieser Auswahl").fill("Noch kuerzer?");
+  await focusedWorkspaceThread.getByRole("button", { name: "Fragen" }).click();
+  await expect(focusedWorkspaceThread).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
+  const workspaceThreadInsert = focusedWorkspaceThread.getByRole("button", { name: "Einfügen" }).first();
   await workspaceThreadInsert.hover();
   await expect(workspaceNotes.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
   await workspaceThreadInsert.click();
   await expect(workspaceEditor).toHaveValue(/Noch einfacher: Es ist eine Merkhilfe/);
-  const workspaceThreadMessage = workspaceThread.locator(".ai-thread-message--assistant", { hasText: "Noch einfacher: Es ist eine Merkhilfe." }).last();
-  await expect(workspaceThreadMessage.getByRole("button", { name: "Einfuegen" })).toBeVisible();
+  const workspaceMarker = workspaceNotes.getByRole("button", { name: /KI-Notiz N\d+ öffnen/ }).last();
+  await expect(workspaceMarker).toBeVisible();
+  await expect.poll(() => workspaceNotes.locator(".textarea-highlight-range--thread-anchor-active").count()).toBeGreaterThan(0);
+  const insertedText = await workspaceEditor.inputValue();
+  const manualInsertIndex = insertedText.indexOf("Merkhilfe") + "Merk".length;
+  await workspaceEditor.evaluate(
+    (node, index) => {
+      node.focus();
+      node.setSelectionRange(index, index);
+    },
+    manualInsertIndex
+  );
+  await page.keyboard.type(" manuell");
+  await expect(workspaceMarker).toBeVisible();
+  await expect.poll(() => workspaceNotes.locator(".textarea-highlight-range--thread-anchor-active").count()).toBeGreaterThan(0);
+  await expect(workspaceNotes.locator(".textarea-highlight-range--thread-anchor-active", { hasText: "manuell" })).toHaveCount(0);
+  await workspaceMarker.hover();
+  await expect.poll(() => workspaceNotes.locator(".textarea-highlight-range--thread-anchor").count()).toBeGreaterThan(0);
+  await expect(page.locator(".textarea-thread-anchor-tooltip")).toHaveCount(0);
+  await expect(page.locator(".textarea-thread-anchor-tooltip--portal")).toHaveCount(0);
+  await expect(workspaceMarker).not.toHaveAttribute("title", /.+/);
+  const markerBox = await workspaceMarker.boundingBox();
+  const editorWrapBox = await workspaceNotes.locator(".markdown-editor-wrap").boundingBox();
+  if (!markerBox || !editorWrapBox) {
+    throw new Error("Workspace marker was not measurable");
+  }
+  expect(markerBox.x).toBeGreaterThanOrEqual(editorWrapBox.x - 1);
+  expect(markerBox.x + markerBox.width).toBeLessThanOrEqual(editorWrapBox.x + editorWrapBox.width + 1);
+  await workspaceMarker.click();
+  const workspaceInlineNote = page.getByRole("dialog", { name: /KI-Notiz N\d+/ }).last();
+  await expect(workspaceInlineNote).toBeVisible();
+  const inlineNoteBox = await workspaceInlineNote.boundingBox();
+  const viewport = page.viewportSize();
+  if (!inlineNoteBox || !viewport) {
+    throw new Error("Workspace inline KI note was not measurable");
+  }
+  expect(inlineNoteBox.x).toBeGreaterThanOrEqual(0);
+  expect(inlineNoteBox.x + inlineNoteBox.width).toBeLessThanOrEqual(viewport.width + 1);
+  await workspaceInlineNote.getByRole("button", { name: "KI-Notiz einklappen" }).click();
+  await workspaceAssistant.getByRole("button", { name: "PDF-Assistent" }).click();
+  await expect(workspaceAssistant.getByRole("button", { name: "PDF-Assistent" })).toHaveClass(/active/);
+  await workspaceAssistant.getByRole("button", { name: "Notiz-Assistent" }).click();
+  await expect(workspaceAssistant.locator(".workspace-notes-assistant-panel")).toContainText("Arbeitsplatz erklaeren");
+  await expect(workspaceEditor).toBeVisible();
+  await expect(workspaceNotes).toBeVisible();
+  const workspaceThreadMessage = workspaceAssistant.locator(".ai-thread-message--assistant", { hasText: "Noch einfacher: Es ist eine Merkhilfe." }).last();
+  await expect(workspaceThreadMessage.getByRole("button", { name: "Einfügen" })).toBeVisible();
   await workspaceThreadMessage.getByRole("button", { name: "KI-Antwort ausblenden" }).click();
   await expect(workspaceThreadMessage).not.toBeVisible();
+  await workspaceAssistant.getByRole("button", { name: "Liste" }).first().click();
   await workspaceThread.getByRole("button", { name: "KI-Verlauf loeschen" }).click();
-  await expect(workspaceNav.getByText("Noch keine KI-Fragen")).toBeVisible();
+  await workspaceAssistant.getByRole("button", { name: "Alle" }).click();
+  await expect(workspaceAssistant.getByText("Noch keine KI-Fragen")).toBeVisible();
 
   await workspaceNav.getByRole("button", { name: /KI-Sessions/ }).click();
   await expect(workspaceNav.locator(".workspace-session-item", { hasText: "What connects graph transformers and citations?" })).toBeVisible();
@@ -623,6 +932,10 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.getByRole("link", { name: /Settings/ }).click();
   await expect(page.getByText("API Base URL")).toBeVisible();
 });
+
+async function evidenceColor(locator: Locator) {
+  return locator.evaluate((node) => window.getComputedStyle(node).getPropertyValue("--evidence-color").trim());
+}
 
 function tinyPdf(text: string) {
   const escaped = text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");

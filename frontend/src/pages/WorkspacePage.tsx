@@ -8,12 +8,15 @@ import {
   FilePlus2,
   FileText,
   ListChecks,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Pin,
   Quote,
   Search,
   Send,
@@ -51,12 +54,15 @@ import {
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
 
-export type WorkspaceNavigatorTab = "notes" | "pdfs" | "noteAi" | "assistantSessions";
+export type WorkspaceNavigatorTab = "notes" | "pdfs" | "assistantSessions";
 
 export type WorkspacePdfTarget =
   | { kind: "assistant"; source: VerificationSource; evidenceIndex: number }
   | { kind: "noteCitation"; citation: NoteCitation }
   | { kind: "paper"; paper: Paper };
+
+type PaperQuestionScope = "current" | "selected" | "all";
+type WorkspaceAssistantMode = "pdf" | "notes";
 
 type AssistantAnswerBlock = ReturnType<typeof turnBlocks>[number];
 type AssistantTurn = Parameters<typeof turnBlocks>[0];
@@ -72,6 +78,7 @@ const EMPTY_NOTES_SNAPSHOT: NotesSurfaceSnapshot = {
   selectedCitation: null,
   threads: [],
   activeThreadId: "",
+  historyOpen: false,
   threadMeta: new Map(),
   followUpDrafts: {},
   isFollowUpPending: false,
@@ -106,6 +113,10 @@ export function WorkspacePage() {
   const [evidenceOpen, setEvidenceOpen] = useState(true);
   const [evidenceMode, setEvidenceMode] = useState("auto");
   const [conversationMode, setConversationMode] = useState<"followup" | "new">("followup");
+  const [paperScope, setPaperScope] = useState<PaperQuestionScope>("all");
+  const [assistantMode, setAssistantMode] = useState<WorkspaceAssistantMode>("pdf");
+  const [focusedNoteThreadId, setFocusedNoteThreadId] = useState("");
+  const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
 
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
@@ -114,8 +125,6 @@ export function WorkspacePage() {
   const [navigatorWidth, setNavigatorWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", 180));
   const [assistantWidth, setAssistantWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "assistantWidth.v3", 420));
   const [pdfWidth, setPdfWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfWidth.v3", 220));
-  const [pdfCitationLimit, setPdfCitationLimit] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfCitationLimit", 8));
-  const [pdfPaperLimit, setPdfPaperLimit] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfPaperLimit", 12));
   const [pdfCitationListHeight, setPdfCitationListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", 220));
   const [pdfTarget, setPdfTarget] = useState<WorkspacePdfTarget | null>(null);
 
@@ -140,13 +149,19 @@ export function WorkspacePage() {
     queryFn: () => api.listPapers({ project_id: activeProject, has_full_text: true, limit: 200 })
   });
 
+  const currentScopePaperId = activeScopePaperId(pdfTarget, selectedSource);
+  const scopedPaperIds =
+    paperScope === "all" ? [] : paperScope === "selected" ? selectedPaperIds : currentScopePaperId ? [currentScopePaperId] : [];
+  const questionBlockedByScope = (paperScope === "selected" && !selectedPaperIds.length) || (paperScope === "current" && !currentScopePaperId);
+
   const answerMutation = useMutation({
     mutationFn: (value: string) =>
       api.answer({
         question: value,
         provider,
         model,
-        limit: answerLimitFor(value, evidenceMode),
+        limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length)),
+        paper_ids: scopedPaperIds.length ? scopedPaperIds : undefined,
         conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined
       }),
     onSuccess: async (payload) => {
@@ -209,6 +224,8 @@ export function WorkspacePage() {
     setPdfTarget(null);
     setControlledNoteId("");
     setRequestedCitationId("");
+    setSelectedPaperIds([]);
+    setFocusedNoteThreadId("");
   }, [scopedProjectId]);
 
   useEffect(() => {
@@ -224,9 +241,13 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", navigatorWidth), [navigatorWidth, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "assistantWidth.v3", assistantWidth), [assistantWidth, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfWidth.v3", pdfWidth), [pdfWidth, scopedProjectId]);
-  useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfCitationLimit", pdfCitationLimit), [pdfCitationLimit, scopedProjectId]);
-  useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfPaperLimit", pdfPaperLimit), [pdfPaperLimit, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", pdfCitationListHeight), [pdfCitationListHeight, scopedProjectId]);
+
+  useEffect(() => {
+    if (focusedNoteThreadId && !notesSnapshot.threads.some((thread) => thread.id === focusedNoteThreadId)) {
+      setFocusedNoteThreadId("");
+    }
+  }, [focusedNoteThreadId, notesSnapshot.threads]);
 
   const handleNotesStateChange = useCallback((snapshot: NotesSurfaceSnapshot) => {
     setNotesSnapshot((current) => (sameNotesSnapshot(current, snapshot) ? current : snapshot));
@@ -246,12 +267,12 @@ export function WorkspacePage() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (question.trim()) {
+    if (question.trim() && !questionBlockedByScope) {
       answerMutation.mutate(question.trim());
     }
   }
 
-  function openAssistantSource(source: VerificationSource | null, evidenceIndex = 0, quote = "", options: { openPdf?: boolean } = {}) {
+  function openAssistantSource(source: VerificationSource | null, evidenceIndex = 0, quote = "", options: { openPdf?: boolean; syncPdfTarget?: boolean } = {}) {
     setSelectedAnswerQuote(null);
     if (!source) {
       setSelectedSource(null);
@@ -261,8 +282,10 @@ export function WorkspacePage() {
     const nextIndex = Math.max(0, Math.min(evidenceIndex, source.evidence.length - 1));
     setSelectedSource(source);
     setActiveEvidenceIndex(nextIndex);
-    if (options.openPdf) {
+    if (options.openPdf || options.syncPdfTarget) {
       setPdfTarget({ kind: "assistant", source, evidenceIndex: nextIndex });
+    }
+    if (options.openPdf) {
       setPdfOpen(true);
       setNavigatorTab("pdfs");
     }
@@ -292,8 +315,43 @@ export function WorkspacePage() {
   function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "") {
     const meta = citationMetaFor(pool, citation, context);
     if (meta) {
-      openAssistantSource(meta.source, meta.evidenceIndex, quote || context);
+      setEvidenceOpen(true);
+      openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { openPdf: pdfOpen, syncPdfTarget: true });
     }
+  }
+
+  function openThreadInNotesAssistant(threadId: string) {
+    setAssistantMode("notes");
+    setAssistantOpen(true);
+    setNotesOpen(true);
+    notesActionsRef.current?.locateThread(threadId);
+    const thread = notesSnapshot.threads.find((item) => item.id === threadId);
+    if (thread && threadCollapsed(thread)) {
+      notesActionsRef.current?.toggleThreadCollapsed(threadId);
+    }
+  }
+
+  function insertCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "") {
+    const evidence = source.evidence[evidenceIndex];
+    if (!evidence) {
+      return;
+    }
+    const citation = noteCitation(source, evidence, evidenceIndex);
+    notesActionsRef.current?.clearInsertPreview();
+    void appendToActiveNote(formatNoteQuote(quote || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id), [citation]);
+  }
+
+  function previewCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "") {
+    const evidence = source.evidence[evidenceIndex];
+    if (!evidence) {
+      return;
+    }
+    const citation = noteCitation(source, evidence, evidenceIndex);
+    notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(quote || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id));
+  }
+
+  function toggleScopedPaper(paperId: string) {
+    setSelectedPaperIds((current) => (current.includes(paperId) ? current.filter((item) => item !== paperId) : [...current, paperId]));
   }
 
   async function appendToActiveNote(markdown: string, citations: Record<string, unknown>[] = []) {
@@ -466,11 +524,6 @@ export function WorkspacePage() {
               <span>PDFs</span>
               <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
             </button>
-            <button type="button" className={navigatorTab === "noteAi" ? "active" : ""} onClick={() => setNavigatorTab("noteAi")}>
-              <Sparkles size={15} />
-              <span>KI-Notizen</span>
-              <strong>{notesSnapshot.threads.length}</strong>
-            </button>
             <button type="button" className={navigatorTab === "assistantSessions" ? "active" : ""} onClick={() => setNavigatorTab("assistantSessions")}>
               <MessageSquareText size={15} />
               <span>KI-Sessions</span>
@@ -491,15 +544,8 @@ export function WorkspacePage() {
             pdfTarget={pdfTarget}
             activeAssistantSource={selectedSource}
             activeAssistantEvidenceIndex={activeEvidenceIndex}
-            pdfCitationLimit={pdfCitationLimit}
-            pdfPaperLimit={pdfPaperLimit}
+            selectedPaperIds={selectedPaperIds}
             pdfCitationListHeight={pdfCitationListHeight}
-            threads={notesSnapshot.threads}
-            activeThreadId={notesSnapshot.activeThreadId}
-            threadMeta={notesSnapshot.threadMeta}
-            followUpDrafts={notesSnapshot.followUpDrafts}
-            isFollowUpPending={notesSnapshot.isFollowUpPending}
-            deletingThreadId={notesSnapshot.deletingThreadId}
             sessions={history}
             activeSessionId={activeTurnId}
             onCreateNote={() => notesActionsRef.current?.createNote()}
@@ -509,31 +555,22 @@ export function WorkspacePage() {
               setNavigatorTab("notes");
             }}
             onOpenCitation={(citation) => {
-              setRequestedCitationId(citation.id);
-              notesActionsRef.current?.openCitation(citation);
+              if (notesActionsRef.current) {
+                setRequestedCitationId("");
+                notesActionsRef.current.openCitation(citation);
+              } else {
+                setRequestedCitationId(citation.id);
+              }
               setPdfTarget({ kind: "noteCitation", citation });
               setPdfOpen(true);
             }}
             onOpenPaper={(paper) => {
-              setPdfTarget({ kind: "paper", paper });
+              setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(paper) });
               setPdfOpen(true);
             }}
-            onCitationLimitChange={(value) => setPdfCitationLimit(clampWorkspaceNumber(value, 1, 50))}
-            onPaperLimitChange={(value) => setPdfPaperLimit(clampWorkspaceNumber(value, 1, 100))}
+            onToggleScopedPaper={toggleScopedPaper}
             onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90, 520)}
             onOpenAssistantPdf={openSelectedAssistantPdf}
-            onActivateThread={(threadId) => notesActionsRef.current?.activateThread(threadId)}
-            onToggleThread={(threadId) => notesActionsRef.current?.toggleThreadCollapsed(threadId)}
-            onDraftChange={(threadId, value) => notesActionsRef.current?.setFollowUpDraft(threadId, value)}
-            onFollowUp={(threadId) => notesActionsRef.current?.submitFollowUp(threadId)}
-            onInsertThread={(threadId) => notesActionsRef.current?.insertThreadAnswer(threadId)}
-            onPreviewThread={(threadId) => notesActionsRef.current?.previewThreadAnswer(threadId)}
-            onInsertThreadMessage={(threadId, messageId) => notesActionsRef.current?.insertThreadMessage(threadId, messageId)}
-            onPreviewThreadMessage={(threadId, messageId) => notesActionsRef.current?.previewThreadMessage(threadId, messageId)}
-            onHideThreadMessage={(threadId, messageId) => notesActionsRef.current?.hideThreadMessage(threadId, messageId)}
-            onPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
-            onDeleteThread={(threadId) => notesActionsRef.current?.deleteThread(threadId)}
-            onDeleteAllThreads={() => notesActionsRef.current?.deleteAllThreads()}
             onActivateSession={activateAssistantTurn}
           />
         </aside>
@@ -567,11 +604,85 @@ export function WorkspacePage() {
       />
 
       {assistantOpen ? (
-        <section className="workspace-assistant-pane">
-          <PaneHeading eyebrow="Grounded KG" title="Assistant" onCollapse={() => setAssistantOpen(false)} collapseSide="left" status={answerMutation.isPending ? "running" : answer?.generation_error ? "warning" : "idle"} />
+        <section className={`workspace-assistant-pane ${assistantMode === "notes" ? "workspace-assistant-pane--notes" : ""}`}>
+          <PaneHeading title="Assistant" onCollapse={() => setAssistantOpen(false)} collapseSide="left" status={answerMutation.isPending ? "running" : answer?.generation_error ? "warning" : "idle"} />
+          <div className="segmented workspace-assistant-mode-toggle" aria-label="Assistant-Modus">
+            <button
+              type="button"
+              className={assistantMode === "pdf" ? "active" : ""}
+              onClick={() => {
+                notesActionsRef.current?.clearInsertPreview();
+                setAssistantMode("pdf");
+              }}
+            >
+              <FileText size={15} />
+              <span>PDF-Assistent</span>
+            </button>
+            <button
+              type="button"
+              className={assistantMode === "notes" ? "active" : ""}
+              onClick={() => {
+                notesActionsRef.current?.clearInsertPreview();
+                setAssistantMode("notes");
+              }}
+            >
+              <Sparkles size={15} />
+              <span>Notiz-Assistent</span>
+            </button>
+          </div>
+          {assistantMode === "notes" ? (
+            <WorkspaceNotesAssistant
+              threads={notesSnapshot.threads}
+              activeThreadId={notesSnapshot.activeThreadId}
+              focusedThreadId={focusedNoteThreadId}
+              threadMeta={notesSnapshot.threadMeta}
+              followUpDrafts={notesSnapshot.followUpDrafts}
+              isFollowUpPending={notesSnapshot.isFollowUpPending}
+              deletingThreadId={notesSnapshot.deletingThreadId}
+              onActivateThread={openThreadInNotesAssistant}
+              onFocusThread={(threadId) => {
+                setFocusedNoteThreadId(threadId);
+                notesActionsRef.current?.locateThread(threadId);
+                const thread = notesSnapshot.threads.find((item) => item.id === threadId);
+                if (thread && threadCollapsed(thread)) {
+                  notesActionsRef.current?.toggleThreadCollapsed(threadId);
+                }
+              }}
+              onClearFocus={() => setFocusedNoteThreadId("")}
+              onToggleThread={(threadId) => notesActionsRef.current?.toggleThreadCollapsed(threadId)}
+              onSetThreadPinned={(threadId, pinned) => notesActionsRef.current?.setThreadPinned(threadId, pinned)}
+              onDraftChange={(threadId, value) => notesActionsRef.current?.setFollowUpDraft(threadId, value)}
+              onFollowUp={(threadId) => notesActionsRef.current?.submitFollowUp(threadId)}
+              onInsertThread={(threadId) => notesActionsRef.current?.insertThreadAnswer(threadId)}
+              onPreviewThread={(threadId) => notesActionsRef.current?.previewThreadAnswer(threadId)}
+              onInsertThreadMessage={(threadId, messageId) => notesActionsRef.current?.insertThreadMessage(threadId, messageId)}
+              onPreviewThreadMessage={(threadId, messageId) => notesActionsRef.current?.previewThreadMessage(threadId, messageId)}
+              onHideThreadMessage={(threadId, messageId) => notesActionsRef.current?.hideThreadMessage(threadId, messageId)}
+              onPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
+              onDeleteThread={(threadId) => {
+                if (focusedNoteThreadId === threadId) {
+                  setFocusedNoteThreadId("");
+                }
+                notesActionsRef.current?.deleteThread(threadId);
+              }}
+              onDeleteAllThreads={() => notesActionsRef.current?.deleteAllThreads()}
+            />
+          ) : (
+            <>
           <form className="chat-box" onSubmit={submit}>
             <Bot size={20} />
             <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Frage an den lokalen KG" />
+            <div className="segmented workspace-scope-segment" aria-label="Paper-Scope">
+              <button type="button" className={paperScope === "current" ? "active" : ""} onClick={() => setPaperScope("current")}>
+                Dieses
+              </button>
+              <button type="button" className={paperScope === "selected" ? "active" : ""} onClick={() => setPaperScope("selected")}>
+                Auswahl
+              </button>
+              <button type="button" className={paperScope === "all" ? "active" : ""} onClick={() => setPaperScope("all")}>
+                Alle
+              </button>
+            </div>
             <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
               <option value="followup">Weiterfragen</option>
               <option value="new">Neu starten</option>
@@ -582,10 +693,15 @@ export function WorkspacePage() {
               <option value="20">20</option>
               <option value="25">25</option>
             </select>
-            <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending}>
+            <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
               <Send size={18} />
             </button>
           </form>
+          {questionBlockedByScope ? (
+            <div className="scope-status">
+              {paperScope === "selected" ? "Keine Paper ausgewählt" : "Kein aktives Paper"}
+            </div>
+          ) : null}
           <section className="answer-panel workspace-answer-panel">
             {activeTurn ? (
               <div className="answer-blocks">
@@ -597,6 +713,10 @@ export function WorkspacePage() {
                         answer={block.answer.answer}
                         onCitationClick={(citation, context, quote) => jumpToCitationIn(block.verification, citation, context, quote)}
                         getCitationMeta={(citation, context) => citationMetaFor(block.verification, citation, context)}
+                        activeCitation={selectedSource ? { paperId: selectedSource.paper_id, evidenceIndex: activeEvidenceIndex } : undefined}
+                        onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
+                        onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
+                        onCitationInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
                       />
                     </div>
                     {block.answer.generation_error ? <div className="warning-row">{block.answer.generation_error}</div> : null}
@@ -712,7 +832,7 @@ export function WorkspacePage() {
                       <button
                         className={`list-row evidence-row ${activeEvidenceIndex === index ? "list-row--active" : ""}`}
                         key={`${item.reference_text}-${index}`}
-                        onClick={() => openAssistantSource(selectedSource, index)}
+                        onClick={() => openAssistantSource(selectedSource, index, "", { openPdf: pdfOpen, syncPdfTarget: true })}
                         style={evidenceColorVars(index)}
                       >
                         <strong className="evidence-row-title">
@@ -727,6 +847,8 @@ export function WorkspacePage() {
               </div>
             )}
           </section>
+            </>
+          )}
         </section>
       ) : (
         <CollapsedPane label="Assistant" icon={<PanelLeftOpen size={17} />} onOpen={() => setAssistantOpen(true)} />
@@ -796,12 +918,230 @@ export function WorkspacePage() {
       };
     }
     return {
-      url: target.paper.has_full_text ? api.paperPdfUrl(target.paper.id, target.paper.title) : null,
-      title: target.paper.title || target.paper.id,
+      url: target.paper.has_full_text && workspacePaperId(target.paper) ? api.paperPdfUrl(workspacePaperId(target.paper), workspacePaperTitle(target.paper)) : null,
+      title: workspacePaperTitle(target.paper),
       evidences: [],
       activeEvidenceIndex: 0
     };
   }
+}
+
+function WorkspaceNotesAssistant({
+  threads,
+  activeThreadId,
+  focusedThreadId,
+  threadMeta,
+  followUpDrafts,
+  isFollowUpPending,
+  deletingThreadId,
+  onActivateThread,
+  onToggleThread,
+  onSetThreadPinned,
+  onDraftChange,
+  onFollowUp,
+  onInsertThread,
+  onPreviewThread,
+  onInsertThreadMessage,
+  onPreviewThreadMessage,
+  onHideThreadMessage,
+  onPreviewClear,
+  onDeleteThread,
+  onDeleteAllThreads,
+  onFocusThread,
+  onClearFocus
+}: {
+  threads: NoteAiThread[];
+  activeThreadId: string;
+  focusedThreadId: string;
+  threadMeta: NotesSurfaceSnapshot["threadMeta"];
+  followUpDrafts: Record<string, string>;
+  isFollowUpPending: boolean;
+  deletingThreadId: string;
+  onActivateThread: (threadId: string) => void;
+  onToggleThread: (threadId: string) => void;
+  onSetThreadPinned: (threadId: string, pinned: boolean) => void;
+  onDraftChange: (threadId: string, value: string) => void;
+  onFollowUp: (threadId: string) => void;
+  onInsertThread: (threadId: string) => void;
+  onPreviewThread: (threadId: string) => void;
+  onInsertThreadMessage: (threadId: string, messageId: string) => void;
+  onPreviewThreadMessage: (threadId: string, messageId: string) => void;
+  onHideThreadMessage: (threadId: string, messageId: string) => void;
+  onPreviewClear: () => void;
+  onDeleteThread: (threadId: string) => void;
+  onDeleteAllThreads: () => void;
+  onFocusThread: (threadId: string) => void;
+  onClearFocus: () => void;
+}) {
+  const orderedThreads = sortPinnedThreads(threads);
+  const focusedThread = focusedThreadId ? orderedThreads.find((thread) => thread.id === focusedThreadId) ?? null : null;
+  const visibleThreads = focusedThread ? [focusedThread] : orderedThreads;
+  return (
+    <section className={`workspace-notes-assistant-panel ${focusedThread ? "workspace-notes-assistant-panel--focused" : ""}`}>
+      <div className="workspace-notes-assistant-heading">
+        <div>
+          <span>{focusedThread ? "KI-Notiz gross" : "KI-Notizen"}</span>
+          <strong>{focusedThread ? focusedThread.instruction : `${threads.length} Verlaufseintraege`}</strong>
+        </div>
+        <div className="button-row">
+          {focusedThread ? (
+            <button className="button button-compact" type="button" onClick={onClearFocus}>
+              <Minimize2 size={15} />
+              <span>Liste</span>
+            </button>
+          ) : null}
+          <button className="button button-compact" type="button" disabled={!threads.length} onClick={onDeleteAllThreads}>
+            <Trash2 size={15} />
+            <span>Alle</span>
+          </button>
+        </div>
+      </div>
+      <div className="ai-thread-list workspace-notes-assistant-list">
+        {visibleThreads.map((thread) => {
+          const answer = latestThreadAnswer(thread);
+          const meta = threadMeta.get(thread.id);
+          const collapsed = focusedThread ? false : threadCollapsed(thread);
+          const pinned = threadPinned(thread);
+          const messages = threadMessages(thread);
+          const contextText = stripThreadContext(thread.selected_text || thread.anchor_quote || "");
+          return (
+            <article
+              className={`note-thread-row ai-thread-card workspace-notes-assistant-card ${focusedThread ? "workspace-notes-assistant-card--focused" : ""} ${meta ? "ai-thread-card--anchored" : ""} ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""} ${pinned ? "ai-thread-card--pinned" : ""}`}
+              key={thread.id}
+              style={meta ? evidenceColorVars(meta.colorIndex) : undefined}
+            >
+              <div className="ai-thread-topline">
+                <button className="ai-thread-header" type="button" onClick={() => onActivateThread(thread.id)}>
+                  <span className="ai-thread-header-line">
+                    {meta ? <span className="ai-thread-anchor-badge">{meta.label}</span> : null}
+                    <strong>{thread.instruction}</strong>
+                  </span>
+                </button>
+                <div className="ai-thread-actions">
+                  <button
+                    className={`icon-button icon-button--compact ${pinned ? "icon-button--active" : ""}`}
+                    type="button"
+                    aria-label={pinned ? "KI-Notiz loesen" : "KI-Notiz anpinnen"}
+                    onClick={() => onSetThreadPinned(thread.id, !pinned)}
+                  >
+                    <Pin size={15} />
+                  </button>
+                  <button className="button button-compact" type="button" onClick={() => (focusedThread ? onClearFocus() : collapsed ? onActivateThread(thread.id) : onToggleThread(thread.id))}>
+                    {focusedThread ? "Liste" : collapsed ? "Öffnen" : "Einklappen"}
+                  </button>
+                  {!focusedThread ? (
+                    <button className="icon-button icon-button--compact" type="button" aria-label="KI-Notiz gross anzeigen" onClick={() => onFocusThread(thread.id)}>
+                      <Maximize2 size={15} />
+                    </button>
+                  ) : null}
+                  <button
+                    className="button button-compact"
+                    type="button"
+                    onClick={() => {
+                      onInsertThread(thread.id);
+                      onPreviewClear();
+                    }}
+                    onMouseEnter={() => onPreviewThread(thread.id)}
+                    onMouseOut={onPreviewClear}
+                    onMouseLeave={onPreviewClear}
+                    onPointerEnter={() => onPreviewThread(thread.id)}
+                    onPointerOut={onPreviewClear}
+                    onPointerLeave={onPreviewClear}
+                    onFocus={() => onPreviewThread(thread.id)}
+                    onBlur={onPreviewClear}
+                    disabled={!answer}
+                  >
+                    Einfügen
+                  </button>
+                  <button className="icon-button icon-button--compact" type="button" aria-label="KI-Verlauf loeschen" disabled={deletingThreadId === thread.id} onClick={() => onDeleteThread(thread.id)}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+              <div className={`ai-thread-preview ${!collapsed ? "ai-thread-preview--expanded" : ""}`}>
+                {contextText ? (
+                  <section className="ai-thread-info-block ai-thread-info-block--selection">
+                    <span>Markierter Bereich</span>
+                    <p>{contextText}</p>
+                  </section>
+                ) : null}
+                {collapsed ? (
+                  <>
+                    <section className="ai-thread-info-block ai-thread-info-block--question">
+                      <span>Deine Frage</span>
+                      <p>{thread.instruction}</p>
+                    </section>
+                    {answer ? (
+                      <section className="ai-thread-info-block ai-thread-info-block--answer">
+                        <span>KI-Antwort</span>
+                        <p>{shortThreadContext(answer)}</p>
+                      </section>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+              {!collapsed ? (
+                <>
+                  <div className={`ai-thread-messages ${focusedThread ? "workspace-notes-chat-stream" : ""}`}>
+                    {messages.map((message) => (
+                      <div className={`ai-thread-message ai-thread-message--${message.role === "assistant" ? "assistant" : "user"}`} key={message.id}>
+                        <div className="ai-thread-message-topline">
+                          <span>{message.role === "assistant" ? "KI-Antwort" : "Deine Frage"}</span>
+                          {message.role === "assistant" ? (
+                            <div className="ai-thread-message-actions">
+                              <button
+                                className="button button-compact"
+                                type="button"
+                                onClick={() => {
+                                  onInsertThreadMessage(thread.id, message.id);
+                                  onPreviewClear();
+                                }}
+                                onMouseEnter={() => onPreviewThreadMessage(thread.id, message.id)}
+                                onMouseOut={onPreviewClear}
+                                onMouseLeave={onPreviewClear}
+                                onPointerEnter={() => onPreviewThreadMessage(thread.id, message.id)}
+                                onPointerOut={onPreviewClear}
+                                onPointerLeave={onPreviewClear}
+                                onFocus={() => onPreviewThreadMessage(thread.id, message.id)}
+                                onBlur={onPreviewClear}
+                              >
+                                Einfügen
+                              </button>
+                              <button className="icon-button icon-button--compact" type="button" aria-label="KI-Antwort ausblenden" onClick={() => onHideThreadMessage(thread.id, message.id)}>
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        <p>{message.content}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="ai-follow-up-row">
+                    <input
+                      value={followUpDrafts[thread.id] ?? ""}
+                      onChange={(event) => onDraftChange(thread.id, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && (followUpDrafts[thread.id] ?? "").trim()) {
+                          event.preventDefault();
+                          onFollowUp(thread.id);
+                        }
+                      }}
+                      placeholder="Folgefrage zu dieser Auswahl"
+                    />
+                    <button className="button button-primary" type="button" disabled={isFollowUpPending || !(followUpDrafts[thread.id] ?? "").trim()} onClick={() => onFollowUp(thread.id)}>
+                      Fragen
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </article>
+          );
+        })}
+        {!threads.length ? <EmptyState title="Noch keine KI-Fragen" /> : null}
+      </div>
+    </section>
+  );
 }
 
 function WorkspaceNavigatorBody({
@@ -818,37 +1158,17 @@ function WorkspaceNavigatorBody({
   pdfTarget,
   activeAssistantSource,
   activeAssistantEvidenceIndex,
-  pdfCitationLimit,
-  pdfPaperLimit,
+  selectedPaperIds,
   pdfCitationListHeight,
-  threads,
-  activeThreadId,
-  threadMeta,
-  followUpDrafts,
-  isFollowUpPending,
-  deletingThreadId,
   sessions,
   activeSessionId,
   onCreateNote,
   onSelectNote,
   onOpenCitation,
   onOpenPaper,
-  onCitationLimitChange,
-  onPaperLimitChange,
+  onToggleScopedPaper,
   onResizeCitationList,
   onOpenAssistantPdf,
-  onActivateThread,
-  onToggleThread,
-  onDraftChange,
-  onFollowUp,
-  onInsertThread,
-  onPreviewThread,
-  onInsertThreadMessage,
-  onPreviewThreadMessage,
-  onHideThreadMessage,
-  onPreviewClear,
-  onDeleteThread,
-  onDeleteAllThreads,
   onActivateSession
 }: {
   tab: WorkspaceNavigatorTab;
@@ -864,37 +1184,17 @@ function WorkspaceNavigatorBody({
   pdfTarget: WorkspacePdfTarget | null;
   activeAssistantSource: VerificationSource | null;
   activeAssistantEvidenceIndex: number;
-  pdfCitationLimit: number;
-  pdfPaperLimit: number;
+  selectedPaperIds: string[];
   pdfCitationListHeight: number;
-  threads: NoteAiThread[];
-  activeThreadId: string;
-  threadMeta: NotesSurfaceSnapshot["threadMeta"];
-  followUpDrafts: Record<string, string>;
-  isFollowUpPending: boolean;
-  deletingThreadId: string;
   sessions: AssistantTurn[];
   activeSessionId: string;
   onCreateNote: () => void;
   onSelectNote: (noteId: string) => void;
   onOpenCitation: (citation: NoteCitation) => void;
   onOpenPaper: (paper: Paper) => void;
-  onCitationLimitChange: (value: number) => void;
-  onPaperLimitChange: (value: number) => void;
+  onToggleScopedPaper: (paperId: string) => void;
   onResizeCitationList: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onOpenAssistantPdf: () => void;
-  onActivateThread: (threadId: string) => void;
-  onToggleThread: (threadId: string) => void;
-  onDraftChange: (threadId: string, value: string) => void;
-  onFollowUp: (threadId: string) => void;
-  onInsertThread: (threadId: string) => void;
-  onPreviewThread: (threadId: string) => void;
-  onInsertThreadMessage: (threadId: string, messageId: string) => void;
-  onPreviewThreadMessage: (threadId: string, messageId: string) => void;
-  onHideThreadMessage: (threadId: string, messageId: string) => void;
-  onPreviewClear: () => void;
-  onDeleteThread: (threadId: string) => void;
-  onDeleteAllThreads: () => void;
   onActivateSession: (turnId: string) => void;
 }) {
   if (tab === "notes") {
@@ -930,16 +1230,21 @@ function WorkspaceNavigatorBody({
   }
   if (tab === "pdfs") {
     const activeCitationId = selectedCitation?.id ?? (pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.id : "");
-    const activePaperId =
-      activeAssistantSource?.paper_id ??
-      (pdfTarget?.kind === "paper" ? pdfTarget.paper.id : pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.paper_id : "");
+    const targetPaperId = pdfTarget?.kind === "paper" ? workspacePaperId(pdfTarget.paper) : pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.paper_id : pdfTarget?.kind === "assistant" ? pdfTarget.source.paper_id : "";
+    const activePaperId = targetPaperId || activeAssistantSource?.paper_id || "";
     const activeAssistantEvidence = activeAssistantSource?.evidence[activeAssistantEvidenceIndex];
     const selectedCitationIndex = Number(selectedCitation?.evidence_index ?? 0);
-    const visibleCitations = citations.slice(0, pdfCitationLimit);
-    const visiblePapers = papers.slice(0, pdfPaperLimit);
+    const activePaperEvidenceIndex =
+      pdfTarget?.kind === "assistant"
+        ? pdfTarget.evidenceIndex
+        : pdfTarget?.kind === "noteCitation"
+          ? selectedCitationIndex
+          : activeAssistantSource
+            ? activeAssistantEvidenceIndex
+            : 0;
     return (
       <section className="workspace-nav-body">
-        {activeAssistantSource && activeAssistantEvidence ? (
+        {pdfTarget?.kind === "assistant" && activeAssistantSource && activeAssistantEvidence ? (
           <div className="workspace-active-source" style={evidenceColorVars(activeAssistantEvidenceIndex)}>
             <span>Aktiver Assistant-Nachweis</span>
             <strong>
@@ -962,20 +1267,9 @@ function WorkspaceNavigatorBody({
         ) : null}
         <div className="workspace-nav-subheading">
           <span>Notizquellen</span>
-          <label className="workspace-count-control">
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={pdfCitationLimit}
-              onChange={(event) => onCitationLimitChange(Number(event.target.value))}
-              aria-label="Anzahl Notizquellen"
-            />
-            <strong>{citations.length}</strong>
-          </label>
         </div>
         <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: pdfCitationListHeight }}>
-          {visibleCitations.map(({ citation, badge, title, evidence }, index) => (
+          {citations.map(({ citation, badge, title, evidence }, index) => (
             <button
               className={`list-row note-citation-row ${activeCitationId === citation.id ? "note-citation-row--active list-row--active" : ""}`}
               type="button"
@@ -995,141 +1289,47 @@ function WorkspaceNavigatorBody({
         <div className="workspace-list-resize-handle" role="separator" aria-label="Notizquellen Hoehe anpassen" onPointerDown={onResizeCitationList} />
         <div className="workspace-nav-subheading">
           <span>Projekt-PDFs</span>
-          <label className="workspace-count-control">
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={pdfPaperLimit}
-              onChange={(event) => onPaperLimitChange(Number(event.target.value))}
-              aria-label="Anzahl Projekt-PDFs"
-            />
-            <strong>{papers.length}</strong>
-          </label>
         </div>
         <div className="list workspace-nav-list">
-          {visiblePapers.map((paper) => (
-            <button className={`list-row note-list-row ${activePaperId === paper.id ? "list-row--active" : ""}`} type="button" key={paper.id} onClick={() => onOpenPaper(paper)}>
-              <strong>{paper.title || paper.id}</strong>
-              <span>{paper.id}</span>
-              <small>{paper.year ?? "n/a"}</small>
-            </button>
-          ))}
-          {!papers.length ? <EmptyState title={papersLoading ? "Lade PDFs" : "Keine PDFs"} /> : null}
-        </div>
-      </section>
-    );
-  }
-  if (tab === "noteAi") {
-    return (
-      <section className="workspace-nav-body">
-        <div className="workspace-nav-toolbar">
-          <span>{threads.length} KI-Notizen</span>
-          <button className="button button-compact" type="button" disabled={!threads.length} onClick={onDeleteAllThreads}>
-            <Trash2 size={15} />
-            <span>Alle</span>
-          </button>
-        </div>
-        <div className="ai-thread-list workspace-nav-list">
-          {threads.map((thread) => {
-            const answer = latestThreadAnswer(thread);
-            const meta = threadMeta.get(thread.id);
-            const collapsed = threadCollapsed(thread);
-            const messages = threadMessages(thread);
+          {papers.map((paper) => {
+            const normalizedPaper = normalizeWorkspacePaper(paper);
+            const paperId = workspacePaperId(normalizedPaper);
+            const title = workspacePaperTitle(normalizedPaper);
+            const selectedForScope = Boolean(paperId && selectedPaperIds.includes(paperId));
+            const isActivePaper = Boolean(paperId && activePaperId === paperId);
             return (
-              <article
-                className={`note-thread-row ai-thread-card ${meta ? "ai-thread-card--anchored" : ""} ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""}`}
-                key={thread.id}
-                style={meta ? evidenceColorVars(meta.colorIndex) : undefined}
+              <div
+                className={`list-row workspace-paper-row ${isActivePaper ? "workspace-paper-row--active-source list-row--active" : ""}`}
+                key={paperId || `${title}-${paper.year ?? "n/a"}`}
+                role="button"
+                tabIndex={0}
+                aria-label={`PDF ${title} öffnen`}
+                onClick={() => onOpenPaper(normalizedPaper)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onOpenPaper(normalizedPaper);
+                  }
+                }}
+                style={isActivePaper ? evidenceColorVars(activePaperEvidenceIndex) : undefined}
               >
-                <div className="ai-thread-topline">
-                  <button className="ai-thread-header" type="button" onClick={() => onActivateThread(thread.id)}>
-                    <span className="ai-thread-header-line">
-                      {meta ? <span className="ai-thread-anchor-badge">{meta.label}</span> : null}
-                      <strong>{thread.instruction}</strong>
-                    </span>
-                  </button>
-                  <div className="ai-thread-actions">
-                    <button className="button button-compact" type="button" onClick={() => onToggleThread(thread.id)}>
-                      {collapsed ? "Oeffnen" : "Einklappen"}
-                    </button>
-                    <button
-                      className="button button-compact"
-                      type="button"
-                      onClick={() => onInsertThread(thread.id)}
-                      onMouseEnter={() => onPreviewThread(thread.id)}
-                      onMouseLeave={onPreviewClear}
-                      onPointerEnter={() => onPreviewThread(thread.id)}
-                      onPointerLeave={onPreviewClear}
-                      onFocus={() => onPreviewThread(thread.id)}
-                      onBlur={onPreviewClear}
-                      disabled={!answer}
-                    >
-                      Einfuegen
-                    </button>
-                    <button className="icon-button icon-button--compact" type="button" aria-label="KI-Verlauf loeschen" disabled={deletingThreadId === thread.id} onClick={() => onDeleteThread(thread.id)}>
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
+                <label className="workspace-paper-select" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedForScope}
+                    disabled={!paperId}
+                    aria-label={`${title} auswaehlen`}
+                    onChange={() => paperId && onToggleScopedPaper(paperId)}
+                  />
+                </label>
+                <div className="workspace-paper-main" title={title}>
+                  <strong>{title}</strong>
+                  <span>{[paperId || "keine ID", normalizedPaper.year ?? ""].filter(Boolean).join(" - ")}</span>
                 </div>
-                <div className="ai-thread-preview">
-                  <p>{shortThreadContext(thread.anchor_quote || thread.selected_text)}</p>
-                  {answer ? <p className="ai-thread-answer-preview">{shortThreadContext(answer)}</p> : null}
-                </div>
-                {!collapsed ? (
-                  <>
-                    <div className="ai-thread-messages">
-                      {messages.map((message) => (
-                        <div className={`ai-thread-message ai-thread-message--${message.role === "assistant" ? "assistant" : "user"}`} key={message.id}>
-                          <div className="ai-thread-message-topline">
-                            <span>{message.role === "assistant" ? "KI" : "Du"}</span>
-                            {message.role === "assistant" ? (
-                              <div className="ai-thread-message-actions">
-                                <button
-                                  className="button button-compact"
-                                  type="button"
-                                  onClick={() => onInsertThreadMessage(thread.id, message.id)}
-                                  onMouseEnter={() => onPreviewThreadMessage(thread.id, message.id)}
-                                  onMouseLeave={onPreviewClear}
-                                  onPointerEnter={() => onPreviewThreadMessage(thread.id, message.id)}
-                                  onPointerLeave={onPreviewClear}
-                                  onFocus={() => onPreviewThreadMessage(thread.id, message.id)}
-                                  onBlur={onPreviewClear}
-                                >
-                                  Einfuegen
-                                </button>
-                                <button className="icon-button icon-button--compact" type="button" aria-label="KI-Antwort ausblenden" onClick={() => onHideThreadMessage(thread.id, message.id)}>
-                                  <Trash2 size={15} />
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                          <p>{message.content}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="ai-follow-up-row">
-                      <input
-                        value={followUpDrafts[thread.id] ?? ""}
-                        onChange={(event) => onDraftChange(thread.id, event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && (followUpDrafts[thread.id] ?? "").trim()) {
-                            event.preventDefault();
-                            onFollowUp(thread.id);
-                          }
-                        }}
-                        placeholder="Folgefrage zu dieser Auswahl"
-                      />
-                      <button className="button button-primary" type="button" disabled={isFollowUpPending || !(followUpDrafts[thread.id] ?? "").trim()} onClick={() => onFollowUp(thread.id)}>
-                        Fragen
-                      </button>
-                    </div>
-                  </>
-                ) : null}
-              </article>
+              </div>
             );
           })}
-          {!threads.length ? <div className="muted-row">Noch keine KI-Fragen</div> : null}
+          {!papers.length ? <EmptyState title={papersLoading ? "Lade PDFs" : "Keine PDFs"} /> : null}
         </div>
       </section>
     );
@@ -1164,7 +1364,7 @@ function PaneHeading({
   collapseSide,
   onCollapse
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
   status?: string;
   collapseSide: "left" | "right";
@@ -1173,7 +1373,7 @@ function PaneHeading({
   return (
     <div className="pane-heading workspace-pane-heading">
       <div>
-        <span>{eyebrow}</span>
+        {eyebrow ? <span>{eyebrow}</span> : null}
         <strong>{title}</strong>
       </div>
       <div className="button-row">
@@ -1209,11 +1409,99 @@ function sameNotesSnapshot(left: NotesSurfaceSnapshot, right: NotesSurfaceSnapsh
     left.selectedCitation === right.selectedCitation &&
     left.threads === right.threads &&
     left.activeThreadId === right.activeThreadId &&
+    left.historyOpen === right.historyOpen &&
     left.threadMeta === right.threadMeta &&
     left.followUpDrafts === right.followUpDrafts &&
     left.isFollowUpPending === right.isFollowUpPending &&
     left.deletingThreadId === right.deletingThreadId
   );
+}
+
+function activeScopePaperId(target: WorkspacePdfTarget | null, activeAssistantSource: VerificationSource | null) {
+  if (target) {
+    if (target.kind === "assistant") {
+      return target.source.paper_id;
+    }
+    if (target.kind === "noteCitation") {
+      return target.citation.paper_id;
+    }
+    return workspacePaperId(target.paper);
+  }
+  return activeAssistantSource?.paper_id ?? "";
+}
+
+type WorkspacePaperRecord = Paper & {
+  paper_id?: string;
+  paperId?: string;
+  display_title?: string;
+  name?: string;
+  filename?: string;
+  file_name?: string;
+  pdf_filename?: string;
+  pdf_path?: string;
+  path?: string;
+};
+
+function normalizeWorkspacePaper(paper: Paper): Paper {
+  const id = workspacePaperId(paper);
+  const title = workspacePaperTitle(paper);
+  return { ...paper, id, title };
+}
+
+function workspacePaperId(paper: Paper | null | undefined) {
+  if (!paper) {
+    return "";
+  }
+  const record = paper as WorkspacePaperRecord;
+  return cleanWorkspacePaperText(paper.id) || cleanWorkspacePaperText(record.paper_id) || cleanWorkspacePaperText(record.paperId) || cleanWorkspacePaperText(paper.source_id) || "";
+}
+
+function workspacePaperTitle(paper: Paper | null | undefined) {
+  if (!paper) {
+    return "Unbenanntes Paper";
+  }
+  const record = paper as WorkspacePaperRecord;
+  return (
+    cleanWorkspacePaperText(paper.title) ||
+    cleanWorkspacePaperText(record.display_title) ||
+    cleanWorkspacePaperText(record.name) ||
+    workspacePaperFileTitle(record) ||
+    workspacePaperId(paper) ||
+    "Unbenanntes Paper"
+  );
+}
+
+function cleanWorkspacePaperText(value: unknown) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text || ["undefined", "null", "none", "nan"].includes(text.toLowerCase())) {
+    return "";
+  }
+  return text;
+}
+
+function workspacePaperFileTitle(paper: WorkspacePaperRecord) {
+  const raw =
+    cleanWorkspacePaperText(paper.pdf_filename) ||
+    cleanWorkspacePaperText(paper.file_name) ||
+    cleanWorkspacePaperText(paper.filename) ||
+    cleanWorkspacePaperText(paper.pdf_path) ||
+    cleanWorkspacePaperText(paper.path) ||
+    cleanWorkspacePaperText(paper.pdf_url);
+  if (!raw) {
+    return "";
+  }
+  const withoutQuery = raw.split(/[?#]/)[0] || raw;
+  const fileName = withoutQuery.split(/[\\/]/).pop() || withoutQuery;
+  const decoded = decodeWorkspacePaperText(fileName);
+  return cleanWorkspacePaperText(decoded.replace(/\.pdf$/i, "").replace(/[_-]+/g, " "));
+}
+
+function decodeWorkspacePaperText(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function noteCitationEvidence(citation: NoteCitation): VerificationEvidence[] {
@@ -1224,7 +1512,8 @@ function noteCitationEvidence(citation: NoteCitation): VerificationEvidence[] {
       reference_text: citation.reference_text || "",
       pdf_excerpt: citation.pdf_excerpt || "",
       matched_terms: textTerms(`${citation.reference_text ?? ""} ${citation.pdf_excerpt ?? ""}`),
-      found_in_pdf_text: Boolean(citation.pdf_excerpt)
+      found_in_pdf_text: Boolean(citation.pdf_excerpt),
+      evidence_index: citation.evidence_index ?? 0
     }
   ];
 }
@@ -1264,9 +1553,27 @@ function threadCollapsed(thread: NoteAiThread) {
   return thread.ui_state?.collapsed !== false;
 }
 
+function threadPinned(thread: NoteAiThread) {
+  return thread.ui_state?.pinned === true;
+}
+
+function sortPinnedThreads(threads: NoteAiThread[]) {
+  return threads
+    .map((thread, index) => ({ thread, index }))
+    .sort((left, right) => {
+      const pinnedDelta = Number(threadPinned(right.thread)) - Number(threadPinned(left.thread));
+      return pinnedDelta || left.index - right.index;
+    })
+    .map((item) => item.thread);
+}
+
 function shortThreadContext(value: string) {
-  const text = String(value || "").replace(/^==([\s\S]*)==$/, "$1").replace(/\s+/g, " ").trim();
-  return text.length <= 170 ? text : `${text.slice(0, 167)}...`;
+  const text = stripThreadContext(value).replace(/\s+/g, " ").trim();
+  return text.length <= 120 ? text : `${text.slice(0, 117)}...`;
+}
+
+function stripThreadContext(value: string) {
+  return String(value || "").replace(/^==([\s\S]*)==$/, "$1").trim();
 }
 
 function textTerms(text: string) {
@@ -1275,13 +1582,6 @@ function textTerms(text: string) {
 
 function normalizeFilter(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function clampWorkspaceNumber(value: number, min: number, max: number) {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 function workspaceUiKey(projectId: string, key: string) {

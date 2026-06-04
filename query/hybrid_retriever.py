@@ -49,6 +49,7 @@ class HybridRetriever:
         limit: int = 10,
         include_extractions: bool = True,
         include_embeddings: bool = True,
+        paper_ids: list[str] | set[str] | None = None,
     ) -> list[SearchHit]:
         merged = {
             hit.source.paper_id: hit
@@ -56,12 +57,13 @@ class HybridRetriever:
                 query,
                 limit=limit,
                 include_extractions=include_extractions,
+                paper_ids=paper_ids,
             )
         }
 
         if include_embeddings:
             for match in self.find_embedding_matches(query):
-                for label_hit in self.kg_retriever.search(match.label, limit=limit, include_extractions=True):
+                for label_hit in self.kg_retriever.search(match.label, limit=limit, include_extractions=True, paper_ids=paper_ids):
                     target = merged.get(label_hit.source.paper_id)
                     if target is None:
                         target = SearchHit(source=label_hit.source)

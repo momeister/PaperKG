@@ -36,6 +36,7 @@ class SearchRequest(Phase4Request):
     limit: int = Field(default=10, ge=1, le=50)
     include_extractions: bool = True
     include_embeddings: bool = True
+    paper_ids: list[str] = Field(default_factory=list)
 
 
 class AnswerRequest(Phase4Request):
@@ -44,6 +45,7 @@ class AnswerRequest(Phase4Request):
     provider: str | None = None
     model: str | None = None
     conversation_context: list[dict[str, Any]] = []
+    paper_ids: list[str] = Field(default_factory=list)
 
 
 class HypothesisRequest(Phase4Request):
@@ -81,6 +83,7 @@ def query_search(request: SearchRequest) -> dict[str, Any]:
         limit=request.limit,
         include_extractions=request.include_extractions,
         include_embeddings=request.include_embeddings,
+        paper_ids=request.paper_ids or None,
     )
     return {
         "query": request.query,
@@ -98,6 +101,7 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         provider=request.provider,
         model=request.model,
         conversation_context=request.conversation_context,
+        paper_ids=request.paper_ids or None,
     )
     return answer.to_dict()
 

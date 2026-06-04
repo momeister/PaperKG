@@ -63,9 +63,10 @@ making claims."""
         model: str | None = None,
         overrides: dict[str, Any] | None = None,
         conversation_context: list[dict[str, Any]] | None = None,
+        paper_ids: list[str] | set[str] | None = None,
     ) -> GroundedAnswer:
-        hits = self.retriever.search(question, limit=limit)
-        evidence = self._evidence_for_answer(hits, max_items=24)
+        hits = self.retriever.search(question, limit=limit, paper_ids=paper_ids)
+        evidence = self._evidence_for_answer(hits, max_items=_evidence_item_limit(limit, hits))
         sources = [hit.source for hit in hits if hit.evidence]
 
         if not evidence:
@@ -178,6 +179,13 @@ making claims."""
             provider=provider,
             overrides=merged_overrides,
         )
+        response = self._repair_sparse_citations(
+            response=response,
+            prompt=prompt,
+            provider=provider,
+            overrides=merged_overrides,
+            evidence=evidence,
+        )
 
         if response:
             return response, None
@@ -285,6 +293,50 @@ making claims."""
             return repaired
         return response
 
+    def _repair_sparse_citations(
+        self,
+        response: str,
+        prompt: str,
+        provider: str | None,
+        overrides: dict[str, Any],
+        evidence: list[Evidence],
+    ) -> str:
+        if self.llm_router is None or not response or _invalid_citations(response):
+            return response
+        available_ids = {item.paper_id for item in evidence if item.paper_id}
+        if len(available_ids) < 3:
+            return response
+        cited_ids = _cited_paper_ids(response)
+        desired_count = min(3, len(available_ids))
+        if len(cited_ids) >= desired_count:
+            return response
+
+        repair_prompt = (
+            f"{prompt}\n\n"
+            "Your previous answer cited too few different papers for the available evidence. "
+            f"Rewrite the answer so that, when relevant, it cites at least {desired_count} distinct paper IDs "
+            "from the evidence. Keep the answer concise and do not add unsupported facts.\n\n"
+            f"Previous answer:\n{response}"
+        )
+        repair_overrides = dict(overrides)
+        repair_overrides["temperature"] = min(float(repair_overrides.get("temperature", 0.1)), 0.05)
+        try:
+            repaired = self.llm_router.chat(
+                [
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": repair_prompt},
+                ],
+                provider=provider,
+                overrides=repair_overrides,
+            )
+        except Exception:
+            return response
+        repaired = str(repaired or "").strip()
+        if not repaired or _invalid_citations(repaired):
+            return response
+        repaired_ids = _cited_paper_ids(repaired)
+        return repaired if len(repaired_ids) > len(cited_ids) else response
+
 
 def _flatten_evidence(hits: list[SearchHit], max_items: int) -> list[Evidence]:
     evidence: list[Evidence] = []
@@ -292,6 +344,12 @@ def _flatten_evidence(hits: list[SearchHit], max_items: int) -> list[Evidence]:
         evidence.extend(hit.evidence)
     evidence.sort(key=lambda item: item.score, reverse=True)
     return evidence[:max_items]
+
+
+def _evidence_item_limit(limit: int, hits: list[SearchHit]) -> int:
+    hit_count = max(1, len(hits))
+    requested = max(1, int(limit))
+    return min(80, max(24, requested * 4, hit_count * 5))
 
 
 def _supplemental_evidence_from_extraction(
@@ -385,6 +443,7 @@ def _build_grounded_prompt(
             "",
             "Answer concisely using only this evidence.",
             "Include source paper IDs in square brackets for each substantive claim.",
+            "When multiple papers support different parts of the answer, cite multiple distinct paper IDs instead of reusing only one source.",
             "Use only paper IDs shown in the evidence as citations; never cite evidence item numbers like [1] or [4].",
             "When quantitative findings or metrics are present, include the most important numbers.",
         ]

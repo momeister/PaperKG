@@ -7,6 +7,7 @@ import {
   BrainCircuit,
   Briefcase,
   Columns3,
+  FileSearch,
   FileText,
   GitBranch,
   Import,
@@ -22,6 +23,7 @@ import { api, API_BASE_URL } from "./api";
 import { AppStateContext } from "./state";
 import { Status } from "./components/Status";
 import { AssistantPage } from "./pages/AssistantPage";
+import { ExtractionPage } from "./pages/ExtractionPage";
 import { GraphPage } from "./pages/GraphPage";
 import { ImportPage } from "./pages/ImportPage";
 import { JobsPage } from "./pages/JobsPage";
@@ -35,6 +37,7 @@ import { WorkspacePage } from "./pages/WorkspacePage";
 const navigation = [
   { to: "/projects", label: "Projekte", icon: Briefcase },
   { to: "/import", label: "Import", icon: Import },
+  { to: "/extraction", label: "Extraktion", icon: FileSearch },
   { to: "/library", label: "Library", icon: Library },
   { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/notes", label: "Notizen", icon: NotebookPen },
@@ -164,6 +167,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/projects" replace />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/import" element={<ImportPage />} />
+            <Route path="/extraction" element={<ExtractionPage />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/assistant" element={<AssistantPage />} />
             <Route path="/notes" element={<NotesPage />} />

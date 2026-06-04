@@ -1,6 +1,7 @@
 import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { CSSProperties, MutableRefObject, RefObject } from "react";
+import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bold,
@@ -19,8 +20,10 @@ import {
   NotebookPen,
   PanelRightClose,
   PanelRightOpen,
+  Pin,
   Quote,
   Redo2,
+  Search,
   SpellCheck2,
   Sparkles,
   Table2,
@@ -66,6 +69,32 @@ export type ThreadAnchorMeta = {
   colorIndex: number;
 };
 
+type ThreadTextRange = {
+  start: number;
+  end: number;
+};
+
+type ThreadTextDiff = {
+  start: number;
+  beforeEnd: number;
+  afterEnd: number;
+  delta: number;
+};
+
+const THREAD_RANGE_TEXT_LIMIT = 16000;
+
+type ThreadStoredRange = {
+  start: number;
+  end: number;
+  text: string;
+  manualRanges?: ThreadTextRange[];
+};
+
+type ThreadAnchorRange = ThreadStoredRange & {
+  changedRanges: ThreadTextRange[];
+  manualRanges: ThreadTextRange[];
+};
+
 export type NoteCitationRow = {
   citation: NoteCitation;
   badge: string;
@@ -85,6 +114,7 @@ export type NotesSurfaceSnapshot = {
   selectedCitation: NoteCitation | null;
   threads: NoteAiThread[];
   activeThreadId: string;
+  historyOpen: boolean;
   threadMeta: Map<string, ThreadAnchorMeta>;
   followUpDrafts: Record<string, string>;
   isFollowUpPending: boolean;
@@ -96,9 +126,13 @@ export type NotesSurfaceActions = {
   selectNote: (noteId: string) => void;
   openCitation: (citation: NoteCitation) => void;
   clearCitation: () => void;
+  showHistory: () => void;
+  showSources: () => void;
   activateThread: (threadId: string) => void;
+  locateThread: (threadId: string) => void;
   setActiveThread: (threadId: string) => void;
   toggleThreadCollapsed: (threadId: string) => void;
+  setThreadPinned: (threadId: string, pinned: boolean) => void;
   setFollowUpDraft: (threadId: string, value: string) => void;
   submitFollowUp: (threadId: string) => void;
   insertThreadAnswer: (threadId: string) => void;
@@ -150,11 +184,17 @@ export function NotesSurface({
   const [selectionPinned, setSelectionPinned] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiPreview, setAiPreview] = useState("");
+  const [noteQuestion, setNoteQuestion] = useState("");
+  const [noteSearchQuery, setNoteSearchQuery] = useState("");
+  const [noteSearchIndex, setNoteSearchIndex] = useState(0);
   const [aiPopoverBottomPadding, setAiPopoverBottomPadding] = useState(0);
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [selectedCitation, setSelectedCitation] = useState<NoteCitation | null>(null);
+  const [selectedCitationRef, setSelectedCitationRef] = useState<CitationMarkdownRef | null>(null);
   const [activeEditorCitationId, setActiveEditorCitationId] = useState("");
+  const [activeEditorCitationRef, setActiveEditorCitationRef] = useState<CitationMarkdownRef | null>(null);
   const [inlineThreadId, setInlineThreadId] = useState("");
+  const [hoverThreadId, setHoverThreadId] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [notesListOpen, setNotesListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
   const [contextOpen, setContextOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
@@ -163,7 +203,9 @@ export function NotesSurface({
   const [spellcheckEnabled, setSpellcheckEnabled] = useState(() => loadBooleanUiState("spellcheckEnabled", true));
   const [contextWidth, setContextWidth] = useState(() => loadNumberUiState(`${scopedProjectId}.contextWidth`, 430));
   const [activeThreadId, setActiveThreadId] = useState("");
+  const [locatedThreadId, setLocatedThreadId] = useState("");
   const [threadMetaById, setThreadMetaById] = useState<Record<string, ThreadAnchorMeta>>({});
+  const [localThreadRanges, setLocalThreadRanges] = useState<Record<string, ThreadStoredRange>>({});
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [editorScrollLeft, setEditorScrollLeft] = useState(0);
@@ -174,10 +216,12 @@ export function NotesSurface({
   const citationPanelRef = useRef<HTMLElement | null>(null);
   const citationRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const handledRequestedCitationIdRef = useRef("");
   const loadedNoteIdRef = useRef("");
   const previewRef = useRef<HTMLElement | null>(null);
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
   const markdownRef = useRef(markdown);
+  const localThreadRangesRef = useRef<Record<string, ThreadStoredRange>>({});
   const contextResizeFrameRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const lastCursorRef = useRef<number | null>(null);
@@ -210,6 +254,8 @@ export function NotesSurface({
       setSelection(null);
       setSelectionPinned(false);
       setInlineThreadId("");
+      localThreadRangesRef.current = {};
+      setLocalThreadRanges({});
       loadedNoteIdRef.current = note.id;
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
@@ -225,6 +271,7 @@ export function NotesSurface({
       }
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
+      persistLocalThreadRanges();
     }
   });
   const deleteNote = useMutation({
@@ -235,6 +282,8 @@ export function NotesSurface({
       setMarkdown("");
       setDirtyState(false);
       loadedNoteIdRef.current = "";
+      localThreadRangesRef.current = {};
+      setLocalThreadRanges({});
       queryClient.invalidateQueries({ queryKey: ["notes"] });
     }
   });
@@ -246,6 +295,8 @@ export function NotesSurface({
       setDirtyState(false);
       setUndoStack([]);
       loadedNoteIdRef.current = note.id;
+      localThreadRangesRef.current = {};
+      setLocalThreadRanges({});
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
     }
@@ -290,6 +341,33 @@ export function NotesSurface({
       queryClient.invalidateQueries({ queryKey: threadsQueryKey });
     }
   });
+  const askNote = useMutation({
+    mutationFn: () =>
+      api.askNote(activeNoteId, {
+        question: noteQuestion.trim(),
+        provider,
+        model,
+        use_kg_evidence: true
+      }),
+    onSuccess: (payload) => {
+      setNoteQuestion("");
+      setSelection(null);
+      setSelectionPinned(false);
+      setAiPreview("");
+      setAiInstruction("");
+      setInlineThreadId("");
+      setActiveThreadId(payload.thread.id);
+      setHistoryOpen(true);
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+        if (!current) {
+          return { items: [payload.thread], total: 1 };
+        }
+        const nextItems = [payload.thread, ...current.items.filter((thread) => thread.id !== payload.thread.id)];
+        return { ...current, items: nextItems, total: nextItems.length };
+      });
+      queryClient.invalidateQueries({ queryKey: threadsQueryKey });
+    }
+  });
   const followUp = useMutation({
     mutationFn: ({ threadId, message }: { threadId: string; message: string; source?: "inline" | "history" }) =>
       api.appendNoteAiMessage(activeNoteId, threadId, {
@@ -323,6 +401,24 @@ export function NotesSurface({
   const updateThreadUi = useMutation({
     mutationFn: ({ thread, uiState }: { thread: NoteAiThread; uiState: Record<string, unknown> }) =>
       api.updateNoteAiThread(activeNoteId, thread.id, { ui_state: { ...(thread.ui_state ?? {}), ...uiState } }),
+    onMutate: async ({ thread, uiState }) => {
+      await queryClient.cancelQueries({ queryKey: threadsQueryKey });
+      const previous = queryClient.getQueryData<NoteAiThreadsResult>(threadsQueryKey);
+      queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+        if (!current) {
+          return current;
+        }
+        const optimisticThread = { ...thread, ui_state: { ...(thread.ui_state ?? {}), ...uiState } };
+        const nextItems = current.items.map((item) => (item.id === thread.id ? optimisticThread : item));
+        return { ...current, items: nextItems };
+      });
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(threadsQueryKey, context.previous);
+      }
+    },
     onSuccess: ({ thread }) => {
       queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
         if (!current) {
@@ -353,6 +449,8 @@ export function NotesSurface({
         delete next[threadId];
         return next;
       });
+      localThreadRangesRef.current = Object.fromEntries(Object.entries(localThreadRangesRef.current).filter(([id]) => id !== threadId));
+      setLocalThreadRanges(localThreadRangesRef.current);
       return { previous };
     },
     onError: (_error, _threadId, context) => {
@@ -374,6 +472,8 @@ export function NotesSurface({
       setInlineThreadId("");
       setFollowUpDrafts({});
       setAiPreview("");
+      localThreadRangesRef.current = {};
+      setLocalThreadRanges({});
       return { previous };
     },
     onError: (_error, _variables, context) => {
@@ -397,6 +497,7 @@ export function NotesSurface({
   const currentNote = noteQuery.data?.note;
   const citations = currentNote?.citations ?? [];
   const threads = threadsQuery.data?.items ?? [];
+  const displayedThreads = useMemo(() => sortPinnedThreads(threads), [threads]);
   const citationRefs = useMemo(() => parseMarkdownCitationRefs(markdown), [markdown]);
   const citationLookup = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
   const citationRows = useMemo(
@@ -408,24 +509,45 @@ export function NotesSurface({
         const label = ref?.label || badge;
         const title = ref?.title || citation.title || citation.paper_id;
         const evidence = citation.pdf_excerpt || citation.reference_text || citation.kind || "";
-        return { citation, badge, label, title: shortText(title, 96), evidence: shortText(evidence, 150) };
+        return { citation, badge, label, title: shortText(title, 96), evidence: shortText(evidence, 150), colorIndex: citationColorIndex(citation, index) };
       }),
     [citationRefs, citations]
+  );
+  const citationColorIndexById = useMemo(
+    () => new Map(citationRows.map((row) => [row.citation.id, row.colorIndex])),
+    [citationRows]
   );
   const activeEditorCitation = activeEditorCitationId ? citationLookup.get(activeEditorCitationId) ?? null : null;
   const activeEditorCitationRow = activeEditorCitation
     ? citationRows.find((row) => row.citation.id === activeEditorCitation.id) ?? null
     : null;
-  const activeCitationRefs = selectedCitation ? citationRefs.filter((item) => item.id === selectedCitation.id) : [];
+  const selectedCitationColorIndex = selectedCitation ? citationColorIndexById.get(selectedCitation.id) ?? citationColorIndex(selectedCitation) : 0;
+  const activeEditorCitationColorIndex = activeEditorCitation ? citationColorIndexById.get(activeEditorCitation.id) ?? citationColorIndex(activeEditorCitation) : 0;
+  const activeCitationRefs = useMemo(() => {
+    if (!selectedCitation) {
+      return [];
+    }
+    const refs = citationRefs.filter((item) => item.id === selectedCitation.id);
+    if (!refs.length) {
+      return [];
+    }
+    if (selectedCitationRef?.id === selectedCitation.id) {
+      const exact = refs.find((item) => item.start === selectedCitationRef.start && item.end === selectedCitationRef.end);
+      if (exact) {
+        return [exact];
+      }
+    }
+    return [refs[0]];
+  }, [citationRefs, selectedCitation, selectedCitationRef]);
   const threadAnchors = useMemo(
     () =>
       threads
         .map((thread, index) => {
-          const range = threadAnchorRange(thread, markdown);
+          const range = threadAnchorRange(thread, markdown, localThreadRanges[thread.id]);
           return range ? { thread, index, ...range } : null;
         })
-        .filter((anchor): anchor is { thread: NoteAiThread; index: number; start: number; end: number } => Boolean(anchor)),
-    [markdown, threads]
+        .filter((anchor): anchor is { thread: NoteAiThread; index: number } & ThreadAnchorRange => Boolean(anchor)),
+    [localThreadRanges, markdown, threads]
   );
   const threadAnchorMeta = useMemo(
     () =>
@@ -440,6 +562,33 @@ export function NotesSurface({
       ),
     [threadAnchors, threadMetaById]
   );
+  const noteSearchRanges = useMemo(() => findNoteSearchRanges(markdown, noteSearchQuery), [markdown, noteSearchQuery]);
+  const activeNoteSearchRange = noteSearchRanges[noteSearchIndex] ?? null;
+
+  useEffect(() => {
+    if (!noteSearchRanges.length) {
+      setNoteSearchIndex(0);
+      return;
+    }
+    if (noteSearchIndex >= noteSearchRanges.length) {
+      setNoteSearchIndex(0);
+    }
+  }, [noteSearchIndex, noteSearchRanges.length]);
+
+  useEffect(() => {
+    if (!activeNoteSearchRange) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) {
+        return;
+      }
+      node.scrollTop = estimatedTextareaScrollTop(markdown, activeNoteSearchRange.start, node);
+      setEditorScrollTop(node.scrollTop);
+      setEditorScrollLeft(node.scrollLeft);
+    });
+  }, [activeNoteSearchRange, markdown]);
 
   useEffect(() => {
     if (!activeNoteId || !threadAnchors.length) {
@@ -449,6 +598,28 @@ export function NotesSurface({
   }, [activeNoteId, threadAnchors]);
 
   useEffect(() => {
+    if (!activeNoteId || !threads.length) {
+      return;
+    }
+    const seeded = { ...localThreadRangesRef.current };
+    let changed = false;
+    for (const thread of threads) {
+      if (seeded[thread.id]) {
+        continue;
+      }
+      const range = threadResultRange(thread);
+      if (range) {
+        seeded[thread.id] = range;
+        changed = true;
+      }
+    }
+    if (changed) {
+      localThreadRangesRef.current = seeded;
+      setLocalThreadRanges(seeded);
+    }
+  }, [activeNoteId, threads]);
+
+  useEffect(() => {
     markdownRef.current = markdown;
     latestDraftRef.current = { noteId: activeNoteId, title, markdown };
   }, [activeNoteId, markdown, title]);
@@ -456,7 +627,9 @@ export function NotesSurface({
   useEffect(() => {
     setActiveNoteId("");
     setSelectedCitation(null);
+    setSelectedCitationRef(null);
     setInlineThreadId("");
+    setHoverThreadId("");
     loadedNoteIdRef.current = "";
   }, [scopedProjectId]);
 
@@ -465,6 +638,14 @@ export function NotesSurface({
       setActiveNoteId(controlledNoteId);
     }
   }, [activeNoteId, controlledNoteId]);
+
+  useEffect(() => {
+    setSelectedCitation(null);
+    setSelectedCitationRef(null);
+    setActiveEditorCitationId("");
+    setActiveEditorCitationRef(null);
+    handledRequestedCitationIdRef.current = "";
+  }, [activeNoteId]);
 
   useEffect(() => {
     onActiveNoteChange?.(activeNoteId);
@@ -516,6 +697,10 @@ export function NotesSurface({
   useEffect(() => {
     saveBooleanUiState("spellcheckEnabled", spellcheckEnabled);
   }, [spellcheckEnabled]);
+
+  useEffect(() => {
+    setInsertPreview(null);
+  }, [activeNoteId, activeThreadId, editorMode, historyOpen]);
 
   useEffect(() => {
     if (!selectedCitation || !citationListOpen || historyOpen) {
@@ -621,8 +806,13 @@ export function NotesSurface({
     setAiPreview("");
     setSelection(null);
     setSelectionPinned(false);
-    setActiveThreadId("");
-    setInlineThreadId("");
+    if (switchedNote) {
+      setActiveThreadId("");
+      setInlineThreadId("");
+      setHoverThreadId("");
+      localThreadRangesRef.current = {};
+      setLocalThreadRanges({});
+    }
   }, [currentNote?.id, currentNote?.markdown, currentNote?.title, currentNote?.updated_timestamp, dirty, markdown, title]);
 
   useEffect(() => {
@@ -661,22 +851,67 @@ export function NotesSurface({
         reference_text: selectedCitation.reference_text || "",
         pdf_excerpt: selectedCitation.pdf_excerpt || "",
         matched_terms: textTerms(`${selectedCitation.reference_text} ${selectedCitation.pdf_excerpt}`),
-        found_in_pdf_text: Boolean(selectedCitation.pdf_excerpt)
+        found_in_pdf_text: Boolean(selectedCitation.pdf_excerpt),
+        evidence_index: selectedCitationColorIndex
       }
     ];
-  }, [selectedCitation]);
+  }, [selectedCitation, selectedCitationColorIndex]);
 
   function setDirtyState(value: boolean) {
     dirtyRef.current = value;
     setDirty(value);
   }
 
-  function updateMarkdown(value: string) {
+  function storeLocalThreadRanges(ranges: Record<string, ThreadStoredRange>) {
+    localThreadRangesRef.current = ranges;
+    setLocalThreadRanges(ranges);
+    mirrorThreadRangesInCache(ranges);
+  }
+
+  function mirrorThreadRangesInCache(ranges: Record<string, ThreadStoredRange>) {
+    if (!activeNoteId || !Object.keys(ranges).length) {
+      return;
+    }
+    queryClient.setQueryData<NoteAiThreadsResult>(threadsQueryKey, (current) => {
+      if (!current) {
+        return current;
+      }
+      let changed = false;
+      const nextItems = current.items.map((thread) => {
+        const range = ranges[thread.id];
+        if (!range || threadRangeMatchesUi(thread, range)) {
+          return thread;
+        }
+        changed = true;
+        return {
+          ...thread,
+          ui_state: {
+            ...(thread.ui_state ?? {}),
+            ...threadRangeUiState(range)
+          }
+        };
+      });
+      return changed ? { ...current, items: nextItems } : current;
+    });
+  }
+
+  function applyMarkdownChange(value: string, options: { markDirty?: boolean; clearPreview?: boolean } = {}) {
+    const shiftedRanges = shiftThreadRanges(seedThreadRanges(localThreadRangesRef.current, threads), markdownRef.current, value);
+    storeLocalThreadRanges(shiftedRanges);
     markdownRef.current = value;
     setMarkdown(value);
-    setDirtyState(true);
-    setInsertPreview(null);
+    if (options.markDirty ?? true) {
+      setDirtyState(true);
+    }
+    if (options.clearPreview ?? true) {
+      setInsertPreview(null);
+    }
     setActiveEditorCitationId("");
+    setActiveEditorCitationRef(null);
+  }
+
+  function updateMarkdown(value: string) {
+    applyMarkdownChange(value);
   }
 
   function updateTitle(value: string) {
@@ -696,12 +931,15 @@ export function NotesSurface({
     if (!node || node.selectionStart === node.selectionEnd) {
       if (node) {
         lastCursorRef.current = node.selectionStart;
-        setActiveEditorCitationId(citationRefAtPosition(citationRefs, node.selectionStart)?.id ?? "");
+        const ref = citationRefAtPosition(citationRefs, node.selectionStart);
+        setActiveEditorCitationId(ref?.id ?? "");
+        setActiveEditorCitationRef(ref ?? null);
       }
       return null;
     }
     lastCursorRef.current = node.selectionEnd;
     setActiveEditorCitationId("");
+    setActiveEditorCitationRef(null);
     const next = {
       start: node.selectionStart,
       end: node.selectionEnd,
@@ -764,12 +1002,31 @@ export function NotesSurface({
     setUndoStack((current) => [...current.slice(-14), markdown]);
   }
 
+  function rememberThreadResultRange(thread: NoteAiThread | null | undefined, start: number, end: number, text: string) {
+    if (!thread || end <= start) {
+      return;
+    }
+    const range: ThreadStoredRange = { start, end, text, manualRanges: [] };
+    storeLocalThreadRanges({ ...localThreadRangesRef.current, [thread.id]: range });
+    updateThreadUi.mutate({
+      thread,
+      uiState: {
+        result_anchor_start: start,
+        result_anchor_end: end,
+        result_anchor_text: text.slice(0, THREAD_RANGE_TEXT_LIMIT),
+        result_manual_ranges: []
+      }
+    });
+  }
+
   function replaceSelection(value: string) {
     if (!selection) {
       return;
     }
+    const thread = activeThreadId ? threads.find((item) => item.id === activeThreadId) : null;
     pushUndo();
     updateMarkdown(`${markdown.slice(0, selection.start)}${value}${markdown.slice(selection.end)}`);
+    rememberThreadResultRange(thread, selection.start, selection.start + value.length, value);
     setSelection(null);
     setAiPreview("");
     setAiInstruction("");
@@ -788,6 +1045,8 @@ export function NotesSurface({
       return;
     }
     setInlineThreadId("");
+    setLocatedThreadId("");
+    setHoverThreadId("");
     clearEditorSelection();
   }
 
@@ -801,9 +1060,11 @@ export function NotesSurface({
   function toggleInlineThread(threadId: string) {
     if (inlineThreadId === threadId) {
       setInlineThreadId("");
+      setLocatedThreadId("");
       return;
     }
     setInlineThreadId(threadId);
+    setLocatedThreadId("");
     setActiveThreadId(threadId);
     setSelection(null);
     setSelectionPinned(false);
@@ -811,15 +1072,17 @@ export function NotesSurface({
     setAiInstruction("");
   }
 
-  function activateThreadFromHistory(threadId: string) {
+  function locateThreadInEditor(threadId: string, openInline = false) {
     setActiveThreadId(threadId);
-    setInlineThreadId(threadId);
+    setInlineThreadId(openInline ? threadId : "");
+    setLocatedThreadId(openInline ? "" : threadId);
     setSelection(null);
     setSelectionPinned(false);
     setAiPreview("");
     setAiInstruction("");
     const anchor = threadAnchors.find((item) => item.thread.id === threadId);
     if (!anchor) {
+      setLocatedThreadId("");
       return;
     }
     requestAnimationFrame(() => {
@@ -835,10 +1098,16 @@ export function NotesSurface({
     });
   }
 
+  function activateThreadFromHistory(threadId: string) {
+    locateThreadInEditor(threadId, false);
+  }
+
   function appendThreadAnswer(thread: NoteAiThread) {
     const text = latestThreadAnswer(thread);
     if (text) {
       insertThreadAnswer(thread, text);
+    } else {
+      clearInsertPreview();
     }
   }
 
@@ -850,8 +1119,26 @@ export function NotesSurface({
     followUp.mutate({ threadId: thread.id, message, source });
   }
 
+  function stepNoteSearch(direction: -1 | 1) {
+    if (!noteSearchRanges.length) {
+      return;
+    }
+    setNoteSearchIndex((current) => (current + direction + noteSearchRanges.length) % noteSearchRanges.length);
+  }
+
+  function askWholeNote() {
+    if (!activeNoteId || !noteQuestion.trim() || askNote.isPending) {
+      return;
+    }
+    askNote.mutate();
+  }
+
   function setThreadCollapsed(thread: NoteAiThread, collapsed: boolean) {
     updateThreadUi.mutate({ thread, uiState: { collapsed } });
+  }
+
+  function setThreadPinned(thread: NoteAiThread, pinned: boolean) {
+    updateThreadUi.mutate({ thread, uiState: { pinned } });
   }
 
   function hideThreadMessage(thread: NoteAiThread, messageId: string) {
@@ -863,8 +1150,22 @@ export function NotesSurface({
     });
   }
 
+  function persistLocalThreadRanges() {
+    if (!activeNoteId || !threads.length) {
+      return;
+    }
+    for (const thread of threads) {
+      const range = localThreadRangesRef.current[thread.id];
+      if (!range || threadRangeMatchesUi(thread, range)) {
+        continue;
+      }
+      updateThreadUi.mutate({ thread, uiState: threadRangeUiState(range) });
+    }
+  }
+
   function appendThreadMessage(thread: NoteAiThread, message: NoteAiMessage) {
     insertThreadAnswer(thread, message.content);
+    clearInsertPreview();
   }
 
   function previewThreadMessage(thread: NoteAiThread, message: NoteAiMessage) {
@@ -921,7 +1222,14 @@ export function NotesSurface({
   function insertThreadAnswer(thread: NoteAiThread, answer: string) {
     const content = threadInsertionContent(answer);
     const index = insertionPointForThread(thread);
+    const existingResultRange = localThreadRangesRef.current[thread.id] ?? threadResultRange(thread);
+    const existingResultAnchor = existingResultRange ? threadAnchorRange(thread, markdown, existingResultRange) : null;
+    const insertsInsideExistingAnchor = Boolean(existingResultAnchor && index >= existingResultAnchor.start && index <= existingResultAnchor.end);
     insertAtRange(index, index, content);
+    if (!insertsInsideExistingAnchor) {
+      const range = insertedContentRange(index, content);
+      rememberThreadResultRange(thread, range.start, range.end, range.text);
+    }
   }
 
   function previewThreadAnswer(thread: NoteAiThread) {
@@ -958,11 +1266,7 @@ export function NotesSurface({
     const nextMarkdown = `${currentMarkdown.slice(0, start)}${insertText}${currentMarkdown.slice(end)}`;
     const nextCursor = start + insertText.length;
     pushUndo();
-    markdownRef.current = nextMarkdown;
-    setMarkdown(nextMarkdown);
-    setInsertPreview(null);
-    setActiveEditorCitationId("");
-    setDirtyState(true);
+    applyMarkdownChange(nextMarkdown);
     lastCursorRef.current = nextCursor;
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
@@ -991,18 +1295,26 @@ export function NotesSurface({
     const saved = await api.updateNote(activeNoteId, { title: nextTitle, markdown: nextMarkdown });
     const note = citations.length ? (await api.appendNote(activeNoteId, { markdown: " ", citations })).note : saved.note;
     setTitle(note.title);
-    setMarkdown(note.markdown);
-    markdownRef.current = note.markdown;
+    applyMarkdownChange(note.markdown, { markDirty: false, clearPreview: false });
     setDirtyState(false);
     loadedNoteIdRef.current = note.id;
     queryClient.setQueryData(["note", note.id], { note });
     queryClient.invalidateQueries({ queryKey: ["notes"] });
     queryClient.invalidateQueries({ queryKey: ["note", note.id] });
+    persistLocalThreadRanges();
     return note.id;
   }
 
   function threadInsertionContent(answer: string) {
     return `\n\n${answer.trim()}`;
+  }
+
+  function insertedContentRange(index: number, content: string) {
+    const leading = content.length - content.trimStart().length;
+    const trailing = content.trimEnd().length;
+    const start = index + leading;
+    const end = index + trailing;
+    return { start, end, text: content.slice(leading, trailing) };
   }
 
   function externalInsertRange() {
@@ -1049,10 +1361,13 @@ export function NotesSurface({
       insertAtSelection(insertText);
       return;
     }
+    const thread = activeThreadId ? threads.find((item) => item.id === activeThreadId) : null;
     const start = selection.end;
     pushUndo();
     updateMarkdown(`${markdown.slice(0, start)}${insertText}${markdown.slice(start)}`);
     lastCursorRef.current = start + insertText.length;
+    const range = insertedContentRange(start, insertText);
+    rememberThreadResultRange(thread, range.start, range.end, range.text);
     setSelection({
       start,
       end: start + insertText.length,
@@ -1195,8 +1510,7 @@ export function NotesSurface({
     const previous = undoStack.length ? undoStack[undoStack.length - 1] : undefined;
     if (previous !== undefined) {
       setUndoStack((current) => current.slice(0, -1));
-      setMarkdown(previous);
-      setDirtyState(true);
+      applyMarkdownChange(previous);
       return;
     }
     if (activeNoteId) {
@@ -1204,8 +1518,9 @@ export function NotesSurface({
     }
   }
 
-  function openCitation(citation: NoteCitation) {
+  function openCitation(citation: NoteCitation, ref?: CitationMarkdownRef | null) {
     setSelectedCitation(citation);
+    setSelectedCitationRef(ref ?? null);
     setContextOpen(true);
     setHistoryOpen(false);
     setCitationListOpen(true);
@@ -1215,18 +1530,34 @@ export function NotesSurface({
 
   function clearCitation() {
     setSelectedCitation(null);
+    setSelectedCitationRef(null);
     onCitationOpen?.(null);
   }
 
   useEffect(() => {
-    if (!requestedCitationId || selectedCitation?.id === requestedCitationId) {
+    if (!requestedCitationId || handledRequestedCitationIdRef.current === requestedCitationId) {
       return;
     }
     const citation = citations.find((item) => item.id === requestedCitationId);
     if (citation) {
+      handledRequestedCitationIdRef.current = requestedCitationId;
       openCitation(citation);
     }
-  }, [citations, requestedCitationId, selectedCitation?.id]);
+  }, [citations, requestedCitationId]);
+
+  useEffect(() => {
+    if (!selectedCitation) {
+      return;
+    }
+    const freshCitation = citations.find((item) => item.id === selectedCitation.id);
+    if (!freshCitation) {
+      setSelectedCitation(null);
+      setSelectedCitationRef(null);
+      onCitationOpen?.(null);
+    } else if (freshCitation !== selectedCitation) {
+      setSelectedCitation(freshCitation);
+    }
+  }, [citations, onCitationOpen, selectedCitation]);
 
   function clearSelectionAi() {
     clearEditorSelection();
@@ -1258,18 +1589,31 @@ export function NotesSurface({
           }
         ]
       : []),
-    ...threadAnchors
-      .filter((anchor) => anchor.thread.id === inlineThreadId)
-      .map((anchor) => ({
-        start: anchor.start,
-        end: anchor.end,
-        className: "textarea-highlight-range--thread-anchor textarea-highlight-range--thread-anchor-active",
+    ...threadAnchors.flatMap((anchor) => {
+      const isActive = anchor.thread.id === inlineThreadId || anchor.thread.id === locatedThreadId;
+      const isHovered = anchor.thread.id === hoverThreadId;
+      if (!isActive && !isHovered) {
+        return [];
+      }
+      return threadHighlightSegments(anchor).map((range) => ({
+        start: range.start,
+        end: range.end,
+        className: isActive
+          ? "textarea-highlight-range--thread-anchor textarea-highlight-range--thread-anchor-active"
+          : "textarea-highlight-range--thread-anchor",
         style: evidenceColorVars(threadAnchorMeta.get(anchor.thread.id)?.colorIndex ?? 0)
-      })),
+      }));
+    }),
     ...activeCitationRefs.map((ref) => ({
       start: ref.start,
       end: ref.end,
-      className: "textarea-highlight-range--citation-active"
+      className: "textarea-highlight-range--citation-active",
+      style: evidenceColorVars(selectedCitationColorIndex)
+    })),
+    ...noteSearchRanges.map((range, index) => ({
+      start: range.start,
+      end: range.end,
+      className: index === noteSearchIndex ? "textarea-highlight-range--note-search textarea-highlight-range--note-search-active" : "textarea-highlight-range--note-search"
     }))
   ];
   const threadAnchorInsertions = threadAnchors.map((anchor) => {
@@ -1290,10 +1634,18 @@ export function NotesSurface({
           isSubmitting={followUp.isPending && followUp.variables?.threadId === anchor.thread.id}
           deleting={deleteThread.isPending && deleteThread.variables === anchor.thread.id}
           onToggle={() => toggleInlineThread(anchor.thread.id)}
-          onClose={() => setInlineThreadId("")}
+          onClose={() => {
+            setInlineThreadId("");
+            setLocatedThreadId("");
+          }}
+          onHoverChange={(hovered) => setHoverThreadId((current) => (hovered ? anchor.thread.id : current === anchor.thread.id ? "" : current))}
           onDraftChange={(value) => setFollowUpDrafts((current) => ({ ...current, [anchor.thread.id]: value }))}
           onFollowUp={() => submitFollowUp(anchor.thread)}
           onDelete={() => deleteThread.mutate(anchor.thread.id)}
+          onInsertMessage={(message) => appendThreadMessage(anchor.thread, message)}
+          onPreviewMessage={(message) => previewThreadMessage(anchor.thread, message)}
+          onPreviewClear={clearInsertPreview}
+          onHideMessage={(messageId) => hideThreadMessage(anchor.thread, messageId)}
         />
       )
     };
@@ -1308,7 +1660,7 @@ export function NotesSurface({
   } as CSSProperties;
   const showEditor = editorMode === "edit" || editorMode === "split";
   const showPreview = editorMode === "preview" || editorMode === "split";
-  const pageClassName = embedded ? "page notes-page notes-page--embedded" : "page notes-page";
+  const pageClassName = embedded ? `page notes-page notes-page--embedded ${historyOpen ? "notes-page--embedded-history" : ""}` : "page notes-page";
 
   useEffect(() => {
     if (!actionsRef) {
@@ -1320,12 +1672,27 @@ export function NotesSurface({
       selectNote: setActiveNoteId,
       openCitation,
       clearCitation,
+      showHistory: () => {
+        setContextOpen(true);
+        setHistoryOpen(true);
+      },
+      showSources: () => {
+        setContextOpen(true);
+        setHistoryOpen(false);
+      },
       activateThread: activateThreadFromHistory,
+      locateThread: (threadId: string) => locateThreadInEditor(threadId, false),
       setActiveThread: setActiveThreadId,
       toggleThreadCollapsed: (threadId: string) => {
         const thread = findThread(threadId);
         if (thread) {
           setThreadCollapsed(thread, !threadCollapsed(thread));
+        }
+      },
+      setThreadPinned: (threadId: string, pinned: boolean) => {
+        const thread = findThread(threadId);
+        if (thread) {
+          setThreadPinned(thread, pinned);
         }
       },
       setFollowUpDraft: (threadId: string, value: string) => setFollowUpDrafts((current) => ({ ...current, [threadId]: value })),
@@ -1388,8 +1755,9 @@ export function NotesSurface({
       citations,
       citationRows,
       selectedCitation,
-      threads,
+      threads: displayedThreads,
       activeThreadId,
+      historyOpen,
       threadMeta: threadAnchorMeta,
       followUpDrafts,
       isFollowUpPending: followUp.isPending,
@@ -1404,8 +1772,9 @@ export function NotesSurface({
     citations,
     citationRows,
     selectedCitation,
-    threads,
+    displayedThreads,
     activeThreadId,
+    historyOpen,
     threadAnchorMeta,
     followUpDrafts,
     followUp.isPending,
@@ -1550,7 +1919,49 @@ export function NotesSurface({
                     Split
                   </button>
                 </div>
+                <label className="note-search-field">
+                  <Search size={15} />
+                  <input
+                    value={noteSearchQuery}
+                    onChange={(event) => {
+                      setNoteSearchQuery(event.target.value);
+                      setNoteSearchIndex(0);
+                    }}
+                    placeholder="Notiz suchen"
+                  />
+                  <span>{noteSearchQuery.trim() ? `${noteSearchRanges.length ? noteSearchIndex + 1 : 0}/${noteSearchRanges.length}` : ""}</span>
+                  <button className="icon-button icon-button--compact" type="button" aria-label="Vorheriger Suchtreffer" onClick={() => stepNoteSearch(-1)} disabled={!noteSearchRanges.length}>
+                    <ChevronUp size={14} />
+                  </button>
+                  <button className="icon-button icon-button--compact" type="button" aria-label="Naechster Suchtreffer" onClick={() => stepNoteSearch(1)} disabled={!noteSearchRanges.length}>
+                    <ChevronDown size={14} />
+                  </button>
+                </label>
+                <label className="note-question-field">
+                  <Sparkles size={15} />
+                  <input
+                    value={noteQuestion}
+                    onChange={(event) => setNoteQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        askWholeNote();
+                      }
+                    }}
+                    placeholder="Ganze Notiz fragen"
+                  />
+                  <button
+                    className="button button-compact"
+                    type="button"
+                    aria-label="Ganze Notiz"
+                    onClick={askWholeNote}
+                    disabled={!noteQuestion.trim() || askNote.isPending || !activeNoteId}
+                  >
+                    Notiz
+                  </button>
+                </label>
               </div>
+              {askNote.isError ? <div className="inline-error">Notizfrage fehlgeschlagen: {formatError(askNote.error)}</div> : null}
 
               <div className={`markdown-editor-grid markdown-editor-grid--${editorMode}`}>
                 {showEditor ? (
@@ -1587,8 +1998,9 @@ export function NotesSurface({
                       <button
                         className="editor-citation-chip"
                         type="button"
+                        style={evidenceColorVars(activeEditorCitationColorIndex)}
                         onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => openCitation(activeEditorCitation)}
+                        onClick={() => openCitation(activeEditorCitation, activeEditorCitationRef)}
                       >
                         <Quote size={15} />
                         <span>{activeEditorCitationRow.badge} öffnen</span>
@@ -1664,7 +2076,9 @@ export function NotesSurface({
                     markdown={markdown}
                     citations={citations}
                     activeCitationId={selectedCitation?.id ?? ""}
+                    activeCitationRef={selectedCitationRef}
                     onCitationClick={openCitation}
+                    searchQuery={noteSearchQuery}
                     editable={editorMode === "preview"}
                     onBlockChange={editorMode === "preview" ? updatePreviewBlock : undefined}
                   />
@@ -1699,7 +2113,7 @@ export function NotesSurface({
                 selectedCitation={selectedCitation}
                 citationListOpen={citationListOpen}
                 notePdfOpen={notePdfOpen}
-                threads={threads}
+                threads={displayedThreads}
                 deleteAllPending={deleteAllThreads.isPending}
                 onShowSources={() => setHistoryOpen(false)}
                 onShowHistory={() => setHistoryOpen(true)}
@@ -1713,7 +2127,7 @@ export function NotesSurface({
                 {deleteAllThreads.isError ? <div className="inline-error">KI-Verlaeufe konnten nicht geloescht werden: {formatError(deleteAllThreads.error)}</div> : null}
                 {followUp.isError ? <div className="inline-error">Folgefrage fehlgeschlagen: {formatError(followUp.error)}</div> : null}
                 <AiThreadList
-                  threads={threads}
+                  threads={displayedThreads}
                   activeThreadId={activeThreadId}
                   threadMeta={threadAnchorMeta}
                   followUpDrafts={followUpDrafts}
@@ -1726,6 +2140,7 @@ export function NotesSurface({
                   onPreviewInsert={previewThreadAnswer}
                   onPreviewClear={clearInsertPreview}
                   onCollapseChange={setThreadCollapsed}
+                  onPinChange={setThreadPinned}
                   onInsertMessage={appendThreadMessage}
                   onPreviewMessage={previewThreadMessage}
                   onHideMessage={hideThreadMessage}
@@ -1743,7 +2158,7 @@ export function NotesSurface({
                 selectedCitation={selectedCitation}
                 citationListOpen={citationListOpen}
                 notePdfOpen={notePdfOpen}
-                threads={threads}
+                threads={displayedThreads}
                 deleteAllPending={deleteAllThreads.isPending}
                 onShowSources={() => setHistoryOpen(false)}
                 onShowHistory={() => setHistoryOpen(true)}
@@ -1756,7 +2171,7 @@ export function NotesSurface({
                 <section ref={citationPanelRef} className={`panel citation-panel ${citationListOpen ? "" : "citation-panel--compact"}`}>
                   {citationListOpen ? (
                     <div className="list">
-                      {citationRows.map(({ citation, badge, label, title, evidence }) => (
+                      {citationRows.map(({ citation, badge, label, title, evidence, colorIndex }) => (
                         <button
                           className={`list-row note-citation-row ${selectedCitation?.id === citation.id ? "note-citation-row--active" : ""}`}
                           type="button"
@@ -1765,6 +2180,7 @@ export function NotesSurface({
                             citationRowRefs.current[citation.id] = node;
                           }}
                           onClick={() => openCitation(citation)}
+                          style={evidenceColorVars(colorIndex)}
                           aria-label={`Quelle ${badge} öffnen`}
                           aria-pressed={selectedCitation?.id === citation.id}
                         >
@@ -1820,9 +2236,14 @@ function ThreadAnchorMarker({
   deleting,
   onToggle,
   onClose,
+  onHoverChange,
   onDraftChange,
   onFollowUp,
-  onDelete
+  onDelete,
+  onInsertMessage,
+  onPreviewMessage,
+  onPreviewClear,
+  onHideMessage
 }: {
   label: string;
   thread: NoteAiThread;
@@ -1835,21 +2256,163 @@ function ThreadAnchorMarker({
   deleting: boolean;
   onToggle: () => void;
   onClose: () => void;
+  onHoverChange: (hovered: boolean) => void;
   onDraftChange: (value: string) => void;
   onFollowUp: () => void;
   onDelete: () => void;
+  onInsertMessage: (message: NoteAiMessage) => void;
+  onPreviewMessage: (message: NoteAiMessage) => void;
+  onPreviewClear: () => void;
+  onHideMessage: (messageId: string) => void;
 }) {
   const messages = threadDisplayMessages(thread);
   const context = shortThreadContext(thread.anchor_quote || thread.selected_text);
+  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [buttonPlacement, setButtonPlacement] = useState<"above" | "below">("above");
+  const [portalPosition, setPortalPosition] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  function setHoveredState(value: boolean) {
+    onHoverChange(value);
+  }
+
+  useEffect(() => {
+    const updatePosition = () => {
+      const button = buttonRef.current;
+      const wrap = wrapRef.current;
+      if (!button || !wrap) {
+        return;
+      }
+      const rect = button.getBoundingClientRect();
+      const wrapRect = wrap.getBoundingClientRect();
+      const editor = wrap.closest(".markdown-editor-wrap");
+      const editorRect = editor?.getBoundingClientRect();
+      const nextButtonPlacement = editorRect && wrapRect.top < editorRect.top + 30 ? "below" : "above";
+      setButtonPlacement((current) => (current === nextButtonPlacement ? current : nextButtonPlacement));
+
+      const viewportWidth = window.innerWidth || 1024;
+      const viewportHeight = window.innerHeight || 768;
+      const preferredWidth = open ? 430 : 320;
+      const preferredHeight = open ? 420 : 130;
+      const width = Math.min(preferredWidth, Math.max(240, viewportWidth - 24));
+      const expectedHeight = Math.min(preferredHeight, Math.max(120, viewportHeight - 24));
+      const maxLeft = Math.max(12, viewportWidth - width - 12);
+      const preferredLeft = placement === "left" ? rect.right - width : rect.left;
+      const left = Math.min(Math.max(12, preferredLeft), maxLeft);
+      const belowTop = rect.bottom + 8;
+      const top = belowTop + expectedHeight > viewportHeight ? Math.max(12, rect.top - expectedHeight - 8) : belowTop;
+      setPortalPosition({ left, top, width });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, placement]);
+
+  const portalTarget = typeof document === "undefined" ? null : document.body;
+  const popover =
+    portalTarget && open && portalPosition
+      ? createPortal(
+          <span
+            className="thread-anchor-popover thread-anchor-popover--portal"
+            role="dialog"
+            aria-label={`KI-Notiz ${label}`}
+            style={{ ...style, left: portalPosition.left, top: portalPosition.top, width: portalPosition.width }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <span className="thread-anchor-popover__header">
+              <span>
+                <strong>{label}</strong>
+                <small>{context || "Markierter Bereich"}</small>
+              </span>
+              <span className="thread-anchor-popover__actions">
+                <button className="icon-button" type="button" aria-label="KI-Notiz einklappen" onMouseDown={(event) => event.preventDefault()} onClick={onClose}>
+                  <ChevronDown size={16} />
+                </button>
+                <button className="icon-button" type="button" aria-label="KI-Notiz löschen" disabled={deleting} onMouseDown={(event) => event.preventDefault()} onClick={onDelete}>
+                  <Trash2 size={16} />
+                </button>
+              </span>
+            </span>
+            <span className="thread-anchor-messages">
+              {messages.map((message) => (
+                <span className={`thread-anchor-message thread-anchor-message--${message.role === "assistant" ? "assistant" : "user"}`} key={message.id}>
+                  <span className="thread-anchor-message__topline">
+                    <small>{message.role === "assistant" ? "Antwort" : "Frage"}</small>
+                    {message.role === "assistant" ? (
+                      <span className="thread-anchor-message__actions">
+                        <button
+                          className="button button-compact"
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            onInsertMessage(message);
+                            onPreviewClear();
+                          }}
+                          onMouseEnter={() => onPreviewMessage(message)}
+                          onMouseOut={onPreviewClear}
+                          onMouseLeave={onPreviewClear}
+                          onPointerEnter={() => onPreviewMessage(message)}
+                          onPointerOut={onPreviewClear}
+                          onPointerLeave={onPreviewClear}
+                          onFocus={() => onPreviewMessage(message)}
+                          onBlur={onPreviewClear}
+                        >
+                          Einfügen
+                        </button>
+                        <button className="icon-button icon-button--compact" type="button" aria-label="KI-Antwort ausblenden" onMouseDown={(event) => event.preventDefault()} onClick={() => onHideMessage(message.id)}>
+                          <Trash2 size={15} />
+                        </button>
+                      </span>
+                    ) : null}
+                  </span>
+                  <span>{message.content}</span>
+                </span>
+              ))}
+            </span>
+            <form
+              className="thread-anchor-followup"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (followUpDraft.trim() && !isSubmitting) {
+                  onFollowUp();
+                }
+              }}
+            >
+              <input
+                value={followUpDraft}
+                onChange={(event) => onDraftChange(event.target.value)}
+                onMouseDown={(event) => event.stopPropagation()}
+                placeholder="Weiterfragen"
+              />
+              <button className="button button-primary" type="submit" disabled={!followUpDraft.trim() || isSubmitting}>
+                Fragen
+              </button>
+            </form>
+          </span>,
+          portalTarget
+        )
+      : null;
   return (
-    <span className="textarea-thread-anchor-wrap" style={style}>
+    <span
+      ref={wrapRef}
+      className="textarea-thread-anchor-wrap"
+      style={style}
+      onPointerEnter={() => setHoveredState(true)}
+      onPointerLeave={() => setHoveredState(false)}
+    >
       <button
-        className={`textarea-thread-anchor-button ${active ? "textarea-thread-anchor-button--active" : ""}`}
+        ref={buttonRef}
+        className={`textarea-thread-anchor-button textarea-thread-anchor-button--${buttonPlacement} ${active ? "textarea-thread-anchor-button--active" : ""}`}
         type="button"
         aria-label={`KI-Notiz ${label} öffnen`}
         aria-expanded={open}
-        title={context || "KI-Notiz"}
         onMouseDown={(event) => event.preventDefault()}
+        onFocus={() => setHoveredState(true)}
+        onBlur={() => setHoveredState(false)}
         onClick={(event) => {
           event.stopPropagation();
           onToggle();
@@ -1857,7 +2420,7 @@ function ThreadAnchorMarker({
       >
         {label}
       </button>
-      {open ? (
+      {false && open ? (
         <span className={`thread-anchor-popover thread-anchor-popover--${placement}`} role="dialog" aria-label={`KI-Notiz ${label}`}>
           <span className="thread-anchor-popover__header">
             <span>
@@ -1876,7 +2439,35 @@ function ThreadAnchorMarker({
           <span className="thread-anchor-messages">
             {messages.map((message) => (
               <span className={`thread-anchor-message thread-anchor-message--${message.role === "assistant" ? "assistant" : "user"}`} key={message.id}>
-                <small>{message.role === "assistant" ? "Antwort" : "Frage"}</small>
+                <span className="thread-anchor-message__topline">
+                  <small>{message.role === "assistant" ? "Antwort" : "Frage"}</small>
+                  {message.role === "assistant" ? (
+                    <span className="thread-anchor-message__actions">
+                      <button
+                        className="button button-compact"
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          onInsertMessage(message);
+                          onPreviewClear();
+                        }}
+                        onMouseEnter={() => onPreviewMessage(message)}
+                        onMouseOut={onPreviewClear}
+                        onMouseLeave={onPreviewClear}
+                        onPointerEnter={() => onPreviewMessage(message)}
+                        onPointerOut={onPreviewClear}
+                        onPointerLeave={onPreviewClear}
+                        onFocus={() => onPreviewMessage(message)}
+                        onBlur={onPreviewClear}
+                      >
+                        Einfügen
+                      </button>
+                      <button className="icon-button icon-button--compact" type="button" aria-label="KI-Antwort ausblenden" onMouseDown={(event) => event.preventDefault()} onClick={() => onHideMessage(message.id)}>
+                        <Trash2 size={15} />
+                      </button>
+                    </span>
+                  ) : null}
+                </span>
                 <span>{message.content}</span>
               </span>
             ))}
@@ -1902,6 +2493,7 @@ function ThreadAnchorMarker({
           </form>
         </span>
       ) : null}
+      {popover}
     </span>
   );
 }
@@ -2001,6 +2593,7 @@ function AiThreadList({
   onPreviewInsert,
   onPreviewClear,
   onCollapseChange,
+  onPinChange,
   onInsertMessage,
   onPreviewMessage,
   onHideMessage,
@@ -2020,6 +2613,7 @@ function AiThreadList({
   onPreviewInsert: (thread: NoteAiThread) => void;
   onPreviewClear: () => void;
   onCollapseChange: (thread: NoteAiThread, collapsed: boolean) => void;
+  onPinChange: (thread: NoteAiThread, pinned: boolean) => void;
   onInsertMessage: (thread: NoteAiThread, message: NoteAiMessage) => void;
   onPreviewMessage: (thread: NoteAiThread, message: NoteAiMessage) => void;
   onHideMessage: (thread: NoteAiThread, messageId: string) => void;
@@ -2039,14 +2633,15 @@ function AiThreadList({
         const context = shortThreadContext(thread.anchor_quote || thread.selected_text);
         const answerPreview = shortThreadContext(answer);
         const meta = threadMeta.get(thread.id);
+        const pinned = threadPinned(thread);
         return (
           <article
-            className={`note-thread-row ai-thread-card ${meta ? "ai-thread-card--anchored" : ""} ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""}`}
+            className={`note-thread-row ai-thread-card ${meta ? "ai-thread-card--anchored" : ""} ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""} ${pinned ? "ai-thread-card--pinned" : ""}`}
             key={thread.id}
             style={{ ...(meta ? evidenceColorVars(meta.colorIndex) : {}), ...threadSizeStyle(thread) }}
           >
             <div className="ai-thread-topline">
-              <button className="ai-thread-header" type="button" title={context || undefined} onClick={() => onLocateThread(thread.id)}>
+              <button className="ai-thread-header" type="button" onClick={() => onLocateThread(thread.id)}>
                 <span className="ai-thread-header-line">
                   {meta ? (
                     <span className="ai-thread-anchor-badge" aria-label={`KI-Notiz ${meta.label}`}>
@@ -2057,6 +2652,14 @@ function AiThreadList({
                 </span>
               </button>
               <div className="ai-thread-actions">
+                <button
+                  className={`icon-button icon-button--compact ${pinned ? "icon-button--active" : ""}`}
+                  type="button"
+                  aria-label={pinned ? "KI-Notiz loesen" : "KI-Notiz anpinnen"}
+                  onClick={() => onPinChange(thread, !pinned)}
+                >
+                  <Pin size={15} />
+                </button>
                 <button
                   className="button button-compact"
                   type="button"
@@ -2070,12 +2673,17 @@ function AiThreadList({
                 <button
                   className="button button-compact"
                   type="button"
-                  onClick={() => onInsert(thread)}
+                  onClick={() => {
+                    onInsert(thread);
+                    onPreviewClear();
+                  }}
                   onMouseEnter={() => onPreviewInsert(thread)}
                   onMouseOver={() => onPreviewInsert(thread)}
+                  onMouseOut={onPreviewClear}
                   onMouseLeave={onPreviewClear}
                   onPointerEnter={() => onPreviewInsert(thread)}
                   onPointerOver={() => onPreviewInsert(thread)}
+                  onPointerOut={onPreviewClear}
                   onPointerLeave={onPreviewClear}
                   onFocus={() => onPreviewInsert(thread)}
                   onBlur={onPreviewClear}
@@ -2115,12 +2723,17 @@ function AiThreadList({
                           <button
                             className="button button-compact"
                             type="button"
-                            onClick={() => onInsertMessage(thread, message)}
+                            onClick={() => {
+                              onInsertMessage(thread, message);
+                              onPreviewClear();
+                            }}
                             onMouseEnter={() => onPreviewMessage(thread, message)}
                             onMouseOver={() => onPreviewMessage(thread, message)}
+                            onMouseOut={onPreviewClear}
                             onMouseLeave={onPreviewClear}
                             onPointerEnter={() => onPreviewMessage(thread, message)}
                             onPointerOver={() => onPreviewMessage(thread, message)}
+                            onPointerOut={onPreviewClear}
                             onPointerLeave={onPreviewClear}
                             onFocus={() => onPreviewMessage(thread, message)}
                             onBlur={onPreviewClear}
@@ -2170,7 +2783,9 @@ function MarkdownPreview({
   markdown,
   citations,
   activeCitationId,
+  activeCitationRef,
   onCitationClick,
+  searchQuery = "",
   editable = false,
   onBlockChange
 }: {
@@ -2178,16 +2793,19 @@ function MarkdownPreview({
   markdown: string;
   citations: NoteCitation[];
   activeCitationId?: string;
-  onCitationClick: (citation: NoteCitation) => void;
+  activeCitationRef?: CitationMarkdownRef | null;
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void;
+  searchQuery?: string;
   editable?: boolean;
   onBlockChange?: (blockIndex: number, nextRaw: string, expectedRaw?: string) => void;
 }) {
   const citationById = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
+  const citationColorById = useMemo(() => new Map(citations.map((citation, index) => [citation.id, citationColorIndex(citation, index)])), [citations]);
   const blocks = useMemo(() => splitMarkdownBlocks(markdown), [markdown]);
   return (
     <article ref={previewRef} className={`markdown-preview ${editable ? "markdown-preview--editable" : ""}`}>
       {blocks.map((block, index) => {
-        const rendered = renderBlock(block.raw, `${index}`, citationById, onCitationClick, activeCitationId ?? "");
+        const rendered = renderBlock(block.raw, `${index}`, citationById, citationColorById, onCitationClick, activeCitationId ?? "", searchQuery, block.start, activeCitationRef ?? null);
         if (!editable || !rendered) {
           return rendered;
         }
@@ -2224,23 +2842,34 @@ function MarkdownPreview({
   );
 }
 
-function renderBlock(block: string, key: string, citations: Map<string, NoteCitation>, onCitationClick: (citation: NoteCitation) => void, activeCitationId = "") {
+function renderBlock(
+  block: string,
+  key: string,
+  citations: Map<string, NoteCitation>,
+  citationColorById: Map<string, number>,
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void,
+  activeCitationId = "",
+  searchQuery = "",
+  blockStart = 0,
+  activeCitationRef: CitationMarkdownRef | null = null
+) {
   const trimmed = block.trim();
   if (!trimmed) {
     return null;
   }
+  const trimOffset = Math.max(0, block.indexOf(trimmed));
   if (/^!\[[^\]]*\]\([^)]+\)$/.test(trimmed)) {
     const match = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed);
     return <img key={key} className="markdown-preview-image" alt={match?.[1] ?? ""} src={match?.[2]} />;
   }
   if (trimmed.startsWith("# ")) {
-    return <h1 key={key}>{renderInline(trimmed.slice(2), citations, onCitationClick, activeCitationId)}</h1>;
+    return <h1 key={key}>{renderInline(trimmed.slice(2), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset + 2, activeCitationRef)}</h1>;
   }
   if (trimmed.startsWith("## ")) {
-    return <h2 key={key}>{renderInline(trimmed.slice(3), citations, onCitationClick, activeCitationId)}</h2>;
+    return <h2 key={key}>{renderInline(trimmed.slice(3), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset + 3, activeCitationRef)}</h2>;
   }
   if (trimmed.startsWith(">")) {
-    return <blockquote key={key}>{renderInline(trimmed.replace(/^>\s?/gm, ""), citations, onCitationClick, activeCitationId)}</blockquote>;
+    return <blockquote key={key}>{renderInline(trimmed.replace(/^>\s?/gm, ""), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}</blockquote>;
   }
   if (/^\|.+\|\n\|[-:|\s]+\|/.test(trimmed)) {
     const rows = trimmed.split("\n").filter((line) => line.trim().startsWith("|"));
@@ -2251,7 +2880,7 @@ function renderBlock(block: string, key: string, citations: Map<string, NoteCita
             <tr key={`${key}-${rowIndex}`}>
               {row.split("|").slice(1, -1).map((cell, cellIndex) => {
                 const Tag = rowIndex === 0 ? "th" : "td";
-                return <Tag key={`${key}-${rowIndex}-${cellIndex}`}>{renderInline(cell.trim(), citations, onCitationClick, activeCitationId)}</Tag>;
+                return <Tag key={`${key}-${rowIndex}-${cellIndex}`}>{renderInline(cell.trim(), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}</Tag>;
               })}
             </tr>
           ))}
@@ -2263,30 +2892,58 @@ function renderBlock(block: string, key: string, citations: Map<string, NoteCita
     return (
       <ul key={key}>
         {trimmed.split("\n").map((line, itemIndex) => (
-          <li key={`${key}-${itemIndex}`}>{renderInline(line.replace(/^- /, ""), citations, onCitationClick, activeCitationId)}</li>
+          <li key={`${key}-${itemIndex}`}>{renderInline(line.replace(/^- /, ""), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}</li>
         ))}
       </ul>
     );
   }
-  return <p key={key}>{renderInline(trimmed, citations, onCitationClick, activeCitationId)}</p>;
+  return <p key={key}>{renderInline(trimmed, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset, activeCitationRef)}</p>;
 }
 
-function renderInline(text: string, citations: Map<string, NoteCitation>, onCitationClick: (citation: NoteCitation) => void, activeCitationId = "") {
+function renderInline(
+  text: string,
+  citations: Map<string, NoteCitation>,
+  citationColorById: Map<string, number>,
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void,
+  activeCitationId = "",
+  searchQuery = "",
+  baseOffset: number | null = null,
+  activeCitationRef: CitationMarkdownRef | null = null
+) {
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|==[^=]+==|<mark(?:\s+[^>]*)?>.*?<\/mark>|<span style="color:[^"]+">.*?<\/span>|\[[^\]]+\]\([^)]+\))/g);
+  let cursor = 0;
   return parts.map((part, index) => {
+    const partStart = cursor;
+    cursor += part.length;
     const citationMatch = /^\[([^\]]+)\]\(sciencekg:\/\/citation\/([^)]+)\)$/.exec(part);
     if (citationMatch) {
       const citation = citations.get(citationMatch[2]);
+      const colorIndex = citationColorById.get(citationMatch[2]) ?? citationColorIndex(citation);
+      const ref =
+        baseOffset === null
+          ? null
+          : {
+              id: citationMatch[2],
+              label: citationMatch[1],
+              badge: citationBadgeFromLabel(citationMatch[1]),
+              title: citationTitleFromLabel(citationMatch[1]),
+              start: baseOffset + partStart,
+              end: baseOffset + partStart + part.length
+            };
+      const isActive =
+        citationMatch[2] === activeCitationId &&
+        (!activeCitationRef || (ref !== null && activeCitationRef.start === ref.start && activeCitationRef.end === ref.end));
       return (
         <button
           key={`${part}-${index}`}
           type="button"
-          className={`citation-link citation-link--mapped ${citationMatch[2] === activeCitationId ? "citation-link--active" : ""}`}
+          className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""}`}
           contentEditable={false}
           data-citation-id={citationMatch[2]}
           data-citation-label={citationMatch[1]}
+          style={citation ? evidenceColorVars(colorIndex) : undefined}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() => citation && onCitationClick(citation)}
+          onClick={() => citation && onCitationClick(citation, ref)}
         >
           {citationMatch[1]}
         </button>
@@ -2319,7 +2976,7 @@ function renderInline(text: string, citations: Map<string, NoteCitation>, onCita
     if (colorMatch) {
       return <span key={`${part}-${index}`} style={{ color: colorMatch[1] }} data-color={colorMatch[1]}>{colorMatch[2]}</span>;
     }
-    return <span key={`${part}-${index}`}>{part}</span>;
+    return <span key={`${part}-${index}`}>{highlightPreviewSearch(part, searchQuery)}</span>;
   });
 }
 
@@ -2431,26 +3088,428 @@ function parseMarkdownCitationRefs(markdown: string): CitationMarkdownRef[] {
   return refs;
 }
 
+function findNoteSearchRanges(markdown: string, query: string) {
+  const needle = query.toLowerCase().trim();
+  if (!needle) {
+    return [] as Array<{ start: number; end: number }>;
+  }
+  const haystack = markdown.toLowerCase();
+  const ranges: Array<{ start: number; end: number }> = [];
+  let index = haystack.indexOf(needle);
+  while (index >= 0 && ranges.length < 500) {
+    ranges.push({ start: index, end: index + needle.length });
+    index = haystack.indexOf(needle, index + Math.max(1, needle.length));
+  }
+  return ranges;
+}
+
+function highlightPreviewSearch(text: string, query: string) {
+  const needle = query.trim();
+  if (!needle) {
+    return text;
+  }
+  const lowerText = text.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  const parts: Array<string | ReactNode> = [];
+  let cursor = 0;
+  let index = lowerText.indexOf(lowerNeedle);
+  while (index >= 0) {
+    if (index > cursor) {
+      parts.push(text.slice(cursor, index));
+    }
+    const end = index + needle.length;
+    parts.push(
+      <mark className="markdown-preview-search-hit" key={`${index}-${end}`}>
+        {text.slice(index, end)}
+      </mark>
+    );
+    cursor = end;
+    index = lowerText.indexOf(lowerNeedle, cursor);
+  }
+  if (!parts.length) {
+    return text;
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts;
+}
+
 function citationRefAtPosition(refs: CitationMarkdownRef[], position: number) {
   return refs.find((ref) => position >= ref.start && position <= ref.end) ?? null;
 }
 
-function threadAnchorRange(thread: NoteAiThread, markdown: string) {
+function threadAnchorRange(thread: NoteAiThread, markdown: string, localRange?: ThreadStoredRange): ThreadAnchorRange | null {
+  const resultRange = localRange ?? threadResultRange(thread);
+  const resolvedResult = resultRange ? resolveStoredThreadRange(markdown, resultRange, true) : null;
+  if (resolvedResult) {
+    return resolvedResult;
+  }
+
   const quote = stripHighlightMarkers(thread.anchor_quote || thread.selected_text || "").trim();
   const anchorStart = thread.anchor_start === null || thread.anchor_start === undefined ? NaN : Number(thread.anchor_start);
   const anchorEnd = thread.anchor_end === null || thread.anchor_end === undefined ? NaN : Number(thread.anchor_end);
   if (Number.isFinite(anchorStart) && Number.isFinite(anchorEnd) && anchorStart >= 0 && anchorEnd > anchorStart && anchorEnd <= markdown.length) {
     if (!quote || markdown.slice(anchorStart, anchorEnd).includes(quote) || quote.includes(markdown.slice(anchorStart, anchorEnd).trim())) {
-      return { start: anchorStart, end: anchorEnd };
+      return { start: anchorStart, end: anchorEnd, text: markdown.slice(anchorStart, anchorEnd), changedRanges: [], manualRanges: [] };
     }
   }
   if (quote) {
     const index = markdown.indexOf(quote);
     if (index >= 0) {
-      return { start: index, end: index + quote.length };
+      return { start: index, end: index + quote.length, text: quote, changedRanges: [], manualRanges: [] };
+    }
+    const fuzzy = resolveStoredThreadRange(markdown, { start: Number.isFinite(anchorStart) ? anchorStart : 0, end: Number.isFinite(anchorEnd) ? anchorEnd : 0, text: quote }, false);
+    if (fuzzy) {
+      return fuzzy;
     }
   }
   return null;
+}
+
+function threadResultRange(thread: NoteAiThread): ThreadStoredRange | null {
+  const start = Number(thread.ui_state?.result_anchor_start);
+  const end = Number(thread.ui_state?.result_anchor_end);
+  const text = String(thread.ui_state?.result_anchor_text ?? "").trim();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) {
+    return null;
+  }
+  return { start, end, text, manualRanges: readThreadManualRanges(thread.ui_state?.result_manual_ranges) };
+}
+
+function threadRangeUiState(range: ThreadStoredRange) {
+  const manualRanges = normalizeManualRanges(range.manualRanges, range.start, range.end);
+  return {
+    result_anchor_start: range.start,
+    result_anchor_end: range.end,
+    result_anchor_text: range.text.slice(0, THREAD_RANGE_TEXT_LIMIT),
+    result_manual_ranges: manualRanges
+  };
+}
+
+function threadRangeMatchesUi(thread: NoteAiThread, range: ThreadStoredRange) {
+  const start = Number(thread.ui_state?.result_anchor_start);
+  const end = Number(thread.ui_state?.result_anchor_end);
+  const text = String(thread.ui_state?.result_anchor_text ?? "");
+  const manualRanges = normalizeManualRanges(range.manualRanges, range.start, range.end);
+  return start === range.start && end === range.end && text === range.text.slice(0, THREAD_RANGE_TEXT_LIMIT) && sameThreadRanges(readThreadManualRanges(thread.ui_state?.result_manual_ranges), manualRanges);
+}
+
+function resolveStoredThreadRange(markdown: string, stored: ThreadStoredRange, acceptEditedRange: boolean): ThreadAnchorRange | null {
+  const start = Math.max(0, Math.min(markdown.length, stored.start));
+  const end = Math.max(start, Math.min(markdown.length, stored.end));
+  const original = stripHighlightMarkers(stored.text || "").trim();
+  const manualRanges = normalizeManualRanges(stored.manualRanges, start, end);
+  if (acceptEditedRange && end > start) {
+    const current = markdown.slice(start, end);
+    const comparableCurrent = textWithoutAbsoluteRanges(current, start, manualRanges);
+    if (current.trim() && storedThreadRangeMatchesCurrent(comparableCurrent, original)) {
+      const changedRanges = storedThreadTextLooksTruncated(comparableCurrent, original) ? [] : changedThreadRanges(start, comparableCurrent, original);
+      return { start, end, text: current, changedRanges, manualRanges };
+    }
+  }
+  if (original) {
+    const exactIndex = markdown.indexOf(original);
+    if (exactIndex >= 0 && !manualRanges.length) {
+      return { start: exactIndex, end: exactIndex + original.length, text: original, changedRanges: [], manualRanges: [] };
+    }
+  }
+  if (!original) {
+    return null;
+  }
+  const fragments = meaningfulThreadFragments(original);
+  for (const fragment of fragments) {
+    const index = markdown.indexOf(fragment);
+    if (index >= 0) {
+      const range = expandThreadFragmentRange(markdown, index, fragment.length, original);
+      const current = markdown.slice(range.start, range.end);
+      return { ...range, text: current, changedRanges: changedThreadRanges(range.start, current, original), manualRanges: [] };
+    }
+  }
+  return null;
+}
+
+function textWithoutAbsoluteRanges(text: string, baseStart: number, ranges: ThreadTextRange[]) {
+  if (!ranges.length) {
+    return text;
+  }
+  let cursor = 0;
+  const parts: string[] = [];
+  for (const range of ranges) {
+    const start = Math.max(0, Math.min(text.length, range.start - baseStart));
+    const end = Math.max(start, Math.min(text.length, range.end - baseStart));
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts.join("");
+}
+
+function storedThreadRangeMatchesCurrent(current: string, original: string) {
+  if (!original) {
+    return Boolean(current.trim());
+  }
+  const normalizedCurrent = normalizeThreadText(current);
+  const normalizedOriginal = normalizeThreadText(original);
+  if (!normalizedOriginal) {
+    return Boolean(normalizedCurrent);
+  }
+  const leadingOriginal = normalizedOriginal.slice(0, Math.min(160, normalizedOriginal.length));
+  return normalizedCurrent.includes(normalizedOriginal) || normalizedCurrent.startsWith(leadingOriginal) || textSimilarity(current, original) >= 0.22;
+}
+
+function storedThreadTextLooksTruncated(current: string, original: string) {
+  if (!original || current.length <= original.length) {
+    return false;
+  }
+  const normalizedOriginal = normalizeThreadText(original);
+  return Boolean(normalizedOriginal && normalizeThreadText(current).startsWith(normalizedOriginal.slice(0, Math.min(160, normalizedOriginal.length))));
+}
+
+function threadHighlightSegments(anchor: ThreadAnchorRange) {
+  return rangeSegmentsExcluding({ start: anchor.start, end: anchor.end }, anchor.manualRanges);
+}
+
+function rangeSegmentsExcluding(range: ThreadTextRange, exclusions: ThreadTextRange[]) {
+  const normalized = normalizeManualRanges(exclusions, range.start, range.end);
+  const segments: ThreadTextRange[] = [];
+  let cursor = range.start;
+  for (const exclusion of normalized) {
+    if (exclusion.start > cursor) {
+      segments.push({ start: cursor, end: exclusion.start });
+    }
+    cursor = Math.max(cursor, exclusion.end);
+  }
+  if (cursor < range.end) {
+    segments.push({ start: cursor, end: range.end });
+  }
+  return segments.filter((segment) => segment.end > segment.start);
+}
+
+function changedThreadRanges(start: number, current: string, original: string) {
+  if (!original || normalizeThreadText(current) === normalizeThreadText(original)) {
+    return [];
+  }
+  let prefix = 0;
+  while (prefix < current.length && prefix < original.length && current[prefix] === original[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix + prefix < current.length &&
+    suffix + prefix < original.length &&
+    current[current.length - 1 - suffix] === original[original.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const changedStart = start + prefix;
+  const changedEnd = start + Math.max(prefix, current.length - suffix);
+  return changedEnd > changedStart ? [{ start: changedStart, end: changedEnd }] : [];
+}
+
+function shiftThreadRanges(ranges: Record<string, ThreadStoredRange>, previous: string, next: string) {
+  if (previous === next || !Object.keys(ranges).length) {
+    return ranges;
+  }
+  const diff = textDiffWindow(previous, next);
+  if (!diff) {
+    return ranges;
+  }
+  let changed = false;
+  const shifted: Record<string, ThreadStoredRange> = {};
+  for (const [threadId, range] of Object.entries(ranges)) {
+    let start = range.start;
+    let end = range.end;
+    let manualRanges = shiftManualRanges(range.manualRanges ?? [], diff, next.length);
+    const editOverlapsRange = diff.beforeEnd > start && diff.start < end;
+    if (diff.beforeEnd <= start) {
+      start += diff.delta;
+      end += diff.delta;
+    } else if (diff.start >= end) {
+      // Edit happened after this range.
+    } else {
+      if (diff.start < start) {
+        start = diff.start;
+      }
+      end = Math.max(start, end + diff.delta);
+      if (diff.afterEnd > end) {
+        end = diff.afterEnd;
+      }
+    }
+    start = Math.max(0, Math.min(next.length, start));
+    end = Math.max(start, Math.min(next.length, end));
+    if (editOverlapsRange && diff.afterEnd > diff.start) {
+      manualRanges.push({ start: Math.max(start, diff.start), end: Math.min(end, diff.afterEnd) });
+    }
+    manualRanges = normalizeManualRanges(manualRanges, start, end);
+    shifted[threadId] = { ...range, start, end, manualRanges };
+    changed = changed || start !== range.start || end !== range.end || !sameThreadRanges(manualRanges, range.manualRanges ?? []);
+  }
+  return changed ? shifted : ranges;
+}
+
+function readThreadManualRanges(value: unknown): ThreadTextRange[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      const record = item as Record<string, unknown>;
+      return { start: Number(record.start), end: Number(record.end) };
+    })
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start);
+}
+
+function shiftManualRanges(ranges: ThreadTextRange[], diff: ThreadTextDiff, docLength: number) {
+  if (!ranges.length) {
+    return [];
+  }
+  const shifted: ThreadTextRange[] = [];
+  for (const range of ranges) {
+    let start = range.start;
+    let end = range.end;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      continue;
+    }
+    if (diff.beforeEnd <= start) {
+      start += diff.delta;
+      end += diff.delta;
+    } else if (diff.start >= end) {
+      // Edit happened after this manual segment.
+    } else {
+      if (diff.start < start) {
+        start = diff.start;
+      }
+      end = Math.max(start, end + diff.delta);
+      if (diff.afterEnd > end) {
+        end = diff.afterEnd;
+      }
+    }
+    start = Math.max(0, Math.min(docLength, start));
+    end = Math.max(start, Math.min(docLength, end));
+    if (end > start) {
+      shifted.push({ start, end });
+    }
+  }
+  return shifted;
+}
+
+function normalizeManualRanges(ranges: ThreadTextRange[] | undefined, start: number, end: number) {
+  const clipped = (ranges ?? [])
+    .map((range) => ({
+      start: Math.max(start, Math.min(end, Number(range.start))),
+      end: Math.max(start, Math.min(end, Number(range.end)))
+    }))
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+  const merged: ThreadTextRange[] = [];
+  for (const range of clipped) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+function sameThreadRanges(left: ThreadTextRange[], right: ThreadTextRange[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((range, index) => range.start === right[index].start && range.end === right[index].end);
+}
+
+function seedThreadRanges(current: Record<string, ThreadStoredRange>, threads: NoteAiThread[]) {
+  if (!threads.length) {
+    return current;
+  }
+  let next = current;
+  for (const thread of threads) {
+    if (next[thread.id]) {
+      continue;
+    }
+    const range = threadResultRange(thread);
+    if (!range) {
+      continue;
+    }
+    if (next === current) {
+      next = { ...current };
+    }
+    next[thread.id] = range;
+  }
+  return next;
+}
+
+function textDiffWindow(previous: string, next: string): ThreadTextDiff | null {
+  let start = 0;
+  while (start < previous.length && start < next.length && previous[start] === next[start]) {
+    start += 1;
+  }
+  if (start === previous.length && start === next.length) {
+    return null;
+  }
+  let suffix = 0;
+  while (
+    suffix + start < previous.length &&
+    suffix + start < next.length &&
+    previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const beforeEnd = previous.length - suffix;
+  const afterEnd = next.length - suffix;
+  return { start, beforeEnd, afterEnd, delta: afterEnd - beforeEnd };
+}
+
+function meaningfulThreadFragments(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  const fragments = [
+    normalized.slice(0, 140),
+    normalized.slice(Math.max(0, Math.floor(normalized.length / 2) - 70), Math.min(normalized.length, Math.floor(normalized.length / 2) + 70)),
+    normalized.slice(Math.max(0, normalized.length - 140))
+  ];
+  return Array.from(new Set(fragments.map((fragment) => fragment.trim()).filter((fragment) => fragment.length >= 24))).sort((left, right) => right.length - left.length);
+}
+
+function expandThreadFragmentRange(markdown: string, fragmentStart: number, fragmentLength: number, original: string) {
+  const targetLength = Math.max(fragmentLength, Math.min(markdown.length, original.length));
+  let start = fragmentStart;
+  let end = fragmentStart + fragmentLength;
+  while (start > 0 && end - start < targetLength && markdown[start - 1] !== "\n") {
+    start -= 1;
+  }
+  while (end < markdown.length && end - start < targetLength && markdown[end] !== "\n") {
+    end += 1;
+  }
+  return { start, end };
+}
+
+function textSimilarity(left: string, right: string) {
+  const leftTerms = new Set(normalizeThreadText(left).split(" ").filter((term) => term.length >= 4));
+  const rightTerms = new Set(normalizeThreadText(right).split(" ").filter((term) => term.length >= 4));
+  if (!leftTerms.size || !rightTerms.size) {
+    return 0;
+  }
+  let overlap = 0;
+  leftTerms.forEach((term) => {
+    if (rightTerms.has(term)) {
+      overlap += 1;
+    }
+  });
+  return overlap / Math.max(leftTerms.size, rightTerms.size);
+}
+
+function normalizeThreadText(value: string) {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
 function threadAnchorPlacement(markdown: string, index: number): "left" | "right" {
@@ -2525,9 +3584,28 @@ function threadCollapsed(thread: NoteAiThread) {
   return thread.ui_state?.collapsed !== false;
 }
 
+function threadPinned(thread: NoteAiThread) {
+  return thread.ui_state?.pinned === true;
+}
+
+function sortPinnedThreads(threads: NoteAiThread[]) {
+  return threads
+    .map((thread, index) => ({ thread, index }))
+    .sort((left, right) => {
+      const pinnedDelta = Number(threadPinned(right.thread)) - Number(threadPinned(left.thread));
+      return pinnedDelta || left.index - right.index;
+    })
+    .map((item) => item.thread);
+}
+
 function shortThreadContext(value: string) {
   const text = stripHighlightMarkers(value || "").replace(/\s+/g, " ").trim();
   return text.length <= 170 ? text : `${text.slice(0, 167)}...`;
+}
+
+function citationColorIndex(citation?: Pick<NoteCitation, "evidence_index"> | null, fallback = 0) {
+  const index = Number(citation?.evidence_index);
+  return Number.isFinite(index) ? index : fallback;
 }
 
 function legacyThreadMessages(thread: NoteAiThread) {

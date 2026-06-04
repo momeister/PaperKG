@@ -176,6 +176,7 @@ class KGRetriever:
         query: str,
         limit: int = 10,
         include_extractions: bool = True,
+        paper_ids: list[str] | set[str] | None = None,
     ) -> list[SearchHit]:
         tokens = _query_tokens(query)
         if not tokens:
@@ -183,6 +184,7 @@ class KGRetriever:
 
         hits: dict[str, SearchHit] = {}
         paper_cache: dict[str, dict[str, Any]] = {}
+        allowed_ids = _normalized_paper_id_set(paper_ids)
 
         with MetadataDB(self.metadata_db_path) as db:
             papers = db.list_papers(limit=self.max_papers)
@@ -190,6 +192,8 @@ class KGRetriever:
             token_weights = _query_token_weights(tokens, papers, extractions)
             for record in papers:
                 pid = paper_id(record)
+                if not _paper_id_allowed(pid, allowed_ids):
+                    continue
                 paper_cache[pid] = record
                 self._add_paper_evidence(hits, query, tokens, record, token_weights)
 
@@ -200,6 +204,8 @@ class KGRetriever:
                         continue
                     resolved = db.resolve_paper(raw_pid) if hasattr(db, "resolve_paper") else None
                     pid = paper_id(resolved) if resolved is not None else raw_pid
+                    if not _paper_id_allowed(pid, allowed_ids) and not _paper_id_allowed(raw_pid, allowed_ids):
+                        continue
                     record = paper_cache.get(pid) or resolved or db.get_paper(pid) or {"id": pid}
                     paper_cache[pid] = record
                     for evidence in _evidence_from_extraction(extraction, query, tokens, token_weights):
@@ -614,6 +620,22 @@ def _rank_hits(hits: Iterable[SearchHit], tokens: list[str]) -> list[SearchHit]:
 
     selected.extend(hit for hit in ordered if hit.source.paper_id not in selected_ids)
     return selected
+
+
+def _normalized_paper_id_set(paper_ids: list[str] | set[str] | None) -> set[str]:
+    return {_normalize_paper_identifier(item) for item in (paper_ids or []) if str(item or "").strip()}
+
+
+def _paper_id_allowed(paper_id_value: str, allowed_ids: set[str]) -> bool:
+    if not allowed_ids:
+        return True
+    normalized = _normalize_paper_identifier(paper_id_value)
+    return any(normalized == allowed or normalized.endswith(allowed) or allowed.endswith(normalized) for allowed in allowed_ids)
+
+
+def _normalize_paper_identifier(value: str) -> str:
+    normalized = re.sub(r"^https?://arxiv\.org/abs/", "arxiv:", str(value or "").lower())
+    return re.sub(r"\s+", "", normalized)
 
 
 def _hit_tokens(hit: SearchHit) -> set[str]:

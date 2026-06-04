@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bold,
@@ -382,6 +382,7 @@ export function AssistantPage() {
   function jumpToCitation(citation: string, context = "") {
     const meta = citationMeta(citation, context);
     if (meta) {
+      setEvidenceOpen(true);
       selectSource(meta.source, meta.evidenceIndex);
     }
   }
@@ -389,6 +390,7 @@ export function AssistantPage() {
   function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "") {
     const meta = citationMetaFor(pool, citation, context);
     if (meta) {
+      setEvidenceOpen(true);
       selectSource(meta.source, meta.evidenceIndex);
       setSelectedAnswerQuote({
         paperId: meta.source.paper_id,
@@ -500,7 +502,6 @@ export function AssistantPage() {
       <div className="assistant-left">
         <div className="page-title compact">
           <div>
-            <span>Grounded KG</span>
             <h1>Assistant</h1>
           </div>
           <div className="button-row">
@@ -563,6 +564,7 @@ export function AssistantPage() {
                         answer={block.answer.answer}
                         onCitationClick={(citation, context, quote) => jumpToCitationIn(block.verification, citation, context, quote)}
                         getCitationMeta={(citation, context) => citationMetaFor(block.verification, citation, context)}
+                        activeCitation={selectedSource ? { paperId: selectedSource.paper_id, evidenceIndex: activeEvidenceIndex } : undefined}
                       />
                     </div>
                     {block.answer.generation_error ? <div className="warning-row">{block.answer.generation_error}</div> : null}
@@ -1214,11 +1216,17 @@ function renderAssistantInline(text: string) {
   });
 }
 
-export function answerLimitFor(question: string, mode: string) {
+export function answerLimitFor(question: string, mode: string, scopedPaperCount = 0) {
   if (mode !== "auto") {
     return Number(mode);
   }
   const terms = textTerms(question);
+  if (scopedPaperCount === 0 && (question.length > 120 || terms.length > 12)) {
+    return 25;
+  }
+  if (scopedPaperCount > 1) {
+    return Math.min(25, Math.max(20, scopedPaperCount * 4));
+  }
   if (question.length > 180 || terms.length > 18) {
     return 25;
   }
@@ -1481,11 +1489,19 @@ export function formatTurnTime(value: string) {
 export function AnswerText({
   answer,
   onCitationClick,
-  getCitationMeta
+  getCitationMeta,
+  activeCitation,
+  onCitationInsert,
+  onCitationInsertPreview,
+  onCitationInsertPreviewClear
 }: {
   answer: string;
   onCitationClick: (citation: string, context?: string, quote?: string) => void;
   getCitationMeta: (citation: string, context?: string) => { source: VerificationSource; evidenceIndex: number } | null;
+  activeCitation?: { paperId: string; evidenceIndex: number };
+  onCitationInsert?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
+  onCitationInsertPreview?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
+  onCitationInsertPreviewClear?: () => void;
 }) {
   const [hoverCitation, setHoverCitation] = useState<{
     key: string;
@@ -1494,6 +1510,8 @@ export function AnswerText({
     subtitle: string;
     text: string;
     evidenceIndex: number;
+    source: VerificationSource;
+    quote: string;
     left: number;
     top: number;
     width: number;
@@ -1516,7 +1534,7 @@ export function AnswerText({
     }, 80);
   }
 
-  function showCitationHover(key: string, label: string, meta: { source: VerificationSource; evidenceIndex: number }, event: ReactPointerEvent<HTMLElement>) {
+  function showCitationHover(key: string, label: string, meta: { source: VerificationSource; evidenceIndex: number }, quote: string, event: ReactPointerEvent<HTMLElement>) {
     const evidence = meta.source.evidence[meta.evidenceIndex];
     if (!evidence) {
       return;
@@ -1535,6 +1553,8 @@ export function AnswerText({
       subtitle: `${label} - ${evidence.kind || "Evidence"} - ${meta.source.paper_id}`,
       text: evidence.pdf_excerpt || evidence.reference_text,
       evidenceIndex: meta.evidenceIndex,
+      source: meta.source,
+      quote,
       left,
       top,
       width
@@ -1546,7 +1566,10 @@ export function AnswerText({
       {parts.map((part, index) => {
         const match = /^\[([^\]]+)\]$/.exec(part);
         if (!match) {
-          return <span key={`${part}-${index}`}>{part}</span>;
+          const highlightRange = hoverCitation ? citationHoverTextRange(parts, index, hoverCitation.key) : null;
+          return (
+            <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, hoverCitation ? evidenceColorVars(hoverCitation.evidenceIndex) : undefined)}</span>
+          );
         }
         const context = citationContext(parts, index);
         const quote = citationQuoteFromParts(parts, index);
@@ -1554,17 +1577,18 @@ export function AnswerText({
         const label = meta ? `Z${meta.evidenceIndex + 1}` : "?";
         const evidence = meta?.source.evidence[meta.evidenceIndex];
         const hoverKey = `${part}-${index}`;
+        const isActive = Boolean(meta && activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
         return (
           <span className="citation-link-wrap" key={hoverKey}>
             <button
-              className={`citation-link ${meta ? "citation-link--mapped" : ""}`}
+              className={`citation-link ${meta ? "citation-link--mapped" : ""} ${isActive ? "citation-link--active" : ""}`}
               type="button"
               onClick={() => {
                 cancelCitationHoverClose();
                 setHoverCitation(null);
                 onCitationClick(match[1], context, quote);
               }}
-              onPointerEnter={meta ? (event) => showCitationHover(hoverKey, label, meta, event) : undefined}
+              onPointerEnter={meta ? (event) => showCitationHover(hoverKey, label, meta, quote, event) : undefined}
               onPointerLeave={meta ? scheduleCitationHoverClose : undefined}
               style={meta ? evidenceColorVars(meta.evidenceIndex) : undefined}
               title={meta ? `${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}` : undefined}
@@ -1591,6 +1615,30 @@ export function AnswerText({
                   {label} · {evidence.kind || "Evidence"} · {meta.source.paper_id}
                 </span>
                 <p>{hoverCitation.text}</p>
+                {onCitationInsert ? (
+                  <button
+                    className="button button-compact citation-hover-card__insert"
+                    type="button"
+                    onMouseEnter={() => onCitationInsertPreview?.(hoverCitation.source, hoverCitation.evidenceIndex, hoverCitation.quote || hoverCitation.text)}
+                    onMouseOver={() => onCitationInsertPreview?.(hoverCitation.source, hoverCitation.evidenceIndex, hoverCitation.quote || hoverCitation.text)}
+                    onMouseOut={onCitationInsertPreviewClear}
+                    onMouseLeave={onCitationInsertPreviewClear}
+                    onPointerEnter={() => onCitationInsertPreview?.(hoverCitation.source, hoverCitation.evidenceIndex, hoverCitation.quote || hoverCitation.text)}
+                    onPointerOver={() => onCitationInsertPreview?.(hoverCitation.source, hoverCitation.evidenceIndex, hoverCitation.quote || hoverCitation.text)}
+                    onPointerOut={onCitationInsertPreviewClear}
+                    onPointerLeave={onCitationInsertPreviewClear}
+                    onFocus={() => onCitationInsertPreview?.(hoverCitation.source, hoverCitation.evidenceIndex, hoverCitation.quote || hoverCitation.text)}
+                    onBlur={onCitationInsertPreviewClear}
+                    onClick={() => {
+                      cancelCitationHoverClose();
+                      setHoverCitation(null);
+                      onCitationInsertPreviewClear?.();
+                      onCitationInsert(hoverCitation.source, hoverCitation.evidenceIndex, hoverCitation.quote || hoverCitation.text);
+                    }}
+                  >
+                    In Notiz
+                  </button>
+                ) : null}
               </span>
             ) : null}
           </span>
@@ -1598,6 +1646,67 @@ export function AnswerText({
       })}
     </>
   );
+}
+
+function renderCitationContextPart(value: string, range: { start: number; end: number } | null, style?: CSSProperties) {
+  if (!range) {
+    return value;
+  }
+  return (
+    <>
+      {value.slice(0, range.start)}
+      <span className="citation-context-highlight" style={style}>
+        {value.slice(range.start, range.end)}
+      </span>
+      {value.slice(range.end)}
+    </>
+  );
+}
+
+function citationHoverTextRange(parts: string[], index: number, hoverKey: string) {
+  const previousCitationKey = `${parts[index - 1] ?? ""}-${index - 1}`;
+  const nextCitationKey = `${parts[index + 1] ?? ""}-${index + 1}`;
+  if (nextCitationKey === hoverKey) {
+    return trailingSentenceRange(parts[index] ?? "");
+  }
+  if (previousCitationKey === hoverKey) {
+    return leadingSentenceRange(parts[index] ?? "");
+  }
+  return null;
+}
+
+function trailingSentenceRange(value: string) {
+  const end = value.trimEnd().length;
+  if (end <= 0) {
+    return null;
+  }
+  let start = 0;
+  const blockBoundary = value.slice(0, end).lastIndexOf("\n\n");
+  if (blockBoundary >= 0) {
+    start = blockBoundary + 2;
+  }
+  for (const match of value.slice(0, end).matchAll(/[.!?]\s+/g)) {
+    start = Math.max(start, match.index + match[0].length);
+  }
+  while (start < end && /\s/.test(value[start])) {
+    start += 1;
+  }
+  return hasSemanticText(value.slice(start, end)) ? { start, end } : null;
+}
+
+function leadingSentenceRange(value: string) {
+  const start = value.length - value.trimStart().length;
+  if (start >= value.length) {
+    return null;
+  }
+  const text = value.slice(start);
+  const stop = text.search(/[.!?](?:\s|$)|\n{2,}/);
+  const end = stop >= 0 ? start + stop + 1 : value.length;
+  return hasSemanticText(value.slice(start, end)) ? { start, end } : null;
+}
+
+function hasSemanticText(value: string) {
+  return /[\p{L}\p{N}]/u.test(value);
 }
 
 function shortCitationLabel(value: string) {

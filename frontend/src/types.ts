@@ -10,9 +10,17 @@ export type Project = {
 export type Paper = {
   id: string;
   title: string;
+  paper_id?: string;
+  paperId?: string;
+  display_title?: string;
   abstract?: string;
   source?: string;
   source_id?: string;
+  filename?: string;
+  file_name?: string;
+  pdf_filename?: string;
+  pdf_path?: string;
+  path?: string;
   year?: number | null;
   doi?: string | null;
   pdf_url?: string | null;
@@ -84,6 +92,7 @@ export type VerificationEvidence = {
   pdf_excerpt: string;
   matched_terms: string[];
   found_in_pdf_text: boolean;
+  evidence_index?: number | null;
 };
 
 export type VerificationSource = {
@@ -154,6 +163,87 @@ export type Job = {
   papers_failed: number;
   error_message?: string | null;
   updated_timestamp?: string;
+};
+
+export type ExtractionLibraryItem = {
+  paper_id: string;
+  title: string;
+  filename: string;
+  pdf_path: string;
+  size_bytes?: number | null;
+  modified_timestamp?: string | null;
+  latest_extraction_status?: string | null;
+  known_paper?: boolean;
+};
+
+export type ExtractionResultPayload = {
+  paper_id: string;
+  paper_type: string;
+  concepts: Array<Record<string, unknown>>;
+  methods: Array<Record<string, unknown>>;
+  concept_candidates: Array<Record<string, unknown>>;
+  method_candidates: Array<Record<string, unknown>>;
+  relations: Array<Record<string, unknown>>;
+  claims: Array<Record<string, unknown>>;
+  cross_domain_hints: Array<Record<string, unknown>>;
+  terminology_conflicts: Array<Record<string, unknown>>;
+  temporal_coverage: Record<string, unknown>;
+  mathematical_content: Record<string, unknown>;
+  language_detected: string;
+  quality_warnings: string[];
+  metadata_status: string;
+  blocking_errors: string[];
+  candidate_count: number;
+  extraction_diagnostics: Record<string, unknown>;
+  raw_response?: string | null;
+};
+
+export type ExtractionParseResponse = {
+  paper_id: string;
+  pdf_path: string;
+  text: string;
+  page_count: number;
+  parser: string;
+  metadata: Record<string, unknown>;
+  excerpt: string;
+};
+
+export type ExtractionRunResponse = {
+  result_id?: number | null;
+  paper_id: string;
+  status: string;
+  error_message?: string | null;
+  duration_seconds?: number | null;
+  parse?: Omit<ExtractionParseResponse, "paper_id" | "text"> | null;
+  result: ExtractionResultPayload;
+};
+
+export type ExtractionHistoryItem = {
+  id: number;
+  paper_id: string;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+  extraction_status?: string | null;
+  extraction_timestamp?: string | null;
+  extraction_duration_seconds?: number | null;
+  paper_type?: string | null;
+  concepts?: Array<Record<string, unknown>>;
+  methods?: Array<Record<string, unknown>>;
+  claims?: Array<Record<string, unknown>>;
+  concept_candidates?: Array<Record<string, unknown>>;
+  method_candidates?: Array<Record<string, unknown>>;
+  relations?: Array<Record<string, unknown>>;
+  quality_warnings?: string[];
+  error_message?: string | null;
+};
+
+export type VocabularyEntry = {
+  canonical_label: string;
+  aliases: string[];
+  openalx_id?: string | null;
+  domain?: string | null;
+  confidence?: number;
+  custom_metadata?: Record<string, unknown>;
 };
 
 export type BenchmarkReport = {

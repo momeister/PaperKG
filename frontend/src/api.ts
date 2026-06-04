@@ -2,6 +2,10 @@ import type {
   Answer,
   BenchmarkReport,
   Dashboard,
+  ExtractionHistoryItem,
+  ExtractionLibraryItem,
+  ExtractionParseResponse,
+  ExtractionRunResponse,
   GraphExplorer,
   HealthReport,
   Job,
@@ -13,7 +17,8 @@ import type {
   Provider,
   RewriteResponse,
   ReviewEntity,
-  VerificationSource
+  VerificationSource,
+  VocabularyEntry
 } from "./types";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -91,7 +96,56 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ papers, download_pdfs: downloadPdfs })
     }),
-  answer: (payload: { question: string; provider?: string; model?: string; limit?: number; conversation_context?: Array<{ role: string; content: string }> }) =>
+  getExtractionLibrary: (query = "") =>
+    request<{ items: ExtractionLibraryItem[]; total: number }>("/extraction/library", { query: { query } }),
+  parseExtractionPdf: (payload: { paper_id: string; pdf_path?: string; parser?: string }) =>
+    request<ExtractionParseResponse>("/extraction/parse", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  runExtraction: (payload: {
+    paper_id: string;
+    text?: string;
+    pdf_path?: string;
+    parser?: string;
+    provider?: string;
+    model?: string;
+    temperature?: number;
+    top_p?: number;
+    max_tokens?: number;
+    context_size?: number;
+    extraction_mode?: string;
+    link_concepts?: boolean;
+  }) =>
+    request<ExtractionRunResponse>("/extraction/extract", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  runExtractionBatch: (payload: {
+    items: Array<{ paper_id: string; pdf_path: string }>;
+    provider?: string;
+    model?: string;
+    temperature?: number;
+    top_p?: number;
+    max_tokens?: number;
+    context_size?: number;
+    extraction_mode?: string;
+    link_concepts?: boolean;
+    resume?: boolean;
+  }) =>
+    request<{ job: Job; items: Array<Record<string, unknown>> }>("/extraction/batch", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  getExtractionHistory: (paperId = "") =>
+    request<{ items: ExtractionHistoryItem[]; total: number }>("/extraction/history", { query: { paper_id: paperId } }),
+  getExtractionVocabulary: () => request<{ items: VocabularyEntry[]; total: number }>("/extraction/vocabulary"),
+  addExtractionVocabulary: (payload: { canonical_label: string; aliases: string[]; openalx_id?: string; domain?: string }) =>
+    request<{ items: VocabularyEntry[]; total: number }>("/extraction/vocabulary", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  answer: (payload: { question: string; provider?: string; model?: string; limit?: number; paper_ids?: string[]; conversation_context?: Array<{ role: string; content: string }> }) =>
     request<Answer>("/query/answer", { method: "POST", body: JSON.stringify(payload) }),
   verifyAnswer: (answer: Answer, options: { max_sources?: number; max_evidence_per_source?: number } = {}) =>
     request<{ sources: VerificationSource[]; cited_paper_ids: string[]; missing_source_ids: string[] }>("/sources/verify-answer", {
@@ -166,6 +220,11 @@ export const api = {
     }),
   noteAiEdit: (noteId: string, payload: { selected_text: string; instruction: string; provider?: string; model?: string; use_kg_evidence?: boolean }) =>
     request<NoteAiEditResponse>(`/notes/${encodeURIComponent(noteId)}/ai-edit`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  askNote: (noteId: string, payload: { question: string; provider?: string; model?: string; use_kg_evidence?: boolean }) =>
+    request<NoteAiEditResponse>(`/notes/${encodeURIComponent(noteId)}/ask`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
