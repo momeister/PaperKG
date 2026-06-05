@@ -24,7 +24,7 @@ const modeOptions = [
 ];
 
 export function ExtractionPage() {
-  const { provider, model } = useAppState();
+  const { provider, model, activeProject } = useAppState();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<ExtractionTab>("run");
   const [libraryQuery, setLibraryQuery] = useState("");
@@ -47,8 +47,8 @@ export function ExtractionPage() {
   const [vocabOpenAlex, setVocabOpenAlex] = useState("");
 
   const libraryQueryResult = useQuery({
-    queryKey: ["extraction-library", libraryQuery],
-    queryFn: () => api.getExtractionLibrary(libraryQuery)
+    queryKey: ["extraction-library", libraryQuery, activeProject ?? ""],
+    queryFn: () => api.getExtractionLibrary(libraryQuery, activeProject || undefined)
   });
   const historyQuery = useQuery({
     queryKey: ["extraction-history", historyPaperId],
@@ -168,6 +168,9 @@ export function ExtractionPage() {
       <div className="page-title">
         <div>
           <h1>Extraktion</h1>
+          <p className="page-subtitle">
+            {activeProject ? `Projekt: ${activeProject} — nur Projekt-PDFs` : "Alle Papers — globale Bibliothek"}
+          </p>
         </div>
         <div className="segmented extraction-tabs">
           <button className={activeTab === "run" ? "active" : ""} type="button" onClick={() => setActiveTab("run")}>

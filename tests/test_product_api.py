@@ -138,6 +138,121 @@ def test_product_projects_papers_dashboard_review_and_graph(tmp_path) -> None:
     assert projects_after_delete.json()["projects"] == []
 
 
+def test_harvest_download_attaches_papers_to_project(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    projects_path.write_text(json.dumps({"demo": []}), encoding="utf-8")
+
+    client = TestClient(product_main.app)
+    response = client.post(
+        "/harvest/download",
+        json={
+            "papers": [
+                {"id": "arxiv:1234.5678", "source": "arxiv", "source_id": "1234.5678", "title": "A"},
+                {"id": "arxiv:2222.0001", "source": "arxiv", "source_id": "2222.0001", "title": "B"},
+            ],
+            "download_pdfs": False,
+            "project_id": "demo",
+            "projects_path": str(projects_path),
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["inserted"] == 2
+    assert payload["attached"] is True
+    assert len(payload["results"]) == 2
+    saved = json.loads(projects_path.read_text(encoding="utf-8"))
+    assert set(saved["demo"]) == {"arxiv:1234.5678", "arxiv:2222.0001"}
+
+
+def test_harvest_download_to_all_papers_does_not_attach(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    projects_path.write_text(json.dumps({"demo": []}), encoding="utf-8")
+
+    client = TestClient(product_main.app)
+    response = client.post(
+        "/harvest/download",
+        json={
+            "papers": [{"id": "arxiv:9999.0001", "source": "arxiv", "source_id": "9999.0001", "title": "X"}],
+            "download_pdfs": False,
+            "project_id": "__all_papers__",
+            "projects_path": str(projects_path),
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(tmp_path / "pdfs"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["attached"] is False
+    saved = json.loads(projects_path.read_text(encoding="utf-8"))
+    assert saved["demo"] == []
+
+
+def test_extraction_library_filters_by_project(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    member_pdf = pdf_dir / "member.pdf"
+    member_pdf.write_bytes(b"%PDF-1.4\n")
+    other_pdf = pdf_dir / "other.pdf"
+    other_pdf.write_bytes(b"%PDF-1.4\n")
+
+    with MetadataDB(str(db_path)) as db:
+        db.insert_paper({"id": "member", "source": "f", "source_id": "member", "title": "Member", "pdf_url": str(member_pdf)})
+        db.insert_paper({"id": "other", "source": "f", "source_id": "other", "title": "Other", "pdf_url": str(other_pdf)})
+    projects_path.write_text(json.dumps({"demo": ["member"]}), encoding="utf-8")
+
+    client = TestClient(product_main.app)
+    scoped = client.get(
+        "/extraction/library",
+        params={
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+            "project_id": "demo",
+            "projects_path": str(projects_path),
+        },
+    )
+    assert scoped.status_code == 200
+    ids = {row["paper_id"] for row in scoped.json()["items"]}
+    assert ids == {"member"}
+
+
+def test_benchmark_job_persists_and_lists_runs(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    with MetadataDB(str(db_path)):
+        pass  # initialize schema
+
+    client = TestClient(product_main.app)
+    run = client.post(
+        "/jobs/benchmark",
+        json={"metadata_db_path": str(db_path), "allow_embedded_predictions": True},
+    )
+    assert run.status_code == 200
+    body = run.json()
+    assert body["status"] == "completed"
+    run_id = body["run"]["id"]
+    assert body["run"]["kind"] == "extraction"
+
+    listed = client.get("/benchmark/runs", params={"metadata_db_path": str(db_path)})
+    assert listed.status_code == 200
+    ids = {item["id"] for item in listed.json()["items"]}
+    assert run_id in ids
+
+    deleted = client.delete(f"/benchmark/runs/{run_id}", params={"metadata_db_path": str(db_path)})
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+
+    after = client.get("/benchmark/runs", params={"metadata_db_path": str(db_path)})
+    assert run_id not in {item["id"] for item in after.json()["items"]}
+
+
 def test_product_papers_include_pdf_display_fallbacks(tmp_path) -> None:
     db_path = tmp_path / "metadata.duckdb"
     pdf_dir = tmp_path / "pdfs"

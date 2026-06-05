@@ -370,6 +370,20 @@ class MetadataDB:
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)")
 
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS benchmark_runs (
+                id VARCHAR PRIMARY KEY,
+                kind VARCHAR NOT NULL,
+                provider VARCHAR,
+                model VARCHAR,
+                summary JSON,
+                report JSON,
+                duration_ms INTEGER,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute("CREATE INDEX IF NOT EXISTS idx_benchmark_runs_kind ON benchmark_runs(kind)")
+
         self._execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_batch_items_status ON batch_job_items(job_id, status)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_embeddings_label ON entity_embeddings(label_norm)")
@@ -1360,6 +1374,65 @@ class MetadataDB:
                 row["injection_flags"] = []
         elif flags is None:
             row["injection_flags"] = []
+        return row
+
+    def add_benchmark_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        """Persist a benchmark/eval run so past runs and their metadata stay visible."""
+        run_id = str(run.get("id") or f"bench_{uuid.uuid4().hex}")
+        self._execute("""
+            INSERT INTO benchmark_runs
+            (id, kind, provider, model, summary, report, duration_ms, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            run_id,
+            str(run.get("kind") or "extraction"),
+            run.get("provider"),
+            run.get("model"),
+            json.dumps(run.get("summary") or {}),
+            json.dumps(run.get("report") or {}),
+            int(run.get("duration_ms") or 0),
+            datetime.now(),
+        ])
+        return self.get_benchmark_run(run_id) or {"id": run_id}
+
+    def get_benchmark_run(self, run_id: str) -> dict[str, Any] | None:
+        rows = self._execute("SELECT * FROM benchmark_runs WHERE id = ?", [run_id]).fetchall()
+        if not rows:
+            return None
+        cols = [desc[0] for desc in self.conn.description]
+        return self._decode_benchmark_run(dict(zip(cols, rows[0])))
+
+    def list_benchmark_runs(self, kind: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        if kind:
+            rows = self._execute(
+                "SELECT * FROM benchmark_runs WHERE kind = ? ORDER BY created_timestamp DESC LIMIT ?",
+                [kind, limit],
+            ).fetchall()
+        else:
+            rows = self._execute(
+                "SELECT * FROM benchmark_runs ORDER BY created_timestamp DESC LIMIT ?",
+                [limit],
+            ).fetchall()
+        cols = [desc[0] for desc in self.conn.description]
+        return [self._decode_benchmark_run(dict(zip(cols, row))) for row in rows]
+
+    def delete_benchmark_run(self, run_id: str) -> bool:
+        if self.get_benchmark_run(run_id) is None:
+            return False
+        self._execute("DELETE FROM benchmark_runs WHERE id = ?", [run_id])
+        return True
+
+    @staticmethod
+    def _decode_benchmark_run(row: dict[str, Any]) -> dict[str, Any]:
+        for field in ("summary", "report"):
+            value = row.get(field)
+            if isinstance(value, str):
+                try:
+                    row[field] = json.loads(value)
+                except (ValueError, TypeError):
+                    row[field] = {}
+            elif value is None:
+                row[field] = {}
         return row
 
     def add_note_citation(self, note_id: str, citation: dict[str, Any]) -> dict[str, Any]:

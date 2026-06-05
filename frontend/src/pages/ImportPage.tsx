@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, FileUp, Globe, Search, Sparkles, Star } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowRight, CheckCircle2, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, XCircle } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -9,6 +10,7 @@ import { useAppState } from "../state";
 import type {
   DeepResearchFinding,
   DiscoveryCandidate,
+  HarvestDownloadResponse,
   Paper,
   ReferenceCandidate
 } from "../types";
@@ -47,7 +49,9 @@ function paperKey(paper: Paper): string {
 
 export function ImportPage() {
   const { activeProject, provider } = useAppState();
+  const navigate = useNavigate();
   const isRealProject = !!activeProject && !ALL_PAPERS_SCOPES.has(activeProject);
+  const downloadProjectId = isRealProject ? (activeProject as string) : undefined;
 
   const [topic, setTopic] = useState("");
   const [sources, setSources] = useState<string[]>(["arxiv"]);
@@ -81,11 +85,12 @@ export function ImportPage() {
   });
   const download = useMutation({
     mutationFn: ({ papers, downloadPdfs }: { papers: Paper[]; downloadPdfs: boolean }) =>
-      api.harvestDownload(papers, downloadPdfs),
+      api.harvestDownload(papers, downloadPdfs, downloadProjectId),
     onSuccess: invalidateLibrary
   });
   const upload = useMutation({
-    mutationFn: ({ file, title }: { file: File; title?: string }) => api.uploadPdf(file, { title }),
+    mutationFn: ({ file, title }: { file: File; title?: string }) =>
+      api.uploadPdf(file, { title, project_id: downloadProjectId }),
     onSuccess: (payload) => {
       setUploaded((current) => [payload.paper, ...current.filter((p) => p.id !== payload.paper.id)]);
       invalidateLibrary();
@@ -96,7 +101,7 @@ export function ImportPage() {
     onSuccess: async (payload) => {
       setReferences((current) => ({ ...current, [payload.paper_id]: payload.references }));
       if (autoDownload && payload.references.length) {
-        await api.harvestDownload(payload.references, true);
+        await api.harvestDownload(payload.references, true, downloadProjectId);
         invalidateLibrary();
       }
     }
@@ -106,7 +111,7 @@ export function ImportPage() {
     onSuccess: async (payload) => {
       setTopicCandidates(payload.candidates);
       if (autoDownload && payload.candidates.length) {
-        await api.harvestDownload(payload.candidates.slice(0, 10), true);
+        await api.harvestDownload(payload.candidates.slice(0, 10), true, downloadProjectId);
         invalidateLibrary();
       }
     }
@@ -116,7 +121,7 @@ export function ImportPage() {
     onSuccess: async (payload, paperId) => {
       setPaperCandidates((current) => ({ ...current, [paperId]: payload.candidates }));
       if (autoDownload && payload.candidates.length) {
-        await api.harvestDownload(payload.candidates.slice(0, 10), true);
+        await api.harvestDownload(payload.candidates.slice(0, 10), true, downloadProjectId);
         invalidateLibrary();
       }
     }
@@ -175,6 +180,13 @@ export function ImportPage() {
           <span>KI-Vorschlägen vertrauen: Top-10 automatisch laden</span>
         </label>
       </div>
+
+      <DownloadProgress
+        pending={download.isPending}
+        data={download.data}
+        scopeLabel={isRealProject ? `Projekt: ${activeProject}` : "Alle Papers (global)"}
+        onGoToExtraction={() => navigate("/extraction")}
+      />
 
       <div className="two-column">
         <section className="panel import-panel">
@@ -419,6 +431,79 @@ export function ImportPage() {
           <EmptyState title="Keine Treffer" />
         )}
       </section>
+    </section>
+  );
+}
+
+function DownloadProgress({
+  pending,
+  data,
+  scopeLabel,
+  onGoToExtraction
+}: {
+  pending: boolean;
+  data?: HarvestDownloadResponse;
+  scopeLabel: string;
+  onGoToExtraction: () => void;
+}) {
+  if (!pending && !data) {
+    return null;
+  }
+  const downloaded = data?.downloaded ?? 0;
+  const failed = data?.failed_downloads?.length ?? 0;
+  const total = data?.results?.length ?? 0;
+  return (
+    <section className="panel download-progress">
+      <div className="panel-heading">
+        <div>
+          <span>Download</span>
+          <strong>{pending ? "Lädt Paper …" : `${downloaded} von ${total} geladen`}</strong>
+        </div>
+        <div className="download-progress-meta">
+          <span className="muted">Ziel: {scopeLabel}</span>
+          {pending ? <Loader2 className="spin" size={18} /> : <Status value={failed ? "warning" : "success"} />}
+        </div>
+      </div>
+      {pending ? (
+        <div className="download-progress-bar">
+          <div className="download-progress-bar-fill" />
+        </div>
+      ) : null}
+      {!pending && data ? (
+        <>
+          <div className="download-progress-counts">
+            <span className="pill pill-success">{downloaded} PDF(s)</span>
+            {data.results.filter((r) => r.status === "no_pdf").length ? (
+              <span className="pill">{data.results.filter((r) => r.status === "no_pdf").length} ohne PDF</span>
+            ) : null}
+            {failed ? <span className="pill pill-error">{failed} fehlgeschlagen</span> : null}
+            {data.attached ? <span className="pill pill-info">dem Projekt zugeordnet</span> : null}
+          </div>
+          <div className="download-result-list">
+            {data.results.slice(0, 12).map((result) => (
+              <div className="download-result-row" key={result.paper_id}>
+                {result.status === "downloaded" ? (
+                  <CheckCircle2 size={15} className="ok" />
+                ) : result.status === "failed" ? (
+                  <XCircle size={15} className="err" />
+                ) : (
+                  <Download size={15} className="muted" />
+                )}
+                <span className="download-result-title">{result.title}</span>
+                <span className="muted download-result-status">{result.status}</span>
+              </div>
+            ))}
+          </div>
+          {downloaded ? (
+            <div className="button-row">
+              <button className="button button-primary" type="button" onClick={onGoToExtraction}>
+                <span>Zur Extraktion</span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
     </section>
   );
 }

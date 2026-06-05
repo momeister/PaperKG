@@ -1,6 +1,7 @@
 import type {
   Answer,
   BenchmarkReport,
+  BenchmarkRun,
   Dashboard,
   DeepResearchResponse,
   DiscoveryResponse,
@@ -11,6 +12,7 @@ import type {
   ExtractionParseResponse,
   ExtractionRunResponse,
   GraphExplorer,
+  HarvestDownloadResponse,
   HealthReport,
   Job,
   Note,
@@ -90,8 +92,8 @@ export const api = {
   getDashboard: (projectId: string) => request<Dashboard>(`/projects/${encodeURIComponent(projectId)}/dashboard`),
   listPapers: (params: Record<string, string | number | boolean | null | undefined> = {}) =>
     request<{ items: Paper[]; total: number; limit: number; offset: number }>("/papers", { query: params }),
-  uploadPdf: (file: File, params: { paper_id?: string; title?: string }) =>
-    request<{ paper: Paper; pdf_path: string }>("/papers/upload", {
+  uploadPdf: (file: File, params: { paper_id?: string; title?: string; project_id?: string }) =>
+    request<{ paper: Paper; pdf_path: string; project_id?: string | null; attached?: boolean }>("/papers/upload", {
       method: "POST",
       query: params,
       headers: { "content-type": file.type || "application/pdf", "x-filename": file.name },
@@ -102,10 +104,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  harvestDownload: (papers: Paper[], downloadPdfs: boolean) =>
-    request<{ inserted: number; downloaded: number; failed_downloads: string[] }>("/harvest/download", {
+  harvestDownload: (papers: Paper[], downloadPdfs: boolean, projectId?: string) =>
+    request<HarvestDownloadResponse>("/harvest/download", {
       method: "POST",
-      body: JSON.stringify({ papers, download_pdfs: downloadPdfs })
+      body: JSON.stringify({ papers, download_pdfs: downloadPdfs, project_id: projectId || null })
     }),
   extractReferences: (payload: { paper_id: string; pdf_path?: string; parser?: string; max_references?: number }) =>
     request<ReferenceExtractResponse>("/papers/references/extract", {
@@ -138,8 +140,10 @@ export const api = {
       `/projects/${encodeURIComponent(projectId)}/primary-paper`,
       { method: "PUT", body: JSON.stringify({ paper_id: paperId }) }
     ),
-  getExtractionLibrary: (query = "") =>
-    request<{ items: ExtractionLibraryItem[]; total: number }>("/extraction/library", { query: { query } }),
+  getExtractionLibrary: (query = "", projectId?: string) =>
+    request<{ items: ExtractionLibraryItem[]; total: number }>("/extraction/library", {
+      query: { query, project_id: projectId || undefined }
+    }),
   parseExtractionPdf: (payload: { paper_id: string; pdf_path?: string; parser?: string }) =>
     request<ExtractionParseResponse>("/extraction/parse", {
       method: "POST",
@@ -307,7 +311,8 @@ export const api = {
     }),
   getJobs: () => request<{ jobs: Job[] }>("/jobs"),
   runHealthRepair: () => request<{ status: string; actions: Record<string, unknown>[]; after: HealthReport }>("/jobs/health-repair", { method: "POST", body: JSON.stringify({}) }),
-  runBenchmarkJob: () => request<{ status: string; report: BenchmarkReport }>("/jobs/benchmark", { method: "POST", body: JSON.stringify({}) }),
+  runBenchmarkJob: () =>
+    request<{ status: string; report: BenchmarkReport; run: BenchmarkRun }>("/jobs/benchmark", { method: "POST", body: JSON.stringify({}) }),
   runBenchmarkSuite: (payload: Record<string, unknown> = {}) =>
     request<{ status: string; report: BenchmarkReport }>("/jobs/benchmark-suite", {
       method: "POST",
@@ -316,5 +321,12 @@ export const api = {
   getBenchmarkSuiteLatest: () => request<{ status: string; report: Partial<BenchmarkReport> }>("/quality/benchmark-suite/latest"),
   runGraphRebuild: () => request<{ status: string; result: Record<string, unknown> }>("/jobs/graph-rebuild", { method: "POST" }),
   runEvalJob: (provider: string, model?: string) =>
-    request<{ status: string; report: Record<string, unknown> }>("/jobs/eval", { method: "POST", body: JSON.stringify({ provider, model }) })
+    request<{ status: string; report: Record<string, unknown>; run: BenchmarkRun }>("/jobs/eval", {
+      method: "POST",
+      body: JSON.stringify({ provider, model })
+    }),
+  getBenchmarkRuns: (kind?: "extraction" | "qa") =>
+    request<{ items: BenchmarkRun[]; total: number }>("/benchmark/runs", { query: { kind } }),
+  deleteBenchmarkRun: (runId: string) =>
+    request<{ deleted: boolean; id: string }>(`/benchmark/runs/${encodeURIComponent(runId)}`, { method: "DELETE" })
 };

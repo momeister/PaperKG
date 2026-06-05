@@ -8,6 +8,7 @@ import {
   Columns3,
   FileSearch,
   FileText,
+  FlaskConical,
   GitBranch,
   Import,
   Library,
@@ -20,6 +21,7 @@ import {
 import { api, API_BASE_URL } from "./api";
 import { AppStateContext } from "./state";
 import { Status } from "./components/Status";
+import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { ExtractionPage } from "./pages/ExtractionPage";
 import { GraphPage } from "./pages/GraphPage";
 import { ImportPage } from "./pages/ImportPage";
@@ -38,6 +40,7 @@ const navigation = [
   { to: "/workspace", label: "Arbeitsplatz", icon: Columns3 },
   { to: "/graph", label: "Graph", icon: GitBranch },
   { to: "/quality", label: "Quality", icon: BarChart3 },
+  { to: "/benchmarks", label: "Benchmarks", icon: FlaskConical },
   { to: "/jobs", label: "Jobs", icon: BrainCircuit },
   { to: "/settings", label: "Settings", icon: Settings }
 ];
@@ -168,6 +171,7 @@ export default function App() {
             <Route path="/workspace" element={<WorkspacePage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/quality" element={<QualityPage />} />
+            <Route path="/benchmarks" element={<BenchmarksPage />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

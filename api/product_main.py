@@ -114,6 +114,8 @@ class HarvestSearchRequest(BaseModel):
 class HarvestDownloadRequest(BaseModel):
     papers: list[dict[str, Any]]
     download_pdfs: bool = True
+    project_id: str | None = None
+    projects_path: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
 
@@ -569,6 +571,8 @@ async def upload_paper_pdf(
     paper_id: str | None = None,
     title: str | None = None,
     source: str = "upload",
+    project_id: str | None = None,
+    projects_path: str | None = None,
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR,
 ) -> dict[str, Any]:
@@ -594,7 +598,13 @@ async def upload_paper_pdf(
             source_id=inferred_id,
         )
         paper = db.get_paper(canonical_id)
-    return {"paper": paper, "pdf_path": str(saved_path)}
+    project_paper_ids = _attach_papers_to_project(project_id, [canonical_id], projects_path)
+    return {
+        "paper": paper,
+        "pdf_path": str(saved_path),
+        "project_id": project_id,
+        "attached": bool(project_paper_ids),
+    }
 
 
 @app.post("/harvest/search")
@@ -608,6 +618,8 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
     inserted = 0
     downloaded = 0
     failed_downloads: list[str] = []
+    results: list[dict[str, Any]] = []
+    attached_ids: list[str] = []
     storage = FileManager(request.pdf_base_dir)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -615,7 +627,11 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
             for paper in request.papers:
                 db.insert_paper(paper)
                 inserted += 1
+                canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+                attached_ids.append(canonical_id)
+                title = str(paper.get("title") or paper.get("id") or canonical_id)
                 if not request.download_pdfs:
+                    results.append({"paper_id": canonical_id, "title": title, "status": "inserted"})
                     continue
                 pdf_url = paper.get("pdf_url")
                 if not pdf_url and paper.get("doi"):
@@ -623,11 +639,11 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
                     if pdf_url:
                         paper["pdf_url"] = pdf_url
                 if not pdf_url:
+                    results.append({"paper_id": canonical_id, "title": title, "status": "no_pdf"})
                     continue
                 try:
                     response = await client.get(str(paper["pdf_url"]))
                     response.raise_for_status()
-                    canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
                     saved_path = storage.save_pdf(
                         canonical_id,
                         response.content,
@@ -637,10 +653,20 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
                     )
                     db.update_paper_metadata_if_missing(canonical_id, pdf_path=str(saved_path))
                     downloaded += 1
+                    results.append({"paper_id": canonical_id, "title": title, "status": "downloaded"})
                 except Exception as exc:
-                    failed_downloads.append(f"{paper.get('title') or paper.get('id')}: {exc}")
+                    failed_downloads.append(f"{title}: {exc}")
+                    results.append({"paper_id": canonical_id, "title": title, "status": "failed", "error": str(exc)})
 
-    return {"inserted": inserted, "downloaded": downloaded, "failed_downloads": failed_downloads}
+    project_paper_ids = _attach_papers_to_project(request.project_id, attached_ids, request.projects_path)
+    return {
+        "inserted": inserted,
+        "downloaded": downloaded,
+        "failed_downloads": failed_downloads,
+        "results": results,
+        "project_id": request.project_id,
+        "attached": bool(project_paper_ids),
+    }
 
 
 async def _match_references_to_crossref(
@@ -817,9 +843,15 @@ def extraction_library(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR,
     query: str = "",
+    project_id: str | None = None,
+    projects_path: str | None = None,
     limit: int = Query(default=500, ge=1, le=5000),
 ) -> dict[str, Any]:
     rows = _local_pdf_library(metadata_db_path, pdf_base_dir)
+    if project_id and not _is_reserved_project_id(project_id):
+        projects = _load_projects(_projects_path(projects_path))
+        member_ids = set(projects.get(project_id, []))
+        rows = [row for row in rows if str(row.get("paper_id") or "") in member_ids]
     if query:
         query_lower = query.lower()
         rows = [
@@ -1618,12 +1650,23 @@ def benchmark_job(request: BenchmarkJobRequest) -> dict[str, Any]:
     if request.suite:
         report = _run_benchmark_suite_job(request)
         return {"status": "completed", "report": report}
+    started = time.perf_counter()
     report = run_benchmark(
         gold_dir=Path(request.gold_dir),
         pred_dir=Path(request.pred_dir) if request.pred_dir else None,
         allow_embedded_predictions=request.allow_embedded_predictions,
     )
-    return {"status": "completed", "report": report}
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    run = _persist_benchmark_run(
+        kind="extraction",
+        provider=None,
+        model=None,
+        summary=report.get("summary") or {},
+        report=report,
+        duration_ms=duration_ms,
+        metadata_db_path=request.metadata_db_path,
+    )
+    return {"status": "completed", "report": report, "run": run}
 
 
 @app.post("/jobs/benchmark-suite")
@@ -1640,6 +1683,7 @@ def benchmark_suite_latest(output_dir: str = "data/eval/benchmarks") -> dict[str
 
 @app.post("/jobs/eval")
 def eval_job(request: EvalJobRequest) -> dict[str, Any]:
+    started = time.perf_counter()
     report = run_eval(
         provider=request.provider,
         model=request.model,
@@ -1648,7 +1692,61 @@ def eval_job(request: EvalJobRequest) -> dict[str, Any]:
         limit=request.limit,
         timeout_seconds=request.timeout_seconds,
     )
-    return {"status": "completed", "report": report}
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    run = _persist_benchmark_run(
+        kind="qa",
+        provider=report.get("provider") or request.provider,
+        model=report.get("model") or request.model,
+        summary=report.get("summary") or {},
+        report=report,
+        duration_ms=duration_ms,
+        metadata_db_path=request.metadata_db_path,
+    )
+    return {"status": "completed", "report": report, "run": run}
+
+
+def _persist_benchmark_run(
+    *,
+    kind: str,
+    provider: str | None,
+    model: str | None,
+    summary: dict[str, Any],
+    report: dict[str, Any],
+    duration_ms: int,
+    metadata_db_path: str,
+) -> dict[str, Any]:
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            return db.add_benchmark_run(
+                {
+                    "kind": kind,
+                    "provider": provider,
+                    "model": model,
+                    "summary": summary,
+                    "report": report,
+                    "duration_ms": duration_ms,
+                }
+            )
+    except Exception:
+        return {}
+
+
+@app.get("/benchmark/runs")
+def list_benchmark_runs(
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+    kind: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        runs = db.list_benchmark_runs(kind=kind, limit=limit)
+    return {"items": runs, "total": len(runs)}
+
+
+@app.delete("/benchmark/runs/{run_id}")
+def delete_benchmark_run(run_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_benchmark_run(run_id)
+    return {"deleted": deleted, "id": run_id}
 
 
 def _run_benchmark_suite_job(request: BenchmarkJobRequest | BenchmarkSuiteJobRequest) -> dict[str, Any]:
@@ -1924,6 +2022,31 @@ def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[
 
 def _is_reserved_project_id(project_id: str) -> bool:
     return project_id.strip().lower() in RESERVED_PROJECT_IDS
+
+
+def _attach_papers_to_project(
+    project_id: str | None,
+    paper_ids: list[str],
+    projects_path: str | None = None,
+) -> list[str]:
+    """Add freshly downloaded/uploaded papers to a real project's membership.
+
+    Returns the project's paper ids after attach, or [] when no real project is
+    targeted. Downloads in the global ``Alle Papers`` scope (no/reserved project)
+    stay unattached and remain assignable later.
+    """
+    if not project_id or _is_reserved_project_id(project_id):
+        return []
+    clean_ids = _unique_strings(paper_ids)
+    if not clean_ids:
+        return []
+    path = _projects_path(projects_path)
+    projects = _load_projects(path)
+    if project_id not in projects:
+        return []
+    projects[project_id] = _unique_strings([*projects[project_id], *clean_ids])
+    _save_projects(projects, path)
+    return projects[project_id]
 
 
 def _project_memberships(projects: dict[str, list[str]]) -> dict[str, set[str]]:

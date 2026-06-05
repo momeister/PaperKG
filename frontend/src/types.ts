@@ -55,6 +55,22 @@ export type DeepResearchResponse = {
   warnings: string[];
 };
 
+export type HarvestDownloadResult = {
+  paper_id: string;
+  title: string;
+  status: "downloaded" | "inserted" | "no_pdf" | "failed";
+  error?: string;
+};
+
+export type HarvestDownloadResponse = {
+  inserted: number;
+  downloaded: number;
+  failed_downloads: string[];
+  results: HarvestDownloadResult[];
+  project_id?: string | null;
+  attached?: boolean;
+};
+
 export type GreySource = {
   id: string;
   project_id: string;
@@ -333,6 +349,17 @@ export type BenchmarkReport = {
   extraction?: Record<string, unknown>;
   answering?: Record<string, unknown>;
   warnings?: string[];
+};
+
+export type BenchmarkRun = {
+  id: string;
+  kind: "extraction" | "qa";
+  provider?: string | null;
+  model?: string | null;
+  summary: Record<string, unknown>;
+  report: Record<string, unknown>;
+  duration_ms?: number | null;
+  created_timestamp?: string;
 };
 
 export type RewriteResponse = {
