@@ -3,7 +3,6 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
-  Bot,
   BrainCircuit,
   Briefcase,
   Columns3,
@@ -12,7 +11,6 @@ import {
   GitBranch,
   Import,
   Library,
-  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -22,13 +20,11 @@ import {
 import { api, API_BASE_URL } from "./api";
 import { AppStateContext } from "./state";
 import { Status } from "./components/Status";
-import { AssistantPage } from "./pages/AssistantPage";
 import { ExtractionPage } from "./pages/ExtractionPage";
 import { GraphPage } from "./pages/GraphPage";
 import { ImportPage } from "./pages/ImportPage";
 import { JobsPage } from "./pages/JobsPage";
 import { LibraryPage } from "./pages/LibraryPage";
-import { NotesPage } from "./pages/NotesPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { QualityPage } from "./pages/QualityPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -39,8 +35,6 @@ const navigation = [
   { to: "/import", label: "Import", icon: Import },
   { to: "/extraction", label: "Extraktion", icon: FileSearch },
   { to: "/library", label: "Library", icon: Library },
-  { to: "/assistant", label: "Assistant", icon: Bot },
-  { to: "/notes", label: "Notizen", icon: NotebookPen },
   { to: "/workspace", label: "Arbeitsplatz", icon: Columns3 },
   { to: "/graph", label: "Graph", icon: GitBranch },
   { to: "/quality", label: "Quality", icon: BarChart3 },
@@ -169,8 +163,8 @@ export default function App() {
             <Route path="/import" element={<ImportPage />} />
             <Route path="/extraction" element={<ExtractionPage />} />
             <Route path="/library" element={<LibraryPage />} />
-            <Route path="/assistant" element={<AssistantPage />} />
-            <Route path="/notes" element={<NotesPage />} />
+            <Route path="/assistant" element={<Navigate to="/workspace" replace />} />
+            <Route path="/notes" element={<Navigate to="/workspace" replace />} />
             <Route path="/workspace" element={<WorkspacePage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/quality" element={<QualityPage />} />

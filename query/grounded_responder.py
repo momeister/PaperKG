@@ -15,6 +15,7 @@ class GroundedAnswer:
     answer: str
     sources: list[Source] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
+    citation_links: list[dict[str, Any]] = field(default_factory=list)
     no_answer: bool = False
     model: str | None = None
     generation_error: str | None = None
@@ -25,6 +26,7 @@ class GroundedAnswer:
             "answer": self.answer,
             "sources": [source.to_dict() for source in self.sources],
             "evidence": [item.to_dict() for item in self.evidence],
+            "citation_links": self.citation_links,
             "no_answer": self.no_answer,
             "model": self.model,
             "generation_error": self.generation_error,
@@ -75,6 +77,7 @@ making claims."""
                 answer=f"No matching evidence was found in the local KG for: {question}",
                 sources=[],
                 evidence=[],
+                citation_links=[],
                 no_answer=True,
                 model=model,
             )
@@ -96,11 +99,13 @@ making claims."""
                 sources = cited_sources
             if cited_evidence:
                 evidence = cited_evidence
+        citation_links = _citation_links_for_answer(answer_text, evidence)
         return GroundedAnswer(
             question=question,
             answer=answer_text,
             sources=sources,
             evidence=evidence,
+            citation_links=citation_links,
             no_answer=False,
             model=model or self._default_model(provider),
             generation_error=generation_error,
@@ -444,6 +449,7 @@ def _build_grounded_prompt(
             "Answer concisely using only this evidence.",
             "Include source paper IDs in square brackets for each substantive claim.",
             "When multiple papers support different parts of the answer, cite multiple distinct paper IDs instead of reusing only one source.",
+            "When one claim is supported by multiple papers, cite the supporting paper IDs together in one bracket, separated by commas, for example [p1, p2].",
             "Use only paper IDs shown in the evidence as citations; never cite evidence item numbers like [1] or [4].",
             "When quantitative findings or metrics are present, include the most important numbers.",
         ]
@@ -501,6 +507,175 @@ def _cited_paper_ids(answer_text: str) -> set[str]:
             if value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p"):
                 ids.add(value)
     return ids
+
+
+def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> list[dict[str, Any]]:
+    links: list[dict[str, Any]] = []
+    for match in re.finditer(r"\[([^\]]+)\]", answer_text or ""):
+        raw_citation = match.group(1).strip()
+        context = _citation_context(answer_text, match.start(), match.end())
+        for paper_id_value in _citation_paper_ids(raw_citation):
+            best_index, best_evidence, score = _best_citation_evidence(paper_id_value, context, evidence)
+            if best_evidence is None:
+                continue
+            links.append(
+                {
+                    "citation": raw_citation,
+                    "citation_start": match.start(),
+                    "citation_end": match.end(),
+                    "paper_id": paper_id_value,
+                    "evidence_id": best_evidence.evidence_id,
+                    "evidence_index": best_index,
+                    "score": round(score, 4),
+                    "context": context,
+                }
+            )
+    return links
+
+
+def _citation_paper_ids(citation: str) -> list[str]:
+    ids: list[str] = []
+    for value in re.split(r"[,;]\s*|\s+(?:and|und)\s+", citation or ""):
+        value = value.strip()
+        if value and _is_allowed_citation_label(value):
+            ids.append(value)
+    return ids
+
+
+def _citation_context(answer_text: str, start: int, end: int, window: int = 500) -> str:
+    before = str(answer_text or "")[:start]
+    after = str(answer_text or "")[end:]
+    left_boundary = max(before.rfind(". "), before.rfind("! "), before.rfind("? "), before.rfind("\n\n"))
+    right_candidates = [idx for idx in [after.find(". "), after.find("! "), after.find("? "), after.find("\n\n")] if idx >= 0]
+    left = left_boundary + 2 if left_boundary >= 0 else max(0, start - window // 2)
+    right = end + (min(right_candidates) + 1 if right_candidates else min(len(after), window // 2))
+    context = str(answer_text or "")[left:right]
+    context = re.sub(r"\[[^\]]+\]", " ", context)
+    return re.sub(r"\s+", " ", context).strip()
+
+
+def _best_citation_evidence(
+    paper_id_value: str,
+    context: str,
+    evidence: list[Evidence],
+) -> tuple[int, Evidence | None, float]:
+    candidates = [(index, item) for index, item in enumerate(evidence) if _same_paper_id(item.paper_id, paper_id_value)]
+    if not candidates:
+        return -1, None, 0.0
+
+    scored = [
+        (index, item, _citation_evidence_score(context, item))
+        for index, item in candidates
+    ]
+    scored.sort(key=lambda row: (row[2], row[1].score, -row[0]), reverse=True)
+    index, item, score = scored[0]
+    return index, item, score
+
+
+def _citation_evidence_score(context: str, evidence: Evidence) -> float:
+    target = _evidence_match_text(evidence)
+    context_norm = _match_normalize(context)
+    target_norm = _match_normalize(target)
+    if not context_norm or not target_norm:
+        return 0.0
+
+    score = 0.0
+    context_terms = _match_terms(context)
+    target_terms = set(_match_terms(target))
+    if context_terms:
+        score += sum(1.0 for term in context_terms if term in target_terms)
+
+    quantitative = _quantitative_tokens(context)
+    if quantitative:
+        matched_numbers = sum(1 for token in quantitative if token in _quantitative_tokens(target))
+        score += matched_numbers * 18.0
+        if matched_numbers == 0:
+            score -= 30.0
+
+    if evidence.kind == "claim":
+        score += 8.0
+    elif evidence.kind == "relation":
+        score += 3.0
+    elif evidence.kind == "paper":
+        score -= 5.0
+
+    if context_norm and context_norm in target_norm:
+        score += 20.0
+    for phrase in _distinctive_phrases(context_norm):
+        if phrase in target_norm:
+            score += 8.0
+    return score
+
+
+def _evidence_match_text(evidence: Evidence) -> str:
+    metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+    parts = [
+        evidence.text,
+        str(metadata.get("statement") or ""),
+        str(metadata.get("evidence_span") or ""),
+        str(metadata.get("context") or ""),
+        str(metadata.get("description") or ""),
+        str(metadata.get("label") or ""),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _same_paper_id(left: str, right: str) -> bool:
+    left_norm = _normalize_citation_id(left)
+    right_norm = _normalize_citation_id(right)
+    return left_norm == right_norm or left_norm.endswith(right_norm) or right_norm.endswith(left_norm)
+
+
+def _normalize_citation_id(value: str) -> str:
+    normalized = re.sub(r"^https?://arxiv\.org/abs/", "arxiv:", str(value or "").lower())
+    return re.sub(r"\s+", "", normalized)
+
+
+def _match_normalize(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w.%+-]+", " ", str(value or "").lower())).strip()
+
+
+def _match_terms(value: str) -> list[str]:
+    stopwords = {
+        "about",
+        "also",
+        "and",
+        "are",
+        "based",
+        "from",
+        "have",
+        "into",
+        "paper",
+        "that",
+        "the",
+        "their",
+        "this",
+        "used",
+        "with",
+    }
+    terms = re.findall(r"[a-z0-9][a-z0-9-]{3,}", _match_normalize(value))
+    return [term for term in terms if term not in stopwords]
+
+
+def _quantitative_tokens(value: str) -> set[str]:
+    tokens = set()
+    for match in re.findall(r"\d+(?:\.\d+)?\s*%?", str(value or "")):
+        clean = re.sub(r"\s+", "", match)
+        if clean:
+            tokens.add(clean)
+            tokens.add(clean.rstrip("%"))
+    return tokens
+
+
+def _distinctive_phrases(value: str) -> list[str]:
+    words = [word for word in value.split() if len(word) >= 4]
+    phrases: list[str] = []
+    for size in (5, 4, 3):
+        for index in range(0, max(len(words) - size + 1, 0)):
+            phrase = " ".join(words[index:index + size])
+            if any(char.isdigit() for char in phrase) or len(phrase) >= 28:
+                phrases.append(phrase)
+    return phrases[:12]
 
 
 def _invalid_citations(answer_text: str) -> list[str]:

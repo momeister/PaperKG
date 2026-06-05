@@ -32,6 +32,7 @@ def test_verify_answer_sources_maps_sources_evidence_and_citations(tmp_path) -> 
         ],
         "evidence": [
             {
+                "evidence_id": "ev-clinical-16",
                 "paper_id": "arxiv:2507.16947",
                 "kind": "claim",
                 "field": "claims",
@@ -48,6 +49,9 @@ def test_verify_answer_sources_maps_sources_evidence_and_citations(tmp_path) -> 
     assert payload["missing_source_ids"] == ["arxiv:0000.00000"]
     assert payload["sources"][0]["pdf_available"] is True
     assert payload["sources"][0]["evidence"][0]["reference_text"].startswith("Clinicians with AI Consult")
+    assert payload["sources"][0]["evidence"][0]["evidence_id"] == "ev-clinical-16"
+    assert payload["sources"][0]["evidence"][0]["source_evidence_index"] == 0
+    assert payload["sources"][0]["evidence"][0]["fragment_index"] == 0
 
 
 def test_best_excerpt_finds_nearest_matching_pdf_text() -> None:
@@ -168,6 +172,28 @@ def test_paper_reference_fragments_drop_title_prefix_before_abstract() -> None:
     assert "Grounding Clinical AI Competency" not in fragments[0]
 
 
+def test_paper_reference_fragments_prefer_precise_evidence_span_over_abstract() -> None:
+    fragments = reference_fragments(
+        {
+            "paper_id": "p1",
+            "kind": "paper",
+            "text": "broad fallback text",
+            "metadata": {
+                "title": "Clinical AI Study",
+                "abstract": (
+                    "This broad abstract discusses implementation, diagnostics, alert fatigue, "
+                    "deployment, safety, clinicians, and many other themes."
+                ),
+                "evidence_span": "Clinicians with access to AI Consult made 16% fewer diagnostic errors.",
+            },
+        },
+        max_fragments=2,
+    )
+
+    assert fragments == ["Clinicians with access to AI Consult made 16% fewer diagnostic errors."]
+    assert "broad abstract" not in fragments[0].lower()
+
+
 def test_best_excerpt_stays_sentence_near_match_without_cross_page_title_context() -> None:
     pdf_text = (
         "Grounding Clinical AI Competency in Human Cognition Through the Clinical World Model "
@@ -181,3 +207,34 @@ def test_best_excerpt_stays_sentence_near_match_without_cross_page_title_context
 
     assert excerpt == reference
     assert "Grounding Clinical AI" not in excerpt
+
+
+def test_best_excerpt_returns_precise_sentence_not_broad_shared_term_window() -> None:
+    pdf_text = (
+        "Implementation notes mention clinical AI deployment, clinicians, diagnostics, "
+        "safety, and alert fatigue across a broad introductory paragraph. "
+        "Clinicians with access to AI Consult made 16% fewer diagnostic errors. "
+        "A separate limitations paragraph discusses workflow integration."
+    )
+    reference = "Clinicians with access to AI Consult made 16% fewer diagnostic errors."
+
+    excerpt = best_excerpt(pdf_text, reference, window_chars=100)
+
+    assert excerpt == reference
+    assert "broad introductory" not in excerpt
+
+
+def test_best_excerpt_keeps_quantitative_claim_tokens_when_matching_pdf_text() -> None:
+    pdf_text = (
+        "These results demonstrate potential for LLM-based clinical decision support tools "
+        "to reduce errors in real-world settings and provide a framework for responsible adoption. "
+        "Clinicians with access to AI Consult made 16% fewer diagnostic errors and 13% fewer treatment errors. "
+        "Additional workflow discussion follows."
+    )
+    reference = "AI Consult reduced diagnostic errors by 16% and treatment errors by 13% in primary care settings."
+
+    excerpt = best_excerpt(pdf_text, reference, window_chars=120)
+
+    assert "16% fewer diagnostic errors" in excerpt
+    assert "13% fewer treatment errors" in excerpt
+    assert "demonstrate potential" not in excerpt

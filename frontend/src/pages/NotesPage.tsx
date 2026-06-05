@@ -1,4 +1,4 @@
-import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from "react";
@@ -147,6 +147,12 @@ export type NotesSurfaceActions = {
   deleteAllThreads: () => void;
 };
 
+type EditorViewportSnapshot = {
+  scrollTop: number;
+  scrollLeft: number;
+  cursor: number;
+};
+
 type NotesSurfaceProps = {
   variant?: "page" | "workspace";
   controlledNoteId?: string;
@@ -222,6 +228,7 @@ export function NotesSurface({
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
   const markdownRef = useRef(markdown);
   const localThreadRangesRef = useRef<Record<string, ThreadStoredRange>>({});
+  const pendingEditorViewportRestoreRef = useRef<{ snapshot: EditorViewportSnapshot; markdownLength: number } | null>(null);
   const contextResizeFrameRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const lastCursorRef = useRef<number | null>(null);
@@ -623,6 +630,15 @@ export function NotesSurface({
     markdownRef.current = markdown;
     latestDraftRef.current = { noteId: activeNoteId, title, markdown };
   }, [activeNoteId, markdown, title]);
+
+  useLayoutEffect(() => {
+    const pending = pendingEditorViewportRestoreRef.current;
+    if (!pending) {
+      return;
+    }
+    pendingEditorViewportRestoreRef.current = null;
+    restoreEditorViewportNow(pending.snapshot, pending.markdownLength);
+  }, [markdown]);
 
   useEffect(() => {
     setActiveNoteId("");
@@ -1265,13 +1281,11 @@ export function NotesSurface({
     const insertText = markdownBlockInsertion(currentMarkdown, start, content);
     const nextMarkdown = `${currentMarkdown.slice(0, start)}${insertText}${currentMarkdown.slice(end)}`;
     const nextCursor = start + insertText.length;
+    const viewportSnapshot = captureEditorViewport(nextCursor);
     pushUndo();
     applyMarkdownChange(nextMarkdown);
     lastCursorRef.current = nextCursor;
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
-    });
+    restoreEditorViewport(viewportSnapshot, nextMarkdown.length);
 
     const nextTitle = noteTitleForSave(title, nextMarkdown);
     if (!activeNoteId) {
@@ -1286,6 +1300,7 @@ export function NotesSurface({
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
       queryClient.invalidateQueries({ queryKey: ["note", note.id] });
+      restoreEditorViewport(viewportSnapshot, note.markdown.length);
       return note.id;
     }
 
@@ -1302,6 +1317,7 @@ export function NotesSurface({
     queryClient.invalidateQueries({ queryKey: ["notes"] });
     queryClient.invalidateQueries({ queryKey: ["note", note.id] });
     persistLocalThreadRanges();
+    restoreEditorViewport(viewportSnapshot, note.markdown.length);
     return note.id;
   }
 
@@ -1324,6 +1340,39 @@ export function NotesSurface({
     const start = Math.max(0, Math.min(currentMarkdown.length, node?.selectionStart ?? fallback));
     const end = Math.max(start, Math.min(currentMarkdown.length, node?.selectionEnd ?? start));
     return { start, end };
+  }
+
+  function captureEditorViewport(cursor: number): EditorViewportSnapshot {
+    const node = textareaRef.current;
+    return {
+      scrollTop: node?.scrollTop ?? editorScrollTop,
+      scrollLeft: node?.scrollLeft ?? editorScrollLeft,
+      cursor
+    };
+  }
+
+  function restoreEditorViewport(snapshot: EditorViewportSnapshot, markdownLength = markdownRef.current.length) {
+    pendingEditorViewportRestoreRef.current = { snapshot, markdownLength };
+    restoreEditorViewportNow(snapshot, markdownLength);
+    requestAnimationFrame(() => {
+      restoreEditorViewportNow(snapshot, markdownLength);
+      requestAnimationFrame(() => restoreEditorViewportNow(snapshot, markdownLength));
+    });
+  }
+
+  function restoreEditorViewportNow(snapshot: EditorViewportSnapshot, markdownLength = markdownRef.current.length) {
+    const cursor = Math.max(0, Math.min(markdownLength, snapshot.cursor));
+    const node = textareaRef.current;
+    if (!node) {
+      return;
+    }
+    node.focus({ preventScroll: true });
+    node.setSelectionRange(cursor, cursor);
+    node.scrollTop = Math.min(snapshot.scrollTop, Math.max(0, node.scrollHeight - node.clientHeight));
+    node.scrollLeft = snapshot.scrollLeft;
+    setEditorScrollTop(node.scrollTop);
+    setEditorScrollLeft(node.scrollLeft);
+    lastCursorRef.current = cursor;
   }
 
   function markdownBlockInsertion(source: string, index: number, content: string) {

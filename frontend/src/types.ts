@@ -67,12 +67,24 @@ export type Source = {
 };
 
 export type Evidence = {
+  evidence_id?: string;
   paper_id: string;
   kind: string;
   text: string;
   score: number;
   field?: string | null;
   metadata?: Record<string, unknown>;
+};
+
+export type CitationLink = {
+  citation: string;
+  citation_start: number;
+  citation_end: number;
+  paper_id: string;
+  evidence_id?: string;
+  evidence_index?: number | null;
+  score?: number;
+  context?: string;
 };
 
 export type Answer = {
@@ -82,9 +94,11 @@ export type Answer = {
   generation_error?: string | null;
   sources: Source[];
   evidence: Evidence[];
+  citation_links?: CitationLink[];
 };
 
 export type VerificationEvidence = {
+  evidence_id?: string;
   paper_id: string;
   kind: string;
   field?: string | null;
@@ -92,6 +106,8 @@ export type VerificationEvidence = {
   pdf_excerpt: string;
   matched_terms: string[];
   found_in_pdf_text: boolean;
+  source_evidence_index?: number | null;
+  fragment_index?: number | null;
   evidence_index?: number | null;
 };
 
@@ -265,6 +281,7 @@ export type NoteCitation = {
   kind?: string | null;
   reference_text?: string | null;
   pdf_excerpt?: string | null;
+  evidence_id?: string | null;
   evidence_index?: number | null;
   created_timestamp?: string;
 };

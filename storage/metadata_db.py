@@ -268,10 +268,17 @@ class MetadataDB:
                 kind VARCHAR,
                 reference_text TEXT,
                 pdf_excerpt TEXT,
+                evidence_id VARCHAR,
                 evidence_index INTEGER DEFAULT 0,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        self._add_missing_columns(
+            "note_citations",
+            {
+                "evidence_id": "VARCHAR",
+            },
+        )
 
         self._execute("""
             CREATE TABLE IF NOT EXISTS note_assets (
@@ -1246,14 +1253,15 @@ class MetadataDB:
         citation_id = str(citation.get("id") or self._stable_note_citation_id(note_id, citation))
         self._execute("""
             INSERT INTO note_citations
-            (id, note_id, paper_id, title, kind, reference_text, pdf_excerpt, evidence_index, created_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, note_id, paper_id, title, kind, reference_text, pdf_excerpt, evidence_id, evidence_index, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 paper_id = EXCLUDED.paper_id,
                 title = EXCLUDED.title,
                 kind = EXCLUDED.kind,
                 reference_text = EXCLUDED.reference_text,
                 pdf_excerpt = EXCLUDED.pdf_excerpt,
+                evidence_id = EXCLUDED.evidence_id,
                 evidence_index = EXCLUDED.evidence_index
         """, [
             citation_id,
@@ -1263,6 +1271,7 @@ class MetadataDB:
             citation.get("kind"),
             citation.get("reference_text"),
             citation.get("pdf_excerpt"),
+            citation.get("evidence_id"),
             int(citation.get("evidence_index") or 0),
             datetime.now(),
         ])
@@ -1272,8 +1281,9 @@ class MetadataDB:
         paper_id = str(citation.get("paper_id") or "")
         reference = self._normalize_citation_text(str(citation.get("reference_text") or ""))
         excerpt = self._normalize_citation_text(str(citation.get("pdf_excerpt") or ""))
+        evidence_id = str(citation.get("evidence_id") or "")
         evidence_index = str(citation.get("evidence_index") or 0)
-        basis = "|".join([note_id, paper_id, reference[:500], excerpt[:500], evidence_index])
+        basis = "|".join([note_id, paper_id, evidence_id, reference[:500], excerpt[:500], evidence_index])
         return f"cite_{uuid.uuid5(uuid.NAMESPACE_URL, basis).hex}"
 
     @staticmethod

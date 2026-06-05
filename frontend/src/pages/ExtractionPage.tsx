@@ -8,7 +8,7 @@ import { Status } from "../components/Status";
 import { useAppState } from "../state";
 import type { ExtractionHistoryItem, ExtractionLibraryItem, ExtractionResultPayload, ExtractionRunResponse } from "../types";
 
-type ExtractionTab = "extract" | "library" | "batch" | "vocabulary" | "history";
+type ExtractionTab = "run" | "library" | "vocabulary" | "history";
 
 const parserOptions = [
   { value: "", label: "Auto" },
@@ -26,7 +26,7 @@ const modeOptions = [
 export function ExtractionPage() {
   const { provider, model } = useAppState();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<ExtractionTab>("extract");
+  const [activeTab, setActiveTab] = useState<ExtractionTab>("run");
   const [libraryQuery, setLibraryQuery] = useState("");
   const [historyPaperId, setHistoryPaperId] = useState("");
   const [selectedPdf, setSelectedPdf] = useState<ExtractionLibraryItem | null>(null);
@@ -140,7 +140,7 @@ export function ExtractionPage() {
   function selectPdf(item: ExtractionLibraryItem) {
     setSelectedPdf(item);
     setPaperId(item.paper_id);
-    setActiveTab("extract");
+    setActiveTab("run");
   }
 
   function toggleBatch(path: string) {
@@ -167,34 +167,30 @@ export function ExtractionPage() {
     <section className="page extraction-page">
       <div className="page-title">
         <div>
-          <span>Phase 3</span>
           <h1>Extraktion</h1>
         </div>
         <div className="segmented extraction-tabs">
-          <button className={activeTab === "extract" ? "active" : ""} type="button" onClick={() => setActiveTab("extract")}>
+          <button className={activeTab === "run" ? "active" : ""} type="button" onClick={() => setActiveTab("run")}>
             <Play size={16} />
-            <span>Extract</span>
+            <span>Ausführen</span>
           </button>
           <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>
             <FileSearch size={16} />
             <span>PDFs</span>
           </button>
-          <button className={activeTab === "batch" ? "active" : ""} type="button" onClick={() => setActiveTab("batch")}>
-            <ListChecks size={16} />
-            <span>Batch</span>
-          </button>
           <button className={activeTab === "vocabulary" ? "active" : ""} type="button" onClick={() => setActiveTab("vocabulary")}>
             <BookOpenCheck size={16} />
-            <span>Vocabulary</span>
+            <span>Vokabular</span>
           </button>
           <button className={activeTab === "history" ? "active" : ""} type="button" onClick={() => setActiveTab("history")}>
             <Database size={16} />
-            <span>History</span>
+            <span>Historie</span>
           </button>
         </div>
       </div>
 
-      {activeTab === "extract" ? (
+      {activeTab === "run" ? (
+        <div className="extraction-run-stack">
         <div className="extraction-workbench">
           <section className="panel extraction-input-panel">
             <div className="panel-heading">
@@ -281,7 +277,7 @@ export function ExtractionPage() {
                 </button>
                 <button className="button button-primary" type="submit" disabled={extract.isPending || (!text.trim() && !selectedPdf)}>
                   <Play size={16} />
-                  <span>Extrahieren</span>
+                  <span>Ausführen</span>
                 </button>
               </div>
             </form>
@@ -299,30 +295,20 @@ export function ExtractionPage() {
             {lastResult ? <ExtractionResultView response={lastResult} /> : <EmptyState title="Kein Ergebnis" />}
           </section>
         </div>
-      ) : null}
-
-      {activeTab === "library" ? (
-        <section className="panel">
-          <LibraryToolbar query={libraryQuery} setQuery={setLibraryQuery} onRefresh={() => libraryQueryResult.refetch()} />
-          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.pdf_path ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} />
-        </section>
-      ) : null}
-
-      {activeTab === "batch" ? (
-        <section className="panel">
+        <section className="panel extraction-batch-panel">
           <div className="panel-heading">
             <div>
-              <span>Batch</span>
-              <strong>{selectedBatchPaths.length} PDFs</strong>
+              <span>Mehrere PDFs</span>
+              <strong>{selectedBatchPaths.length} ausgewählt</strong>
             </div>
             <div className="button-row">
               <button className="button" type="button" onClick={toggleAllBatch}>
                 <ListChecks size={16} />
-                <span>{selectedBatchPaths.length === libraryItems.length ? "Leeren" : "Alle"}</span>
+                <span>{selectedBatchPaths.length === libraryItems.length && libraryItems.length ? "Leeren" : "Alle"}</span>
               </button>
               <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending} onClick={() => batch.mutate()}>
                 <Play size={16} />
-                <span>Start</span>
+                <span>Auswahl ausführen</span>
               </button>
             </div>
           </div>
@@ -338,6 +324,14 @@ export function ExtractionPage() {
           ) : null}
           <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.pdf_path ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
           <JobsMiniList jobs={jobsQuery.data?.jobs ?? []} />
+        </section>
+        </div>
+      ) : null}
+
+      {activeTab === "library" ? (
+        <section className="panel">
+          <LibraryToolbar query={libraryQuery} setQuery={setLibraryQuery} onRefresh={() => libraryQueryResult.refetch()} />
+          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.pdf_path ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} />
         </section>
       ) : null}
 
@@ -474,7 +468,7 @@ function ExtractionLibraryTable({
   return (
     <div className="data-table extraction-library-table">
       <div className="data-row data-row--head">
-        <span>Batch</span>
+        <span>Auswahl</span>
         <span>PDF</span>
         <span>Paper ID</span>
         <span>Status</span>
@@ -644,8 +638,25 @@ function ErrorBox({ error }: { error: unknown }) {
   if (!error) {
     return null;
   }
-  const message = error instanceof ApiError ? String(error.detail) : error instanceof Error ? error.message : String(error);
+  const message = error instanceof ApiError ? formatApiError(error) : error instanceof Error ? error.message : String(error);
   return <div className="inline-error">{message}</div>;
+}
+
+function formatApiError(error: ApiError) {
+  const detail = error.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail && typeof detail === "object") {
+    const data = detail as Record<string, unknown>;
+    const message = String(data.message ?? error.message);
+    const parser = data.parser ? ` Parser: ${data.parser}.` : "";
+    const paperId = data.paper_id ? ` Paper: ${data.paper_id}.` : "";
+    const path = data.pdf_path ? ` Datei: ${data.pdf_path}.` : "";
+    const reason = data.error ? ` Fehler: ${data.error}.` : "";
+    return `${message}.${parser}${paperId}${path}${reason}`;
+  }
+  return error.message;
 }
 
 function selectedBatchItems(items: ExtractionLibraryItem[], selectedPaths: string[]) {

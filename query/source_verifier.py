@@ -14,6 +14,7 @@ DEFAULT_EXCERPT_CHARS = 260
 
 @dataclass(frozen=True)
 class EvidenceLocation:
+    evidence_id: str
     paper_id: str
     kind: str
     field: str | None
@@ -21,10 +22,13 @@ class EvidenceLocation:
     pdf_excerpt: str = ""
     matched_terms: list[str] = field(default_factory=list)
     found_in_pdf_text: bool = False
+    source_evidence_index: int | None = None
+    fragment_index: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "evidence_id": self.evidence_id,
             "paper_id": self.paper_id,
             "kind": self.kind,
             "field": self.field,
@@ -32,6 +36,8 @@ class EvidenceLocation:
             "pdf_excerpt": self.pdf_excerpt,
             "matched_terms": self.matched_terms,
             "found_in_pdf_text": self.found_in_pdf_text,
+            "source_evidence_index": self.source_evidence_index,
+            "fragment_index": self.fragment_index,
             "metadata": self.metadata,
         }
 
@@ -105,15 +111,22 @@ def verify_answer_sources(
                 pdf_error = str(exc)
 
         source_evidence = [
-            item for item in evidence
+            (index, item) for index, item in enumerate(evidence)
             if str(item.get("paper_id") or "") == paper_id
         ]
         locations: list[EvidenceLocation] = []
-        for item in source_evidence:
+        for source_evidence_index, item in source_evidence:
             remaining = max_evidence_per_source - len(locations)
             if remaining <= 0:
                 break
-            locations.extend(locate_evidence_fragments(item, pdf_text, max_fragments=remaining))
+            locations.extend(
+                locate_evidence_fragments(
+                    item,
+                    pdf_text,
+                    max_fragments=remaining,
+                    source_evidence_index=source_evidence_index,
+                )
+            )
         verifications.append(
             SourceVerification(
                 paper_id=paper_id,
@@ -141,18 +154,42 @@ def locate_evidence_fragments(
     evidence: dict[str, Any],
     pdf_text: str = "",
     max_fragments: int = 3,
+    source_evidence_index: int | None = None,
 ) -> list[EvidenceLocation]:
     fragments = reference_fragments(evidence, max_fragments=max_fragments) or [reference_text(evidence)]
     locations: list[EvidenceLocation] = []
-    for reference in fragments[:max_fragments]:
-        locations.append(_location_for_reference(evidence, reference, pdf_text))
-    return locations or [_location_for_reference(evidence, reference_text(evidence), pdf_text)]
+    for fragment_index, reference in enumerate(fragments[:max_fragments]):
+        locations.append(
+            _location_for_reference(
+                evidence,
+                reference,
+                pdf_text,
+                source_evidence_index=source_evidence_index,
+                fragment_index=fragment_index,
+            )
+        )
+    return locations or [
+        _location_for_reference(
+            evidence,
+            reference_text(evidence),
+            pdf_text,
+            source_evidence_index=source_evidence_index,
+            fragment_index=0,
+        )
+    ]
 
 
-def _location_for_reference(evidence: dict[str, Any], reference: str, pdf_text: str = "") -> EvidenceLocation:
+def _location_for_reference(
+    evidence: dict[str, Any],
+    reference: str,
+    pdf_text: str = "",
+    source_evidence_index: int | None = None,
+    fragment_index: int | None = None,
+) -> EvidenceLocation:
     excerpt = best_excerpt(pdf_text, reference) if pdf_text else ""
     terms = highlightable_terms(reference)
     return EvidenceLocation(
+        evidence_id=str(evidence.get("evidence_id") or ""),
         paper_id=str(evidence.get("paper_id") or ""),
         kind=str(evidence.get("kind") or "evidence"),
         field=str(evidence.get("field")) if evidence.get("field") else None,
@@ -160,6 +197,8 @@ def _location_for_reference(evidence: dict[str, Any], reference: str, pdf_text: 
         pdf_excerpt=excerpt,
         matched_terms=[term for term in terms if term in excerpt.lower()] if excerpt else [],
         found_in_pdf_text=bool(excerpt),
+        source_evidence_index=source_evidence_index,
+        fragment_index=fragment_index,
         metadata=evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {},
     )
 
@@ -217,7 +256,6 @@ def reference_text(evidence: dict[str, Any]) -> str:
 
 def reference_fragments(evidence: dict[str, Any], max_fragments: int = 3) -> list[str]:
     metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
-    kind = str(evidence.get("kind") or "").lower()
     title = str(metadata.get("title") or "")
     preferred_anchor_keys = [
         "evidence_span",
@@ -226,10 +264,7 @@ def reference_fragments(evidence: dict[str, Any], max_fragments: int = 3) -> lis
         "description",
         "why_applicable",
     ]
-    anchor_parts: list[str] = []
-    if kind == "paper":
-        anchor_parts.append(str(metadata.get("abstract") or ""))
-    anchor_parts.extend(str(metadata.get(key) or "") for key in preferred_anchor_keys)
+    anchor_parts = [str(metadata.get(key) or "") for key in preferred_anchor_keys]
 
     fragments: list[str] = []
     for part in anchor_parts:
@@ -272,32 +307,52 @@ def best_excerpt(pdf_text: str, reference: str, window_chars: int = DEFAULT_EXCE
     reference_clean = re.sub(r"\s+", " ", reference or "").strip()
     if not clean or not reference_clean:
         return ""
+    quantitative = _quantitative_tokens(reference_clean)
 
     exact = _find_longest_substring(clean, reference_clean)
     if exact is not None:
         position, length = exact
         matched = clean[position : position + length].strip()
-        if _is_complete_sentence(matched):
+        if _is_complete_sentence(matched) and _contains_quantitative_tokens(matched, quantitative):
             return matched
-        return _excerpt_around(clean, position, length, window_chars)
+        excerpt = _excerpt_around(clean, position, length, window_chars)
+        if _contains_quantitative_tokens(excerpt, quantitative):
+            return excerpt
 
     tokens = highlightable_terms(reference_clean)
     if not tokens:
         return _truncate_at_sentence(clean, window_chars)
 
+    lower = clean.lower()
+    if quantitative:
+        required_numbers = {token for token in quantitative if token.endswith("%")} or quantitative
+        number_candidates: list[tuple[int, str]] = []
+        for token in required_numbers:
+            for match in re.finditer(re.escape(token), lower):
+                excerpt = _excerpt_around(clean, match.start(), len(match.group(0)), window_chars)
+                if not _contains_quantitative_tokens(excerpt, quantitative):
+                    continue
+                score = sum(1 for term in tokens if term in excerpt.lower()) + len(required_numbers) * 20
+                number_candidates.append((score, excerpt))
+        if number_candidates:
+            number_candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
+            return number_candidates[0][1]
+
     best_start = 0
     best_score = -1
     step = max(window_chars // 2, 120)
-    lower = clean.lower()
     for start in range(0, max(len(clean) - window_chars, 1), step):
         window = lower[start : start + window_chars]
+        if quantitative and not _contains_quantitative_tokens(window, quantitative):
+            continue
         score = sum(1 for token in tokens if token in window)
         if score > best_score:
             best_score = score
             best_start = start
     if best_score <= 0:
         return ""
-    return _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
+    excerpt = _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
+    return excerpt if _contains_quantitative_tokens(excerpt, quantitative) else ""
 
 
 def highlightable_terms(text: str) -> list[str]:
@@ -445,6 +500,24 @@ def _find_longest_substring(text: str, reference: str) -> tuple[int, int] | None
         if position >= 0:
             return position, len(chunk)
     return None
+
+
+def _quantitative_tokens(value: str) -> set[str]:
+    tokens: set[str] = set()
+    for match in re.findall(r"\d+(?:\.\d+)?\s*%?", str(value or "")):
+        clean = re.sub(r"\s+", "", match)
+        if clean:
+            tokens.add(clean.lower())
+            tokens.add(clean.rstrip("%").lower())
+    return tokens
+
+
+def _contains_quantitative_tokens(text: str, tokens: set[str]) -> bool:
+    if not tokens:
+        return True
+    haystack = _quantitative_tokens(text)
+    required = {token for token in tokens if token.endswith("%")} or tokens
+    return all(token in haystack for token in required)
 
 
 def _cited_paper_ids(answer_text: str) -> set[str]:

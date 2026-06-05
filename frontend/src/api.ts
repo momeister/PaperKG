@@ -32,7 +32,7 @@ export class ApiError extends Error {
   detail: unknown;
 
   constructor(status: number, detail: unknown) {
-    super(typeof detail === "string" ? detail : `API request failed with ${status}`);
+    super(typeof detail === "string" ? detail : detail && typeof detail === "object" && "message" in detail ? String(detail.message) : `API request failed with ${status}`);
     this.status = status;
     this.detail = detail;
   }
@@ -50,17 +50,24 @@ function url(path: string, query?: RequestOptions["query"]) {
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { query, headers, ...init } = options;
-  const response = await fetch(url(path, query), {
-    ...init,
-    headers: {
-      ...(init.body && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}),
-      ...headers
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetch(url(path, query), {
+      ...init,
+      headers: {
+        ...(init.body && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}),
+        ...headers
+      }
+    });
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? ` ${error.message}` : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}).${reason}`);
+  }
   const contentType = response.headers.get("content-type") ?? "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
-    throw new ApiError(response.status, typeof payload === "object" && payload && "detail" in payload ? payload.detail : payload);
+    const detail = typeof payload === "object" && payload && "detail" in payload ? payload.detail : payload;
+    throw new ApiError(response.status, detail || `Backend error ${response.status} for ${path}`);
   }
   return payload as T;
 }

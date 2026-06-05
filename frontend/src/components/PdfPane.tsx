@@ -24,7 +24,16 @@ type HighlightBox = {
   height: number;
 };
 
-type MatchIndex = Record<number, number[]>;
+export type PageMatch = {
+  pageNumber: number;
+  score: number;
+  exact: boolean;
+  matchedText: string;
+  boxes: HighlightBox[];
+  querySignature: string;
+};
+
+type MatchIndex = Record<number, Record<number, PageMatch>>;
 
 type HighlightQuery = {
   phrases: string[];
@@ -140,11 +149,15 @@ export function PdfPane({
   const activeEvidence = evidences[activeEvidenceIndex];
   const activeEvidenceColorIndex = evidenceColorIndex(activeEvidence, activeEvidenceIndex);
   const visibleHighlightColorIndex = showingSearch ? visibleHighlightIndex : activeEvidenceColorIndex;
-  const activePages = matches[visibleHighlightIndex] ?? [];
-  const evidencePages = matches[activeEvidenceIndex] ?? [];
   const activeQuery = evidenceQueries[activeEvidenceIndex] ?? { phrases: [], terms: [] };
   const visibleQuery = showingSearch ? searchQuery : activeQuery;
-  const evidenceTargetPage = showingSearch ? null : evidencePages[0] ?? null;
+  const visibleQuerySignature = highlightQuerySignature(visibleQuery);
+  const activeMatch = bestMatchFor(matches[visibleHighlightIndex], visibleQuerySignature);
+  const evidenceMatch = bestMatchFor(matches[activeEvidenceIndex], highlightQuerySignature(activeQuery));
+  const activePages = pagesFor(matches[visibleHighlightIndex], visibleQuerySignature);
+  const evidencePages = pagesFor(matches[activeEvidenceIndex], highlightQuerySignature(activeQuery));
+  const evidenceTargetPage = showingSearch ? activeMatch?.pageNumber ?? null : evidenceMatch?.pageNumber ?? null;
+  const activeEvidenceText = showingSearch ? activeMatch?.matchedText ?? "" : evidenceMatch?.matchedText ?? "";
 
   useEffect(() => {
     setMatches({});
@@ -179,18 +192,23 @@ export function PdfPane({
   }, [document, url]);
 
   useEffect(() => {
-    const firstPage = activePages[0];
-    if (firstPage) {
-      jumpToPage(firstPage, "center");
+    const targetPage = activeMatch?.pageNumber;
+    if (targetPage) {
+      jumpToPage(targetPage, "center");
     }
-  }, [activeEvidenceIndex, activePages.join(","), showingSearch]);
+  }, [activeEvidenceIndex, activeMatch?.pageNumber, showingSearch]);
 
-  const updateMatch = useCallback((evidenceIndex: number, pageNumber: number, hasMatch: boolean) => {
+  const updateMatch = useCallback((evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => {
     setMatches((current) => {
-      const existing = new Set(current[evidenceIndex] ?? []);
-      hasMatch ? existing.add(pageNumber) : existing.delete(pageNumber);
-      const next = { ...current, [evidenceIndex]: Array.from(existing).sort((a, b) => a - b) };
-      if (!next[evidenceIndex].length) {
+      const existing = { ...(current[evidenceIndex] ?? {}) };
+      const previous = existing[pageNumber];
+      if (match) {
+        existing[pageNumber] = { ...match, pageNumber, querySignature };
+      } else if (!previous || previous.querySignature === querySignature) {
+        delete existing[pageNumber];
+      }
+      const next = { ...current, [evidenceIndex]: existing };
+      if (!Object.keys(existing).length) {
         delete next[evidenceIndex];
       }
       return next;
@@ -199,9 +217,9 @@ export function PdfPane({
 
   function jumpToEvidence(index: number) {
     onActiveEvidenceChange?.(index);
-    const page = matches[index]?.[0];
-    if (page) {
-      jumpToPage(page, "center");
+    const match = bestMatchFor(matches[index], highlightQuerySignature(evidenceQueries[index] ?? { phrases: [], terms: [] }));
+    if (match) {
+      jumpToPage(match.pageNumber, "center");
     }
   }
 
@@ -290,7 +308,7 @@ export function PdfPane({
           <button className="icon-button" type="button" aria-label="Nächste Zitation" onClick={() => stepEvidence(1)}>
             <ChevronRight size={18} />
           </button>
-          <span>{evidencePages.length ? `Seite ${evidencePages[0]}` : "keine Textstelle gefunden"}</span>
+          <span>{evidenceMatch ? `Seite ${evidenceMatch.pageNumber}` : evidencePages.length ? `Seite ${evidencePages[0]}` : "keine Textstelle gefunden"}</span>
         </div>
       ) : null}
 
@@ -352,6 +370,7 @@ export function PdfPane({
                 zoom={zoom}
                 fitMode={fitMode}
                 evidenceQuery={visibleQuery}
+                querySignature={visibleQuerySignature}
                 activeEvidenceIndex={visibleHighlightIndex}
                 evidenceColorIndex={visibleHighlightColorIndex}
                 targetPage={evidenceTargetPage}
@@ -373,7 +392,7 @@ export function PdfPane({
       {activeEvidence ? (
         <div className="excerpt-panel" style={evidenceColorVars(activeEvidenceColorIndex)}>
           <span>Aktive Textstelle</span>
-          <p>{highlightTerms(activeEvidence.pdf_excerpt || activeEvidence.reference_text, activeQuery.terms)}</p>
+          <p>{activeEvidenceText || "Keine Textstelle gefunden."}</p>
         </div>
       ) : null}
     </aside>
@@ -387,6 +406,7 @@ function PdfPage({
   zoom,
   fitMode,
   evidenceQuery,
+  querySignature,
   activeEvidenceIndex,
   evidenceColorIndex,
   targetPage,
@@ -399,10 +419,11 @@ function PdfPage({
   zoom: number;
   fitMode: "width" | "page";
   evidenceQuery: HighlightQuery;
+  querySignature: string;
   activeEvidenceIndex: number;
   evidenceColorIndex: number;
   targetPage?: number | null;
-  onMatch: (evidenceIndex: number, pageNumber: number, hasMatch: boolean) => void;
+  onMatch: (evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => void;
   setPageRef: (node: HTMLDivElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -485,8 +506,8 @@ function PdfPage({
       }
 
       const match = findPageMatch(textContent.items, evidenceQuery, viewport, activeEvidenceIndex, evidenceColorIndex);
-      onMatch(activeEvidenceIndex, pageNumber, match.hasMatch);
-      setBoxes(targetPage && pageNumber !== targetPage ? [] : match.boxes);
+      onMatch(activeEvidenceIndex, pageNumber, querySignature, match);
+      setBoxes(targetPage === pageNumber ? match?.boxes ?? [] : []);
     }
 
     renderPage();
@@ -494,7 +515,7 @@ function PdfPage({
       cancelled = true;
       renderTask?.cancel?.();
     };
-  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, activeEvidenceIndex, evidenceColorIndex, targetPage, onMatch, isNearViewport]);
+  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, querySignature, activeEvidenceIndex, evidenceColorIndex, targetPage, onMatch, isNearViewport]);
 
   return (
     <div className="pdf-page" ref={combinedPageRef} style={{ width: size.width || undefined }}>
@@ -502,7 +523,7 @@ function PdfPage({
       <div className="pdf-page-surface" style={{ width: size.width || undefined, height: size.height || undefined }}>
         <canvas ref={canvasRef} />
         <div className="pdf-highlight-layer">
-          {boxes.map((box) => (
+          {normalizeHighlightBoxes(boxes).map((box) => (
             <span
               key={box.id}
               className={`pdf-highlight ${box.evidenceIndex === activeEvidenceIndex ? "pdf-highlight--active" : ""}`}
@@ -516,18 +537,24 @@ function PdfPage({
   );
 }
 
-function textItemBox(item: unknown, viewport: any, itemIndex: number, evidenceIndex: number, colorIndex = evidenceIndex): HighlightBox | null {
-  const textItem = item as { transform?: number[]; width?: number; height?: number; str?: string };
+function textItemBox(item: IndexedTextItem, viewport: any, evidenceIndex: number, colorIndex = evidenceIndex, rangeStart = 0, rangeEnd = item.text.length): HighlightBox | null {
+  const textItem = item.item as { transform?: number[]; width?: number; height?: number; str?: string };
   if (!textItem.transform) {
     return null;
   }
   const transform = pdfjs.Util.transform(viewport.transform, textItem.transform);
   const height = Math.max(8, Math.hypot(transform[2], transform[3]) || Number(textItem.height) || 10);
-  const width = Math.max(10, Number(textItem.width || String(textItem.str ?? "").length * 5) * viewport.scale);
-  const left = transform[4];
+  const fullWidth = Math.max(10, Number(textItem.width || String(textItem.str ?? "").length * 5) * viewport.scale);
+  const textLength = Math.max(1, item.text.length);
+  const safeStart = Math.max(0, Math.min(textLength, rangeStart));
+  const safeEnd = Math.max(safeStart + 1, Math.min(textLength, rangeEnd));
+  const startRatio = safeStart / textLength;
+  const endRatio = safeEnd / textLength;
+  const width = Math.max(4, fullWidth * (endRatio - startRatio));
+  const left = transform[4] + fullWidth * startRatio;
   const top = transform[5] - height;
   return {
-    id: `${evidenceIndex}-${itemIndex}-${left}-${top}`,
+    id: `${evidenceIndex}-${item.index}-${safeStart}-${safeEnd}-${left}-${top}`,
     evidenceIndex,
     colorIndex,
     left: Math.max(0, left - 1),
@@ -537,32 +564,18 @@ function textItemBox(item: unknown, viewport: any, itemIndex: number, evidenceIn
   };
 }
 
-function findPageMatch(textItems: unknown[], query: HighlightQuery, viewport: any, evidenceIndex: number, colorIndex = evidenceIndex) {
+export function findPageMatch(textItems: unknown[], query: HighlightQuery, viewport: any, evidenceIndex: number, colorIndex = evidenceIndex): Omit<PageMatch, "pageNumber" | "querySignature"> | null {
   const indexed = indexTextItems(textItems);
   if (!indexed.text || (!query.phrases.length && !query.terms.length)) {
-    return { hasMatch: false, boxes: [] as HighlightBox[] };
+    return null;
   }
 
-  const phraseBoxes = boxesForPhraseMatches(indexed.items, indexed.text, query.phrases, viewport, evidenceIndex, colorIndex);
-  if (phraseBoxes.length) {
-    const supplementalTerms = query.terms.filter((term) => indexed.text.includes(term)).filter(isStrongFallbackTerm).slice(0, 4);
-    const supplementalBoxes = boxesForTerms(indexed.items, supplementalTerms, viewport, evidenceIndex, colorIndex, Math.max(0, 30 - phraseBoxes.length));
-    return { hasMatch: true, boxes: mergeOverlappingBoxes(uniqueBoxes([...phraseBoxes, ...supplementalBoxes])).slice(0, 34) };
+  const phraseMatch = bestPhraseMatch(indexed.items, indexed.text, query.phrases, viewport, evidenceIndex, colorIndex);
+  if (phraseMatch) {
+    return phraseMatch;
   }
 
-  const matchedTerms = query.terms.filter((term) => indexed.text.includes(term));
-  const strongTerms = matchedTerms.filter(isStrongFallbackTerm);
-  const requiredHits = query.terms.length <= 4 ? query.terms.length : Math.min(6, Math.max(4, Math.ceil(query.terms.length * 0.45)));
-  if (!matchedTerms.length || matchedTerms.length < requiredHits) {
-    return { hasMatch: false, boxes: [] as HighlightBox[] };
-  }
-  if (query.terms.length < 2 && !strongTerms.length) {
-    return { hasMatch: false, boxes: [] as HighlightBox[] };
-  }
-
-  const anchors = strongTerms.slice(0, 5);
-  const fallbackTerms = anchors.length ? anchors : matchedTerms.slice(0, 3);
-  return { hasMatch: true, boxes: mergeOverlappingBoxes(boxesForTerms(indexed.items, fallbackTerms, viewport, evidenceIndex, colorIndex, 14)) };
+  return bestTermWindowMatch(indexed.items, indexed.text, query.terms, viewport, evidenceIndex, colorIndex);
 }
 
 function indexTextItems(items: unknown[]): { items: IndexedTextItem[]; text: string } {
@@ -583,15 +596,15 @@ function indexTextItems(items: unknown[]): { items: IndexedTextItem[]; text: str
   return { items: indexed, text };
 }
 
-function boxesForPhraseMatches(
+function bestPhraseMatch(
   items: IndexedTextItem[],
   pageText: string,
   phrases: string[],
   viewport: any,
   evidenceIndex: number,
   colorIndex = evidenceIndex
-): HighlightBox[] {
-  const boxes: HighlightBox[] = [];
+): Omit<PageMatch, "pageNumber" | "querySignature"> | null {
+  let best: Omit<PageMatch, "pageNumber" | "querySignature"> | null = null;
   for (const phrase of phrases) {
     const normalizedPhrase = normalizeText(phrase);
     if (!normalizedPhrase) {
@@ -600,49 +613,130 @@ function boxesForPhraseMatches(
     let position = pageText.indexOf(normalizedPhrase);
     while (position >= 0) {
       const end = position + normalizedPhrase.length;
-      for (const item of items) {
-        if (item.end <= position || item.start >= end) {
-          continue;
-        }
-        const box = textItemBox(item.item, viewport, item.index, evidenceIndex, colorIndex);
-        if (box) {
-          boxes.push(box);
-        }
-        if (boxes.length >= 20) {
-          return uniqueBoxes(boxes);
+      if (textRangeHasBoundary(pageText, position, end)) {
+        const boxes = normalizeHighlightBoxes(boxesForTextRange(items, position, end, viewport, evidenceIndex, colorIndex)).slice(0, 18);
+        if (boxes.length) {
+          const candidate = {
+            score: 10000 + normalizedPhrase.length * 2 - boxes.length,
+            exact: true,
+            matchedText: compactText(phrase),
+            boxes
+          };
+          if (!best || candidate.score > best.score) {
+            best = candidate;
+          }
         }
       }
       position = pageText.indexOf(normalizedPhrase, end);
     }
   }
-  return uniqueBoxes(boxes);
+  return best;
 }
 
-function boxesForTerms(
+function bestTermWindowMatch(
   items: IndexedTextItem[],
+  pageText: string,
   terms: string[],
   viewport: any,
   evidenceIndex: number,
-  colorIndex: number,
-  limit: number
-): HighlightBox[] {
-  if (!terms.length || limit <= 0) {
-    return [];
+  colorIndex: number
+): Omit<PageMatch, "pageNumber" | "querySignature"> | null {
+  if (!terms.length) {
+    return null;
   }
+  const occurrences = termOccurrences(pageText, terms);
+  const matchedTerms = new Set(occurrences.map((item) => item.term));
+  const requiredHits = terms.length <= 4 ? terms.length : Math.min(5, Math.max(3, Math.ceil(terms.length * 0.35)));
+  if (matchedTerms.size < requiredHits) {
+    return null;
+  }
+
+  const maxWindow = 280;
+  let bestWindow: { start: number; end: number; score: number; occurrences: typeof occurrences } | null = null;
+  const ordered = [...occurrences].sort((left, right) => left.start - right.start || left.end - right.end);
+  for (let left = 0; left < ordered.length; left += 1) {
+    const windowOccurrences: typeof occurrences = [];
+    for (let right = left; right < ordered.length; right += 1) {
+      const start = ordered[left].start;
+      const end = ordered[right].end;
+      if (end - start > maxWindow) {
+        break;
+      }
+      windowOccurrences.push(ordered[right]);
+      const distinct = new Set(windowOccurrences.map((item) => item.term));
+      if (distinct.size < requiredHits) {
+        continue;
+      }
+      const strongHits = windowOccurrences.filter((item) => isStrongFallbackTerm(item.term)).length;
+      if (!strongHits && distinct.size < Math.max(4, requiredHits + 1)) {
+        continue;
+      }
+      const span = Math.max(1, end - start);
+      const score = distinct.size * 100 + strongHits * 20 - span / 4;
+      if (!bestWindow || score > bestWindow.score) {
+        bestWindow = { start, end, score, occurrences: [...windowOccurrences] };
+      }
+    }
+  }
+  if (!bestWindow) {
+    return null;
+  }
+  const boxes = normalizeHighlightBoxes(boxesForTextRange(items, bestWindow.start, bestWindow.end, viewport, evidenceIndex, colorIndex)).slice(0, 18);
+  if (!boxes.length) {
+    return null;
+  }
+  return {
+    score: bestWindow.score,
+    exact: false,
+    matchedText: pageText.slice(bestWindow.start, bestWindow.end).trim(),
+    boxes
+  };
+}
+
+function boxesForTextRange(items: IndexedTextItem[], start: number, end: number, viewport: any, evidenceIndex: number, colorIndex: number): HighlightBox[] {
   const boxes: HighlightBox[] = [];
   for (const item of items) {
-    if (!terms.some((term) => item.text.includes(term))) {
+    if (item.end <= start || item.start >= end) {
       continue;
     }
-    const box = textItemBox(item.item, viewport, item.index, evidenceIndex, colorIndex);
+    const rangeStart = Math.max(0, start - item.start);
+    const rangeEnd = Math.min(item.text.length, end - item.start);
+    const box = textItemBox(item, viewport, evidenceIndex, colorIndex, rangeStart, rangeEnd);
     if (box) {
       boxes.push(box);
     }
-    if (boxes.length >= limit) {
-      break;
-    }
   }
   return uniqueBoxes(boxes);
+}
+
+function termOccurrences(pageText: string, terms: string[]) {
+  return Array.from(new Set(terms))
+    .flatMap((term) => findTermOccurrences(pageText, term).slice(0, 8).map((start) => ({ term, start, end: start + term.length })))
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
+function findTermOccurrences(text: string, term: string) {
+  const positions: number[] = [];
+  if (!term) {
+    return positions;
+  }
+  let position = text.indexOf(term);
+  while (position >= 0) {
+    const end = position + term.length;
+    if (textRangeHasBoundary(text, position, end)) {
+      positions.push(position);
+    }
+    position = text.indexOf(term, Math.max(end, position + 1));
+  }
+  return positions;
+}
+
+function textRangeHasBoundary(text: string, start: number, end: number) {
+  return isTextBoundary(text[start - 1]) && isTextBoundary(text[end]);
+}
+
+function isTextBoundary(value: string | undefined) {
+  return !value || !/[\p{L}\p{N}-]/u.test(value);
 }
 
 function uniqueBoxes(boxes: HighlightBox[]) {
@@ -660,24 +754,31 @@ function uniqueBoxes(boxes: HighlightBox[]) {
 }
 
 function mergeOverlappingBoxes(boxes: HighlightBox[]) {
-  const ordered = [...boxes].sort((left, right) => left.top - right.top || left.left - right.left);
-  const merged: HighlightBox[] = [];
-  for (const box of ordered) {
-    const target = merged.find((candidate) => boxesTouch(candidate, box));
-    if (!target) {
-      merged.push({ ...box });
-      continue;
+  let current = uniqueBoxes(boxes);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const ordered = [...current].sort((left, right) => left.top - right.top || left.left - right.left);
+    const merged: HighlightBox[] = [];
+    for (const box of ordered) {
+      const target = merged.find((candidate) => boxesTouch(candidate, box));
+      if (!target) {
+        merged.push({ ...box });
+        continue;
+      }
+      const left = Math.min(target.left, box.left);
+      const top = Math.min(target.top, box.top);
+      const right = Math.max(target.left + target.width, box.left + box.width);
+      const bottom = Math.max(target.top + target.height, box.top + box.height);
+      target.left = left;
+      target.top = top;
+      target.width = right - left;
+      target.height = bottom - top;
+      changed = true;
     }
-    const left = Math.min(target.left, box.left);
-    const top = Math.min(target.top, box.top);
-    const right = Math.max(target.left + target.width, box.left + box.width);
-    const bottom = Math.max(target.top + target.height, box.top + box.height);
-    target.left = left;
-    target.top = top;
-    target.width = right - left;
-    target.height = bottom - top;
+    current = merged;
   }
-  return merged;
+  return current;
 }
 
 function boxesTouch(left: HighlightBox, right: HighlightBox) {
@@ -688,6 +789,45 @@ function boxesTouch(left: HighlightBox, right: HighlightBox) {
     left.top <= right.top + right.height + pad &&
     left.top + left.height + pad >= right.top
   );
+}
+
+export function normalizeHighlightBoxes(boxes: HighlightBox[]) {
+  const merged = mergeOverlappingBoxes(boxes);
+  const rows: HighlightBox[][] = [];
+  for (const box of merged.sort((left, right) => left.top - right.top || left.left - right.left)) {
+    const row = rows.find((candidate) => candidate.some((item) => verticalOverlapRatio(item, box) > 0.45));
+    if (row) {
+      row.push({ ...box });
+    } else {
+      rows.push([{ ...box }]);
+    }
+  }
+  return rows.flatMap((row) => mergeRowSegments(row));
+}
+
+function mergeRowSegments(row: HighlightBox[]) {
+  const ordered = row.sort((left, right) => left.left - right.left);
+  const output: HighlightBox[] = [];
+  for (const box of ordered) {
+    const previous = output[output.length - 1];
+    if (!previous || box.left > previous.left + previous.width + 2) {
+      output.push({ ...box });
+      continue;
+    }
+    const right = Math.max(previous.left + previous.width, box.left + box.width);
+    previous.left = Math.min(previous.left, box.left);
+    previous.top = Math.min(previous.top, box.top);
+    previous.width = right - previous.left;
+    previous.height = Math.max(previous.height, box.height);
+  }
+  return output;
+}
+
+function verticalOverlapRatio(left: HighlightBox, right: HighlightBox) {
+  const top = Math.max(left.top, right.top);
+  const bottom = Math.min(left.top + left.height, right.top + right.height);
+  const overlap = Math.max(0, bottom - top);
+  return overlap / Math.max(1, Math.min(left.height, right.height));
 }
 
 function buildHighlightQuery(evidence: VerificationEvidence): HighlightQuery {
@@ -721,6 +861,22 @@ function evidenceListSignature(evidences: VerificationEvidence[]) {
 function evidenceColorIndex(evidence: VerificationEvidence | undefined, fallbackIndex: number) {
   const index = Number(evidence?.evidence_index);
   return Number.isFinite(index) ? index : fallbackIndex;
+}
+
+export function highlightQuerySignature(query: HighlightQuery) {
+  return `${query.phrases.map(normalizeText).join("\u001e")}|\u001f|${query.terms.map(normalizeText).join("\u001e")}`;
+}
+
+export function bestMatchFor(pageMatches: Record<number, PageMatch> | undefined, querySignature: string) {
+  const candidates = Object.values(pageMatches ?? {}).filter((match) => match.querySignature === querySignature && match.boxes.length);
+  return candidates.sort((left, right) => right.score - left.score || Number(right.exact) - Number(left.exact) || left.pageNumber - right.pageNumber)[0] ?? null;
+}
+
+function pagesFor(pageMatches: Record<number, PageMatch> | undefined, querySignature: string) {
+  return Object.values(pageMatches ?? {})
+    .filter((match) => match.querySignature === querySignature && match.boxes.length)
+    .map((match) => match.pageNumber)
+    .sort((left, right) => left - right);
 }
 
 function buildSearchQuery(term: string): HighlightQuery {
@@ -772,24 +928,6 @@ function normalizeText(text: string) {
     .replace(/[^\p{L}\p{N}-]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function highlightTerms(text: string, terms: string[]) {
-  if (!terms.length) {
-    return text;
-  }
-  const visibleTerms = terms.filter((term) => term.length >= 4).slice(0, 12);
-  if (!visibleTerms.length) {
-    return text;
-  }
-  const pattern = new RegExp(`(${visibleTerms.map(escapeRegExp).join("|")})`, "ig");
-  return text.split(pattern).map((part, index) =>
-    visibleTerms.some((term) => term.toLowerCase() === part.toLowerCase()) ? <mark key={`${part}-${index}`}>{part}</mark> : part
-  );
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function shortLabel(value: string) {

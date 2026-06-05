@@ -34,7 +34,7 @@ import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
 import { downloadMarkdownFile } from "../download";
 import { noteProjectId } from "../projectScope";
 import { useAppState } from "../state";
-import type { Answer, Note, VerificationSource } from "../types";
+import type { Answer, CitationLink, Note, VerificationSource } from "../types";
 
 export type AssistantAnswerBlock = {
   id: string;
@@ -51,6 +51,12 @@ export type AssistantTurn = {
   verification: VerificationSource[];
   createdAt: string;
   blocks?: AssistantAnswerBlock[];
+};
+
+export type CitationMeta = {
+  source: VerificationSource;
+  evidenceIndex: number;
+  evidenceId?: string;
 };
 
 type NoteSelectionRange = {
@@ -366,29 +372,24 @@ export function AssistantPage() {
     setActiveEvidenceIndex(Math.max(0, Math.min(evidenceIndex, source.evidence.length - 1)));
   }
 
-  function citationMeta(citation: string, context = "") {
-    return citationMetaFor(verification, citation, context);
+  function citationMeta(citation: string, context = "", links: CitationLink[] = [], citationStart?: number) {
+    return citationMetaFor(verification, citation, context, links, citationStart);
   }
 
-  function citationMetaFor(pool: VerificationSource[], citation: string, context = "") {
-    const candidates = citationIds(citation);
-    const source = pool.find((item) => candidates.some((candidate) => sameCitation(item.paper_id, candidate)));
-    if (source) {
-      return { source, evidenceIndex: bestEvidenceIndex(source, context) };
-    }
-    return null;
+  function citationMetaFor(pool: VerificationSource[], citation: string, context = "", links: CitationLink[] = [], citationStart?: number) {
+    return citationMetasFor(pool, citation, context, links, citationStart)[0] ?? null;
   }
 
-  function jumpToCitation(citation: string, context = "") {
-    const meta = citationMeta(citation, context);
+  function jumpToCitation(citation: string, context = "", links: CitationLink[] = [], citationStart?: number) {
+    const meta = citationMeta(citation, context, links, citationStart);
     if (meta) {
       setEvidenceOpen(true);
       selectSource(meta.source, meta.evidenceIndex);
     }
   }
 
-  function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "") {
-    const meta = citationMetaFor(pool, citation, context);
+  function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "", links: CitationLink[] = [], citationStart?: number) {
+    const meta = citationMetaFor(pool, citation, context, links, citationStart);
     if (meta) {
       setEvidenceOpen(true);
       selectSource(meta.source, meta.evidenceIndex);
@@ -562,8 +563,13 @@ export function AssistantPage() {
                     <div className="answer-text">
                       <AnswerText
                         answer={block.answer.answer}
-                        onCitationClick={(citation, context, quote) => jumpToCitationIn(block.verification, citation, context, quote)}
-                        getCitationMeta={(citation, context) => citationMetaFor(block.verification, citation, context)}
+                        citationLinks={block.answer.citation_links ?? []}
+                        onCitationClick={(citation, context, quote, citationStart) =>
+                          jumpToCitationIn(block.verification, citation, context, quote, block.answer.citation_links ?? [], citationStart)
+                        }
+                        getCitationMeta={(citation, context, citationStart) =>
+                          citationMetasFor(block.verification, citation, context, block.answer.citation_links ?? [], citationStart)
+                        }
                         activeCitation={selectedSource ? { paperId: selectedSource.paper_id, evidenceIndex: activeEvidenceIndex } : undefined}
                       />
                     </div>
@@ -1257,6 +1263,7 @@ export function noteCitation(source: VerificationSource, evidence: VerificationS
     paper_id: source.paper_id,
     title: source.title,
     kind: evidence.kind,
+    evidence_id: evidence.evidence_id ?? null,
     reference_text: cleanCitationText(evidence.reference_text),
     pdf_excerpt: cleanCitationText(evidence.pdf_excerpt),
     evidence_index: evidenceIndex
@@ -1267,24 +1274,24 @@ export function formatAnswerForNote(answer: Answer, verification: VerificationSo
   const citations = new Map<string, Record<string, unknown>>();
   const markdown = answer.answer.replace(/\[([^\]]+)\]/g, (match, rawCitation: string, offset: number, fullText: string) => {
     const context = fullText.slice(Math.max(0, offset - 350), Math.min(fullText.length, offset + match.length + 350));
-    const source = verification.find((item) => citationIds(rawCitation).some((candidate) => sameCitation(item.paper_id, candidate)));
-    if (!source) {
+    const metas = citationMetasFor(verification, rawCitation, context, answer.citation_links ?? [], offset);
+    if (!metas.length) {
       return match;
     }
-    const evidenceIndex = bestEvidenceIndex(source, context);
-    const evidence = source.evidence[evidenceIndex];
-    if (!evidence) {
-      return match;
-    }
-    const citation = noteCitation(source, evidence, evidenceIndex);
-    citations.set(String(citation.id), citation);
-    return `[Z${evidenceIndex + 1} - ${shortTitle(source.title || source.paper_id)}](sciencekg://citation/${citation.id})`;
+    return metas
+      .map((meta) => {
+        const evidence = meta.source.evidence[meta.evidenceIndex];
+        const citation = noteCitation(meta.source, evidence, meta.evidenceIndex);
+        citations.set(String(citation.id), citation);
+        return `[Z${meta.evidenceIndex + 1} - ${shortTitle(meta.source.title || meta.source.paper_id)}](sciencekg://citation/${citation.id})`;
+      })
+      .join(" ");
   });
   return { markdown, citations: Array.from(citations.values()) };
 }
 
 function stableCitationId(source: VerificationSource, evidence: VerificationSource["evidence"][number], evidenceIndex: number) {
-  return `cite_${stableHash([source.paper_id, evidenceIndex, evidence.reference_text, evidence.pdf_excerpt].join("|"))}`;
+  return `cite_${stableHash([source.paper_id, evidence.evidence_id ?? evidenceIndex, evidence.reference_text, evidence.pdf_excerpt].join("|"))}`;
 }
 
 function stableHash(value: string) {
@@ -1496,13 +1503,19 @@ export function AnswerText({
   onCitationInsertPreviewClear
 }: {
   answer: string;
-  onCitationClick: (citation: string, context?: string, quote?: string) => void;
-  getCitationMeta: (citation: string, context?: string) => { source: VerificationSource; evidenceIndex: number } | null;
+  citationLinks?: CitationLink[];
+  onCitationClick: (citation: string, context?: string, quote?: string, citationStart?: number) => void;
+  getCitationMeta: (citation: string, context?: string, citationStart?: number) => CitationMeta[] | CitationMeta | null;
   activeCitation?: { paperId: string; evidenceIndex: number };
   onCitationInsert?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
   onCitationInsertPreview?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
   onCitationInsertPreviewClear?: () => void;
 }) {
+  const [pinnedCitation, setPinnedCitation] = useState<{
+    key: string;
+    paperId: string;
+    evidenceIndex: number;
+  } | null>(null);
   const [hoverCitation, setHoverCitation] = useState<{
     key: string;
     label: string;
@@ -1518,6 +1531,17 @@ export function AnswerText({
   } | null>(null);
   const closeHoverTimerRef = useRef<number | null>(null);
   const parts = answer.split(/(\[[^\]]+\])/g);
+  let renderedOffset = 0;
+  const contextCitation = hoverCitation ?? pinnedCitation;
+
+  useEffect(() => {
+    setPinnedCitation((current) => {
+      if (!current || !activeCitation) {
+        return current;
+      }
+      return current.paperId === activeCitation.paperId && current.evidenceIndex === activeCitation.evidenceIndex ? current : null;
+    });
+  }, [activeCitation?.paperId, activeCitation?.evidenceIndex]);
 
   function cancelCitationHoverClose() {
     if (closeHoverTimerRef.current !== null) {
@@ -1534,7 +1558,7 @@ export function AnswerText({
     }, 80);
   }
 
-  function showCitationHover(key: string, label: string, meta: { source: VerificationSource; evidenceIndex: number }, quote: string, event: ReactPointerEvent<HTMLElement>) {
+  function showCitationHover(key: string, label: string, meta: CitationMeta, quote: string, event: ReactPointerEvent<HTMLElement>) {
     const evidence = meta.source.evidence[meta.evidenceIndex];
     if (!evidence) {
       return;
@@ -1562,44 +1586,74 @@ export function AnswerText({
   }
 
   return (
-    <>
+    <span className="answer-text-content" onClick={() => setPinnedCitation(null)}>
       {parts.map((part, index) => {
+        const partStart = renderedOffset;
+        renderedOffset += part.length;
         const match = /^\[([^\]]+)\]$/.exec(part);
         if (!match) {
-          const highlightRange = hoverCitation ? citationHoverTextRange(parts, index, hoverCitation.key) : null;
+          const highlightRange = contextCitation ? citationHoverTextRange(parts, index, contextCitation.key) : null;
           return (
-            <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, hoverCitation ? evidenceColorVars(hoverCitation.evidenceIndex) : undefined)}</span>
+            <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, contextCitation ? evidenceColorVars(contextCitation.evidenceIndex) : undefined)}</span>
           );
         }
         const context = citationContext(parts, index);
         const quote = citationQuoteFromParts(parts, index);
-        const meta = getCitationMeta(match[1], context);
-        const label = meta ? `Z${meta.evidenceIndex + 1}` : "?";
-        const evidence = meta?.source.evidence[meta.evidenceIndex];
+        const rawMeta = getCitationMeta(match[1], context, partStart);
+        const metas = (Array.isArray(rawMeta) ? rawMeta : rawMeta ? [rawMeta] : []).filter((meta) => meta.source.evidence[meta.evidenceIndex]);
         const hoverKey = `${part}-${index}`;
-        const isActive = Boolean(meta && activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
         return (
           <span className="citation-link-wrap" key={hoverKey}>
-            <button
-              className={`citation-link ${meta ? "citation-link--mapped" : ""} ${isActive ? "citation-link--active" : ""}`}
-              type="button"
-              onClick={() => {
-                cancelCitationHoverClose();
-                setHoverCitation(null);
-                onCitationClick(match[1], context, quote);
-              }}
-              onPointerEnter={meta ? (event) => showCitationHover(hoverKey, label, meta, quote, event) : undefined}
-              onPointerLeave={meta ? scheduleCitationHoverClose : undefined}
-              style={meta ? evidenceColorVars(meta.evidenceIndex) : undefined}
-              title={meta ? `${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}` : undefined}
-            >
-              <span className="citation-index">{label}</span>
-              <span className="citation-paper">{shortCitationLabel(match[1])}</span>
-            </button>
-            {meta && evidence && hoverCitation?.key === hoverKey ? (
+            {metas.length ? (
+              metas.map((meta, metaIndex) => {
+                const label = `Z${meta.evidenceIndex + 1}`;
+                const chipKey = `${hoverKey}-${meta.source.paper_id}-${meta.evidenceIndex}-${metaIndex}`;
+                const isActive = Boolean(activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
+                return (
+                  <button
+                    className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""}`}
+                    type="button"
+                    key={chipKey}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      cancelCitationHoverClose();
+                      setHoverCitation(null);
+                      setPinnedCitation((current) =>
+                        current?.key === chipKey ? null : { key: chipKey, paperId: meta.source.paper_id, evidenceIndex: meta.evidenceIndex }
+                      );
+                      onCitationClick(meta.source.paper_id, context, quote, partStart);
+                    }}
+                    onPointerEnter={(event) => showCitationHover(chipKey, label, meta, quote, event)}
+                    onPointerLeave={scheduleCitationHoverClose}
+                    style={evidenceColorVars(meta.evidenceIndex)}
+                    title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}`}
+                  >
+                    <span className="citation-index">{label}</span>
+                    <span className="citation-paper">{shortCitationLabel(meta.source.paper_id)}</span>
+                  </button>
+                );
+              })
+            ) : (
+              <button
+                className="citation-link"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  cancelCitationHoverClose();
+                  setHoverCitation(null);
+                  setPinnedCitation((current) => (current?.key === hoverKey ? null : { key: hoverKey, paperId: match[1], evidenceIndex: 0 }));
+                  onCitationClick(match[1], context, quote, partStart);
+                }}
+              >
+                <span className="citation-index">?</span>
+                <span className="citation-paper">{shortCitationLabel(match[1])}</span>
+              </button>
+            )}
+            {hoverCitation?.key === hoverKey || hoverCitation?.key.startsWith(`${hoverKey}-`) ? (
               <span
                 className="citation-hover-card citation-hover-card--visible"
                 role="tooltip"
+                onClick={(event) => event.stopPropagation()}
                 onPointerEnter={cancelCitationHoverClose}
                 onPointerLeave={scheduleCitationHoverClose}
                 style={{
@@ -1612,7 +1666,7 @@ export function AnswerText({
                 <strong>{hoverCitation.title}</strong>
                 <span>{hoverCitation.subtitle}</span>
                 <span className="citation-hover-card__legacy" aria-hidden="true">
-                  {label} · {evidence.kind || "Evidence"} · {meta.source.paper_id}
+                  {hoverCitation.label} | {hoverCitation.source.evidence[hoverCitation.evidenceIndex]?.kind || "Evidence"} | {hoverCitation.source.paper_id}
                 </span>
                 <p>{hoverCitation.text}</p>
                 {onCitationInsert ? (
@@ -1644,7 +1698,7 @@ export function AnswerText({
           </span>
         );
       })}
-    </>
+    </span>
   );
 }
 
@@ -1666,13 +1720,17 @@ function renderCitationContextPart(value: string, range: { start: number; end: n
 function citationHoverTextRange(parts: string[], index: number, hoverKey: string) {
   const previousCitationKey = `${parts[index - 1] ?? ""}-${index - 1}`;
   const nextCitationKey = `${parts[index + 1] ?? ""}-${index + 1}`;
-  if (nextCitationKey === hoverKey) {
+  if (sameCitationHighlightKey(nextCitationKey, hoverKey)) {
     return trailingSentenceRange(parts[index] ?? "");
   }
-  if (previousCitationKey === hoverKey) {
+  if (sameCitationHighlightKey(previousCitationKey, hoverKey)) {
     return leadingSentenceRange(parts[index] ?? "");
   }
   return null;
+}
+
+function sameCitationHighlightKey(baseKey: string, candidateKey: string) {
+  return candidateKey === baseKey || candidateKey.startsWith(`${baseKey}-`);
 }
 
 function trailingSentenceRange(value: string) {
@@ -1751,9 +1809,33 @@ function leadingSentenceFragment(value: string) {
 
 export function citationIds(citation: string) {
   return citation
+    .replace(/\s+(?:and|und)\s+/gi, ",")
     .split(/[;,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+export function citationMetasFor(
+  pool: VerificationSource[],
+  citation: string,
+  context = "",
+  links: CitationLink[] = [],
+  citationStart?: number
+): CitationMeta[] {
+  const metas: CitationMeta[] = [];
+  const seen = new Set<string>();
+  for (const candidate of citationIds(citation)) {
+    const source = pool.find((item) => sameCitation(item.paper_id, candidate));
+    if (!source || seen.has(source.paper_id)) {
+      continue;
+    }
+    seen.add(source.paper_id);
+    const link = bestCitationLink(links, candidate, citationStart, context);
+    const linkedIndex = link ? evidenceIndexForCitationLink(source, link, context) : -1;
+    const evidenceIndex = linkedIndex >= 0 ? linkedIndex : bestEvidenceIndex(source, context);
+    metas.push({ source, evidenceIndex, evidenceId: source.evidence[evidenceIndex]?.evidence_id });
+  }
+  return metas;
 }
 
 export function sameCitation(sourceId: string, citation: string) {
@@ -1770,21 +1852,98 @@ export function bestEvidenceIndex(source: VerificationSource, context: string) {
   if (!source.evidence.length) {
     return 0;
   }
+  const scores = source.evidence.map((evidence, index) => ({ index, score: evidenceContextScore(evidence, context) }));
+  scores.sort((left, right) => right.score - left.score || left.index - right.index);
+  return scores[0]?.score > 0 ? scores[0].index : 0;
+}
+
+function bestCitationLink(links: CitationLink[], citation: string, citationStart: number | undefined, context: string) {
+  const candidates = links.filter((link) => sameCitation(link.paper_id, citation));
+  if (!candidates.length) {
+    return null;
+  }
+  return candidates
+    .map((link) => ({
+      link,
+      score:
+        (typeof citationStart === "number" && link.citation_start === citationStart ? 1000 : 0) +
+        (typeof citationStart === "number" ? Math.max(0, 120 - Math.abs((link.citation_start ?? -99999) - citationStart)) : 0) +
+        evidenceLinkContextScore(link, context)
+    }))
+    .sort((left, right) => right.score - left.score)[0].link;
+}
+
+function evidenceIndexForCitationLink(source: VerificationSource, link: CitationLink, context: string) {
+  const evidenceId = link.evidence_id ?? "";
+  if (evidenceId) {
+    const candidates = source.evidence
+      .map((evidence, index) => ({ evidence, index }))
+      .filter((item) => item.evidence.evidence_id === evidenceId);
+    if (candidates.length) {
+      return bestEvidenceIndexFromCandidates(candidates, context);
+    }
+  }
+  if (typeof link.evidence_index === "number") {
+    const sourceIndex = source.evidence.findIndex((evidence) => evidence.source_evidence_index === link.evidence_index);
+    if (sourceIndex >= 0) {
+      return sourceIndex;
+    }
+  }
+  return -1;
+}
+
+function bestEvidenceIndexFromCandidates(candidates: Array<{ evidence: VerificationSource["evidence"][number]; index: number }>, context: string) {
+  return candidates
+    .map((item) => ({ index: item.index, score: evidenceContextScore(item.evidence, context) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0].index;
+}
+
+function evidenceContextScore(evidence: VerificationSource["evidence"][number], context: string) {
   const terms = textTerms(context);
-  if (!terms.length) {
+  const quantitative = quantitativeTokens(context);
+  if (!terms.length && !quantitative.size) {
     return 0;
   }
-  let bestIndex = 0;
-  let bestScore = -1;
-  source.evidence.forEach((evidence, index) => {
-    const target = normalizeText(`${evidence.reference_text} ${evidence.pdf_excerpt} ${evidence.matched_terms.join(" ")}`);
-    const score = terms.reduce((total, term) => total + (target.includes(term) ? 1 : 0), 0);
-    if (score > bestScore) {
-      bestIndex = index;
-      bestScore = score;
+  const targetText = `${evidence.reference_text} ${evidence.pdf_excerpt} ${(evidence.matched_terms ?? []).join(" ")}`;
+  const target = normalizeText(targetText);
+  const targetNumbers = quantitativeTokens(targetText);
+  let score = terms.reduce((total, term) => total + (target.includes(term) ? 1 : 0), 0);
+  if (quantitative.size) {
+    let matchedNumbers = 0;
+    quantitative.forEach((token) => {
+      if (targetNumbers.has(token)) {
+        matchedNumbers += 1;
+      }
+    });
+    score += matchedNumbers * 18;
+    if (!matchedNumbers) {
+      score -= 30;
     }
-  });
-  return bestScore > 0 ? bestIndex : 0;
+  }
+  if (evidence.kind === "claim") {
+    score += 5;
+  } else if (evidence.kind === "paper") {
+    score -= 4;
+  }
+  return score;
+}
+
+function evidenceLinkContextScore(link: CitationLink, context: string) {
+  const terms = textTerms(`${context} ${link.context ?? ""}`);
+  const target = normalizeText(link.context ?? "");
+  return terms.reduce((total, term) => total + (target.includes(term) ? 1 : 0), 0);
+}
+
+function quantitativeTokens(text: string) {
+  const tokens = new Set<string>();
+  for (const match of text.match(/\d+(?:\.\d+)?\s*%?/g) ?? []) {
+    const clean = match.replace(/\s+/g, "");
+    if (clean) {
+      tokens.add(clean.toLowerCase());
+      tokens.add(clean.replace(/%$/, "").toLowerCase());
+    }
+  }
+  return tokens;
 }
 
 function textTerms(text: string) {

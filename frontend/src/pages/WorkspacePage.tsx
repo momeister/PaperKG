@@ -35,8 +35,7 @@ import type { Answer, NoteAiMessage, NoteAiThread, NoteCitation, Paper, Verifica
 import {
   AnswerText,
   answerLimitFor,
-  bestEvidenceIndex,
-  citationIds,
+  citationMetasFor,
   cleanAnswerQuote,
   formatAnswerForNote,
   formatNoteQuote,
@@ -44,7 +43,6 @@ import {
   loadAssistantSession,
   mergeVerification,
   noteCitation,
-  sameCitation,
   saveAssistantSession,
   shortEvidenceText,
   turnBlocks,
@@ -303,20 +301,15 @@ export function WorkspacePage() {
     setNavigatorTab("pdfs");
   }
 
-  function citationMetaFor(pool: VerificationSource[], citation: string, context = "") {
-    const candidates = citationIds(citation);
-    const source = pool.find((item) => candidates.some((candidate) => sameCitation(item.paper_id, candidate)));
-    if (source) {
-      return { source, evidenceIndex: bestEvidenceIndex(source, context) };
-    }
-    return null;
+  function citationMetaFor(pool: VerificationSource[], citation: string, context = "", links = answer?.citation_links ?? [], citationStart?: number) {
+    return citationMetasFor(pool, citation, context, links, citationStart)[0] ?? null;
   }
 
-  function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "") {
-    const meta = citationMetaFor(pool, citation, context);
+  function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "", links = answer?.citation_links ?? [], citationStart?: number) {
+    const meta = citationMetaFor(pool, citation, context, links, citationStart);
     if (meta) {
       setEvidenceOpen(true);
-      openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { openPdf: pdfOpen, syncPdfTarget: true });
+      openAssistantSource(meta.source, meta.evidenceIndex, quote || context);
     }
   }
 
@@ -324,9 +317,15 @@ export function WorkspacePage() {
     setAssistantMode("notes");
     setAssistantOpen(true);
     setNotesOpen(true);
+    setFocusedNoteThreadId("");
     notesActionsRef.current?.locateThread(threadId);
     const thread = notesSnapshot.threads.find((item) => item.id === threadId);
-    if (thread && threadCollapsed(thread)) {
+    for (const item of notesSnapshot.threads) {
+      if (item.id !== threadId && !threadCollapsed(item)) {
+        notesActionsRef.current?.toggleThreadCollapsed(item.id);
+      }
+    }
+    if (thread) {
       notesActionsRef.current?.toggleThreadCollapsed(threadId);
     }
   }
@@ -524,7 +523,7 @@ export function WorkspacePage() {
               <span>PDFs</span>
               <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
             </button>
-            <button type="button" className={navigatorTab === "assistantSessions" ? "active" : ""} onClick={() => setNavigatorTab("assistantSessions")}>
+            <button type="button" className={`workspace-nav-tab--wide ${navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => setNavigatorTab("assistantSessions")}>
               <MessageSquareText size={15} />
               <span>KI-Sessions</span>
               <strong>{history.length}</strong>
@@ -644,6 +643,11 @@ export function WorkspacePage() {
                 setFocusedNoteThreadId(threadId);
                 notesActionsRef.current?.locateThread(threadId);
                 const thread = notesSnapshot.threads.find((item) => item.id === threadId);
+                for (const item of notesSnapshot.threads) {
+                  if (item.id !== threadId && !threadCollapsed(item)) {
+                    notesActionsRef.current?.toggleThreadCollapsed(item.id);
+                  }
+                }
                 if (thread && threadCollapsed(thread)) {
                   notesActionsRef.current?.toggleThreadCollapsed(threadId);
                 }
@@ -711,8 +715,13 @@ export function WorkspacePage() {
                     <div className="answer-text">
                       <AnswerText
                         answer={block.answer.answer}
-                        onCitationClick={(citation, context, quote) => jumpToCitationIn(block.verification, citation, context, quote)}
-                        getCitationMeta={(citation, context) => citationMetaFor(block.verification, citation, context)}
+                        citationLinks={block.answer.citation_links ?? []}
+                        onCitationClick={(citation, context, quote, citationStart) =>
+                          jumpToCitationIn(block.verification, citation, context, quote, block.answer.citation_links ?? [], citationStart)
+                        }
+                        getCitationMeta={(citation, context, citationStart) =>
+                          citationMetasFor(block.verification, citation, context, block.answer.citation_links ?? [], citationStart)
+                        }
                         activeCitation={selectedSource ? { paperId: selectedSource.paper_id, evidenceIndex: activeEvidenceIndex } : undefined}
                         onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
                         onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
@@ -832,7 +841,7 @@ export function WorkspacePage() {
                       <button
                         className={`list-row evidence-row ${activeEvidenceIndex === index ? "list-row--active" : ""}`}
                         key={`${item.reference_text}-${index}`}
-                        onClick={() => openAssistantSource(selectedSource, index, "", { openPdf: pdfOpen, syncPdfTarget: true })}
+                        onClick={() => openAssistantSource(selectedSource, index)}
                         style={evidenceColorVars(index)}
                       >
                         <strong className="evidence-row-title">
@@ -898,14 +907,21 @@ export function WorkspacePage() {
       return { url: null, title: undefined, evidences: [], activeEvidenceIndex: 0 };
     }
     if (target.kind === "assistant") {
+      const liveSource =
+        selectedSource?.paper_id === target.source.paper_id
+          ? selectedSource
+          : verification.find((source) => source.paper_id === target.source.paper_id) ?? target.source;
+      const preferredIndex = selectedSource?.paper_id === liveSource.paper_id ? activeEvidenceIndex : target.evidenceIndex;
+      const liveIndex = Math.max(0, Math.min(preferredIndex, liveSource.evidence.length - 1));
       return {
-        url: target.source.pdf_available ? api.paperPdfUrl(target.source.paper_id, target.source.title) : null,
-        title: target.source.title || target.source.paper_id,
-        evidences: target.source.evidence,
-        activeEvidenceIndex: target.evidenceIndex,
+        url: liveSource.pdf_available ? api.paperPdfUrl(liveSource.paper_id, liveSource.title) : null,
+        title: liveSource.title || liveSource.paper_id,
+        evidences: liveSource.evidence,
+        activeEvidenceIndex: liveIndex,
         onActiveEvidenceChange: (index) => {
+          setSelectedSource(liveSource);
           setActiveEvidenceIndex(index);
-          setPdfTarget({ kind: "assistant", source: target.source, evidenceIndex: index });
+          setPdfTarget({ kind: "assistant", source: liveSource, evidenceIndex: index });
         }
       };
     }
@@ -976,6 +992,7 @@ function WorkspaceNotesAssistant({
   const orderedThreads = sortPinnedThreads(threads);
   const focusedThread = focusedThreadId ? orderedThreads.find((thread) => thread.id === focusedThreadId) ?? null : null;
   const visibleThreads = focusedThread ? [focusedThread] : orderedThreads;
+  const [expandedSelectionIds, setExpandedSelectionIds] = useState<Record<string, boolean>>({});
   return (
     <section className={`workspace-notes-assistant-panel ${focusedThread ? "workspace-notes-assistant-panel--focused" : ""}`}>
       <div className="workspace-notes-assistant-heading">
@@ -1004,6 +1021,8 @@ function WorkspaceNotesAssistant({
           const pinned = threadPinned(thread);
           const messages = threadMessages(thread);
           const contextText = stripThreadContext(thread.selected_text || thread.anchor_quote || "");
+          const selectionExpanded = focusedThread ? expandedSelectionIds[thread.id] !== false : expandedSelectionIds[thread.id] === true;
+          const threadTimestamp = thread.updated_timestamp || thread.created_timestamp || "";
           return (
             <article
               className={`note-thread-row ai-thread-card workspace-notes-assistant-card ${focusedThread ? "workspace-notes-assistant-card--focused" : ""} ${meta ? "ai-thread-card--anchored" : ""} ${collapsed ? "ai-thread-card--compact" : ""} ${activeThreadId === thread.id ? "ai-thread-card--active" : ""} ${pinned ? "ai-thread-card--pinned" : ""}`}
@@ -1015,6 +1034,10 @@ function WorkspaceNotesAssistant({
                   <span className="ai-thread-header-line">
                     {meta ? <span className="ai-thread-anchor-badge">{meta.label}</span> : null}
                     <strong>{thread.instruction}</strong>
+                  </span>
+                  <span className="ai-thread-card-meta">
+                    {messages.length} Nachrichten
+                    {threadTimestamp ? ` - ${formatTurnTime(threadTimestamp)}` : ""}
                   </span>
                 </button>
                 <div className="ai-thread-actions">
@@ -1061,23 +1084,20 @@ function WorkspaceNotesAssistant({
               <div className={`ai-thread-preview ${!collapsed ? "ai-thread-preview--expanded" : ""}`}>
                 {contextText ? (
                   <section className="ai-thread-info-block ai-thread-info-block--selection">
-                    <span>Markierter Bereich</span>
-                    <p>{contextText}</p>
+                    <span>
+                      Markierter Bereich
+                      {!collapsed ? (
+                        <button
+                          className="button button-compact ai-thread-context-toggle"
+                          type="button"
+                          onClick={() => setExpandedSelectionIds((current) => ({ ...current, [thread.id]: !selectionExpanded }))}
+                        >
+                          {selectionExpanded ? "Einklappen" : "Anzeigen"}
+                        </button>
+                      ) : null}
+                    </span>
+                    <p>{selectionExpanded || collapsed ? contextText : shortSelectionPreview(contextText)}</p>
                   </section>
-                ) : null}
-                {collapsed ? (
-                  <>
-                    <section className="ai-thread-info-block ai-thread-info-block--question">
-                      <span>Deine Frage</span>
-                      <p>{thread.instruction}</p>
-                    </section>
-                    {answer ? (
-                      <section className="ai-thread-info-block ai-thread-info-block--answer">
-                        <span>KI-Antwort</span>
-                        <p>{shortThreadContext(answer)}</p>
-                      </section>
-                    ) : null}
-                  </>
                 ) : null}
               </div>
               {!collapsed ? (
@@ -1507,6 +1527,7 @@ function decodeWorkspacePaperText(value: string) {
 function noteCitationEvidence(citation: NoteCitation): VerificationEvidence[] {
   return [
     {
+      evidence_id: citation.evidence_id || undefined,
       paper_id: citation.paper_id,
       kind: citation.kind || "note",
       reference_text: citation.reference_text || "",
@@ -1567,9 +1588,9 @@ function sortPinnedThreads(threads: NoteAiThread[]) {
     .map((item) => item.thread);
 }
 
-function shortThreadContext(value: string) {
+function shortSelectionPreview(value: string) {
   const text = stripThreadContext(value).replace(/\s+/g, " ").trim();
-  return text.length <= 120 ? text : `${text.slice(0, 117)}...`;
+  return text.length <= 260 ? text : `${text.slice(0, 257)}...`;
 }
 
 function stripThreadContext(value: string) {

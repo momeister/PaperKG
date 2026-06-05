@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "./api";
+import { api, ApiError } from "./api";
 
 describe("api client", () => {
   afterEach(() => {
@@ -48,5 +48,44 @@ describe("api client", () => {
 
     expect(fetchMock.mock.calls[0][0]).toContain("/notes/n1/ai-threads/thread-1/delete");
     expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+  });
+
+  it("turns network fetch failures into actionable API errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
+
+    let error: unknown;
+    try {
+      await api.getProjects();
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 0,
+      detail: expect.stringContaining("API nicht erreichbar")
+    });
+  });
+
+  it("labels empty backend failures separately from network failures", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", {
+        status: 500,
+        headers: { "content-type": "text/plain" }
+      })
+    );
+
+    let error: unknown;
+    try {
+      await api.getProjects();
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 500,
+      detail: expect.stringContaining("Backend error 500")
+    });
   });
 });

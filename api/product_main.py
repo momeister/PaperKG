@@ -573,7 +573,7 @@ def parse_extraction_pdf(request: ExtractionParseRequest) -> dict[str, Any]:
         "text": parsed.text,
         "page_count": parsed.page_count,
         "parser": str(parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser),
-        "metadata": parsed.metadata or {},
+        "metadata": _parsed_document_metadata(parsed),
         "excerpt": parsed.text[:4000],
     }
 
@@ -596,7 +596,7 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
             "pdf_path": str(pdf_path),
             "page_count": parsed.page_count,
             "parser": str(parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser),
-            "metadata": parsed.metadata or {},
+            "metadata": _parsed_document_metadata(parsed),
             "excerpt": parsed.text[:4000],
         }
     if not text:
@@ -1729,16 +1729,41 @@ def _resolve_extraction_pdf_path(
 
 
 def _parse_pdf_for_extraction(pdf_path: Path, paper_id_value: str, parser_name: str | None):
+    requested_parser = parser_name or "auto"
     forced_parser: ParserType | None = None
     if parser_name:
         try:
             forced_parser = ParserType(parser_name)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"Unknown parser: {parser_name}") from exc
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Unknown parser",
+                    "paper_id": paper_id_value,
+                    "pdf_path": str(pdf_path),
+                    "parser": parser_name,
+                },
+            ) from exc
     try:
         return parser_router.parse(str(pdf_path), paper_id_value, force_parser=forced_parser)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"PDF parsing failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "PDF parsing failed",
+                "paper_id": paper_id_value,
+                "pdf_path": str(pdf_path),
+                "parser": requested_parser,
+                "error": str(exc),
+            },
+        ) from exc
+
+
+def _parsed_document_metadata(parsed: Any) -> dict[str, Any]:
+    metadata = getattr(parsed, "metadata", None)
+    if metadata is None:
+        metadata = getattr(parsed, "meta", None)
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def _extraction_overrides(request: Any) -> dict[str, Any]:

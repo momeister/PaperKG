@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -119,9 +120,20 @@ class Evidence:
     score: float
     field: str | None = None
     metadata: dict[str, Any] = dataclass_field(default_factory=dict)
+    evidence_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.evidence_id:
+            return
+        object.__setattr__(
+            self,
+            "evidence_id",
+            _stable_evidence_id(self.paper_id, self.kind, self.field, self.text, self.metadata),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "evidence_id": self.evidence_id,
             "paper_id": self.paper_id,
             "kind": self.kind,
             "text": self.text,
@@ -148,6 +160,46 @@ class SearchHit:
             "score": round(float(self.score), 4),
             "evidence": [item.to_dict() for item in ordered],
         }
+
+
+def _stable_evidence_id(
+    paper_id_value: str,
+    kind: str,
+    field: str | None,
+    text: str,
+    metadata: dict[str, Any] | None,
+) -> str:
+    metadata = metadata or {}
+    stable_metadata = {
+        key: metadata.get(key)
+        for key in [
+            "statement",
+            "evidence_span",
+            "context",
+            "description",
+            "label",
+            "canonical_id",
+            "relation_type",
+            "subject_id",
+            "object_id",
+            "raw_extraction_paper_id",
+        ]
+        if metadata.get(key) is not None
+    }
+    payload = json.dumps(
+        {
+            "paper_id": paper_id_value,
+            "kind": kind,
+            "field": field,
+            "text": re.sub(r"\s+", " ", str(text or "")).strip(),
+            "metadata": stable_metadata,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    digest = hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"ev_{digest}"
 
 
 class KGRetriever:

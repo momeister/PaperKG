@@ -193,7 +193,7 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
                 parser="marker",
                 text="Phase Three Paper\n\nGraph Transformer methods produce claims.",
                 page_count=2,
-                metadata={"extraction_method": "fake"},
+                meta={"extraction_method": "fake"},
             )
 
     class FakePipeline:
@@ -242,13 +242,14 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
     )
     assert parsed.status_code == 200
     assert parsed.json()["page_count"] == 2
+    assert parsed.json()["metadata"]["extraction_method"] == "fake"
     assert "Graph Transformer" in parsed.json()["text"]
 
     extracted = client.post(
         "/extraction/extract",
         json={
             "paper_id": "paper-1",
-            "text": parsed.json()["text"],
+            "pdf_path": str(pdf_path),
             "provider": "fake",
             "model": "fake-model",
             "metadata_db_path": str(db_path),
@@ -258,11 +259,67 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
     assert extracted.status_code == 200
     payload = extracted.json()
     assert payload["status"] == "success"
+    assert payload["parse"]["metadata"]["extraction_method"] == "fake"
     assert payload["result"]["concepts"][0]["label"] == "Graph Transformer"
 
     history = client.get("/extraction/history", params={"metadata_db_path": str(db_path), "paper_id": "paper-1"})
     assert history.status_code == 200
     assert history.json()["items"][0]["concepts"][0]["label"] == "Graph Transformer"
+
+
+def test_product_extraction_parse_returns_structured_errors(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    with MetadataDB(str(db_path)) as db:
+        db.ensure_paper_record("paper-1", title="Parser Error Paper", pdf_path=str(pdf_path))
+
+    client = TestClient(product_main.app)
+    invalid_parser = client.post(
+        "/extraction/parse",
+        json={
+            "paper_id": "paper-1",
+            "pdf_path": str(pdf_path),
+            "parser": "missing-parser",
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+        },
+    )
+
+    assert invalid_parser.status_code == 400
+    assert invalid_parser.json()["detail"] == {
+        "message": "Unknown parser",
+        "paper_id": "paper-1",
+        "pdf_path": str(pdf_path.resolve()),
+        "parser": "missing-parser",
+    }
+
+    class FailingParser:
+        def parse(self, file_path, paper_id, force_parser=None):
+            raise RuntimeError("parser backend unavailable")
+
+    monkeypatch.setattr(product_main, "parser_router", FailingParser())
+    parse_failure = client.post(
+        "/extraction/parse",
+        json={
+            "paper_id": "paper-1",
+            "pdf_path": str(pdf_path),
+            "parser": "marker",
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+        },
+    )
+
+    assert parse_failure.status_code == 500
+    detail = parse_failure.json()["detail"]
+    assert detail["message"] == "PDF parsing failed"
+    assert detail["paper_id"] == "paper-1"
+    assert detail["pdf_path"] == str(pdf_path.resolve())
+    assert detail["parser"] == "marker"
+    assert detail["error"] == "parser backend unavailable"
 
 
 def test_product_upload_models_jobs_and_harvest(tmp_path, monkeypatch) -> None:

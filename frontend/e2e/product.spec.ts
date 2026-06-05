@@ -501,8 +501,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.getByLabel("Projekt").selectOption("");
   await expect(page.getByLabel("Projekt")).toHaveValue("");
 
-  await page.getByRole("link", { name: /Notizen/ }).click();
-  await expect(page.getByRole("heading", { name: "Notizen" })).toBeVisible();
+  await page.getByRole("link", { name: /Arbeitsplatz/ }).click();
+  await expect(page.locator(".workspace-notes-pane")).toBeVisible();
   await page.getByRole("button", { name: "Neu" }).click();
   await expect(page.getByPlaceholder("Titel")).toHaveValue("Neue Notiz");
   const editor = page.getByPlaceholder("Markdown schreiben");
@@ -539,128 +539,11 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await editor.fill(`${formattedMarkdown}\n\nLive Split`);
   await expect(page.locator(".markdown-preview", { hasText: "Live Split" })).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).click();
-  await editor.evaluate((node: HTMLTextAreaElement) => {
-    const index = node.value.indexOf("Z2");
-    node.focus();
-    node.setSelectionRange(index + 2, index + 2);
-    node.dispatchEvent(new Event("select", { bubbles: true }));
-  });
-  await expect(page.getByRole("button", { name: /Z2 öffnen/ })).toBeVisible();
-  await page.getByRole("button", { name: /Quelle Z2 öffnen/ }).click();
-  const activeNoteCitationRow = page.locator(".note-citation-row--active", { hasText: "Z2" });
-  const activeNoteCitationHighlight = page.locator(".textarea-highlight-range--citation-active");
-  const activeNotePdfExcerpt = page.locator(".excerpt-panel", { hasText: "Clinical AI evidence in PDF text for citation navigation." });
-  await expect(activeNoteCitationRow).toBeVisible();
-  await expect(activeNoteCitationHighlight).toBeVisible();
-  await expect(activeNotePdfExcerpt).toBeVisible();
-  await expect(page.locator(".pdf-highlight--active").first()).toBeVisible();
-  const activeNoteColor = await evidenceColor(activeNoteCitationRow);
-  expect(await evidenceColor(activeNoteCitationHighlight.first())).toBe(activeNoteColor);
-  expect(await evidenceColor(activeNotePdfExcerpt)).toBe(activeNoteColor);
-  expect(await evidenceColor(page.locator(".pdf-highlight--active").first())).toBe(activeNoteColor);
   await expect(page.getByRole("button", { name: "Fett" })).toBeVisible();
-  await page.getByRole("button", { name: "Keine Quelle aktiv" }).click();
-  await expect(page.locator(".note-citation-row--active")).toHaveCount(0);
-  await expect(page.locator(".textarea-highlight-range--citation-active")).toHaveCount(0);
-  await page.locator(".note-context-toolbar").getByRole("button", { name: /KI/ }).click();
-  await expect(page.locator(".note-history-panel")).toBeVisible();
-  await page.locator(".note-context-toolbar").getByRole("button", { name: /Quellen/ }).click();
-  const contextPanel = page.locator(".note-context-panel");
-  const resizeHandle = page.getByRole("separator", { name: "Notizen und Quellen/PDF Breite anpassen" });
-  const contextBefore = await contextPanel.boundingBox();
-  const handleBox = await resizeHandle.boundingBox();
-  if (!contextBefore || !handleBox) {
-    throw new Error("Notes context resize handle was not measurable");
-  }
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(handleBox.x + 90, handleBox.y + handleBox.height / 2, { steps: 4 });
-  await page.mouse.up();
-  await expect.poll(async () => (await contextPanel.boundingBox())?.width ?? 0).toBeLessThan(contextBefore.width - 30);
-  await editor.fill(`${Array.from({ length: 42 }, (_, index) => `Zeile ${index + 1}`).join("\n")}\nEndwort`);
-  for (let index = 0; index < "Endwort".length; index += 1) {
-    await editor.press("Shift+ArrowLeft");
-  }
-  await expect(page.getByPlaceholder("KI-Frage zu dieser Auswahl")).toBeVisible();
-  const editorClientHeight = await editor.evaluate((node) => node.clientHeight);
-  await expect
-    .poll(() => editor.evaluate((node) => parseFloat(window.getComputedStyle(node).paddingBottom)))
-    .toBeGreaterThan(120);
-  await expect
-    .poll(() => editor.evaluate((node) => parseFloat(window.getComputedStyle(node).paddingBottom)))
-    .toBeLessThan(editorClientHeight);
-  await page.getByPlaceholder("KI-Frage zu dieser Auswahl").fill("Was bedeutet das in einfachen Worten?");
-  await page.getByRole("button", { name: "Fragen" }).click();
-  const marker = page.getByRole("button", { name: /KI-Notiz N\d+ öffnen/ }).last();
-  await expect(marker).toBeVisible();
-  const markerLabel = (await marker.textContent())?.trim() || "N1";
-  const inlineNote = page.getByRole("dialog", { name: new RegExp(`KI-Notiz ${markerLabel}`) });
-  await expect(inlineNote).not.toBeVisible();
-  await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toHaveCount(0);
-  await expect(page.locator(".textarea-highlight-range--thread-anchor")).toHaveCount(0);
-  await expect(page.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
-  await expect(page.getByRole("button", { name: "Ersetzen" })).toBeVisible();
-  await marker.click();
-  await expect(inlineNote).toBeVisible();
-  await expect(inlineNote).toContainText("Was bedeutet das in einfachen Worten?");
-  await expect(inlineNote).toContainText("Das bedeutet in einfachen Worten");
-  await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toBeVisible();
-  await inlineNote.getByRole("button", { name: "KI-Notiz einklappen" }).click();
-  await expect(inlineNote).not.toBeVisible();
-  await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toHaveCount(0);
-  await marker.click();
-  await expect(inlineNote).toBeVisible();
-  await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toBeVisible();
-  await marker.click();
-  await expect(inlineNote).not.toBeVisible();
-  await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toHaveCount(0);
-  await marker.click();
-  await expect(inlineNote).toBeVisible();
-  await inlineNote.getByPlaceholder("Weiterfragen").fill("Noch einfacher?");
-  await inlineNote.getByRole("button", { name: "Fragen" }).click();
-  await expect(inlineNote).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
-  await inlineNote.getByRole("button", { name: "KI-Notiz einklappen" }).click();
-  await expect(inlineNote).not.toBeVisible();
-  await page.locator(".note-context-toolbar").getByRole("button", { name: /KI/ }).click();
-  await expect(page.locator(".ai-thread-anchor-badge", { hasText: markerLabel })).toBeVisible();
-  const anchoredThread = page.locator(".ai-thread-card", { has: page.locator(".ai-thread-anchor-badge", { hasText: markerLabel }) });
-  await anchoredThread.getByRole("button", { name: "Öffnen" }).click();
-  await anchoredThread.getByPlaceholder("Folgefrage zu dieser Auswahl").fill("Aus der Übersicht?");
-  await anchoredThread.getByRole("button", { name: "Fragen" }).click();
-  await expect(inlineNote).not.toBeVisible();
-  await expect(page.locator(".textarea-highlight-range--thread-anchor-active")).toHaveCount(0);
-  await expect(anchoredThread).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
-  await anchoredThread.getByRole("button", { name: "KI-Antwort ausblenden" }).first().click();
-  await expect(anchoredThread).not.toContainText("Das bedeutet in einfachen Worten: Es ist eine kurze Erklaerung.");
-  await expect(anchoredThread).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
-  await page.locator(".note-context-toolbar").getByRole("button", { name: /Quellen/ }).click();
-  await marker.click();
-  await inlineNote.getByRole("button", { name: /KI-Notiz (loeschen|löschen)/ }).click();
-  await expect(page.getByRole("dialog", { name: new RegExp(`KI-Notiz ${markerLabel}`) })).not.toBeVisible();
   const spellButton = page.getByRole("button", { name: "Rechtschreibkontrolle ausschalten" });
   await expect(spellButton).toHaveAttribute("aria-pressed", "true");
   await spellButton.click();
   await expect(page.getByRole("button", { name: "Rechtschreibkontrolle einschalten" })).toHaveAttribute("aria-pressed", "false");
-  await editor.click();
-  await editor.press("Control+A");
-  await page.getByPlaceholder("KI-Frage zu dieser Auswahl").click();
-  await expect(page.locator(".textarea-highlight-range--selection").first()).toBeVisible();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "KI-Verlauf", exact: true }).click();
-  await expect(page.getByText("Fasse kurz zusammen")).toBeVisible();
-  await expect(page.getByText("Ausfuehrliche Antwort, die im kompakten Verlauf nicht sofort sichtbar sein soll.")).not.toBeVisible();
-  const historyPanel = page.locator(".note-history-panel");
-  await expect(historyPanel.locator(".ai-thread-anchor-badge")).toHaveCount(0);
-  await expect(historyPanel.locator(".ai-thread-preview p", { hasText: "Direkt" })).toHaveCount(1);
-  const insertButton = page.getByRole("button", { name: "Einfügen", exact: true }).first();
-  await insertButton.hover();
-  await expect(page.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
-  await expect(page.locator(".textarea-ghost-insertion--ai")).toBeVisible();
-  await insertButton.click();
-  await expect(editor).toHaveValue(/Kompakte Antwort/);
-  await page.getByRole("button", { name: "KI-Verlauf loeschen" }).click();
-  await expect(page.getByText("Noch keine KI-Fragen")).toBeVisible();
-  await expect(page.getByText("Fasse kurz zusammen")).not.toBeVisible();
 
   await page.getByRole("link", { name: /Import/ }).click();
   await page.locator('input[type="file"]').setInputFiles({
@@ -672,25 +555,25 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
 
   await page.getByRole("link", { name: /Extraktion/ }).click();
   await expect(page.getByRole("heading", { name: "Extraktion" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Extract/ })).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: /Ausführen/ }).first()).toHaveClass(/active/);
   await page.getByLabel("PDF").selectOption("library/p1.pdf");
   await page.getByRole("button", { name: "Parsen" }).click();
   await expect(page.getByPlaceholder("Paper-Text")).toHaveValue(/Graph Transformer methods/);
-  await page.getByRole("button", { name: "Extrahieren" }).click();
+  await page.locator(".extraction-input-panel").getByRole("button", { name: "Ausführen" }).click();
   await expect(page.locator(".extraction-result-panel")).toContainText("Graph Transformer");
   await expect(page.locator(".extraction-result-panel")).toContainText("Attention");
   await page.getByRole("button", { name: /PDFs/ }).click();
   await expect(page.locator(".extraction-library-table")).toContainText("Graph Transformer for Science");
-  await page.getByRole("button", { name: /Batch/ }).click();
-  await page.locator(".extraction-library-table input[type='checkbox']").first().check();
-  await page.getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: /Ausführen/ }).first().click();
+  await page.locator(".extraction-batch-panel .extraction-library-table input[type='checkbox']").first().check();
+  await page.getByRole("button", { name: "Auswahl ausführen" }).click();
   await expect(page.locator(".status-strip", { hasText: "1/1" })).toBeVisible();
-  await page.getByRole("button", { name: /Vocabulary/ }).click();
+  await page.getByRole("button", { name: /Vokabular/ }).click();
   await page.getByLabel("Canonical Label").fill("Citation Network");
   await page.getByLabel("Aliases").fill("citation graph");
   await page.getByRole("button", { name: "Hinzufuegen" }).click();
   await expect(page.locator(".extraction-vocabulary-table")).toContainText("Citation Network");
-  await page.getByRole("button", { name: /History/ }).click();
+  await page.getByRole("button", { name: /Historie/ }).click();
   await expect(page.locator(".extraction-history-table")).toContainText("p1");
 
   await expect(page.getByRole("link", { name: /Arbeitsplatz/ })).toBeVisible();
@@ -702,8 +585,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   const workspacePdf = page.locator(".workspace-page > .pdf-pane");
   const workspaceEditor = workspaceNotes.getByPlaceholder("Markdown schreiben");
   await expect(workspace).toBeVisible();
-  await expect(page.getByRole("link", { name: /Assistant/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Notizen/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Assistant/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Notizen/ })).toHaveCount(0);
   await expect(workspaceNav.getByRole("button", { name: /^Notizen/ })).toBeVisible();
   await expect(workspaceNav.locator(".note-list-row").first()).toBeVisible();
   await expect(workspaceEditor).toBeVisible();
@@ -745,6 +628,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   const workspaceAssistantCitation = workspaceAssistant.locator(".citation-link", { hasText: "Z1" });
   await workspaceAssistantCitation.hover();
   await expect(workspaceAssistant.locator(".citation-hover-card")).toContainText("Graph Transformer evidence in the parsed PDF text.");
+  await expect(workspaceAssistant.locator(".citation-context-highlight", { hasText: "Graph Transformer evidence is grounded" })).toBeVisible();
   const hoverCardInsert = workspaceAssistant.locator(".citation-hover-card").getByRole("button", { name: "In Notiz" });
   await expect(hoverCardInsert).toBeVisible();
   await hoverCardInsert.hover();
@@ -754,10 +638,11 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     .toBe(true);
   await workspaceAssistantCitation.click();
   await expect(workspaceAssistantCitation).toHaveClass(/citation-link--active/);
+  await expect(workspaceAssistant.locator(".citation-context-highlight", { hasText: "Graph Transformer evidence is grounded" })).toBeVisible();
   await expect(workspaceAssistant.locator(".evidence-dock:not(.evidence-dock--collapsed)")).toBeVisible();
   await expect(workspaceAssistant.locator(".evidence-row.list-row--active", { hasText: "Graph Transformer evidence" })).toBeVisible();
   await expect(workspacePdf).toContainText("Graph Transformer for Science");
-  await expect(workspacePdf.locator(".excerpt-panel")).toContainText("Graph Transformer evidence in the parsed PDF text.");
+  await expect(workspacePdf.locator(".excerpt-panel")).toHaveCount(0);
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).hover();
   await expect(workspaceNotes.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).click();
@@ -767,10 +652,32 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(workspaceNotes.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
   await workspaceAssistant.getByRole("button", { name: "Zitat Z1" }).click();
   await expect(workspaceEditor).toHaveValue(/Graph Transformer evidence/);
+  const longScrolledNote = Array.from({ length: 180 }, (_, index) => `Scroll-Zeile ${index + 1}: Workspace bleibt an dieser Stelle.`).join("\n");
+  await workspaceEditor.fill(longScrolledNote);
+  const beforePdfInsertViewport = await workspaceEditor.evaluate((node: HTMLTextAreaElement) => {
+    node.focus();
+    const cursor = node.value.length;
+    node.setSelectionRange(cursor, cursor);
+    node.scrollTop = node.scrollHeight;
+    node.dispatchEvent(new Event("select", { bubbles: true }));
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    return { scrollTop: node.scrollTop, cursor };
+  });
+  expect(beforePdfInsertViewport.scrollTop).toBeGreaterThan(40);
+  await workspaceAssistant.getByRole("button", { name: "PDF Z1" }).click();
+  await expect(workspaceEditor).toHaveValue(/Graph Transformer evidence in the parsed PDF text/);
+  const afterPdfInsertViewport = await workspaceEditor.evaluate((node: HTMLTextAreaElement) => ({
+    scrollTop: node.scrollTop,
+    selectionStart: node.selectionStart,
+    selectionEnd: node.selectionEnd
+  }));
+  expect(afterPdfInsertViewport.scrollTop).toBeGreaterThanOrEqual(beforePdfInsertViewport.scrollTop - 24);
+  expect(afterPdfInsertViewport.selectionStart).toBeGreaterThan(beforePdfInsertViewport.cursor);
+  expect(afterPdfInsertViewport.selectionStart).toBe(afterPdfInsertViewport.selectionEnd);
 
   await workspaceNav.getByRole("button", { name: /PDFs/ }).click();
-  await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Z1");
-  await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Graph Transformer for Science");
+  await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Z2");
+  await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Grounding Clinical AI Competency");
   await workspaceNav.locator(".note-citation-row", { hasText: "Z2" }).click();
   const activeWorkspaceCitationRow = workspaceNav.locator(".note-citation-row--active", { hasText: "Z2" });
   await expect(activeWorkspaceCitationRow).toBeVisible();
@@ -789,9 +696,13 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await workspaceEditor.evaluate(
     (node: HTMLTextAreaElement, selectedText) => {
       const start = node.value.indexOf(selectedText);
+      if (start < 0) {
+        throw new Error("Workspace selection text was not found");
+      }
       node.focus();
       node.setSelectionRange(start, start + selectedText.length);
       node.dispatchEvent(new Event("select", { bubbles: true }));
+      document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
     },
     workspaceLongSelection
   );
@@ -815,6 +726,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(workspaceAssistant.getByText("Grounded KG")).toHaveCount(0);
   const workspaceThread = workspaceAssistant.locator(".ai-thread-card", { hasText: "Arbeitsplatz erklaeren" }).first();
   await expect(workspaceThread).toBeVisible();
+  await expect(workspaceThread.locator(".ai-thread-preview")).not.toContainText("Deine Frage");
+  await expect(workspaceThread.locator(".ai-thread-preview")).not.toContainText("KI-Antwort");
   await expect(workspaceAssistant.locator(".workspace-notes-assistant-panel")).toBeVisible();
   await expect(workspaceAssistant.locator(".ai-thread-card", { hasText: "Arbeitsplatz erklaeren" })).toBeVisible();
   await expect(workspaceEditor).toBeVisible();
@@ -828,15 +741,19 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect.poll(() => workspaceNotes.locator(".textarea-highlight-range--thread-anchor-active").count()).toBeGreaterThan(0);
   await expect(workspaceThread).toContainText("Markierter Bereich");
   await expect(workspaceThread.locator(".ai-thread-info-block--selection")).toContainText("Volltext-Endmarke-7");
-  await expect(workspaceThread).toContainText("Deine Frage");
-  await expect(workspaceThread).toContainText("KI-Antwort");
   await expect(workspaceThread).toContainText("vollstaendig sichtbarer Langtext endet hier.");
   await workspaceThread.getByRole("button", { name: "KI-Notiz gross anzeigen" }).click();
   const focusedWorkspaceThread = workspaceAssistant.locator(".workspace-notes-assistant-card--focused", { hasText: "Arbeitsplatz erklaeren" });
   await expect(focusedWorkspaceThread).toBeVisible();
   await expect(workspaceAssistant.locator(".workspace-notes-assistant-panel--focused")).toBeVisible();
-  await expect.poll(() => focusedWorkspaceThread.locator(".ai-thread-messages").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("visible");
-  await expect.poll(() => workspaceAssistant.locator(".workspace-notes-assistant-list").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("auto");
+  await expect.poll(() => focusedWorkspaceThread.locator(".ai-thread-messages").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("auto");
+  await expect.poll(() => workspaceAssistant.locator(".workspace-notes-assistant-list").evaluate((node) => window.getComputedStyle(node).overflowY)).toBe("hidden");
+  const focusedFollowUp = focusedWorkspaceThread.locator(".ai-follow-up-row");
+  await expect(focusedFollowUp).toBeVisible();
+  await focusedWorkspaceThread.locator(".ai-thread-messages").evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  await expect(focusedFollowUp).toBeVisible();
   await focusedWorkspaceThread.getByPlaceholder("Folgefrage zu dieser Auswahl").fill("Noch kuerzer?");
   await focusedWorkspaceThread.getByRole("button", { name: "Fragen" }).click();
   await expect(focusedWorkspaceThread).toContainText("Noch einfacher: Es ist eine Merkhilfe.");
@@ -920,11 +837,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.locator(".workspace-collapsed-pane", { hasText: "Navigator" }).getByRole("button").click();
   await expect(workspaceNav).toBeVisible();
 
-  await page.getByRole("link", { name: /Assistant/ }).click();
-  await page.getByPlaceholder("Frage an den lokalen KG").fill("What connects graph transformers and citations?");
-  await page.getByRole("button", { name: "Senden" }).click();
-  await expect(page.locator(".answer-panel", { hasText: "Graph Transformer evidence is grounded" })).toBeVisible();
-  await expect(page.locator(".excerpt-panel", { hasText: "Graph Transformer evidence in the parsed PDF text." }).first()).toBeVisible();
+  await page.goto("/assistant");
+  await expect(page).toHaveURL(/\/workspace$/);
 
   await page.getByRole("link", { name: /Quality/ }).click();
   await expect(page.getByRole("heading", { name: "Quality" })).toBeVisible();

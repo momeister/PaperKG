@@ -79,6 +79,15 @@ class CapturingLLMRouter(FakeLLMRouter):
         return "Captured evidence [clinical]."
 
 
+class RepeatedPaperCitationLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return (
+            "Graph transformers improve scientific paper linking [p1]. "
+            "The method applies transformer attention to graph-structured scientific data [p1]."
+        )
+
+
 @contextmanager
 def _phase4_fixture():
     root = Path("test-output") / f"phase4-{uuid4().hex}"
@@ -371,6 +380,24 @@ def test_grounded_responder_uses_evidence_and_skips_empty_answers() -> None:
         assert len(fake_llm.calls) == 1
 
 
+def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence() -> None:
+    with _phase4_fixture() as db_path:
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=RepeatedPaperCitationLLMRouter(),
+        )
+
+        answer = responder.answer("What does the graph transformer paper claim and do?")
+        evidence_by_id = {item.evidence_id: item for item in answer.evidence}
+
+        assert len(answer.citation_links) == 2
+        assert {link["paper_id"] for link in answer.citation_links} == {"p1"}
+        assert answer.citation_links[0]["evidence_id"] != answer.citation_links[1]["evidence_id"]
+        assert evidence_by_id[answer.citation_links[0]["evidence_id"]].kind == "claim"
+        assert evidence_by_id[answer.citation_links[1]["evidence_id"]].kind == "method"
+        assert all(isinstance(link["citation_start"], int) for link in answer.to_dict()["citation_links"])
+
+
 def test_grounded_responder_surfaces_generation_failures() -> None:
     with _phase4_fixture() as db_path:
         responder = GroundedResponder(
@@ -460,6 +487,7 @@ def test_grounded_responder_supplements_numeric_claims_for_top_hits() -> None:
         prompt = fake_llm.calls[0]["messages"][1]["content"]
         assert "16% fewer diagnostic errors" in prompt
         assert "13% fewer treatment errors" in prompt
+        assert "cite the supporting paper IDs together in one bracket" in prompt
     finally:
         if not db.is_closed:
             db.close()
