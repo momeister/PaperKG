@@ -4,9 +4,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from query.context_budget import decide_whole_context, effective_generation_limits
 from query.hybrid_retriever import HybridRetriever
 from query.kg_retriever import Evidence, SearchHit, Source
 from query.llm_router import LLMRouter
+from query.source_verifier import find_pdf_path, parse_pdf_text, verify_answer_sources
 
 
 @dataclass
@@ -19,6 +21,8 @@ class GroundedAnswer:
     no_answer: bool = False
     model: str | None = None
     generation_error: str | None = None
+    context_diagnostics: dict[str, Any] = field(default_factory=dict)
+    source_verification: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,6 +34,8 @@ class GroundedAnswer:
             "no_answer": self.no_answer,
             "model": self.model,
             "generation_error": self.generation_error,
+            "context_diagnostics": self.context_diagnostics,
+            "source_verification": self.source_verification,
         }
 
 
@@ -66,8 +72,30 @@ making claims."""
         overrides: dict[str, Any] | None = None,
         conversation_context: list[dict[str, Any]] | None = None,
         paper_ids: list[str] | set[str] | None = None,
+        priority_paper_ids: list[str] | set[str] | None = None,
+        answer_context_mode: str = "kg",
+        pdf_base_dir: str = "data/pdfs",
     ) -> GroundedAnswer:
+        context_diagnostics: dict[str, Any] = {
+            "answer_context_mode": answer_context_mode or "kg",
+        }
+        if str(answer_context_mode or "kg").strip().lower() == "pdf_if_fits":
+            pdf_answer, pdf_diagnostics = self._answer_from_pdf_context_if_fits(
+                question=question,
+                provider=provider,
+                model=model,
+                overrides=overrides,
+                conversation_context=conversation_context,
+                paper_ids=paper_ids,
+                pdf_base_dir=pdf_base_dir,
+            )
+            context_diagnostics.update(pdf_diagnostics)
+            if pdf_answer is not None:
+                return pdf_answer
+
         hits = self.retriever.search(question, limit=limit, paper_ids=paper_ids)
+        priority_set = {str(pid) for pid in (priority_paper_ids or []) if pid}
+        hits = _prioritize_hits(hits, priority_set)
         evidence = self._evidence_for_answer(hits, max_items=_evidence_item_limit(limit, hits))
         sources = [hit.source for hit in hits if hit.evidence]
 
@@ -80,6 +108,7 @@ making claims."""
                 citation_links=[],
                 no_answer=True,
                 model=model,
+                context_diagnostics={**context_diagnostics, "fallback_reason": "no_kg_evidence"},
             )
 
         answer_text, generation_error = self._generate_answer(
@@ -90,6 +119,7 @@ making claims."""
             model=model,
             overrides=overrides,
             conversation_context=conversation_context,
+            priority_paper_ids=priority_set,
         )
         cited_ids = _cited_paper_ids(answer_text)
         if cited_ids:
@@ -109,7 +139,167 @@ making claims."""
             no_answer=False,
             model=model or self._default_model(provider),
             generation_error=generation_error,
+            context_diagnostics={**context_diagnostics, "answer_context_mode": "kg"},
         )
+
+    def _answer_from_pdf_context_if_fits(
+        self,
+        *,
+        question: str,
+        provider: str | None,
+        model: str | None,
+        overrides: dict[str, Any] | None,
+        conversation_context: list[dict[str, Any]] | None,
+        paper_ids: list[str] | set[str] | None,
+        pdf_base_dir: str,
+    ) -> tuple[GroundedAnswer | None, dict[str, Any]]:
+        diagnostics: dict[str, Any] = {"answer_context_mode": "pdf_if_fits"}
+        if self.llm_router is None:
+            diagnostics["fallback_reason"] = "no_llm_router"
+            return None, diagnostics
+
+        requested_ids = [str(item) for item in (paper_ids or []) if str(item or "").strip()]
+        requested_ids = list(dict.fromkeys(requested_ids))
+        if not requested_ids:
+            diagnostics["fallback_reason"] = "no_explicit_paper_scope"
+            return None, diagnostics
+        if len(requested_ids) > 3:
+            diagnostics["fallback_reason"] = "too_many_papers_for_pdf_context"
+            diagnostics["paper_count"] = len(requested_ids)
+            return None, diagnostics
+
+        sources: list[Source] = []
+        parsed_texts: list[tuple[Source, str, str]] = []
+        missing: list[str] = []
+        for paper_id in requested_ids:
+            detail = self.retriever.paper_detail(paper_id) or {}
+            source_payload = detail.get("source") or {}
+            source = Source(
+                paper_id=str(source_payload.get("paper_id") or paper_id),
+                title=str(source_payload.get("title") or paper_id),
+                year=_coerce_int(source_payload.get("year")),
+                doi=source_payload.get("doi"),
+                url=source_payload.get("url"),
+            )
+            pdf_path = find_pdf_path(source.paper_id, source.title, pdf_base_dir)
+            if pdf_path is None:
+                missing.append(source.paper_id)
+                continue
+            try:
+                pdf_text = parse_pdf_text(str(pdf_path), source.paper_id)
+            except Exception as exc:
+                diagnostics.setdefault("pdf_errors", {})[source.paper_id] = str(exc)
+                continue
+            if not pdf_text.strip():
+                diagnostics.setdefault("pdf_errors", {})[source.paper_id] = "empty parsed PDF text"
+                continue
+            sources.append(source)
+            parsed_texts.append((source, str(pdf_path), pdf_text))
+
+        if missing:
+            diagnostics["missing_pdf_ids"] = missing
+        if not parsed_texts:
+            diagnostics["fallback_reason"] = "no_parseable_pdf_text"
+            return None, diagnostics
+
+        sections = [
+            f"[{source.paper_id}] {source.title}\nPDF path: {pdf_path}\n\n{pdf_text}"
+            for source, pdf_path, pdf_text in parsed_texts
+        ]
+        combined_text = "\n\n--- PAPER TEXT ---\n\n".join(sections)
+        merged_overrides = {
+            "temperature": 0.1,
+            "top_p": 0.9,
+            "max_tokens": self._answer_max_tokens(provider),
+            **(overrides or {}),
+        }
+        if model:
+            merged_overrides["model"] = model
+        context_size, max_tokens, resolved_model = effective_generation_limits(
+            self.llm_router,
+            provider,
+            merged_overrides,
+            default_max_tokens=self.MIN_ANSWER_TOKENS,
+        )
+        decision = decide_whole_context(
+            text=combined_text,
+            context_policy="whole",
+            context_size=context_size,
+            max_tokens=max_tokens,
+            prompt_overhead_tokens=1800,
+            output_reserve_tokens=max_tokens,
+            chunk_count_if_fallback=len(parsed_texts),
+            provider=provider,
+            model=resolved_model,
+        )
+        diagnostics.update(decision.to_dict())
+        diagnostics["paper_count"] = len(parsed_texts)
+        if not decision.whole_context_used:
+            diagnostics["fallback_reason"] = decision.fallback_reason or "context_budget_exceeded"
+            return None, diagnostics
+
+        evidence = [
+            Evidence(
+                paper_id=source.paper_id,
+                kind="pdf",
+                field="parsed_pdf_text",
+                text=_best_pdf_context_snippet(pdf_text, question),
+                score=10.0,
+                metadata={"title": source.title, "pdf_path": pdf_path, "context_policy": "whole"},
+            )
+            for source, pdf_path, pdf_text in parsed_texts
+        ]
+        prompt = _build_pdf_context_prompt(question, combined_text, conversation_context=conversation_context)
+        try:
+            response = self._chat_with_transient_retry(
+                [
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                provider=provider,
+                overrides=merged_overrides,
+            )
+        except Exception as exc:
+            diagnostics["fallback_reason"] = "pdf_context_generation_failed"
+            diagnostics["generation_error"] = str(exc)
+            return None, diagnostics
+
+        answer_text = str(response or "").strip()
+        answer_text = self._repair_invalid_citations(
+            response=answer_text,
+            prompt=prompt,
+            provider=provider,
+            overrides=merged_overrides,
+        )
+        if not answer_text:
+            diagnostics["fallback_reason"] = "empty_pdf_context_answer"
+            return None, diagnostics
+
+        cited_ids = _cited_paper_ids(answer_text)
+        filtered_sources = [source for source in sources if not cited_ids or source.paper_id in cited_ids]
+        filtered_evidence = [item for item in evidence if not cited_ids or item.paper_id in cited_ids]
+        answer = GroundedAnswer(
+            question=question,
+            answer=answer_text,
+            sources=filtered_sources or sources,
+            evidence=filtered_evidence or evidence,
+            citation_links=_citation_links_for_answer(answer_text, filtered_evidence or evidence),
+            no_answer=False,
+            model=model or resolved_model or self._default_model(provider),
+            generation_error=None,
+            context_diagnostics=diagnostics,
+        )
+        try:
+            answer.source_verification = verify_answer_sources(
+                answer.to_dict(),
+                pdf_base_dir=pdf_base_dir,
+                parse_pdfs=True,
+                max_sources=10,
+                max_evidence_per_source=5,
+            ).to_dict()
+        except Exception as exc:
+            answer.context_diagnostics["source_verification_error"] = str(exc)
+        return answer, diagnostics
 
     def _generate_answer(
         self,
@@ -120,11 +310,18 @@ making claims."""
         model: str | None,
         overrides: dict[str, Any] | None,
         conversation_context: list[dict[str, Any]] | None = None,
+        priority_paper_ids: set[str] | None = None,
     ) -> tuple[str, str | None]:
         if self.llm_router is None:
             return _extractive_answer(question, hits, evidence), None
 
-        prompt = _build_grounded_prompt(question, hits, evidence, conversation_context=conversation_context)
+        prompt = _build_grounded_prompt(
+            question,
+            hits,
+            evidence,
+            conversation_context=conversation_context,
+            priority_paper_ids=priority_paper_ids,
+        )
         merged_overrides = {
             "temperature": 0.1,
             "top_p": 0.9,
@@ -423,11 +620,22 @@ def _answer_evidence_rank(item: Evidence) -> float:
     return float(item.score) + kind_bonus + _evidence_specificity_bonus(item.text)
 
 
+def _prioritize_hits(hits: list[SearchHit], priority_paper_ids: set[str]) -> list[SearchHit]:
+    """Stable-sort hits so evidence from the main source(s) ranks first."""
+    if not priority_paper_ids:
+        return hits
+    return sorted(
+        hits,
+        key=lambda hit: 0 if str(getattr(hit.source, "paper_id", "")) in priority_paper_ids else 1,
+    )
+
+
 def _build_grounded_prompt(
     question: str,
     hits: list[SearchHit],
     evidence: list[Evidence],
     conversation_context: list[dict[str, Any]] | None = None,
+    priority_paper_ids: set[str] | None = None,
 ) -> str:
     source_titles = {
         hit.source.paper_id: hit.source.title or hit.source.paper_id
@@ -437,6 +645,18 @@ def _build_grounded_prompt(
     context_lines = _conversation_context_lines(conversation_context)
     if context_lines:
         lines.extend(["", "Previous conversation context:", *context_lines])
+    present_priority = [pid for pid in (priority_paper_ids or set()) if pid in source_titles]
+    if present_priority:
+        joined = ", ".join(f"[{pid}]" for pid in present_priority)
+        lines.extend(
+            [
+                "",
+                f"Primary source(s) / Hauptquelle: {joined}.",
+                "Answer primarily from the primary source(s). Use the other evidence only to "
+                "support, contradict, or deepen points the primary source does not fully explain, "
+                "and make clear which role each supporting source plays.",
+            ]
+        )
     lines.extend(["", "Evidence:"])
     for index, item in enumerate(evidence, start=1):
         title = source_titles.get(item.paper_id, item.paper_id)
@@ -473,6 +693,50 @@ def _conversation_context_lines(conversation_context: list[dict[str, Any]] | Non
     return lines
 
 
+def _build_pdf_context_prompt(
+    question: str,
+    combined_text: str,
+    conversation_context: list[dict[str, Any]] | None = None,
+) -> str:
+    lines = [f"Question: {question}"]
+    context_lines = _conversation_context_lines(conversation_context)
+    if context_lines:
+        lines.extend(["", "Previous conversation context:", *context_lines])
+    lines.extend(
+        [
+            "",
+            "Whole parsed PDF context:",
+            combined_text,
+            "",
+            "Answer using only the PDF context above.",
+            "Cite the exact paper IDs shown in square brackets for every substantive claim.",
+            "When multiple papers support one claim, cite them together, for example [p1, p2].",
+            "If the PDF context is insufficient, say that the local PDF context does not contain enough evidence.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _best_pdf_context_snippet(pdf_text: str, question: str, max_chars: int = 900) -> str:
+    clean = re.sub(r"\s+", " ", str(pdf_text or "")).strip()
+    if len(clean) <= max_chars:
+        return clean
+    terms = _match_terms(question)
+    lower = clean.lower()
+    best_pos = -1
+    for term in terms:
+        best_pos = lower.find(term.lower())
+        if best_pos >= 0:
+            break
+    if best_pos < 0:
+        return clean[: max_chars - 3].rstrip() + "..."
+    start = max(0, best_pos - max_chars // 3)
+    end = min(len(clean), start + max_chars)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(clean) else ""
+    return prefix + clean[start:end].strip() + suffix
+
+
 def _extractive_answer(
     question: str,
     hits: list[SearchHit],
@@ -487,6 +751,13 @@ def _extractive_answer(
         title = source_titles.get(item.paper_id, item.paper_id)
         lines.append(f"- [{item.paper_id}] {title}: {_sanitize_evidence_text(item.text)}")
     return "\n".join(lines)
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _sanitize_evidence_text(text: str) -> str:

@@ -148,6 +148,16 @@ def _prediction_for(gold_payload: dict[str, Any], pred_dir: Path | None) -> dict
 
 def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> dict[str, Any]:
     expected = gold_payload.get("expected") or gold_payload
+    support_text = " ".join(
+        str(value or "")
+        for value in [
+            gold_payload.get("source_text"),
+            gold_payload.get("parsed_text"),
+            prediction.get("source_text"),
+            prediction.get("parsed_text"),
+            prediction.get("paper_text"),
+        ]
+    )
     concepts = prf(_label_set(expected.get("concepts") or []), _label_set(prediction.get("concepts") or []))
     concept_candidates = prf(
         _label_set(expected.get("concept_candidates") or []),
@@ -172,6 +182,7 @@ def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> d
         expected.get("claims") or [],
         prediction.get("claims") or [],
     )
+    supported_extras, unsupported_extras = supported_extra_items(expected, prediction, support_text)
     return {
         "paper_id": gold_payload.get("paper_id") or prediction.get("paper_id") or "",
         "concepts": concepts.to_dict(),
@@ -195,7 +206,88 @@ def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> d
         "parser_warning_count": len(parser_warnings),
         "accepted_concept_count": len(prediction.get("concepts") or []),
         "candidate_concept_count": len(prediction.get("concept_candidates") or []),
+        "supported_extra_items": supported_extras,
+        "unsupported_extra_items": unsupported_extras,
+        "supported_extra_count": len(supported_extras),
+        "unsupported_extra_count": len(unsupported_extras),
     }
+
+
+def supported_extra_items(
+    expected: dict[str, Any],
+    prediction: dict[str, Any],
+    support_text: str = "",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Classify predicted extras by whether their evidence appears in parsed paper text."""
+    text_norm = _norm(support_text)
+    rows: list[dict[str, Any]] = []
+    expected_labels = {
+        "concepts": _label_set(expected.get("concepts") or []),
+        "methods": _label_set(expected.get("methods") or []),
+    }
+    for field_name in ["concepts", "methods"]:
+        for item in prediction.get(field_name) or []:
+            if not isinstance(item, dict):
+                continue
+            label = _norm(item.get("label"))
+            if not label or label in expected_labels[field_name]:
+                continue
+            evidence = _item_support_text(item)
+            rows.append(
+                {
+                    "field": field_name,
+                    "label": item.get("label"),
+                    "evidence": evidence,
+                    "supported": _evidence_supported(evidence or item.get("label"), text_norm),
+                }
+            )
+
+    expected_claims = {
+        _norm(item.get("statement"))
+        for item in expected.get("claims") or []
+        if isinstance(item, dict) and _norm(item.get("statement"))
+    }
+    for item in prediction.get("claims") or []:
+        if not isinstance(item, dict):
+            continue
+        statement = _norm(item.get("statement"))
+        if not statement or statement in expected_claims:
+            continue
+        evidence = _item_support_text(item) or str(item.get("statement") or "")
+        rows.append(
+            {
+                "field": "claims",
+                "label": item.get("statement"),
+                "evidence": evidence,
+                "supported": _evidence_supported(evidence, text_norm),
+            }
+        )
+
+    supported = [{k: v for k, v in row.items() if k != "supported"} for row in rows if row["supported"]]
+    unsupported = [{k: v for k, v in row.items() if k != "supported"} for row in rows if not row["supported"]]
+    return supported, unsupported
+
+
+def _item_support_text(item: dict[str, Any]) -> str:
+    for key in ["evidence_span", "context", "description", "statement", "label"]:
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _evidence_supported(evidence: Any, normalized_support_text: str) -> bool:
+    if not normalized_support_text:
+        return False
+    evidence_norm = _norm(evidence)
+    if len(evidence_norm) < 4:
+        return False
+    if evidence_norm in normalized_support_text:
+        return True
+    tokens = [token for token in evidence_norm.split() if len(token) >= 4]
+    if len(tokens) >= 3:
+        return sum(1 for token in tokens if token in normalized_support_text) >= max(2, len(tokens) - 1)
+    return all(token in normalized_support_text for token in tokens)
 
 
 def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -213,6 +305,8 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
             "claim_negation_accuracy": 1.0,
             "claim_negation_error_count": 0,
             "claim_attribution_error_count": 0,
+            "supported_extra_count": 0,
+            "unsupported_extra_count": 0,
             "passes_precision_gate": False,
             "passes_duplicate_gate": True,
             "passes_parser_gate": True,
@@ -230,6 +324,8 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
     claim_negation_accuracy = sum(case["claim_negation_accuracy"] for case in case_reports) / len(case_reports)
     claim_negation_error_count = sum(case["claim_negation_error_count"] for case in case_reports)
     claim_attribution_error_count = sum(case["claim_attribution_error_count"] for case in case_reports)
+    supported_extra_count = sum(int(case.get("supported_extra_count") or 0) for case in case_reports)
+    unsupported_extra_count = sum(int(case.get("unsupported_extra_count") or 0) for case in case_reports)
     return {
         "case_count": len(case_reports),
         "concept_precision": round(concept_precision, 4),
@@ -243,6 +339,8 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "claim_negation_accuracy": round(claim_negation_accuracy, 4),
         "claim_negation_error_count": claim_negation_error_count,
         "claim_attribution_error_count": claim_attribution_error_count,
+        "supported_extra_count": supported_extra_count,
+        "unsupported_extra_count": unsupported_extra_count,
         "passes_precision_gate": concept_precision >= 0.85,
         "passes_duplicate_gate": dup_rate <= 0.05,
         "passes_parser_gate": parser_warning_count == 0,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, X } from "lucide-react";
+import { Check, Play, X } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -13,7 +13,20 @@ export function QualityPage() {
   const queryClient = useQueryClient();
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000 });
   const benchmarkQuery = useQuery({ queryKey: ["benchmark"], queryFn: api.getBenchmark });
+  const benchmarkSuiteLatestQuery = useQuery({ queryKey: ["benchmark-suite-latest"], queryFn: api.getBenchmarkSuiteLatest });
   const reviewQueryResult = useQuery({ queryKey: ["review", reviewQuery], queryFn: () => api.getReview("pending", reviewQuery) });
+  const benchmarkSuite = useMutation({
+    mutationFn: () =>
+      api.runBenchmarkSuite({
+        suite: "core",
+        context_policy: "auto",
+        compare_context_policies: ["auto", "whole", "chunk"],
+        answer_context_mode: "kg"
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["benchmark-suite-latest"] });
+    }
+  });
   const reviewAction = useMutation({
     mutationFn: (action: "approve" | "reject") => api.reviewAction(selected, action),
     onSuccess: () => {
@@ -29,6 +42,8 @@ export function QualityPage() {
 
   const health = healthQuery.data;
   const summary = benchmarkQuery.data?.summary ?? {};
+  const suiteReport = benchmarkSuite.data?.report ?? benchmarkSuiteLatestQuery.data?.report ?? {};
+  const suiteSummary = suiteReport.summary ?? {};
 
   return (
     <section className="page">
@@ -73,6 +88,10 @@ export function QualityPage() {
               <span>Benchmark</span>
               <strong>{String(summary.case_count ?? "—")} Cases</strong>
             </div>
+            <button className="button" disabled={benchmarkSuite.isPending} onClick={() => benchmarkSuite.mutate()}>
+              <Play size={16} />
+              <span>Full Suite</span>
+            </button>
           </div>
           <div className="compact-table">
             {Object.entries(summary).slice(0, 10).map(([key, value]) => (
@@ -84,6 +103,34 @@ export function QualityPage() {
           </div>
         </section>
       </div>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <span>Full Benchmark</span>
+            <strong>{String(suiteSummary.context_policy ?? "auto")}</strong>
+          </div>
+          <Status value={benchmarkSuite.isPending ? "running" : benchmarkSuite.data ? "complete" : "idle"} />
+        </div>
+        <div className="metrics-grid">
+          <MetricCard label="Provider" value={String(suiteSummary.provider ?? "--")} tone="neutral" />
+          <MetricCard label="Model" value={String(suiteSummary.model ?? "--")} tone="blue" />
+          <MetricCard label="Extraction" value={formatMetric(suiteSummary.extraction_score)} tone="green" />
+          <MetricCard label="Answer" value={formatMetric(suiteSummary.answer_score)} tone="blue" />
+          <MetricCard label="Cross Paper" value={formatMetric(suiteSummary.cross_paper_score)} tone="amber" />
+          <MetricCard label="Duration" value={formatSeconds(suiteSummary.duration_seconds)} tone="neutral" />
+        </div>
+        <div className="compact-table">
+          <div className="table-row">
+            <span>Warnings</span>
+            <strong>{String(suiteSummary.warning_count ?? 0)}</strong>
+          </div>
+          <div className="table-row">
+            <span>Run</span>
+            <strong>{String(suiteReport.run_id ?? "--")}</strong>
+          </div>
+        </div>
+      </section>
 
       <section className="panel">
         <div className="panel-heading">
@@ -124,6 +171,10 @@ export function QualityPage() {
       </section>
     </section>
   );
+}
+
+function formatSeconds(value: unknown) {
+  return typeof value === "number" ? `${value.toFixed(1)}s` : "--";
 }
 
 function formatMetric(value: unknown) {

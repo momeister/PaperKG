@@ -9,6 +9,7 @@ import {
   Code,
   Download,
   FilePlus2,
+  Globe,
   Highlighter,
   Italic,
   Link,
@@ -34,7 +35,7 @@ import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
 import { downloadMarkdownFile } from "../download";
 import { noteProjectId } from "../projectScope";
 import { useAppState } from "../state";
-import type { Answer, CitationLink, Note, VerificationSource } from "../types";
+import type { Answer, CitationLink, DeepResearchFinding, Note, VerificationSource } from "../types";
 
 export type AssistantAnswerBlock = {
   id: string;
@@ -100,6 +101,8 @@ export function AssistantPage() {
   const [rewriteMode, setRewriteMode] = useState("klarer");
   const [noteStatus, setNoteStatus] = useState("");
   const [selectedAnswerQuote, setSelectedAnswerQuote] = useState<SelectedAnswerQuote | null>(null);
+  const [webFindings, setWebFindings] = useState<DeepResearchFinding[]>([]);
+  const [savedGreyUrls, setSavedGreyUrls] = useState<string[]>([]);
   const activeTurn = useMemo(() => {
     if (!history.length) {
       return null;
@@ -114,6 +117,11 @@ export function AssistantPage() {
     queryKey: ["notes", scopedProjectId],
     queryFn: () => api.listNotes(scopedProjectId)
   });
+  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
+  const primaryPaperId = useMemo(
+    () => projectsQuery.data?.projects.find((project) => project.id === activeProject)?.primary_paper_id ?? null,
+    [projectsQuery.data?.projects, activeProject]
+  );
   const selectedTargetNote = useMemo(
     () => (targetNoteId ? notesQuery.data?.items.find((note) => note.id === targetNoteId) : undefined),
     [notesQuery.data?.items, targetNoteId]
@@ -126,6 +134,7 @@ export function AssistantPage() {
         provider,
         model,
         limit: answerLimitFor(value, evidenceMode),
+        priority_paper_ids: primaryPaperId ? [primaryPaperId] : undefined,
         conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined
       }),
     onSuccess: async (payload) => {
@@ -177,6 +186,28 @@ export function AssistantPage() {
       setSelectedSource(sources[0] ?? null);
       setActiveEvidenceIndex(0);
     }
+  });
+
+  const webResearchMutation = useMutation({
+    mutationFn: (value: string) => api.deepResearch({ question: value, provider, max_sources: 6 }),
+    onSuccess: (payload) => setWebFindings(payload.findings)
+  });
+  const saveGreyMutation = useMutation({
+    mutationFn: (finding: DeepResearchFinding) =>
+      api.addGreySources(
+        activeProject as string,
+        [
+          {
+            url: finding.url,
+            title: finding.title,
+            summary: finding.summary,
+            raw_excerpt: finding.raw_excerpt,
+            injection_flags: finding.injection_flags
+          }
+        ],
+        question.trim() || undefined
+      ),
+    onSuccess: (_data, finding) => setSavedGreyUrls((current) => [...current, finding.url])
   });
   const rewriteMutation = useMutation({
     mutationFn: () =>
@@ -529,7 +560,58 @@ export function AssistantPage() {
           <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending}>
             <Send size={18} />
           </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Web-Recherche (graue Quelle)"
+            title="Web-Recherche (graue Quelle)"
+            disabled={webResearchMutation.isPending || !question.trim()}
+            onClick={() => webResearchMutation.mutate(question.trim())}
+          >
+            <Globe size={18} />
+          </button>
         </form>
+
+        {webFindings.length ? (
+          <section className="grey-research-panel">
+            <div className="assistant-history-heading">
+              <span>Graue Quellen (Web)</span>
+              <button className="button" type="button" onClick={() => setWebFindings([])}>
+                Schließen
+              </button>
+            </div>
+            {!activeProject || activeProject === "__all_papers__" ? (
+              <div className="warning-row">Wähle ein echtes Projekt, um graue Quellen zu speichern.</div>
+            ) : null}
+            {webFindings.map((finding) => (
+              <article key={finding.url} className="grey-source-card">
+                <div className="assistant-history-heading">
+                  <strong>{finding.title}</strong>
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={
+                      !activeProject ||
+                      activeProject === "__all_papers__" ||
+                      saveGreyMutation.isPending ||
+                      savedGreyUrls.includes(finding.url)
+                    }
+                    onClick={() => saveGreyMutation.mutate(finding)}
+                  >
+                    {savedGreyUrls.includes(finding.url) ? "Gespeichert" : "Zum Projekt"}
+                  </button>
+                </div>
+                {finding.quarantined ? (
+                  <div className="warning-row">⚠ Prompt-Injection erkannt &amp; ignoriert: {finding.injection_flags.join(", ")}</div>
+                ) : null}
+                <p>{finding.summary}</p>
+                <a className="muted" href={finding.url} target="_blank" rel="noreferrer">
+                  {finding.url}
+                </a>
+              </article>
+            ))}
+          </section>
+        ) : null}
 
         <section className="answer-panel">
           {activeTurn ? (

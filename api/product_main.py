@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from datetime import datetime
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -20,25 +22,36 @@ from extraction.batch_processor import BatchProcessor
 from extraction.embedding_engine import EmbeddingEngine
 from extraction.entity_extractor import EntityExtractor, extraction_failure_reason
 from extraction.entity_linker import ExtractionPipeline
+from extraction.reference_parser import extract_reference_section, split_reference_entries
 from extraction.vocabulary import VocabularyManager
 from graph.paper_ingestion import extract_citation_ids, paper_id
 from harvester.arxiv_client import ArxivClient
+from harvester.biorxiv_client import BiorxivClient
+from harvester.core_client import CoreApiKeyMissing, CoreClient, CoreConfig
+from harvester.crossref_client import CrossrefClient, CrossrefConfig
+from harvester.doaj_client import DoajClient, DoajConfig
+from harvester.europepmc_client import EuropePMCClient, EuropePMCConfig
 from harvester.openalex_client import OpenAlexClient
 from harvester.semantic_scholar_client import SemanticScholarClient
+from harvester.unpaywall_client import UnpaywallClient, UnpaywallConfig
 from quality.benchmark import run_benchmark
+from quality.benchmark_suite import SuiteConfig, latest_suite_report, run_suite
 from quality.kg_health import build_health_report
 from quality.phase4_eval import run_eval
 from maintenance.health_repair import repair_health_state
 from parsing.parser_router import ParserRouter, ParserType
+from query.discovery import analyze_paper, analyze_topic
 from query.hybrid_retriever import HybridRetriever
 from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
+from query.web_research import run_deep_research
 from query.source_verifier import find_pdf_path
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
 
 PROJECTS_PATH = Path("data/projects.json")
+PROJECT_PRIMARY_PATH = Path("data/project_primary.json")
 RESERVED_PROJECT_IDS = {"__all_papers__", "alle papers", "all papers"}
 DEFAULT_METADATA_DB_PATH = "data/metadata.duckdb"
 DEFAULT_GRAPH_DB_PATH = "data/graphs/global_kg"
@@ -105,6 +118,49 @@ class HarvestDownloadRequest(BaseModel):
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
 
 
+class ReferenceExtractRequest(BaseModel):
+    paper_id: str = Field(min_length=1, max_length=240)
+    pdf_path: str | None = Field(default=None, max_length=1000)
+    parser: str | None = Field(default=None, max_length=80)
+    max_references: int = Field(default=40, ge=1, le=200)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+
+
+class DiscoveryTopicRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=2000)
+    sources: list[str] = ["arxiv", "openalex"]
+    provider: str | None = None
+    max_per_query: int = Field(default=5, ge=1, le=20)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class DiscoveryPaperRequest(BaseModel):
+    paper_id: str = Field(min_length=1, max_length=240)
+    pdf_path: str | None = Field(default=None, max_length=1000)
+    parser: str | None = Field(default=None, max_length=80)
+    sources: list[str] = ["arxiv", "openalex"]
+    provider: str | None = None
+    max_per_query: int = Field(default=5, ge=1, le=20)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+
+
+class DeepResearchRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    provider: str | None = None
+    search_provider: str | None = None
+    max_queries: int = Field(default=3, ge=1, le=8)
+    results_per_query: int = Field(default=4, ge=1, le=10)
+    max_sources: int = Field(default=6, ge=1, le=15)
+
+
+class GreySourcePayload(BaseModel):
+    sources: list[dict[str, Any]]
+    query: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
 class ExtractionParseRequest(BaseModel):
     paper_id: str = Field(min_length=1, max_length=240)
     pdf_path: str | None = Field(default=None, max_length=1000)
@@ -125,6 +181,8 @@ class ExtractionRunRequest(BaseModel):
     max_tokens: int | None = Field(default=None, ge=256, le=131072)
     context_size: int | None = Field(default=None, ge=1024, le=262144)
     extraction_mode: str | None = Field(default="quality", max_length=80)
+    context_policy: str | None = Field(default="auto", pattern="^(auto|whole|chunk)$")
+    allow_context_fallback: bool = False
     link_concepts: bool = True
     save: bool = True
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
@@ -145,6 +203,8 @@ class ExtractionBatchRequest(BaseModel):
     max_tokens: int | None = Field(default=None, ge=256, le=131072)
     context_size: int | None = Field(default=None, ge=1024, le=262144)
     extraction_mode: str | None = Field(default="quality", max_length=80)
+    context_policy: str | None = Field(default="auto", pattern="^(auto|whole|chunk)$")
+    allow_context_fallback: bool = False
     link_concepts: bool = True
     resume: bool = True
     job_id: str | None = Field(default=None, max_length=120)
@@ -175,6 +235,33 @@ class BenchmarkJobRequest(BaseModel):
     gold_dir: str = "quality/gold"
     pred_dir: str | None = None
     allow_embedded_predictions: bool = True
+    suite: str | None = Field(default=None, pattern="^(core|extended)$")
+    context_policy: str = Field(default="auto", pattern="^(auto|whole|chunk)$")
+    compare_context_policies: list[str] = []
+    answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
+    provider: str | None = None
+    model: str | None = None
+    download_missing: bool = False
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+    output_dir: str = "data/eval/benchmarks"
+    isolated_db: bool = True
+
+
+class BenchmarkSuiteJobRequest(BaseModel):
+    suite: str = Field(default="core", pattern="^(core|extended)$")
+    provider: str | None = None
+    model: str | None = None
+    context_policy: str = Field(default="auto", pattern="^(auto|whole|chunk)$")
+    compare_context_policies: list[str] = []
+    answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
+    download_missing: bool = False
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+    output_dir: str = "data/eval/benchmarks"
+    isolated_db: bool = True
 
 
 class EvalJobRequest(BaseModel):
@@ -330,6 +417,22 @@ def add_project_papers(
     projects[project_id] = _unique_strings([*projects[project_id], *payload.paper_ids])
     _save_projects(projects, path)
     return {"project": _project_view(project_id, projects[project_id], {})}
+
+
+class PrimaryPaperPayload(BaseModel):
+    paper_id: str | None = None
+
+
+@app.put("/projects/{project_id}/primary-paper")
+def set_project_primary_paper(project_id: str, payload: PrimaryPaperPayload) -> dict[str, Any]:
+    """Mark (or clear) the project's main source. Answers will prioritize it."""
+    mapping = _load_primary_papers()
+    if payload.paper_id:
+        mapping[project_id] = str(payload.paper_id)
+    else:
+        mapping.pop(project_id, None)
+    _save_primary_papers(mapping)
+    return {"project_id": project_id, "primary_paper_id": mapping.get(project_id)}
 
 
 @app.get("/projects/{project_id}/dashboard")
@@ -512,7 +615,14 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
             for paper in request.papers:
                 db.insert_paper(paper)
                 inserted += 1
-                if not request.download_pdfs or not paper.get("pdf_url"):
+                if not request.download_pdfs:
+                    continue
+                pdf_url = paper.get("pdf_url")
+                if not pdf_url and paper.get("doi"):
+                    pdf_url = await _resolve_oa_pdf_url(paper.get("doi"))
+                    if pdf_url:
+                        paper["pdf_url"] = pdf_url
+                if not pdf_url:
                     continue
                 try:
                     response = await client.get(str(paper["pdf_url"]))
@@ -531,6 +641,175 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
                     failed_downloads.append(f"{paper.get('title') or paper.get('id')}: {exc}")
 
     return {"inserted": inserted, "downloaded": downloaded, "failed_downloads": failed_downloads}
+
+
+async def _match_references_to_crossref(
+    reference_strings: list[str], max_references: int
+) -> list[dict[str, Any]]:
+    """Match free-text reference strings to Crossref works (best effort, sequential)."""
+    client = CrossrefClient(CrossrefConfig(mailto=_crossref_mailto()))
+    matched: list[dict[str, Any]] = []
+    seen_dois: set[str] = set()
+    try:
+        for reference in reference_strings[:max_references]:
+            try:
+                work = await client.match_reference(reference)
+            except Exception:
+                work = None
+            if not work:
+                continue
+            normalized = _normalize_crossref_work(work)
+            doi_key = str(normalized.get("doi") or normalized.get("source_id") or "").lower()
+            if not doi_key or doi_key in seen_dois:
+                continue
+            seen_dois.add(doi_key)
+            normalized["reference_string"] = reference
+            matched.append(normalized)
+    finally:
+        await client.close()
+    return matched
+
+
+@app.post("/papers/references/extract")
+async def extract_paper_references(request: ReferenceExtractRequest) -> dict[str, Any]:
+    """Parse an uploaded/known PDF, detect its cited references and match them to
+    Crossref so the user can choose which referenced papers to download.
+
+    Does NOT download anything; the frontend sends the chosen subset to
+    /harvest/download.
+    """
+    pdf_path = _resolve_extraction_pdf_path(
+        request.paper_id, request.pdf_path, request.metadata_db_path, request.pdf_base_dir
+    )
+    parsed = _parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
+    section = extract_reference_section(parsed.text)
+    reference_strings = split_reference_entries(section)
+    references = await _match_references_to_crossref(reference_strings, request.max_references)
+    return {
+        "paper_id": request.paper_id,
+        "references_detected": len(reference_strings),
+        "references_matched": len(references),
+        "references": references,
+    }
+
+
+def _existing_library_keys(metadata_db_path: str) -> set[str]:
+    keys: set[str] = set()
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            for paper in db.list_papers(limit=50000):
+                if paper.get("doi"):
+                    keys.add(str(paper["doi"]).lower())
+                if paper.get("id"):
+                    keys.add(str(paper["id"]).lower())
+                if paper.get("title"):
+                    keys.add(re.sub(r"\s+", " ", str(paper["title"]).lower()).strip())
+    except Exception:
+        return keys
+    return keys
+
+
+async def _run_discovery_queries(
+    analysis: dict[str, Any], sources: list[str], max_per_query: int, metadata_db_path: str
+) -> list[dict[str, Any]]:
+    """Run each suggested query through the harvest sources and aggregate novel papers."""
+    existing = _existing_library_keys(metadata_db_path)
+    aggregated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in analysis.get("queries", []):
+        query = entry.get("query")
+        if not query:
+            continue
+        results, _ = await _run_harvest_search(query, sources, max_per_query)
+        for paper in results:
+            doi_key = str(paper.get("doi") or "").lower()
+            id_key = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}").lower()
+            title_key = re.sub(r"\s+", " ", str(paper.get("title") or "").lower()).strip()
+            if doi_key and doi_key in existing:
+                continue
+            if title_key and title_key in existing:
+                continue
+            dedupe_key = doi_key or id_key
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            paper["discovery_reason"] = entry.get("reason") or ""
+            paper["matched_query"] = query
+            aggregated.append(paper)
+    return aggregated
+
+
+@app.post("/discovery/from-topic")
+async def discovery_from_topic(request: DiscoveryTopicRequest) -> dict[str, Any]:
+    """AI suggests topic-near papers to download for more context (suggest only)."""
+    analysis = await asyncio.to_thread(analyze_topic, llm_router, request.topic, request.provider)
+    candidates = await _run_discovery_queries(
+        analysis, request.sources, request.max_per_query, request.metadata_db_path
+    )
+    return {"analysis": analysis, "candidates": candidates}
+
+
+@app.post("/discovery/from-paper")
+async def discovery_from_paper(request: DiscoveryPaperRequest) -> dict[str, Any]:
+    """AI analyzes an uploaded paper (topic + methods) and suggests related papers."""
+    pdf_path = _resolve_extraction_pdf_path(
+        request.paper_id, request.pdf_path, request.metadata_db_path, request.pdf_base_dir
+    )
+    parsed = _parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
+    analysis = await asyncio.to_thread(analyze_paper, llm_router, parsed.text, request.provider)
+    candidates = await _run_discovery_queries(
+        analysis, request.sources, request.max_per_query, request.metadata_db_path
+    )
+    return {"analysis": analysis, "candidates": candidates}
+
+
+@app.post("/research/deep")
+async def research_deep(request: DeepResearchRequest) -> dict[str, Any]:
+    """Run a guarded web deep-research pass. Returns findings for review; nothing is
+    saved until the user confirms via POST /projects/{id}/grey-sources.
+
+    Web content is sanitized and treated as untrusted data (prompt-injection hardened).
+    Results are grey sources and are never written to the knowledge graph.
+    """
+    return await run_deep_research(
+        llm_router,
+        request.question,
+        provider=request.provider,
+        search_provider=request.search_provider,
+        max_queries=request.max_queries,
+        results_per_query=request.results_per_query,
+        max_sources=request.max_sources,
+    )
+
+
+@app.get("/projects/{project_id}/grey-sources")
+def list_project_grey_sources(
+    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        items = db.list_grey_sources(project_id)
+    return {"project_id": project_id, "grey_sources": items}
+
+
+@app.post("/projects/{project_id}/grey-sources")
+def add_project_grey_sources(project_id: str, payload: GreySourcePayload) -> dict[str, Any]:
+    """Persist user-confirmed grey sources for a project (not added to the KG)."""
+    saved: list[dict[str, Any]] = []
+    with MetadataDB(payload.metadata_db_path) as db:
+        for source in payload.sources:
+            record = dict(source)
+            record.setdefault("query", payload.query)
+            saved.append(db.add_grey_source(project_id, record))
+    return {"project_id": project_id, "saved": saved}
+
+
+@app.delete("/grey-sources/{grey_id}")
+def delete_grey_source(grey_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_grey_source(grey_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Grey source not found: {grey_id}")
+    return {"deleted": True, "id": grey_id}
 
 
 @app.get("/extraction/library")
@@ -1336,12 +1615,27 @@ def health_repair_job(request: HealthRepairRequest) -> dict[str, Any]:
 
 @app.post("/jobs/benchmark")
 def benchmark_job(request: BenchmarkJobRequest) -> dict[str, Any]:
+    if request.suite:
+        report = _run_benchmark_suite_job(request)
+        return {"status": "completed", "report": report}
     report = run_benchmark(
         gold_dir=Path(request.gold_dir),
         pred_dir=Path(request.pred_dir) if request.pred_dir else None,
         allow_embedded_predictions=request.allow_embedded_predictions,
     )
     return {"status": "completed", "report": report}
+
+
+@app.post("/jobs/benchmark-suite")
+def benchmark_suite_job(request: BenchmarkSuiteJobRequest) -> dict[str, Any]:
+    report = _run_benchmark_suite_job(request)
+    return {"status": "completed", "report": report}
+
+
+@app.get("/quality/benchmark-suite/latest")
+def benchmark_suite_latest(output_dir: str = "data/eval/benchmarks") -> dict[str, Any]:
+    report = latest_suite_report(Path(output_dir))
+    return {"status": "ok" if report else "empty", "report": report}
 
 
 @app.post("/jobs/eval")
@@ -1355,6 +1649,26 @@ def eval_job(request: EvalJobRequest) -> dict[str, Any]:
         timeout_seconds=request.timeout_seconds,
     )
     return {"status": "completed", "report": report}
+
+
+def _run_benchmark_suite_job(request: BenchmarkJobRequest | BenchmarkSuiteJobRequest) -> dict[str, Any]:
+    policies = list(getattr(request, "compare_context_policies", None) or []) or [request.context_policy]
+    return run_suite(
+        SuiteConfig(
+            suite=getattr(request, "suite", None) or "core",
+            provider=request.provider,
+            model=request.model,
+            context_policy=request.context_policy,
+            compare_context_policies=policies,
+            answer_context_mode=request.answer_context_mode,
+            download_missing=bool(request.download_missing),
+            metadata_db_path=request.metadata_db_path,
+            graph_db_path=request.graph_db_path,
+            pdf_base_dir=request.pdf_base_dir,
+            output_dir=Path(request.output_dir),
+            isolated_db=bool(request.isolated_db),
+        )
+    )
 
 
 def _note_summary(note: dict[str, Any]) -> dict[str, Any]:
@@ -1578,6 +1892,23 @@ def _save_projects(projects: dict[str, list[str]], path: Path = PROJECTS_PATH) -
     path.write_text(json.dumps(projects, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _load_primary_papers(path: Path = PROJECT_PRIMARY_PATH) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(pid): str(value) for pid, value in data.items() if value}
+
+
+def _save_primary_papers(mapping: dict[str, str], path: Path = PROJECT_PRIMARY_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(mapping, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[str, Any]]) -> dict[str, Any]:
     years = [int(papers[pid]["year"]) for pid in paper_ids if pid in papers and papers[pid].get("year")]
     return {
@@ -1587,6 +1918,7 @@ def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[
         "paper_count": len(paper_ids),
         "year_min": min(years) if years else None,
         "year_max": max(years) if years else None,
+        "primary_paper_id": _load_primary_papers().get(project_id),
     }
 
 
@@ -1768,7 +2100,16 @@ def _parsed_document_metadata(parsed: Any) -> dict[str, Any]:
 
 def _extraction_overrides(request: Any) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
-    for key in ["model", "temperature", "top_p", "max_tokens", "context_size", "extraction_mode"]:
+    for key in [
+        "model",
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "context_size",
+        "extraction_mode",
+        "context_policy",
+        "allow_context_fallback",
+    ]:
         value = getattr(request, key, None)
         if value is not None and value != "":
             overrides[key] = value
@@ -1794,6 +2135,7 @@ def _year_from_extraction_result(result: Any) -> int | None:
 
 
 def _extraction_result_payload(result: Any) -> dict[str, Any]:
+    diagnostics = getattr(result, "extraction_diagnostics", {}) or {}
     return {
         "paper_id": getattr(result, "paper_id", ""),
         "paper_type": getattr(result, "paper_type", "unknown"),
@@ -1812,7 +2154,8 @@ def _extraction_result_payload(result: Any) -> dict[str, Any]:
         "metadata_status": getattr(result, "metadata_status", "valid"),
         "blocking_errors": getattr(result, "blocking_errors", []) or [],
         "candidate_count": getattr(result, "candidate_count", 0) or 0,
-        "extraction_diagnostics": getattr(result, "extraction_diagnostics", {}) or {},
+        "extraction_diagnostics": diagnostics,
+        "context_diagnostics": diagnostics.get("context_diagnostics") if isinstance(diagnostics, dict) else {},
         "raw_response": getattr(result, "raw_response", None),
     }
 
@@ -1853,6 +2196,69 @@ def _paper_sort_key(sort: str):
     return key
 
 
+_HARVESTER_CONFIG_CACHE: dict[str, Any] | None = None
+
+
+def _load_harvester_config() -> dict[str, Any]:
+    """Load and cache the `harvester:` section of config.yaml (env-resolved keys).
+
+    .env has already been loaded into os.environ by the module-level LLMRouter, so
+    `*_env` references resolve via os.getenv here.
+    """
+    global _HARVESTER_CONFIG_CACHE
+    if _HARVESTER_CONFIG_CACHE is not None:
+        return _HARVESTER_CONFIG_CACHE
+    cfg: dict[str, Any] = {}
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as fh:
+            cfg = (yaml.safe_load(fh) or {}).get("harvester", {}) or {}
+    except FileNotFoundError:
+        cfg = {}
+    _HARVESTER_CONFIG_CACHE = cfg
+    return cfg
+
+
+def _harvester_section(name: str) -> dict[str, Any]:
+    section = _load_harvester_config().get(name, {})
+    return section if isinstance(section, dict) else {}
+
+
+def _resolved_key(section: dict[str, Any], env_default: str) -> str | None:
+    env_name = section.get("api_key_env") or env_default
+    return os.getenv(env_name) or section.get("api_key")
+
+
+def _unpaywall_email() -> str | None:
+    section = _harvester_section("unpaywall")
+    env_name = section.get("email_env") or "UNPAYWALL_EMAIL"
+    email = os.getenv(env_name) or section.get("email")
+    if not email or "@example.com" in str(email):
+        return None
+    return str(email)
+
+
+def _crossref_mailto() -> str | None:
+    section = _harvester_section("crossref")
+    env_name = section.get("mailto_env") or "CROSSREF_MAILTO"
+    return os.getenv(env_name) or section.get("mailto") or _unpaywall_email()
+
+
+async def _resolve_oa_pdf_url(doi: str | None, client: httpx.AsyncClient | None = None) -> str | None:
+    """Resolve an open-access PDF URL for a DOI via Unpaywall (best-effort)."""
+    if not doi:
+        return None
+    email = _unpaywall_email()
+    if not email:
+        return None
+    unpaywall = UnpaywallClient(UnpaywallConfig(email=email))
+    try:
+        return await unpaywall.best_oa_url(str(doi).replace("https://doi.org/", "").strip())
+    except Exception:
+        return None
+    finally:
+        await unpaywall.close()
+
+
 async def _run_harvest_search(query: str, sources: list[str], max_results: int) -> tuple[list[dict[str, Any]], list[str]]:
     normalized_sources = {source.lower() for source in sources}
     results: list[dict[str, Any]] = []
@@ -1884,6 +2290,46 @@ async def _run_harvest_search(query: str, sources: list[str], max_results: int) 
                     results.extend(_normalize_openalex_work(item) for item in payload.get("results", []))
                 finally:
                     await client.close()
+            elif source == "crossref":
+                client = CrossrefClient(CrossrefConfig(mailto=_crossref_mailto()))
+                try:
+                    items = await client.search_works(query, rows=max_results)
+                    results.extend(_normalize_crossref_work(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "europepmc":
+                client = EuropePMCClient(EuropePMCConfig())
+                try:
+                    items = await client.search(query, page_size=max_results)
+                    results.extend(_normalize_europepmc_result(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "biorxiv":
+                # Native bioRxiv API has no keyword search; use Europe PMC preprint filter.
+                client = EuropePMCClient(EuropePMCConfig())
+                try:
+                    preprint_query = f'({query}) AND SRC:PPR AND (PUBLISHER:"bioRxiv" OR PUBLISHER:"medRxiv")'
+                    items = await client.search(preprint_query, page_size=max_results)
+                    results.extend(_normalize_europepmc_result(item, source="biorxiv") for item in items)
+                finally:
+                    await client.close()
+            elif source == "core":
+                section = _harvester_section("core")
+                client = CoreClient(CoreConfig(api_key=_resolved_key(section, "CORE_API_KEY")))
+                try:
+                    items = await client.search_works(query, limit=max_results)
+                    results.extend(_normalize_core_work(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "doaj":
+                client = DoajClient(DoajConfig())
+                try:
+                    items = await client.search_articles(query, page_size=max_results)
+                    results.extend(_normalize_doaj_article(item) for item in items)
+                finally:
+                    await client.close()
+        except CoreApiKeyMissing as exc:
+            warnings.append(f"{source}: {exc}")
         except Exception as exc:
             warnings.append(f"{source}: {exc}")
 
@@ -1939,6 +2385,139 @@ def _normalize_semantic_scholar_paper(paper: dict[str, Any]) -> dict[str, Any]:
         "landing_page_url": paper.get("url"),
         "has_full_text": bool(open_access_pdf.get("url")) if isinstance(open_access_pdf, dict) else False,
         "raw": paper,
+    }
+
+
+def _crossref_title(work: dict[str, Any]) -> str:
+    title = work.get("title")
+    if isinstance(title, list):
+        return (title[0] if title else "") or ""
+    return str(title or "")
+
+
+def _crossref_year(work: dict[str, Any]) -> int | None:
+    for key in ("published", "published-print", "published-online", "issued", "created"):
+        parts = (work.get(key) or {}).get("date-parts") if isinstance(work.get(key), dict) else None
+        if parts and isinstance(parts, list) and parts[0]:
+            try:
+                return int(parts[0][0])
+            except (ValueError, TypeError, IndexError):
+                continue
+    return None
+
+
+def _normalize_crossref_work(work: dict[str, Any]) -> dict[str, Any]:
+    doi = work.get("DOI")
+    authors = []
+    for author in work.get("author", []) or []:
+        if isinstance(author, dict):
+            name = " ".join(part for part in [author.get("given"), author.get("family")] if part)
+            if name:
+                authors.append(name)
+    pdf_url = None
+    for link in work.get("link", []) or []:
+        if isinstance(link, dict) and link.get("content-type") == "application/pdf":
+            pdf_url = link.get("URL")
+            break
+    abstract = re.sub(r"<[^>]+>", "", str(work.get("abstract") or "")).strip()
+    return {
+        "source": "crossref",
+        "source_id": str(doi or work.get("URL") or "unknown"),
+        "title": _crossref_title(work),
+        "abstract": abstract,
+        "authors": authors,
+        "year": _crossref_year(work),
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "landing_page_url": (f"https://doi.org/{doi}" if doi else work.get("URL")),
+        "has_full_text": bool(pdf_url),
+    }
+
+
+def _normalize_europepmc_result(item: dict[str, Any], source: str = "europepmc") -> dict[str, Any]:
+    doi = item.get("doi")
+    pdf_url = None
+    for url_item in (item.get("fullTextUrlList") or {}).get("fullTextUrl", []) or []:
+        if not isinstance(url_item, dict):
+            continue
+        if url_item.get("documentStyle") == "pdf" or str(url_item.get("url", "")).lower().endswith(".pdf"):
+            pdf_url = url_item.get("url")
+            break
+    pmcid = item.get("pmcid")
+    if not pdf_url and pmcid:
+        pdf_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
+    authors = []
+    author_string = item.get("authorString")
+    if author_string:
+        authors = [name.strip() for name in str(author_string).split(",") if name.strip()]
+    return {
+        "source": source,
+        "source_id": str(item.get("id") or doi or pmcid or "unknown"),
+        "title": str(item.get("title") or ""),
+        "abstract": str(item.get("abstractText") or ""),
+        "authors": authors,
+        "year": int(item["pubYear"]) if str(item.get("pubYear") or "").isdigit() else None,
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "landing_page_url": (f"https://doi.org/{doi}" if doi else None),
+        "has_full_text": str(item.get("isOpenAccess") or "").upper() == "Y" or bool(pdf_url),
+    }
+
+
+def _normalize_core_work(work: dict[str, Any]) -> dict[str, Any]:
+    doi = work.get("doi")
+    authors = [
+        author.get("name", "")
+        for author in (work.get("authors") or [])
+        if isinstance(author, dict) and author.get("name")
+    ]
+    pdf_url = work.get("downloadUrl") or work.get("fullTextLink")
+    year = work.get("yearPublished") or work.get("publishedDate")
+    try:
+        year_int = int(str(year)[:4]) if year else None
+    except (ValueError, TypeError):
+        year_int = None
+    return {
+        "source": "core",
+        "source_id": str(work.get("id") or doi or "unknown"),
+        "title": str(work.get("title") or ""),
+        "abstract": str(work.get("abstract") or ""),
+        "authors": authors,
+        "year": year_int,
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "landing_page_url": (f"https://doi.org/{doi}" if doi else work.get("sourceFulltextUrls")),
+        "has_full_text": bool(pdf_url),
+    }
+
+
+def _normalize_doaj_article(article: dict[str, Any]) -> dict[str, Any]:
+    bib = article.get("bibjson", {}) if isinstance(article.get("bibjson"), dict) else {}
+    doi = None
+    pdf_url = None
+    landing = None
+    for ident in bib.get("identifier", []) or []:
+        if isinstance(ident, dict) and ident.get("type") == "doi":
+            doi = ident.get("id")
+    for link in bib.get("link", []) or []:
+        if not isinstance(link, dict):
+            continue
+        if link.get("type") == "fulltext":
+            landing = link.get("url")
+            if str(link.get("content_type", "")).lower() == "pdf" or str(link.get("url", "")).lower().endswith(".pdf"):
+                pdf_url = link.get("url")
+    authors = [a.get("name", "") for a in bib.get("author", []) or [] if isinstance(a, dict) and a.get("name")]
+    return {
+        "source": "doaj",
+        "source_id": str(article.get("id") or doi or "unknown"),
+        "title": str(bib.get("title") or ""),
+        "abstract": str(bib.get("abstract") or ""),
+        "authors": authors,
+        "year": int(bib["year"]) if str(bib.get("year") or "").isdigit() else None,
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "landing_page_url": landing or (f"https://doi.org/{doi}" if doi else None),
+        "has_full_text": bool(pdf_url or landing),
     }
 
 

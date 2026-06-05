@@ -4487,6 +4487,71 @@ class TestBatchProcessor:
         assert parser_router.parse.call_count == 2
 
 
+def test_entity_extractor_auto_policy_uses_whole_context_when_it_fits():
+    response = {
+        "paper_type": "research",
+        "concepts": [
+            {
+                "label": "Adaptive Control",
+                "entity_type": "Algorithm",
+                "context": "robotics control loop",
+                "confidence": 0.92,
+            }
+        ],
+        "methods": [
+            {
+                "label": "Adaptive Control",
+                "entity_type": "Algorithm",
+                "domain": "robotics",
+                "description": "adapts a controller online",
+                "source_type": "paper_contribution",
+            }
+        ],
+        "concept_candidates": [],
+        "method_candidates": [],
+        "relations": [],
+        "claims": [],
+        "cross_domain_hints": [],
+        "terminology_conflicts": [],
+        "temporal_coverage": {},
+        "mathematical_content": {"has_formulas": False, "formula_types": []},
+        "language_detected": "en",
+    }
+    llm = FakeLLMRouter(response_json=response)
+    extractor = EntityExtractor(llm, quality_db_path=None)
+
+    result = extractor.extract(
+        "paper-context-auto",
+        "Title: Adaptive Control\n\nAdaptive Control improves robotics systems.",
+        overrides={"context_policy": "auto", "context_size": 20000, "max_tokens": 1000, "extraction_mode": "quick"},
+    )
+
+    diagnostics = result.extraction_diagnostics["context_diagnostics"]
+    assert diagnostics["context_policy"] == "auto"
+    assert diagnostics["whole_context_used"] is True
+    assert diagnostics["chunk_count"] == 1
+
+
+def test_entity_extractor_whole_policy_fails_clearly_without_fallback():
+    llm = FakeLLMRouter()
+    extractor = EntityExtractor(llm, quality_db_path=None)
+    text = "Title: Large Paper\n\n" + ("Adaptive Control is discussed in detail. " * 1500)
+
+    result = extractor.extract(
+        "paper-context-too-small",
+        text,
+        overrides={"context_policy": "whole", "context_size": 9000, "max_tokens": 1000, "extraction_mode": "quick"},
+    )
+
+    diagnostics = result.extraction_diagnostics["context_diagnostics"]
+    assert result.extraction_diagnostics["fatal_llm_error"] is True
+    assert "Whole-paper context does not fit" in result.extraction_diagnostics["failure_reason"]
+    assert diagnostics["context_policy"] == "whole"
+    assert diagnostics["whole_context_used"] is False
+    assert diagnostics["fallback_reason"] == "context_budget_exceeded"
+    assert llm.last_messages is None
+
+
 # Run tests
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

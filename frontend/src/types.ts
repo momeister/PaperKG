@@ -5,6 +5,67 @@ export type Project = {
   paper_count: number;
   year_min?: number | null;
   year_max?: number | null;
+  primary_paper_id?: string | null;
+};
+
+export type DiscoveryCandidate = Paper & {
+  discovery_reason?: string;
+  matched_query?: string;
+};
+
+export type DiscoveryAnalysis = {
+  topic_summary: string;
+  methods: string[];
+  queries: { query: string; reason: string }[];
+  error?: string;
+};
+
+export type DiscoveryResponse = {
+  analysis: DiscoveryAnalysis;
+  candidates: DiscoveryCandidate[];
+};
+
+export type ReferenceCandidate = Paper & {
+  reference_string?: string;
+};
+
+export type ReferenceExtractResponse = {
+  paper_id: string;
+  references_detected: number;
+  references_matched: number;
+  references: ReferenceCandidate[];
+};
+
+export type DeepResearchFinding = {
+  url: string;
+  title: string;
+  snippet: string;
+  summary: string;
+  injection_flags: string[];
+  quarantined: boolean;
+  raw_excerpt: string;
+};
+
+export type DeepResearchResponse = {
+  question: string;
+  provider: string;
+  queries: string[];
+  topic_summary: string;
+  findings: DeepResearchFinding[];
+  warnings: string[];
+};
+
+export type GreySource = {
+  id: string;
+  project_id: string;
+  query?: string | null;
+  url: string;
+  title?: string | null;
+  summary?: string | null;
+  raw_excerpt?: string | null;
+  injection_flags: string[];
+  status?: string;
+  created_timestamp?: string;
 };
 
 export type Paper = {
@@ -95,6 +156,8 @@ export type Answer = {
   sources: Source[];
   evidence: Evidence[];
   citation_links?: CitationLink[];
+  context_diagnostics?: Record<string, unknown>;
+  source_verification?: Record<string, unknown> | null;
 };
 
 export type VerificationEvidence = {
@@ -211,6 +274,7 @@ export type ExtractionResultPayload = {
   blocking_errors: string[];
   candidate_count: number;
   extraction_diagnostics: Record<string, unknown>;
+  context_diagnostics?: Record<string, unknown>;
   raw_response?: string | null;
 };
 
@@ -263,8 +327,11 @@ export type VocabularyEntry = {
 };
 
 export type BenchmarkReport = {
+  run_id?: string;
   summary: Record<string, unknown>;
-  cases: Array<Record<string, unknown>>;
+  cases?: Array<Record<string, unknown>>;
+  extraction?: Record<string, unknown>;
+  answering?: Record<string, unknown>;
   warnings?: string[];
 };
 

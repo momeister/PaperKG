@@ -58,6 +58,8 @@ class ExtractionRequest(BaseModel):
     top_p: float | None = None
     context_size: int | None = None
     extraction_mode: str | None = None
+    context_policy: str | None = Field(default=None, pattern="^(auto|whole|chunk)$")
+    allow_context_fallback: bool = False
 
 
 class ConceptItem(BaseModel):
@@ -167,6 +169,10 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
 
         if request.extraction_mode is not None:
             overrides["extraction_mode"] = request.extraction_mode
+
+        if request.context_policy is not None:
+            overrides["context_policy"] = request.context_policy
+            overrides["allow_context_fallback"] = request.allow_context_fallback
 
         provider_cfg = llm_router.provider_config(request.provider)
         if provider_cfg.provider_type == "nvidia":

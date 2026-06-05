@@ -376,6 +376,51 @@ def test_product_upload_models_jobs_and_harvest(tmp_path, monkeypatch) -> None:
     assert json.loads(projects_path.read_text(encoding="utf-8")) == {"compat": ["p1"]}
 
 
+def test_product_benchmark_suite_job_accepts_context_options(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_suite(config):
+        captured["config"] = config
+        return {
+            "run_id": "test-run",
+            "summary": {
+                "provider": config.provider,
+                "model": config.model,
+                "context_policy": config.context_policy,
+                "answer_score": 1.0,
+            },
+        }
+
+    monkeypatch.setattr(product_main, "run_suite", fake_run_suite)
+    client = TestClient(product_main.app)
+
+    response = client.post(
+        "/jobs/benchmark-suite",
+        json={
+            "suite": "core",
+            "provider": "lm_studio",
+            "model": "local-model",
+            "context_policy": "whole",
+            "compare_context_policies": ["auto", "whole", "chunk"],
+            "answer_context_mode": "pdf_if_fits",
+            "metadata_db_path": str(tmp_path / "metadata.duckdb"),
+            "graph_db_path": str(tmp_path / "graph"),
+            "pdf_base_dir": str(tmp_path / "pdfs"),
+            "output_dir": str(tmp_path / "benchmarks"),
+            "isolated_db": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    config = captured["config"]
+    assert config.context_policy == "whole"
+    assert config.compare_context_policies == ["auto", "whole", "chunk"]
+    assert config.answer_context_mode == "pdf_if_fits"
+    assert config.provider == "lm_studio"
+    assert config.model == "local-model"
+
+
 def test_product_health_repair_and_rewrite(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "metadata.duckdb"
     graph_dir = tmp_path / "global_kg"

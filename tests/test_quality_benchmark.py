@@ -89,6 +89,30 @@ def test_benchmark_flags_claim_attribution_errors():
     assert report["claim_attribution_error_count"] == 1
 
 
+def test_benchmark_reports_supported_extras_separately_from_hallucinations():
+    report = evaluate_case(
+        {
+            "paper_id": "paper",
+            "parsed_text": "The method uses adaptive optics calibration before clinical validation.",
+            "expected": {"concepts": [{"label": "Clinical Validation"}], "methods": []},
+        },
+        {
+            "concepts": [
+                {"label": "Clinical Validation"},
+                {"label": "Adaptive Optics", "evidence_span": "adaptive optics calibration"},
+                {"label": "Imaginary Solver", "evidence_span": "imaginary solver benchmark"},
+            ],
+            "methods": [],
+        },
+    )
+
+    assert report["concepts"]["false_positive"] == 2
+    assert report["supported_extra_count"] == 1
+    assert report["unsupported_extra_count"] == 1
+    assert report["supported_extra_items"][0]["label"] == "Adaptive Optics"
+    assert report["unsupported_extra_items"][0]["label"] == "Imaginary Solver"
+
+
 def test_claim_negation_metrics_catch_polarity_errors():
     accuracy, errors, total = claim_negation_metrics(
         [{"statement": "Models work without significant loss.", "negated": False}],

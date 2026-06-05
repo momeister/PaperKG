@@ -2,7 +2,11 @@ import type {
   Answer,
   BenchmarkReport,
   Dashboard,
+  DeepResearchResponse,
+  DiscoveryResponse,
   ExtractionHistoryItem,
+  GreySource,
+  ReferenceExtractResponse,
   ExtractionLibraryItem,
   ExtractionParseResponse,
   ExtractionRunResponse,
@@ -103,6 +107,37 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ papers, download_pdfs: downloadPdfs })
     }),
+  extractReferences: (payload: { paper_id: string; pdf_path?: string; parser?: string; max_references?: number }) =>
+    request<ReferenceExtractResponse>("/papers/references/extract", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  discoveryFromTopic: (payload: { topic: string; sources?: string[]; provider?: string; max_per_query?: number }) =>
+    request<DiscoveryResponse>("/discovery/from-topic", { method: "POST", body: JSON.stringify(payload) }),
+  discoveryFromPaper: (payload: { paper_id: string; pdf_path?: string; sources?: string[]; provider?: string; max_per_query?: number }) =>
+    request<DiscoveryResponse>("/discovery/from-paper", { method: "POST", body: JSON.stringify(payload) }),
+  deepResearch: (payload: {
+    question: string;
+    provider?: string;
+    search_provider?: string;
+    max_queries?: number;
+    results_per_query?: number;
+    max_sources?: number;
+  }) => request<DeepResearchResponse>("/research/deep", { method: "POST", body: JSON.stringify(payload) }),
+  listGreySources: (projectId: string) =>
+    request<{ project_id: string; grey_sources: GreySource[] }>(`/projects/${encodeURIComponent(projectId)}/grey-sources`),
+  addGreySources: (projectId: string, sources: Record<string, unknown>[], query?: string) =>
+    request<{ project_id: string; saved: GreySource[] }>(`/projects/${encodeURIComponent(projectId)}/grey-sources`, {
+      method: "POST",
+      body: JSON.stringify({ sources, query })
+    }),
+  deleteGreySource: (greyId: string) =>
+    request<{ deleted: boolean; id: string }>(`/grey-sources/${encodeURIComponent(greyId)}`, { method: "DELETE" }),
+  setPrimaryPaper: (projectId: string, paperId: string | null) =>
+    request<{ project_id: string; primary_paper_id: string | null }>(
+      `/projects/${encodeURIComponent(projectId)}/primary-paper`,
+      { method: "PUT", body: JSON.stringify({ paper_id: paperId }) }
+    ),
   getExtractionLibrary: (query = "") =>
     request<{ items: ExtractionLibraryItem[]; total: number }>("/extraction/library", { query: { query } }),
   parseExtractionPdf: (payload: { paper_id: string; pdf_path?: string; parser?: string }) =>
@@ -122,6 +157,8 @@ export const api = {
     max_tokens?: number;
     context_size?: number;
     extraction_mode?: string;
+    context_policy?: "auto" | "whole" | "chunk";
+    allow_context_fallback?: boolean;
     link_concepts?: boolean;
   }) =>
     request<ExtractionRunResponse>("/extraction/extract", {
@@ -137,6 +174,8 @@ export const api = {
     max_tokens?: number;
     context_size?: number;
     extraction_mode?: string;
+    context_policy?: "auto" | "whole" | "chunk";
+    allow_context_fallback?: boolean;
     link_concepts?: boolean;
     resume?: boolean;
   }) =>
@@ -152,7 +191,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  answer: (payload: { question: string; provider?: string; model?: string; limit?: number; paper_ids?: string[]; conversation_context?: Array<{ role: string; content: string }> }) =>
+  answer: (payload: {
+    question: string;
+    provider?: string;
+    model?: string;
+    limit?: number;
+    paper_ids?: string[];
+    priority_paper_ids?: string[];
+    conversation_context?: Array<{ role: string; content: string }>;
+    answer_context_mode?: "kg" | "pdf_if_fits";
+  }) =>
     request<Answer>("/query/answer", { method: "POST", body: JSON.stringify(payload) }),
   verifyAnswer: (answer: Answer, options: { max_sources?: number; max_evidence_per_source?: number } = {}) =>
     request<{ sources: VerificationSource[]; cited_paper_ids: string[]; missing_source_ids: string[] }>("/sources/verify-answer", {
@@ -260,6 +308,12 @@ export const api = {
   getJobs: () => request<{ jobs: Job[] }>("/jobs"),
   runHealthRepair: () => request<{ status: string; actions: Record<string, unknown>[]; after: HealthReport }>("/jobs/health-repair", { method: "POST", body: JSON.stringify({}) }),
   runBenchmarkJob: () => request<{ status: string; report: BenchmarkReport }>("/jobs/benchmark", { method: "POST", body: JSON.stringify({}) }),
+  runBenchmarkSuite: (payload: Record<string, unknown> = {}) =>
+    request<{ status: string; report: BenchmarkReport }>("/jobs/benchmark-suite", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  getBenchmarkSuiteLatest: () => request<{ status: string; report: Partial<BenchmarkReport> }>("/quality/benchmark-suite/latest"),
   runGraphRebuild: () => request<{ status: string; result: Record<string, unknown> }>("/jobs/graph-rebuild", { method: "POST" }),
   runEvalJob: (provider: string, model?: string) =>
     request<{ status: string; report: Record<string, unknown> }>("/jobs/eval", { method: "POST", body: JSON.stringify({ provider, model }) })

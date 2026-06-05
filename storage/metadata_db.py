@@ -230,6 +230,18 @@ class MetadataDB:
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        self._add_missing_columns(
+            "extraction_quality",
+            {
+                "provider": "TEXT",
+                "context_policy": "TEXT",
+                "whole_context_used": "BOOLEAN DEFAULT false",
+                "chunk_count": "INTEGER",
+                "estimated_prompt_tokens": "INTEGER",
+                "context_margin_tokens": "INTEGER",
+                "context_fallback_reason": "TEXT",
+            },
+        )
 
         self._execute("""
             CREATE TABLE IF NOT EXISTS entity_review_queue (
@@ -339,6 +351,24 @@ class MetadataDB:
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Grey (web) sources from deep research. Deliberately kept OUT of the
+        # knowledge graph: project-scoped supplementary context only.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS grey_sources (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL,
+                query TEXT,
+                url VARCHAR NOT NULL,
+                title VARCHAR,
+                summary TEXT,
+                raw_excerpt TEXT,
+                injection_flags JSON,
+                status VARCHAR DEFAULT 'saved',
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute("CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)")
 
         self._execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_batch_items_status ON batch_job_items(job_id, status)")
@@ -829,6 +859,13 @@ class MetadataDB:
         call_2_tokens_used: int | None = None,
         duration_seconds: float | None = None,
         model: str | None = None,
+        provider: str | None = None,
+        context_policy: str | None = None,
+        whole_context_used: bool | None = None,
+        chunk_count: int | None = None,
+        estimated_prompt_tokens: int | None = None,
+        context_margin_tokens: int | None = None,
+        context_fallback_reason: str | None = None,
     ) -> None:
         """
         Persist quality telemetry for one extraction run.
@@ -841,9 +878,12 @@ class MetadataDB:
             (
                 paper_id, concept_count, method_count, claim_count, has_formulas,
                 auto_detected_concepts, parse_quality, call_1_tokens_used,
-                call_2_tokens_used, duration_seconds, model, timestamp
+                call_2_tokens_used, duration_seconds, model, provider,
+                context_policy, whole_context_used, chunk_count,
+                estimated_prompt_tokens, context_margin_tokens,
+                context_fallback_reason, timestamp
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             paper_id,
             int(concept_count),
@@ -856,6 +896,13 @@ class MetadataDB:
             call_2_tokens_used,
             duration_seconds,
             model,
+            provider,
+            context_policy,
+            bool(whole_context_used) if whole_context_used is not None else False,
+            chunk_count,
+            estimated_prompt_tokens,
+            context_margin_tokens,
+            context_fallback_reason,
             datetime.now(),
         ])
 
@@ -1248,6 +1295,72 @@ class MetadataDB:
         self._execute("DELETE FROM note_citations WHERE note_id = ?", [note_id])
         self._execute("DELETE FROM notes WHERE id = ?", [note_id])
         return True
+
+    def add_grey_source(self, project_id: str, source: dict[str, Any]) -> dict[str, Any]:
+        """Persist a grey (web) source for a project. Never added to the KG."""
+        grey_id = str(source.get("id") or f"grey_{uuid.uuid4().hex}")
+        now = datetime.now()
+        flags = source.get("injection_flags") or []
+        self._execute("""
+            INSERT INTO grey_sources
+            (id, project_id, query, url, title, summary, raw_excerpt, injection_flags, status, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                query = EXCLUDED.query,
+                url = EXCLUDED.url,
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                raw_excerpt = EXCLUDED.raw_excerpt,
+                injection_flags = EXCLUDED.injection_flags,
+                status = EXCLUDED.status
+        """, [
+            grey_id,
+            str(project_id),
+            source.get("query"),
+            str(source.get("url") or ""),
+            source.get("title"),
+            source.get("summary"),
+            source.get("raw_excerpt"),
+            json.dumps(flags),
+            str(source.get("status") or "saved"),
+            now,
+        ])
+        return self.get_grey_source(grey_id) or {"id": grey_id}
+
+    def get_grey_source(self, grey_id: str) -> dict[str, Any] | None:
+        rows = self._execute("SELECT * FROM grey_sources WHERE id = ?", [grey_id]).fetchall()
+        if not rows:
+            return None
+        cols = [desc[0] for desc in self.conn.description]
+        return self._decode_grey_source(dict(zip(cols, rows[0])))
+
+    def list_grey_sources(self, project_id: str, limit: int = 500) -> list[dict[str, Any]]:
+        rows = self._execute("""
+            SELECT * FROM grey_sources
+            WHERE project_id = ?
+            ORDER BY created_timestamp DESC
+            LIMIT ?
+        """, [str(project_id), limit]).fetchall()
+        cols = [desc[0] for desc in self.conn.description]
+        return [self._decode_grey_source(dict(zip(cols, row))) for row in rows]
+
+    def delete_grey_source(self, grey_id: str) -> bool:
+        if self.get_grey_source(grey_id) is None:
+            return False
+        self._execute("DELETE FROM grey_sources WHERE id = ?", [grey_id])
+        return True
+
+    @staticmethod
+    def _decode_grey_source(row: dict[str, Any]) -> dict[str, Any]:
+        flags = row.get("injection_flags")
+        if isinstance(flags, str):
+            try:
+                row["injection_flags"] = json.loads(flags)
+            except (ValueError, TypeError):
+                row["injection_flags"] = []
+        elif flags is None:
+            row["injection_flags"] = []
+        return row
 
     def add_note_citation(self, note_id: str, citation: dict[str, Any]) -> dict[str, Any]:
         citation_id = str(citation.get("id") or self._stable_note_citation_id(note_id, citation))

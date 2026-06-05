@@ -56,6 +56,13 @@ Ein System das:
 | **OpenAlex API** | Konzept-Taxonomie, Author-Graph | Kostenlos |
 | **Papers with Code API** | Paper â†’ GitHub-Code-Links | Kostenlos |
 | **Unpaywall API** | Open-Access-Version von Paywalled Papern | Kostenlos |
+| **Crossref API** | DOI-Metadaten alle Faecher (Recht/Wirtschaft), Referenz-Matching | Kostenlos |
+| **Europe PMC API** | Medizin/Biologie, deckt PubMed/PMC ab, OA-Volltext | Kostenlos |
+| **CORE API** | 260M+ Open-Access-Volltexte, faecheruebergreifend | Kostenlos (Key noetig) |
+| **DOAJ API** | Open-Access-Journals inkl. Recht/Wirtschaft/Geisteswiss. | Kostenlos |
+| **bioRxiv/medRxiv** | Preprints Medizin/Biologie (Suche via Europe PMC) | Kostenlos |
+
+> Umsetzungsstand (2026-06-05): Crossref, Europe PMC, CORE, DOAJ und bioRxiv/medRxiv sind als Harvester-Clients implementiert und im Import-Tab waehlbar; Unpaywall ist im Download-Pfad verdrahtet. Zusaetzlich: Referenz-Erkennung hochgeladener PDFs (Crossref-Matching), KI-Kontext-Vorschlaege (`query/discovery.py`), PDF-Priorisierung als Hauptquelle, und eine sichere Web-Deep-Research als projektgebundene "graue Quelle" (`research/`, `query/web_research.py`) mit Prompt-Injection-Haertung, die NICHT in den KG aufgenommen wird. Details in `MEMORY.md`.
 
 ### Ontologie / Normalisierung
 | Komponente | Tool |

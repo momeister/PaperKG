@@ -40,6 +40,56 @@ harvester:
     timeout_seconds: 30
     token: null
 
+  # Crossref API (no key; supplying a contact mail joins the "polite pool")
+  crossref:
+    base_url: "https://api.crossref.org"
+    mailto_env: "CROSSREF_MAILTO"  # falls back to the Unpaywall email
+    requests_per_second: 5.0
+    timeout_seconds: 30
+
+  # Europe PMC (biomedical; no key). Also backs bioRxiv/medRxiv preprint search.
+  europepmc:
+    base_url: "https://www.ebi.ac.uk/europepmc/webservices/rest"
+    requests_per_second: 5.0
+    timeout_seconds: 30
+
+  # CORE v3 (260M+ open-access full texts; requires a free API key)
+  core:
+    base_url: "https://api.core.ac.uk/v3"
+    api_key_env: "CORE_API_KEY"
+    requests_per_second: 1.0
+    timeout_seconds: 45
+
+  # DOAJ (open-access journals across all disciplines; no key)
+  doaj:
+    base_url: "https://doaj.org/api/v2"
+    requests_per_second: 2.0
+    timeout_seconds: 30
+
+  # bioRxiv/medRxiv native API (DOI/recent-preprint resolution; no key)
+  biorxiv:
+    base_url: "https://api.biorxiv.org"
+    requests_per_second: 2.0
+    timeout_seconds: 30
+
+# Deep research / grey (web) sources. Used only on explicit request; results are
+# project-scoped supplementary context and are never written to the knowledge graph.
+research:
+  default_provider: "duckduckgo"  # duckduckgo | searxng | tavily | brave
+  timeout_seconds: 30
+  # Optional domain allow/block lists applied to every web result.
+  allowed_domains: []
+  blocked_domains: []
+  providers:
+    duckduckgo: {}
+    searxng:
+      # Self-hosted metasearch (max privacy). Set base_url or env SEARXNG_BASE_URL.
+      base_url: null
+    tavily:
+      api_key_env: "TAVILY_API_KEY"
+    brave:
+      api_key_env: "BRAVE_API_KEY"
+
 storage:
   # PDF Storage
   pdf_base_dir: "data/pdfs"

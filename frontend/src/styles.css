@@ -3922,3 +3922,79 @@ button.data-row {
     min-width: 720px;
   }
 }
+
+/* Import upgrade: sources, candidates, grey sources */
+.muted {
+  color: var(--text-muted, #8a93a6);
+  font-size: 0.85rem;
+  word-break: break-word;
+}
+
+.source-groups {
+  gap: 0.75rem;
+}
+
+.source-group-title {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8a93a6);
+  margin-bottom: 0.35rem;
+}
+
+.source-note {
+  font-style: normal;
+  color: var(--text-muted, #8a93a6);
+  font-size: 0.75rem;
+}
+
+.uploaded-row,
+.grey-source-card,
+.candidate-list {
+  border: 1px solid var(--border, #2a3142);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+}
+
+.uploaded-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.candidate-card {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.candidate-card.candidate-selected {
+  border-color: var(--accent, #4c8bf5);
+  background: rgba(76, 139, 245, 0.08);
+}
+
+.candidate-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.grey-research-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+  padding: 0.6rem;
+  border: 1px dashed var(--border, #2a3142);
+  border-radius: 10px;
+}
+
+.grey-source-card a {
+  display: inline-block;
+  margin-top: 0.35rem;
+}

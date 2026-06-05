@@ -12,6 +12,12 @@ from typing import Any, Callable
 
 from extraction.ontology import stable_canonical_id
 from extraction.text_normalization import normalize_key, normalize_scientific_text
+from query.context_budget import (
+    ContextBudgetDecision,
+    decide_whole_context,
+    effective_generation_limits,
+    normalize_context_policy,
+)
 from query.llm_router import LLMRouter
 
 logger = logging.getLogger(__name__)
@@ -1088,12 +1094,53 @@ Paper text: {paper_text}"""
         semantic_text = self._build_extraction_text(extraction_text, max_chars=30000)
         base_overrides = dict(overrides or {})
         extraction_mode = self._normalize_extraction_mode(base_overrides.pop("extraction_mode", None))
+        context_policy = normalize_context_policy(base_overrides.pop("context_policy", None))
+        allow_context_fallback = self._coerce_bool(base_overrides.pop("allow_context_fallback", False))
         base_overrides["context_size"] = self._effective_context_size(provider, base_overrides)
 
-        chunks = self._build_extraction_chunks(
+        fallback_chunks = self._build_extraction_chunks(
             extraction_text,
             context_size=int(base_overrides["context_size"]),
         )
+        structural_max_tokens = max(5000, min(int(base_overrides.get("max_tokens") or 10000), 12000))
+        context_size, max_tokens, resolved_model = effective_generation_limits(
+            self.llm,
+            provider,
+            {**base_overrides, "max_tokens": structural_max_tokens},
+        )
+        context_decision = decide_whole_context(
+            text=extraction_text,
+            context_policy=context_policy,
+            context_size=context_size,
+            max_tokens=max_tokens,
+            prompt_overhead_tokens=5200,
+            output_reserve_tokens=max_tokens,
+            chunk_count_if_fallback=len(fallback_chunks),
+            provider=provider,
+            model=resolved_model,
+        )
+        if (
+            context_policy == "whole"
+            and not context_decision.whole_context_used
+            and not allow_context_fallback
+        ):
+            return self._context_budget_failure_result(
+                paper_id=paper_id,
+                source_text=source_text,
+                extraction_text=extraction_text,
+                scan=scan,
+                extraction_mode=extraction_mode,
+                context_decision=context_decision,
+                provider=provider,
+                overrides=base_overrides,
+                started=started,
+            )
+
+        chunks = [extraction_text] if context_decision.whole_context_used else fallback_chunks
+        if not context_decision.whole_context_used and context_decision.chunk_count != len(chunks):
+            context_decision = ContextBudgetDecision(
+                **{**context_decision.to_dict(), "chunk_count": len(chunks)}
+            )
         structural_calls = [
             self._run_structural_call(
                 chunk,
@@ -1334,6 +1381,10 @@ Paper text: {paper_text}"""
             "blocking_errors": metadata_validation["blocking_errors"],
             "chunk_count": len(chunks),
             "extraction_mode": extraction_mode,
+            "context_diagnostics": context_decision.to_dict(),
+            "context_policy": context_decision.context_policy,
+            "whole_context_used": context_decision.whole_context_used,
+            "context_margin_tokens": context_decision.context_margin_tokens,
             "call_1_parse_quality": structural_parse_quality,
             "call_2_parse_quality": semantic.parse_quality,
             "concepts_retry_parse_quality": concepts_retry.parse_quality if concepts_retry else None,
@@ -1389,7 +1440,123 @@ Paper text: {paper_text}"""
                 "claims_pass_parse_quality": result_payload["claims_pass_parse_quality"],
                 "fatal_llm_error": bool(fatal_failure_reason),
                 "failure_reason": fatal_failure_reason,
+                "context_diagnostics": context_decision.to_dict(),
                 "calls": result_payload["call_diagnostics"],
+            },
+            raw_response=json.dumps(result_payload, indent=2, ensure_ascii=False),
+            extraction_mode=extraction_mode,
+        )
+
+    def _context_budget_failure_result(
+        self,
+        *,
+        paper_id: str,
+        source_text: str,
+        extraction_text: str,
+        scan: DeterministicScanResult,
+        extraction_mode: str,
+        context_decision: ContextBudgetDecision,
+        provider: str | None,
+        overrides: dict[str, Any],
+        started: float,
+    ) -> ExtractionResult:
+        failure_reason = (
+            "Whole-paper context does not fit the configured model context. "
+            "Use context_policy='auto' or 'chunk', increase context_size, reduce max_tokens, "
+            "or pass allow_context_fallback=true."
+        )
+        detected_paper_type = self._detect_paper_type(extraction_text)
+        temporal_coverage: dict[str, Any] = {}
+        if scan.paper_year:
+            temporal_coverage["paper_year"] = scan.paper_year
+        paper_type = self._resolve_paper_type(None, detected_paper_type, extraction_text)
+        paper_node = self._build_paper_node(
+            paper_id=paper_id,
+            paper_text=source_text,
+            paper_type=paper_type,
+            semantic_paper_node={},
+            temporal_coverage=temporal_coverage,
+            language_detected="en",
+        )
+        result_paper_id = str(paper_node.get("paper_id") or paper_id)
+        duration = time.perf_counter() - started
+        warnings = [
+            "Whole-paper context budget exceeded before the LLM call.",
+            f"Context margin tokens: {context_decision.context_margin_tokens}",
+        ]
+        result_payload = {
+            "paper_type": paper_type,
+            "paper_node": paper_node,
+            "concepts": [],
+            "methods": [],
+            "concept_candidates": scan.concepts,
+            "method_candidates": scan.methods,
+            "relations": [],
+            "claims": [],
+            "cross_domain_hints": [],
+            "terminology_conflicts": [],
+            "temporal_coverage": temporal_coverage,
+            "mathematical_content": {"has_formulas": False, "formula_types": []},
+            "language_detected": "en",
+            "extraction_parse_quality": "failed",
+            "auto_detected_concepts": len(scan.concepts),
+            "deterministic_candidate_count": len(scan.concepts) + len(scan.methods),
+            "quality_warnings": warnings,
+            "metadata_status": "valid",
+            "blocking_errors": [],
+            "chunk_count": context_decision.chunk_count,
+            "extraction_mode": extraction_mode,
+            "context_diagnostics": context_decision.to_dict(),
+            "context_policy": context_decision.context_policy,
+            "whole_context_used": context_decision.whole_context_used,
+            "context_margin_tokens": context_decision.context_margin_tokens,
+            "call_1_parse_quality": "failed",
+            "call_2_parse_quality": "skipped",
+            "concepts_retry_parse_quality": None,
+            "methods_retry_parse_quality": None,
+            "semantic_retry_parse_quality": None,
+            "claims_pass_parse_quality": None,
+            "fatal_llm_error": True,
+            "failure_reason": failure_reason,
+            "call_diagnostics": [],
+        }
+        self._write_quality_record(
+            paper_id=result_paper_id,
+            payload=result_payload,
+            duration_seconds=duration,
+            provider=provider,
+            overrides=overrides,
+            call_1_tokens_used=0,
+            call_2_tokens_used=0,
+        )
+        return ExtractionResult(
+            paper_id=result_paper_id,
+            paper_type=paper_type,
+            paper_node=paper_node,
+            concepts=[],
+            methods=[],
+            concept_candidates=scan.concepts,
+            method_candidates=scan.methods,
+            relations=[],
+            claims=[],
+            cross_domain_hints=[],
+            terminology_conflicts=[],
+            temporal_coverage=temporal_coverage,
+            mathematical_content=result_payload["mathematical_content"],
+            language_detected="en",
+            quality_warnings=warnings,
+            metadata_status="valid",
+            blocking_errors=[],
+            candidate_count=len(scan.concepts) + len(scan.methods),
+            extraction_diagnostics={
+                "chunk_count": context_decision.chunk_count,
+                "parse_quality": "failed",
+                "call_1_parse_quality": "failed",
+                "call_2_parse_quality": "skipped",
+                "fatal_llm_error": True,
+                "failure_reason": failure_reason,
+                "context_diagnostics": context_decision.to_dict(),
+                "calls": [],
             },
             raw_response=json.dumps(result_payload, indent=2, ensure_ascii=False),
             extraction_mode=extraction_mode,
@@ -2688,6 +2855,14 @@ Paper text: {paper_text}"""
     def _normalize_extraction_mode(value: Any) -> str:
         mode = str(value or "quality").strip().lower()
         return mode if mode in {"quality", "quick"} else "quality"
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
 
     @classmethod
     def _accept_concepts(
@@ -4012,6 +4187,7 @@ Paper text: {paper_text}"""
             from storage.metadata_db import MetadataDB
 
             with MetadataDB(self.quality_db_path) as db:
+                context_diagnostics = payload.get("context_diagnostics") if isinstance(payload.get("context_diagnostics"), dict) else {}
                 db.save_extraction_quality(
                     paper_id=paper_id,
                     concept_count=len(payload.get("concepts") or []),
@@ -4024,6 +4200,13 @@ Paper text: {paper_text}"""
                     call_2_tokens_used=call_2_tokens_used,
                     duration_seconds=duration_seconds,
                     model=self._model_name(provider, overrides),
+                    provider=provider,
+                    context_policy=str(context_diagnostics.get("context_policy") or payload.get("context_policy") or ""),
+                    whole_context_used=bool(context_diagnostics.get("whole_context_used") or payload.get("whole_context_used")),
+                    chunk_count=self._optional_int(context_diagnostics.get("chunk_count") or payload.get("chunk_count")),
+                    estimated_prompt_tokens=self._optional_int(context_diagnostics.get("estimated_prompt_tokens")),
+                    context_margin_tokens=self._optional_int(context_diagnostics.get("context_margin_tokens") or payload.get("context_margin_tokens")),
+                    context_fallback_reason=str(context_diagnostics.get("fallback_reason") or ""),
                 )
         except Exception:
             logger.exception("Failed to persist extraction quality for paper_id=%s", paper_id)
@@ -4036,3 +4219,10 @@ Paper text: {paper_text}"""
             return str(self.llm.provider_settings(provider).model)
         except Exception:
             return "unknown"
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None and value != "" else None
+        except (TypeError, ValueError):
+            return None

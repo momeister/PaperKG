@@ -380,6 +380,60 @@ def test_grounded_responder_uses_evidence_and_skips_empty_answers() -> None:
         assert len(fake_llm.calls) == 1
 
 
+def test_grounded_responder_can_answer_from_pdf_context_if_it_fits(monkeypatch, tmp_path) -> None:
+    from query import grounded_responder as responder_module
+
+    class PdfScopedRetriever:
+        def __init__(self) -> None:
+            self.search_called = False
+
+        def paper_detail(self, paper_id: str) -> dict:
+            return {
+                "source": {
+                    "paper_id": paper_id,
+                    "title": "Clinical AI Decision Support",
+                    "year": 2025,
+                    "url": "https://example.test/p1",
+                }
+            }
+
+        def search(self, *args, **kwargs) -> list:
+            self.search_called = True
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {"valid_citation_count": 1}, "sources": [{"paper_id": "p1", "status": "verified"}]}
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    retriever = PdfScopedRetriever()
+    fake_llm = FakeLLMRouter()
+    monkeypatch.setattr(responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path)
+    monkeypatch.setattr(
+        responder_module,
+        "parse_pdf_text",
+        lambda *args, **kwargs: "Clinical AI reduces diagnostic errors in primary care.",
+    )
+    monkeypatch.setattr(responder_module, "verify_answer_sources", lambda *args, **kwargs: VerificationResult())
+
+    answer = GroundedResponder(retriever=retriever, llm_router=fake_llm).answer(
+        "What does the clinical AI paper report?",
+        paper_ids=["p1"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+    assert answer.no_answer is False
+    assert answer.sources[0].paper_id == "p1"
+    assert answer.context_diagnostics["answer_context_mode"] == "pdf_if_fits"
+    assert answer.context_diagnostics["whole_context_used"] is True
+    assert answer.source_verification["summary"]["valid_citation_count"] == 1
+    assert retriever.search_called is False
+    assert "Clinical AI reduces diagnostic errors" in fake_llm.calls[0]["messages"][1]["content"]
+
+
 def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence() -> None:
     with _phase4_fixture() as db_path:
         responder = GroundedResponder(

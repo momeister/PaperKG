@@ -14,6 +14,7 @@ from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
 from query.source_verifier import find_pdf_path, verify_answer_sources
 from quality.benchmark import run_benchmark
+from quality.benchmark_suite import SuiteConfig, latest_suite_report, run_suite
 from quality.kg_health import build_health_report
 
 
@@ -46,6 +47,9 @@ class AnswerRequest(Phase4Request):
     model: str | None = None
     conversation_context: list[dict[str, Any]] = []
     paper_ids: list[str] = Field(default_factory=list)
+    priority_paper_ids: list[str] = Field(default_factory=list)
+    answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
+    pdf_base_dir: str = "data/pdfs"
 
 
 class HypothesisRequest(Phase4Request):
@@ -63,6 +67,19 @@ class VerifyAnswerRequest(Phase4Request):
     parse_pdfs: bool = True
     max_sources: int = Field(default=10, ge=1, le=50)
     max_evidence_per_source: int = Field(default=5, ge=1, le=50)
+
+
+class BenchmarkSuiteRequest(Phase4Request):
+    suite: str = Field(default="core", pattern="^(core|extended)$")
+    provider: str | None = None
+    model: str | None = None
+    context_policy: str = Field(default="auto", pattern="^(auto|whole|chunk)$")
+    compare_context_policies: list[str] = []
+    answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
+    download_missing: bool = False
+    pdf_base_dir: str = "data/pdfs"
+    output_dir: str = "data/eval/benchmarks"
+    isolated_db: bool = True
 
 
 @app.get("/health")
@@ -102,6 +119,9 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         model=request.model,
         conversation_context=request.conversation_context,
         paper_ids=request.paper_ids or None,
+        priority_paper_ids=request.priority_paper_ids or None,
+        answer_context_mode=request.answer_context_mode,
+        pdf_base_dir=request.pdf_base_dir,
     )
     return answer.to_dict()
 
@@ -219,6 +239,33 @@ def quality_benchmark(
         pred_dir=Path(pred_dir) if pred_dir else None,
         allow_embedded_predictions=allow_embedded_predictions,
     )
+
+
+@app.post("/quality/benchmark-suite")
+def quality_benchmark_suite(request: BenchmarkSuiteRequest) -> dict[str, Any]:
+    policies = request.compare_context_policies or [request.context_policy]
+    return run_suite(
+        SuiteConfig(
+            suite=request.suite,
+            provider=request.provider,
+            model=request.model,
+            context_policy=request.context_policy,
+            compare_context_policies=policies,
+            answer_context_mode=request.answer_context_mode,
+            download_missing=request.download_missing,
+            metadata_db_path=request.metadata_db_path,
+            graph_db_path=request.graph_db_path,
+            pdf_base_dir=request.pdf_base_dir,
+            output_dir=Path(request.output_dir),
+            isolated_db=request.isolated_db,
+        )
+    )
+
+
+@app.get("/quality/benchmark-suite/latest")
+def quality_benchmark_suite_latest(output_dir: str = "data/eval/benchmarks") -> dict[str, Any]:
+    report = latest_suite_report(Path(output_dir))
+    return {"status": "ok" if report else "empty", "report": report}
 
 
 def _kg_retriever(metadata_db_path: str, graph_db_path: str) -> KGRetriever:
