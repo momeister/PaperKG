@@ -60,6 +60,8 @@ export type HarvestDownloadResult = {
   title: string;
   status: "downloaded" | "inserted" | "no_pdf" | "failed";
   error?: string;
+  detail?: string | null;
+  landing_url?: string | null;
 };
 
 export type HarvestDownloadResponse = {

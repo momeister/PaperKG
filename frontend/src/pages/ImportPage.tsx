@@ -435,6 +435,21 @@ export function ImportPage() {
   );
 }
 
+function statusLabel(status: string): string {
+  switch (status) {
+    case "downloaded":
+      return "geladen";
+    case "failed":
+      return "fehlgeschlagen";
+    case "no_pdf":
+      return "kein freier Volltext";
+    case "inserted":
+      return "Metadaten";
+    default:
+      return status;
+  }
+}
+
 function DownloadProgress({
   pending,
   data,
@@ -480,8 +495,8 @@ function DownloadProgress({
             {data.attached ? <span className="pill pill-info">dem Projekt zugeordnet</span> : null}
           </div>
           <div className="download-result-list">
-            {data.results.slice(0, 12).map((result) => (
-              <div className="download-result-row" key={result.paper_id}>
+            {data.results.map((result) => (
+              <div className="download-result-row" key={result.paper_id} title={result.detail ?? undefined}>
                 {result.status === "downloaded" ? (
                   <CheckCircle2 size={15} className="ok" />
                 ) : result.status === "failed" ? (
@@ -490,10 +505,21 @@ function DownloadProgress({
                   <Download size={15} className="muted" />
                 )}
                 <span className="download-result-title">{result.title}</span>
-                <span className="muted download-result-status">{result.status}</span>
+                <span className="muted download-result-status">{statusLabel(result.status)}</span>
+                {result.landing_url && result.status !== "downloaded" ? (
+                  <a className="download-result-link" href={result.landing_url} target="_blank" rel="noreferrer">
+                    DOI öffnen
+                  </a>
+                ) : null}
               </div>
             ))}
           </div>
+          {data.results.some((result) => result.status === "no_pdf") ? (
+            <p className="muted download-progress-hint">
+              „Kein freier Volltext" heißt: zu diesem Paper wurde keine frei zugängliche (Open-Access-)PDF gefunden — meist
+              hinter einer Paywall. Über „DOI öffnen" kannst du es ggf. via Bibliothek/Institution abrufen und dann manuell hochladen.
+            </p>
+          ) : null}
           {downloaded ? (
             <div className="button-row">
               <button className="button button-primary" type="button" onClick={onGoToExtraction}>

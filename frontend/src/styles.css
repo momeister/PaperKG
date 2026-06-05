@@ -4081,6 +4081,20 @@ button.data-row {
   flex-direction: column;
   gap: 0.25rem;
   margin-top: 0.3rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.download-result-link {
+  font-size: 0.72rem;
+  white-space: nowrap;
+  color: var(--accent, #4c8bf5);
+}
+
+.download-progress-hint {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .download-result-row {

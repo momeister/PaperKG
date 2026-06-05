@@ -37,6 +37,7 @@ from harvester.unpaywall_client import UnpaywallClient, UnpaywallConfig
 from quality.benchmark import run_benchmark
 from quality.benchmark_suite import SuiteConfig, latest_suite_report, run_suite
 from quality.kg_health import build_health_report
+from quality.pdf_resolver import BenchmarkPdfResolver, _looks_like_pdf
 from quality.phase4_eval import run_eval
 from maintenance.health_repair import repair_health_state
 from parsing.parser_router import ParserRouter, ParserType
@@ -621,8 +622,13 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     attached_ids: list[str] = []
     storage = FileManager(request.pdf_base_dir)
+    resolver = BenchmarkPdfResolver(
+        request.pdf_base_dir,
+        contact_email=_unpaywall_email() or _crossref_mailto(),
+    )
+    download_headers = {"User-Agent": "ScienceKG/harvest (local-development)"}
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, headers=download_headers) as client:
         with MetadataDB(request.metadata_db_path) as db:
             for paper in request.papers:
                 db.insert_paper(paper)
@@ -630,33 +636,66 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
                 canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
                 attached_ids.append(canonical_id)
                 title = str(paper.get("title") or paper.get("id") or canonical_id)
+                doi = paper.get("doi")
                 if not request.download_pdfs:
                     results.append({"paper_id": canonical_id, "title": title, "status": "inserted"})
                     continue
-                pdf_url = paper.get("pdf_url")
-                if not pdf_url and paper.get("doi"):
-                    pdf_url = await _resolve_oa_pdf_url(paper.get("doi"))
-                    if pdf_url:
-                        paper["pdf_url"] = pdf_url
-                if not pdf_url:
-                    results.append({"paper_id": canonical_id, "title": title, "status": "no_pdf"})
-                    continue
-                try:
-                    response = await client.get(str(paper["pdf_url"]))
-                    response.raise_for_status()
-                    saved_path = storage.save_pdf(
-                        canonical_id,
-                        response.content,
-                        version=int(paper.get("version") or 1),
-                        display_name=str(paper.get("title") or canonical_id),
-                        source=str(paper.get("source") or "paper"),
-                    )
+
+                saved_path: str | None = None
+                detail: str | None = None
+
+                # 1) Try a direct PDF URL from the harvest result (validated as a real PDF).
+                direct_url = paper.get("pdf_url")
+                if direct_url:
+                    try:
+                        response = await client.get(str(direct_url))
+                        response.raise_for_status()
+                        if _looks_like_pdf(response.content, response.headers.get("content-type", "")):
+                            saved_path = str(storage.save_pdf(
+                                canonical_id,
+                                response.content,
+                                version=int(paper.get("version") or 1),
+                                display_name=str(paper.get("title") or canonical_id),
+                                source=str(paper.get("source") or "paper"),
+                            ))
+                        else:
+                            detail = "Direkt-Link lieferte kein PDF"
+                    except Exception as exc:
+                        detail = f"Direkt-Link fehlgeschlagen: {exc}"
+
+                # 2) Fall back to open-access discovery across S2/OpenAlex/Unpaywall/Crossref/EuropePMC/CORE.
+                if not saved_path and (doi or title):
+                    try:
+                        resolution = await asyncio.to_thread(
+                            resolver.resolve,
+                            paper_id=canonical_id,
+                            title=title,
+                            doi=str(doi) if doi else None,
+                            download_missing=True,
+                        )
+                        if resolution.pdf_path:
+                            saved_path = resolution.pdf_path
+                        elif resolution.warnings:
+                            detail = "; ".join(resolution.warnings[:2])
+                    except Exception as exc:
+                        detail = f"OA-Suche fehlgeschlagen: {exc}"
+
+                if saved_path:
                     db.update_paper_metadata_if_missing(canonical_id, pdf_path=str(saved_path))
                     downloaded += 1
                     results.append({"paper_id": canonical_id, "title": title, "status": "downloaded"})
-                except Exception as exc:
-                    failed_downloads.append(f"{title}: {exc}")
-                    results.append({"paper_id": canonical_id, "title": title, "status": "failed", "error": str(exc)})
+                else:
+                    landing_url = f"https://doi.org/{str(doi).replace('https://doi.org/', '').strip()}" if doi else None
+                    status = "failed" if detail and "fehlgeschlagen" in detail else "no_pdf"
+                    if status == "failed":
+                        failed_downloads.append(f"{title}: {detail}")
+                    results.append({
+                        "paper_id": canonical_id,
+                        "title": title,
+                        "status": status,
+                        "detail": detail,
+                        "landing_url": landing_url,
+                    })
 
     project_paper_ids = _attach_papers_to_project(request.project_id, attached_ids, request.projects_path)
     return {
