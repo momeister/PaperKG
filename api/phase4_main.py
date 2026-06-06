@@ -16,6 +16,7 @@ from query.source_verifier import find_pdf_path, verify_answer_sources
 from quality.benchmark import run_benchmark
 from quality.benchmark_suite import SuiteConfig, latest_suite_report, run_suite
 from quality.kg_health import build_health_report
+from storage.metadata_db import MetadataDB
 
 
 app = FastAPI(
@@ -197,6 +198,24 @@ def paper_pdf(
     metadata_db_path: str = "data/metadata.duckdb",
     graph_db_path: str = "data/graphs/global_kg",
 ):
+    resolved_base = Path(pdf_base_dir).resolve()
+
+    # Try DuckDB-stored path first (reliable for uploaded papers)
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            record = db.get_paper(paper_id)
+            if record and record.get("pdf_url"):
+                candidate = Path(record["pdf_url"]).resolve()
+                if candidate.is_file() and resolved_base in candidate.parents:
+                    return FileResponse(
+                        path=str(candidate),
+                        media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{candidate.name}"'},
+                    )
+    except Exception:
+        pass
+
+    # Fall back to filesystem scan (handles papers imported before pdf_url was stored)
     if not title:
         detail = _kg_retriever(metadata_db_path, graph_db_path).paper_detail(paper_id)
         title = str((detail or {}).get("source", {}).get("title") or "")
@@ -205,13 +224,12 @@ def paper_pdf(
         raise HTTPException(status_code=404, detail=f"Local PDF not found for: {paper_id}")
 
     resolved_pdf = Path(pdf_path).resolve()
-    resolved_base = Path(pdf_base_dir).resolve()
     if resolved_base not in [resolved_pdf, *resolved_pdf.parents]:
         raise HTTPException(status_code=400, detail="Resolved PDF path is outside the configured PDF directory.")
     return FileResponse(
         path=str(resolved_pdf),
         media_type="application/pdf",
-        filename=resolved_pdf.name,
+        headers={"Content-Disposition": f'inline; filename="{resolved_pdf.name}"'},
     )
 
 

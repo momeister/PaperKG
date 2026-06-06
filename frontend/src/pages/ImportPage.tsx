@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, CheckCircle2, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, XCircle } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -43,6 +43,14 @@ const sourceGroups: { group: string; options: { id: string; label: string; note?
 
 const ALL_PAPERS_SCOPES = new Set(["", "__all_papers__"]);
 
+type TopicGroup = {
+  topic: string;
+  isMain: boolean;
+  findings: DeepResearchFinding[];
+  collapsed: boolean;
+  pending: boolean;
+};
+
 function paperKey(paper: Paper): string {
   return paper.id || `${paper.source}:${paper.source_id}`;
 }
@@ -63,7 +71,8 @@ export function ImportPage() {
   const [references, setReferences] = useState<Record<string, ReferenceCandidate[]>>({});
   const [topicCandidates, setTopicCandidates] = useState<DiscoveryCandidate[]>([]);
   const [paperCandidates, setPaperCandidates] = useState<Record<string, DiscoveryCandidate[]>>({});
-  const [findings, setFindings] = useState<DeepResearchFinding[]>([]);
+  const [topicGroups, setTopicGroups] = useState<TopicGroup[]>([]);
+  const [includeRelatedTopics, setIncludeRelatedTopics] = useState(false);
   const [researchQuestion, setResearchQuestion] = useState("");
   const [autoDownload, setAutoDownload] = useState(false);
   const [primaryPaperId, setPrimaryPaperId] = useState<string | null>(null);
@@ -127,8 +136,42 @@ export function ImportPage() {
     }
   });
   const research = useMutation({
-    mutationFn: (question: string) => api.deepResearch({ question, provider, max_sources: 6 }),
-    onSuccess: (payload) => setFindings(payload.findings)
+    mutationFn: ({ question }: { question: string; withRelated: boolean }) =>
+      api.deepResearch({ question, provider, max_sources: 12 }),
+    onSuccess: async (payload, { question, withRelated }) => {
+      const mainGroup: TopicGroup = {
+        topic: question,
+        isMain: true,
+        findings: payload.findings,
+        collapsed: false,
+        pending: false,
+      };
+      const relTopics = (payload.related_topics ?? []).slice(0, 5);
+      if (withRelated && relTopics.length > 0) {
+        const subGroups: TopicGroup[] = relTopics.map((t) => ({
+          topic: t,
+          isMain: false,
+          findings: [],
+          collapsed: true,
+          pending: true,
+        }));
+        setTopicGroups([mainGroup, ...subGroups]);
+        for (const subTopic of relTopics) {
+          try {
+            const subPayload = await api.deepResearch({ question: subTopic, provider, max_sources: 8 });
+            setTopicGroups((current) =>
+              current.map((g) => (g.topic === subTopic ? { ...g, findings: subPayload.findings, pending: false } : g))
+            );
+          } catch {
+            setTopicGroups((current) =>
+              current.map((g) => (g.topic === subTopic ? { ...g, pending: false } : g))
+            );
+          }
+        }
+      } else {
+        setTopicGroups([mainGroup]);
+      }
+    }
   });
   const saveGrey = useMutation({
     mutationFn: (finding: DeepResearchFinding) =>
@@ -140,6 +183,8 @@ export function ImportPage() {
             title: finding.title,
             summary: finding.summary,
             raw_excerpt: finding.raw_excerpt,
+            full_text: finding.full_text,
+            evidence: finding.evidence,
             injection_flags: finding.injection_flags
           }
         ],
@@ -161,6 +206,12 @@ export function ImportPage() {
 
   function toggleSource(source: string) {
     setSources((current) => (current.includes(source) ? current.filter((item) => item !== source) : [...current, source]));
+  }
+
+  function toggleGroup(topic: string) {
+    setTopicGroups((current) =>
+      current.map((g) => (g.topic === topic ? { ...g, collapsed: !g.collapsed } : g))
+    );
   }
 
   function onFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -350,6 +401,14 @@ export function ImportPage() {
           Durchsucht das Web, behandelt Inhalte als nicht vertrauenswürdige Daten (Prompt-Injection-Schutz) und speichert
           bestätigte Treffer nur als projektgebundene Zusatzinfo — nicht im großen Knowledge Graph.
         </p>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={includeRelatedTopics}
+            onChange={(event) => setIncludeRelatedTopics(event.target.checked)}
+          />
+          <span>KI-Themenvorschläge einbeziehen (erweitert die Suche auf verwandte Themen)</span>
+        </label>
         <div className="button-row">
           <input
             value={researchQuestion}
@@ -360,8 +419,8 @@ export function ImportPage() {
           <button
             className="button button-primary"
             type="button"
-            disabled={research.isPending || !researchQuestion.trim()}
-            onClick={() => research.mutate(researchQuestion.trim())}
+            disabled={research.isPending || topicGroups.some((g) => g.pending) || !researchQuestion.trim()}
+            onClick={() => research.mutate({ question: researchQuestion.trim(), withRelated: includeRelatedTopics })}
           >
             <Globe size={16} />
             <span>Recherchieren</span>
@@ -370,29 +429,60 @@ export function ImportPage() {
         {!isRealProject ? (
           <div className="warning-row">Wähle oben ein echtes Projekt, um graue Quellen zu speichern.</div>
         ) : null}
-        {findings.length ? (
-          <div className="stack">
-            {findings.map((finding) => (
-              <article key={finding.url} className="grey-source-card">
-                <div className="uploaded-row-head">
-                  <strong>{finding.title}</strong>
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={!isRealProject || saveGrey.isPending || savedFindingUrls.includes(finding.url)}
-                    onClick={() => saveGrey.mutate(finding)}
-                  >
-                    {savedFindingUrls.includes(finding.url) ? "Gespeichert" : "Zum Projekt"}
-                  </button>
-                </div>
-                {finding.quarantined ? (
-                  <div className="warning-row">⚠ Mögliche Prompt-Injection erkannt &amp; ignoriert: {finding.injection_flags.join(", ")}</div>
+        {topicGroups.length ? (
+          <div className="topic-groups">
+            {topicGroups.map((group) => (
+              <div key={group.topic} className="topic-group">
+                <button
+                  type="button"
+                  className={`topic-group-header ${group.isMain ? "topic-group-header--main" : ""}`}
+                  onClick={() => !group.isMain && toggleGroup(group.topic)}
+                >
+                  {!group.isMain && (
+                    <ChevronDown size={14} className={group.collapsed ? "topic-group-chevron--collapsed" : "topic-group-chevron"} />
+                  )}
+                  <span className="topic-group-label">
+                    {group.isMain ? group.topic : `Verwandtes Thema: ${group.topic}`}
+                  </span>
+                  <span className="topic-group-count">
+                    {group.pending ? "Suche läuft…" : `${group.findings.length} Treffer`}
+                  </span>
+                </button>
+                {!group.collapsed ? (
+                  <div className="topic-group-findings">
+                    {group.pending ? (
+                      <div className="muted" style={{ padding: "0.5rem 0" }}>Suche läuft…</div>
+                    ) : group.findings.length ? (
+                      <div className="stack">
+                        {group.findings.map((finding) => (
+                          <article key={finding.url} className="grey-source-card">
+                            <div className="uploaded-row-head">
+                              <strong>{finding.title}</strong>
+                              <button
+                                className="button"
+                                type="button"
+                                disabled={!isRealProject || saveGrey.isPending || savedFindingUrls.includes(finding.url)}
+                                onClick={() => saveGrey.mutate(finding)}
+                              >
+                                {savedFindingUrls.includes(finding.url) ? "Gespeichert" : "Zum Projekt"}
+                              </button>
+                            </div>
+                            {finding.quarantined ? (
+                              <div className="warning-row">⚠ Mögliche Prompt-Injection erkannt &amp; ignoriert: {finding.injection_flags.join(", ")}</div>
+                            ) : null}
+                            <p>{finding.summary}</p>
+                            <a className="muted" href={finding.url} target="_blank" rel="noreferrer">
+                              {finding.url}
+                            </a>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="muted" style={{ padding: "0.5rem 0" }}>Keine Treffer</div>
+                    )}
+                  </div>
                 ) : null}
-                <p>{finding.summary}</p>
-                <a className="muted" href={finding.url} target="_blank" rel="noreferrer">
-                  {finding.url}
-                </a>
-              </article>
+              </div>
             ))}
           </div>
         ) : null}

@@ -781,14 +781,16 @@ export function WorkspacePage() {
               <option value="20">20</option>
               <option value="25">25</option>
             </select>
-            <label
+            <button
+              type="button"
               className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
+              onClick={() => setUseInternet((v) => !v)}
+              disabled={!isRealProject}
               title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
             >
-              <input type="checkbox" checked={useInternet} onChange={(event) => setUseInternet(event.target.checked)} disabled={!isRealProject} />
-              <Globe size={15} />
-              <span>Internet</span>
-            </label>
+              <Globe size={14} />
+              <span>Mit Web</span>
+            </button>
             <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
               <Send size={18} />
             </button>
