@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ExternalLink, Globe, PanelRightClose, Quote } from "lucide-react";
+import { ExternalLink, Globe, Monitor, PanelRightClose, Quote } from "lucide-react";
 
 import { evidenceColorVars } from "../citationColors";
 import type { GreySource } from "../types";
@@ -24,9 +24,15 @@ type GreySourceViewProps = {
 export function GreySourceView({ source, onCollapse, onInsert, onInsertPreview, onInsertPreviewClear }: GreySourceViewProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [selection, setSelection] = useState("");
+  const [viewMode, setViewMode] = useState<"website" | "fulltext">("fulltext");
   const evidence = useMemo(() => (source.evidence ?? []).filter((quote) => quote && quote.trim()), [source.evidence]);
   const fullText = source.full_text || source.raw_excerpt || source.summary || "";
   const segments = useMemo(() => highlightSegments(fullText, evidence), [fullText, evidence]);
+
+  useEffect(() => {
+    setViewMode("fulltext");
+    setSelection("");
+  }, [source.id]);
 
   function captureSelection() {
     const text = window.getSelection()?.toString().trim() ?? "";
@@ -46,7 +52,25 @@ export function GreySourceView({ source, onCollapse, onInsert, onInsertPreview, 
           <strong title={source.title || source.url}>{source.title || source.url}</strong>
         </div>
         <div className="button-row">
-          <a className="icon-button" href={source.url} target="_blank" rel="noreferrer" aria-label="Website öffnen" title="Website in neuem Tab öffnen">
+          <button
+            className={`icon-button ${viewMode === "website" ? "icon-button--active" : ""}`}
+            type="button"
+            title="Website-Ansicht"
+            aria-label="Website anzeigen"
+            onClick={() => setViewMode("website")}
+          >
+            <Monitor size={16} />
+          </button>
+          <button
+            className={`icon-button ${viewMode === "fulltext" ? "icon-button--active" : ""}`}
+            type="button"
+            title="Volltext-Ansicht"
+            aria-label="Volltext anzeigen"
+            onClick={() => setViewMode("fulltext")}
+          >
+            <Globe size={16} />
+          </button>
+          <a className="icon-button" href={source.url} target="_blank" rel="noreferrer" aria-label="Website oeffnen" title="Website in neuem Tab oeffnen">
             <ExternalLink size={16} />
           </a>
           {onCollapse ? (
@@ -63,66 +87,83 @@ export function GreySourceView({ source, onCollapse, onInsert, onInsertPreview, 
       </a>
 
       {source.injection_flags?.length ? (
-        <div className="warning-row">⚠ Prompt-Injection-Flags ignoriert: {source.injection_flags.join(", ")}</div>
+        <div className="warning-row">Prompt-Injection-Flags ignoriert: {source.injection_flags.join(", ")}</div>
       ) : null}
 
-      {source.summary ? (
-        <div className="grey-view-summary">
-          <span className="grey-view-label">Zusammenfassung</span>
-          <p>{source.summary}</p>
+      {viewMode === "website" ? (
+        <div className="grey-view-iframe-wrap">
+          <div className="grey-view-iframe-hint">
+            Falls die Seite leer erscheint, blockiert der Anbieter iframe-Einbettungen &mdash; wechsle zum Volltext-Tab.
+          </div>
+          <iframe
+            key={source.url}
+            src={source.url}
+            title={source.title || source.url}
+            className="grey-view-iframe"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock"
+          />
         </div>
-      ) : null}
-
-      {evidence.length ? (
-        <div className="grey-view-evidence">
-          <span className="grey-view-label">Belegstellen ({evidence.length})</span>
-          {evidence.map((quote, index) => (
-            <div className="grey-view-evidence-row" key={index} style={evidenceColorVars(index)}>
-              <span className="evidence-swatch" aria-hidden="true" />
-              <blockquote>{quote}</blockquote>
-              {onInsert ? (
-                <button
-                  className="button button-compact button-ghost"
-                  type="button"
-                  onClick={() => onInsert(quote)}
-                  onMouseEnter={() => onInsertPreview?.(quote)}
-                  onMouseLeave={() => onInsertPreviewClear?.()}
-                  onFocus={() => onInsertPreview?.(quote)}
-                  onBlur={() => onInsertPreviewClear?.()}
-                >
-                  <Quote size={13} />
-                  <span>Einfügen</span>
-                </button>
-              ) : null}
+      ) : (
+        <>
+          {source.summary ? (
+            <div className="grey-view-summary">
+              <span className="grey-view-label">Zusammenfassung</span>
+              <p>{source.summary}</p>
             </div>
-          ))}
-        </div>
-      ) : null}
+          ) : null}
 
-      {onInsert ? (
-        <div className="grey-view-toolbar">
-          <span className="muted">{selection ? `${selection.length} Zeichen markiert` : "Text im Volltext markieren, um ihn zu zitieren"}</span>
-          <button
-            className="button button-compact"
-            type="button"
-            disabled={!selection}
-            onClick={() => {
-              onInsert(selection);
-              onInsertPreviewClear?.();
-            }}
-            onMouseEnter={() => selection && onInsertPreview?.(selection)}
-            onMouseLeave={() => onInsertPreviewClear?.()}
-          >
-            <Quote size={14} />
-            <span>Auswahl in Notiz</span>
-          </button>
-        </div>
-      ) : null}
+          {evidence.length ? (
+            <div className="grey-view-evidence">
+              <span className="grey-view-label">Belegstellen ({evidence.length})</span>
+              {evidence.map((quote, index) => (
+                <div className="grey-view-evidence-row" key={index} style={evidenceColorVars(index)}>
+                  <span className="citation-badge">Z{index + 1}</span>
+                  <blockquote>{quote}</blockquote>
+                  {onInsert ? (
+                    <button
+                      className="button button-compact button-ghost"
+                      type="button"
+                      onClick={() => onInsert(quote)}
+                      onMouseEnter={() => onInsertPreview?.(quote)}
+                      onMouseLeave={() => onInsertPreviewClear?.()}
+                      onFocus={() => onInsertPreview?.(quote)}
+                      onBlur={() => onInsertPreviewClear?.()}
+                    >
+                      <Quote size={13} />
+                      <span>Einf&uuml;gen</span>
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
-      <div className="grey-view-label grey-view-body-label">Volltext ({fullText.length.toLocaleString("de-DE")} Zeichen)</div>
-      <div className="grey-view-body" ref={bodyRef} onMouseUp={captureSelection} onKeyUp={captureSelection}>
-        {fullText ? segments : <p className="muted">Kein gespeicherter Volltext. Nutze „Website öffnen“.</p>}
-      </div>
+          {onInsert ? (
+            <div className="grey-view-toolbar">
+              <span className="muted">{selection ? `${selection.length} Zeichen markiert` : "Text im Volltext markieren, um ihn zu zitieren"}</span>
+              <button
+                className="button button-compact"
+                type="button"
+                disabled={!selection}
+                onClick={() => {
+                  onInsert(selection);
+                  onInsertPreviewClear?.();
+                }}
+                onMouseEnter={() => selection && onInsertPreview?.(selection)}
+                onMouseLeave={() => onInsertPreviewClear?.()}
+              >
+                <Quote size={14} />
+                <span>Auswahl in Notiz</span>
+              </button>
+            </div>
+          ) : null}
+
+          <div className="grey-view-label grey-view-body-label">Volltext ({fullText.length.toLocaleString("de-DE")} Zeichen)</div>
+          <div className="grey-view-body" ref={bodyRef} onMouseUp={captureSelection} onKeyUp={captureSelection}>
+            {fullText ? segments : <p className="muted">Kein gespeicherter Volltext.</p>}
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -136,7 +177,7 @@ function selectionWithin(container: HTMLElement) {
   return container.contains(node.nodeType === Node.TEXT_NODE ? node.parentNode : node);
 }
 
-/** Build text nodes with evidence quotes wrapped in colored <mark> elements. */
+/** Build text nodes with evidence quotes wrapped in colored mark elements. */
 function highlightSegments(text: string, evidence: string[]): ReactNode[] {
   if (!text) {
     return [];

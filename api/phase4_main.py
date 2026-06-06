@@ -51,6 +51,7 @@ class AnswerRequest(Phase4Request):
     priority_paper_ids: list[str] = Field(default_factory=list)
     answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
     pdf_base_dir: str = "data/pdfs"
+    inline_context_texts: list[str] = Field(default_factory=list)
 
 
 class HypothesisRequest(Phase4Request):
@@ -123,6 +124,7 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         priority_paper_ids=request.priority_paper_ids or None,
         answer_context_mode=request.answer_context_mode,
         pdf_base_dir=request.pdf_base_dir,
+        inline_context_texts=request.inline_context_texts or None,
     )
     return answer.to_dict()
 

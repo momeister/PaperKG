@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Download,
   FilePlus2,
+  Globe,
   Highlighter,
   ImagePlus,
   Italic,
@@ -145,6 +146,7 @@ export type NotesSurfaceActions = {
   clearInsertPreview: () => void;
   deleteThread: (threadId: string) => void;
   deleteAllThreads: () => void;
+  deleteNote: (noteId: string) => void;
 };
 
 type EditorViewportSnapshot = {
@@ -291,6 +293,21 @@ export function NotesSurface({
       loadedNoteIdRef.current = "";
       localThreadRangesRef.current = {};
       setLocalThreadRanges({});
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+    }
+  });
+  const deleteNoteById = useMutation({
+    mutationFn: (noteId: string) => api.deleteNote(noteId),
+    onSuccess: (_data, noteId) => {
+      if (activeNoteId === noteId) {
+        setActiveNoteId("");
+        setTitle("");
+        setMarkdown("");
+        setDirtyState(false);
+        loadedNoteIdRef.current = "";
+        localThreadRangesRef.current = {};
+        setLocalThreadRanges({});
+      }
       queryClient.invalidateQueries({ queryKey: ["notes"] });
     }
   });
@@ -1787,7 +1804,8 @@ export function NotesSurface({
       insertMarkdownAtCursor,
       clearInsertPreview,
       deleteThread: (threadId: string) => deleteThread.mutate(threadId),
-      deleteAllThreads: () => deleteAllThreads.mutate()
+      deleteAllThreads: () => deleteAllThreads.mutate(),
+      deleteNote: (noteId: string) => deleteNoteById.mutate(noteId)
     };
     return () => {
       actionsRef.current = null;
@@ -2234,13 +2252,17 @@ export function NotesSurface({
                           aria-pressed={selectedCitation?.id === citation.id}
                         >
                           <span className="note-citation-row__title">
-                            <span className="citation-badge">{badge}</span>
+                            {citation.paper_id.startsWith("grey::") ? (
+                              <span className="citation-badge citation-badge--grey"><Globe size={10} /></span>
+                            ) : (
+                              <span className="citation-badge">{badge}</span>
+                            )}
                             <strong>{title}</strong>
                           </span>
                           <span>{evidence || label}</span>
                           <small>
-                            {citation.paper_id}
-                            {label !== badge ? ` - ${label}` : ""}
+                            {citation.paper_id.startsWith("grey::") ? (citation.pdf_excerpt || citation.paper_id) : citation.paper_id}
+                            {label !== badge && !citation.paper_id.startsWith("grey::") ? ` - ${label}` : ""}
                           </small>
                         </button>
                       ))}

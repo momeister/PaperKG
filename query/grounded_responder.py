@@ -75,6 +75,7 @@ making claims."""
         priority_paper_ids: list[str] | set[str] | None = None,
         answer_context_mode: str = "kg",
         pdf_base_dir: str = "data/pdfs",
+        inline_context_texts: list[str] | None = None,
     ) -> GroundedAnswer:
         context_diagnostics: dict[str, Any] = {
             "answer_context_mode": answer_context_mode or "kg",
@@ -98,6 +99,31 @@ making claims."""
         hits = _prioritize_hits(hits, priority_set)
         evidence = self._evidence_for_answer(hits, max_items=_evidence_item_limit(limit, hits))
         sources = [hit.source for hit in hits if hit.evidence]
+
+        # Inject inline context (e.g. grey-source full_text) as synthetic evidence.
+        inline_texts = [t for t in (inline_context_texts or []) if t and str(t).strip()]
+        if inline_texts:
+            inline_source = Source(paper_id="inline_context", title="Inline-Kontext", year=None, doi=None, url=None)
+            inline_evidence = [
+                Evidence(
+                    paper_id="inline_context",
+                    kind="inline",
+                    field="context_text",
+                    text=_best_pdf_context_snippet(text, question),
+                    score=10.0,
+                    metadata={"context_index": i},
+                )
+                for i, text in enumerate(inline_texts)
+            ]
+            context_diagnostics["inline_context_count"] = len(inline_texts)
+            if not hits:
+                inline_hit = SearchHit(source=inline_source)
+                for ev in inline_evidence:
+                    inline_hit.add_evidence(ev)
+                hits = [inline_hit]
+            evidence = inline_evidence + evidence
+            if inline_source not in sources:
+                sources = [inline_source] + sources
 
         if not evidence:
             return GroundedAnswer(

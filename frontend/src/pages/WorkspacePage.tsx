@@ -126,11 +126,13 @@ export function WorkspacePage() {
   const [selectedAnswerQuote, setSelectedAnswerQuote] = useState<{ paperId: string; evidenceIndex: number; text: string } | null>(null);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
   const [evidenceMode, setEvidenceMode] = useState("auto");
+  const [verbosity, setVerbosity] = useState<"kurz" | "standard" | "ausführlich">("standard");
   const [conversationMode, setConversationMode] = useState<"followup" | "new">("followup");
   const [paperScope, setPaperScope] = useState<PaperQuestionScope>("all");
   const [assistantMode, setAssistantMode] = useState<WorkspaceAssistantMode>("pdf");
   const [focusedNoteThreadId, setFocusedNoteThreadId] = useState("");
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
+  const [selectedGreyIds, setSelectedGreyIds] = useState<string[]>([]);
   const [useInternet, setUseInternet] = useState(() => loadWorkspaceBoolean(scopedProjectId, "useInternet", false));
 
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
@@ -174,9 +176,27 @@ export function WorkspacePage() {
   const greySources = greyQuery.data?.grey_sources ?? [];
 
   const currentScopePaperId = activeScopePaperId(pdfTarget, selectedSource);
+  const currentScopeIsGrey = paperScope === "current" && pdfTarget?.kind === "grey";
   const scopedPaperIds =
     paperScope === "all" ? [] : paperScope === "selected" ? selectedPaperIds : currentScopePaperId ? [currentScopePaperId] : [];
-  const questionBlockedByScope = (paperScope === "selected" && !selectedPaperIds.length) || (paperScope === "current" && !currentScopePaperId);
+  const questionBlockedByScope =
+    (paperScope === "selected" && !selectedPaperIds.length && !selectedGreyIds.length) ||
+    (paperScope === "current" && !currentScopePaperId && !currentScopeIsGrey);
+
+  const answerContextMode: "kg" | "pdf_if_fits" =
+    paperScope === "current" && currentScopePaperId ? "pdf_if_fits" : "kg";
+
+  const inlineContextTexts: string[] = (() => {
+    if (currentScopeIsGrey && pdfTarget?.kind === "grey" && pdfTarget.source.full_text) {
+      return [pdfTarget.source.full_text];
+    }
+    if (paperScope === "selected" && selectedGreyIds.length) {
+      return greySources
+        .filter((s) => selectedGreyIds.includes(s.id) && s.full_text)
+        .map((s) => s.full_text as string);
+    }
+    return [];
+  })();
 
   const answerMutation = useMutation({
     mutationFn: (value: string) =>
@@ -184,8 +204,10 @@ export function WorkspacePage() {
         question: value,
         provider,
         model,
-        limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length)),
+        limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length + (inlineContextTexts.length ? 1 : 0))),
         paper_ids: scopedPaperIds.length ? scopedPaperIds : undefined,
+        answer_context_mode: answerContextMode !== "kg" ? answerContextMode : undefined,
+        inline_context_texts: inlineContextTexts.length ? inlineContextTexts : undefined,
         conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined
       }),
     onSuccess: async (payload) => {
@@ -262,6 +284,7 @@ export function WorkspacePage() {
     setControlledNoteId("");
     setRequestedCitationId("");
     setSelectedPaperIds([]);
+    setSelectedGreyIds([]);
     setFocusedNoteThreadId("");
     webMutation.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -297,12 +320,21 @@ export function WorkspacePage() {
   }, []);
 
   const handleNoteCitationOpen = useCallback((citation: NoteCitation | null) => {
-    if (citation) {
-      setPdfTarget({ kind: "noteCitation", citation });
-      setPdfOpen(true);
-      setNavigatorTab("pdfs");
+    if (!citation) return;
+    if (citation.paper_id.startsWith("grey::")) {
+      const greyId = citation.paper_id.slice(6);
+      const source = greySources.find((s) => s.id === greyId);
+      if (source) {
+        setPdfTarget({ kind: "grey", source });
+        setPdfOpen(true);
+        setNavigatorTab("pdfs");
+        return;
+      }
     }
-  }, []);
+    setPdfTarget({ kind: "noteCitation", citation });
+    setPdfOpen(true);
+    setNavigatorTab("pdfs");
+  }, [greySources]);
 
   function openGreySource(source: GreySource) {
     setPdfTarget({ kind: "grey", source });
@@ -316,9 +348,19 @@ export function WorkspacePage() {
       return;
     }
     const label = source.title || source.url;
-    const markdown = `> ${quote.replace(/\n+/g, "\n> ")}\n>\n> — Graue Quelle: [${label}](${source.url})\n\n`;
+    const citation = {
+      id: `grey_${Math.random().toString(36).slice(2, 10)}`,
+      paper_id: `grey::${source.id}`,
+      title: label,
+      kind: "grey_source",
+      evidence_id: null,
+      reference_text: quote,
+      pdf_excerpt: source.url,
+      evidence_index: 0
+    };
+    const markdown = `> ${quote.replace(/\n+/g, "\n> ")}\n\nQuelle: [Z1 - ${label}](sciencekg://citation/${citation.id}) (${source.url})`;
     notesActionsRef.current?.clearInsertPreview();
-    void appendToActiveNote(markdown);
+    void appendToActiveNote(markdown, [citation]);
   }
 
   function previewGreyQuote(text: string, source: GreySource) {
@@ -327,14 +369,20 @@ export function WorkspacePage() {
       return;
     }
     const label = source.title || source.url;
-    notesActionsRef.current?.previewAppendMarkdown(`> ${quote.replace(/\n+/g, "\n> ")}\n>\n> — Graue Quelle: [${label}](${source.url})\n\n`);
+    notesActionsRef.current?.previewAppendMarkdown(`> ${quote.replace(/\n+/g, "\n> ")}\n\nQuelle: [Z1 - ${label}](sciencekg://citation/preview) (${source.url})`);
+  }
+
+  function verbosityInstruction(v: typeof verbosity) {
+    if (v === "kurz") return " [Bitte antworte präzise in 1–2 Sätzen pro Punkt.]";
+    if (v === "ausführlich") return " [Bitte antworte ausführlich mit konkreten Details, Beispielen und Hintergründen.]";
+    return "";
   }
 
   function submit(event: FormEvent) {
     event.preventDefault();
     const value = question.trim();
     if (value && !questionBlockedByScope) {
-      answerMutation.mutate(value);
+      answerMutation.mutate(value + verbosityInstruction(verbosity));
       if (useInternet) {
         webMutation.mutate(value);
       }
@@ -380,7 +428,7 @@ export function WorkspacePage() {
     const meta = citationMetaFor(pool, citation, context, links, citationStart);
     if (meta) {
       setEvidenceOpen(true);
-      openAssistantSource(meta.source, meta.evidenceIndex, quote || context);
+      openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { syncPdfTarget: pdfOpen });
     }
   }
 
@@ -422,6 +470,10 @@ export function WorkspacePage() {
 
   function toggleScopedPaper(paperId: string) {
     setSelectedPaperIds((current) => (current.includes(paperId) ? current.filter((item) => item !== paperId) : [...current, paperId]));
+  }
+
+  function toggleScopedGrey(greyId: string) {
+    setSelectedGreyIds((current) => (current.includes(greyId) ? current.filter((item) => item !== greyId) : [...current, greyId]));
   }
 
   async function appendToActiveNote(markdown: string, citations: Record<string, unknown>[] = []) {
@@ -488,6 +540,20 @@ export function WorkspacePage() {
     const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : activeAnswerQuote || activeEvidence.reference_text;
     const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
     notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id));
+  }
+
+  function deleteAssistantTurn(turnId: string) {
+    setHistory((current) => {
+      const next = current.filter((item) => item.id !== turnId);
+      saveAssistantSession(scopedProjectId, { history: next, activeTurnId: activeTurnId === turnId ? (next[0]?.id ?? "") : activeTurnId });
+      return next;
+    });
+    if (activeTurnId === turnId) {
+      setActiveTurnId((prev) => {
+        const idx = history.findIndex((item) => item.id === turnId);
+        return history[idx - 1]?.id ?? history[idx + 1]?.id ?? "";
+      });
+    }
   }
 
   function activateAssistantTurn(turnId: string) {
@@ -642,9 +708,13 @@ export function WorkspacePage() {
             }}
             onOpenGrey={openGreySource}
             onToggleScopedPaper={toggleScopedPaper}
+            selectedGreyIds={selectedGreyIds}
+            onToggleScopedGrey={toggleScopedGrey}
             onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90, 520)}
             onOpenAssistantPdf={openSelectedAssistantPdf}
             onActivateSession={activateAssistantTurn}
+            onDeleteSession={deleteAssistantTurn}
+            onDeleteNote={(noteId) => notesActionsRef.current?.deleteNote(noteId)}
           />
         </aside>
       ) : (
@@ -760,6 +830,9 @@ export function WorkspacePage() {
           <form className="chat-box" onSubmit={submit}>
             <Bot size={20} />
             <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Frage an den lokalen KG" />
+            <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
+              <Send size={18} />
+            </button>
             <div className="segmented workspace-scope-segment" aria-label="Paper-Scope">
               <button type="button" className={paperScope === "current" ? "active" : ""} onClick={() => setPaperScope("current")}>
                 Dieses
@@ -771,36 +844,40 @@ export function WorkspacePage() {
                 Alle
               </button>
             </div>
-            <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
-              <option value="followup">Weiterfragen</option>
-              <option value="new">Neu starten</option>
-            </select>
-            <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
-              <option value="auto">Auto</option>
-              <option value="12">12</option>
-              <option value="20">20</option>
-              <option value="25">25</option>
-            </select>
-            <button
-              type="button"
-              className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
-              onClick={() => setUseInternet((v) => !v)}
-              disabled={!isRealProject}
-              title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
-            >
-              <Globe size={14} />
-              <span>Mit Web</span>
-            </button>
-            <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
-              <Send size={18} />
-            </button>
+            <div className="workspace-chat-controls">
+              <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
+                <option value="followup">Weiterfragen</option>
+                <option value="new">Neu starten</option>
+              </select>
+              <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
+                <option value="auto">Auto</option>
+                <option value="12">12</option>
+                <option value="20">20</option>
+                <option value="25">25</option>
+              </select>
+              <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
+                <option value="kurz">Kurz</option>
+                <option value="standard">Standard</option>
+                <option value="ausführlich">Ausführlich</option>
+              </select>
+              <button
+                type="button"
+                className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
+                onClick={() => setUseInternet((v) => !v)}
+                disabled={!isRealProject}
+                title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
+              >
+                <Globe size={14} />
+                <span>Mit Web</span>
+              </button>
+            </div>
           </form>
           {useInternet && !isRealProject ? (
             <div className="scope-status">Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).</div>
           ) : null}
           {questionBlockedByScope ? (
             <div className="scope-status">
-              {paperScope === "selected" ? "Keine Paper ausgewählt" : "Kein aktives Paper"}
+              {paperScope === "selected" ? "Keine Quellen ausgewählt" : "Kein aktives Paper"}
             </div>
           ) : null}
           <section className="answer-panel workspace-answer-panel">
@@ -1083,6 +1160,9 @@ export function WorkspacePage() {
       };
     }
     if (target.kind === "noteCitation") {
+      if (target.citation.paper_id.startsWith("grey::")) {
+        return { url: null, title: target.citation.title ?? target.citation.paper_id, evidences: [], activeEvidenceIndex: 0 };
+      }
       return {
         url: api.paperPdfUrl(target.citation.paper_id, target.citation.title ?? ""),
         title: target.citation.title ?? target.citation.paper_id,
@@ -1351,9 +1431,13 @@ function WorkspaceNavigatorBody({
   onOpenPaper,
   onOpenGrey,
   onToggleScopedPaper,
+  selectedGreyIds,
+  onToggleScopedGrey,
   onResizeCitationList,
   onOpenAssistantPdf,
-  onActivateSession
+  onActivateSession,
+  onDeleteSession,
+  onDeleteNote
 }: {
   tab: WorkspaceNavigatorTab;
   query: string;
@@ -1380,9 +1464,13 @@ function WorkspaceNavigatorBody({
   onOpenPaper: (paper: Paper) => void;
   onOpenGrey: (source: GreySource) => void;
   onToggleScopedPaper: (paperId: string) => void;
+  selectedGreyIds: string[];
+  onToggleScopedGrey: (greyId: string) => void;
   onResizeCitationList: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onOpenAssistantPdf: () => void;
   onActivateSession: (turnId: string) => void;
+  onDeleteSession: (turnId: string) => void;
+  onDeleteNote: (noteId: string) => void;
 }) {
   if (tab === "notes") {
     return (
@@ -1399,16 +1487,28 @@ function WorkspaceNavigatorBody({
         </div>
         <div className="list workspace-nav-list">
           {notes.map((note) => (
-            <button
+            <div
               className={`list-row note-list-row ${activeNoteId === note.id ? "list-row--active" : ""}`}
-              type="button"
               key={note.id}
-              onClick={() => onSelectNote(note.id)}
             >
-              <strong>{note.title}</strong>
-              <span>{note.excerpt || "Leer"}</span>
-              <small>{note.citation_count ?? 0} Quellen</small>
-            </button>
+              <button
+                className="note-list-row__body"
+                type="button"
+                onClick={() => onSelectNote(note.id)}
+              >
+                <strong>{note.title}</strong>
+                <span>{note.excerpt || "Leer"}</span>
+                <small>{note.citation_count ?? 0} Quellen</small>
+              </button>
+              <button
+                className="icon-button nav-delete-btn"
+                type="button"
+                title="Notiz löschen"
+                onClick={(e) => { e.stopPropagation(); onDeleteNote(note.id); }}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
           ))}
           {!notes.length ? <EmptyState title={notesLoading ? "Lade Notizen" : "Noch keine Notizen"} /> : null}
         </div>
@@ -1538,6 +1638,7 @@ function WorkspaceNavigatorBody({
             <div className="list workspace-nav-list">
               {greySources.map((source) => {
                 const isActiveGrey = pdfTarget?.kind === "grey" && pdfTarget.source.id === source.id;
+                const selectedForScope = selectedGreyIds.includes(source.id);
                 return (
                   <div
                     className={`list-row workspace-paper-row workspace-grey-row ${isActiveGrey ? "workspace-paper-row--active-source list-row--active" : ""}`}
@@ -1553,12 +1654,20 @@ function WorkspaceNavigatorBody({
                       }
                     }}
                   >
+                    <label className="workspace-paper-select" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedForScope}
+                        aria-label={`${source.title || source.url} auswaehlen`}
+                        onChange={() => onToggleScopedGrey(source.id)}
+                      />
+                    </label>
                     <div className="workspace-paper-main" title={source.title || source.url}>
-                      <strong>
+                      <strong>{source.title || source.url}</strong>
+                      <span>
                         <span className="grey-badge grey-badge--mini">Grauquelle</span>
-                        {source.title || source.url}
-                      </strong>
-                      <span>{source.url}</span>
+                        {source.url}
+                      </span>
                     </div>
                   </div>
                 );
@@ -1573,18 +1682,30 @@ function WorkspaceNavigatorBody({
     <section className="workspace-nav-body">
       <div className="list workspace-nav-list">
         {sessions.map((turn) => (
-          <button
+          <div
             className={`assistant-history-item workspace-session-item ${activeSessionId === turn.id ? "assistant-history-item--active" : ""}`}
-            type="button"
             key={turn.id}
-            onClick={() => onActivateSession(turn.id)}
           >
-            <span>{turn.question}</span>
-            <small>
-              {formatTurnTime(turn.createdAt)}
-              {turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
-            </small>
-          </button>
+            <button
+              className="session-item__body"
+              type="button"
+              onClick={() => onActivateSession(turn.id)}
+            >
+              <span>{turn.question}</span>
+              <small>
+                {formatTurnTime(turn.createdAt)}
+                {turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
+              </small>
+            </button>
+            <button
+              className="icon-button nav-delete-btn"
+              type="button"
+              title="Session löschen"
+              onClick={(e) => { e.stopPropagation(); onDeleteSession(turn.id); }}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
         ))}
         {!sessions.length ? <EmptyState title="Noch keine KI-Sessions" /> : null}
       </div>

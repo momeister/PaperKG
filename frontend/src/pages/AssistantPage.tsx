@@ -1321,7 +1321,7 @@ export function answerLimitFor(question: string, mode: string, scopedPaperCount 
   if (question.length > 90 || terms.length > 10) {
     return 20;
   }
-  return 16;
+  return 20;
 }
 
 export function verificationLimits(answer: Answer) {
@@ -1598,6 +1598,7 @@ export function AnswerText({
     paperId: string;
     evidenceIndex: number;
   } | null>(null);
+  const [expandedCitations, setExpandedCitations] = useState<Set<string>>(new Set());
   const [hoverCitation, setHoverCitation] = useState<{
     key: string;
     label: string;
@@ -1682,54 +1683,71 @@ export function AnswerText({
         const context = citationContext(parts, index);
         const quote = citationQuoteFromParts(parts, index);
         const rawMeta = getCitationMeta(match[1], context, partStart);
-        const metas = (Array.isArray(rawMeta) ? rawMeta : rawMeta ? [rawMeta] : []).filter((meta) => meta.source.evidence[meta.evidenceIndex]);
+        const metas = (Array.isArray(rawMeta) ? rawMeta : rawMeta ? [rawMeta] : []);
         const hoverKey = `${part}-${index}`;
         return (
           <span className="citation-link-wrap" key={hoverKey}>
-            {metas.length ? (
-              metas.map((meta, metaIndex) => {
-                const label = `Z${meta.evidenceIndex + 1}`;
-                const chipKey = `${hoverKey}-${meta.source.paper_id}-${meta.evidenceIndex}-${metaIndex}`;
-                const isActive = Boolean(activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
-                return (
-                  <button
-                    className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""}`}
-                    type="button"
-                    key={chipKey}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      cancelCitationHoverClose();
-                      setHoverCitation(null);
-                      setPinnedCitation((current) =>
-                        current?.key === chipKey ? null : { key: chipKey, paperId: meta.source.paper_id, evidenceIndex: meta.evidenceIndex }
-                      );
-                      onCitationClick(meta.source.paper_id, context, quote, partStart);
-                    }}
-                    onPointerEnter={(event) => showCitationHover(chipKey, label, meta, quote, event)}
-                    onPointerLeave={scheduleCitationHoverClose}
-                    style={evidenceColorVars(meta.evidenceIndex)}
-                    title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}`}
-                  >
-                    <span className="citation-index">{label}</span>
-                    <span className="citation-paper">{shortCitationLabel(meta.source.paper_id)}</span>
-                  </button>
-                );
-              })
-            ) : (
-              <button
-                className="citation-link"
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  cancelCitationHoverClose();
-                  setHoverCitation(null);
-                  setPinnedCitation((current) => (current?.key === hoverKey ? null : { key: hoverKey, paperId: match[1], evidenceIndex: 0 }));
-                  onCitationClick(match[1], context, quote, partStart);
-                }}
+            {metas.length ? (() => {
+              const COLLAPSE_THRESHOLD = 3;
+              const isExpanded = expandedCitations.has(hoverKey);
+              const visibleMetas = metas.length > COLLAPSE_THRESHOLD && !isExpanded ? metas.slice(0, 2) : metas;
+              const hiddenCount = metas.length - visibleMetas.length;
+              return (
+                <>
+                  {visibleMetas.map((meta, metaIndex) => {
+                    const label = `Z${meta.evidenceIndex + 1}`;
+                    const chipKey = `${hoverKey}-${meta.source.paper_id}-${meta.evidenceIndex}-${metaIndex}`;
+                    const isActive = Boolean(activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
+                    return (
+                      <button
+                        className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""}`}
+                        type="button"
+                        key={chipKey}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          cancelCitationHoverClose();
+                          setHoverCitation(null);
+                          setPinnedCitation((current) =>
+                            current?.key === chipKey ? null : { key: chipKey, paperId: meta.source.paper_id, evidenceIndex: meta.evidenceIndex }
+                          );
+                          onCitationClick(meta.source.paper_id, context, quote, partStart);
+                        }}
+                        onPointerEnter={(event) => showCitationHover(chipKey, label, meta, quote, event)}
+                        onPointerLeave={scheduleCitationHoverClose}
+                        style={evidenceColorVars(meta.evidenceIndex)}
+                        title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}`}
+                      >
+                        <span className="citation-index">{label}</span>
+                        <span className="citation-paper">{shortCitationLabel(meta.source.title || meta.source.paper_id)}</span>
+                      </button>
+                    );
+                  })}
+                  {hiddenCount > 0 ? (
+                    <button
+                      className="citation-link citation-more"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setExpandedCitations((current) => {
+                          const next = new Set(current);
+                          next.add(hoverKey);
+                          return next;
+                        });
+                      }}
+                    >
+                      +{hiddenCount}
+                    </button>
+                  ) : null}
+                </>
+              );
+            })() : (
+              <span
+                className="citation-link citation-link--unresolved"
+                title={`Quelle nicht verifiziert: ${match[1]}`}
               >
-                <span className="citation-index">?</span>
+                <span className="citation-index">!</span>
                 <span className="citation-paper">{shortCitationLabel(match[1])}</span>
-              </button>
+              </span>
             )}
             {hoverCitation?.key === hoverKey || hoverCitation?.key.startsWith(`${hoverKey}-`) ? (
               <span
@@ -1851,10 +1869,10 @@ function hasSemanticText(value: string) {
 
 function shortCitationLabel(value: string) {
   const clean = value.replace(/^https?:\/\/arxiv\.org\/abs\//, "arxiv:").trim();
-  if (clean.length <= 18) {
+  if (clean.length <= 22) {
     return clean;
   }
-  return `${clean.slice(0, 16)}...`;
+  return `${clean.slice(0, 20)}…`;
 }
 
 export function shortTitle(value: string) {
@@ -1927,7 +1945,11 @@ export function sameCitation(sourceId: string, citation: string) {
 }
 
 function normalizeCitation(value: string) {
-  return value.toLowerCase().replace(/^https?:\/\/arxiv\.org\/abs\//, "arxiv:").replace(/\s+/g, "");
+  return value
+    .toLowerCase()
+    .replace(/^https?:\/\/arxiv\.org\/abs\//, "arxiv:")
+    .replace(/v\d+$/, "")
+    .replace(/\s+/g, "");
 }
 
 export function bestEvidenceIndex(source: VerificationSource, context: string) {
