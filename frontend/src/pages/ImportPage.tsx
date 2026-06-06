@@ -1,7 +1,7 @@
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, X, XCircle } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -55,6 +55,17 @@ function paperKey(paper: Paper): string {
   return paper.id || `${paper.source}:${paper.source_id}`;
 }
 
+function useElapsedTimer(isPending: boolean): number {
+  const [s, setS] = useState(0);
+  useEffect(() => {
+    if (!isPending) { setS(0); return; }
+    setS(0);
+    const id = setInterval(() => setS((x) => x + 1), 1000);
+    return () => clearInterval(id);
+  }, [isPending]);
+  return s;
+}
+
 export function ImportPage() {
   const { activeProject, provider } = useAppState();
   const navigate = useNavigate();
@@ -79,6 +90,11 @@ export function ImportPage() {
   const [savedFindingUrls, setSavedFindingUrls] = useState<string[]>([]);
 
   const queryClient = useQueryClient();
+
+  const extractRefsAbort = useRef<AbortController | null>(null);
+  const discoverPaperAbort = useRef<AbortController | null>(null);
+  const discoverTopicAbort = useRef<AbortController | null>(null);
+  const cancelResearchRef = useRef(false);
 
   function invalidateLibrary() {
     queryClient.invalidateQueries({ queryKey: ["papers"] });
@@ -106,7 +122,10 @@ export function ImportPage() {
     }
   });
   const extractRefs = useMutation({
-    mutationFn: (paperId: string) => api.extractReferences({ paper_id: paperId, max_references: 40 }),
+    mutationFn: (paperId: string) => {
+      extractRefsAbort.current = new AbortController();
+      return api.extractReferences({ paper_id: paperId, max_references: 40 }, extractRefsAbort.current.signal);
+    },
     onSuccess: async (payload) => {
       setReferences((current) => ({ ...current, [payload.paper_id]: payload.references }));
       if (autoDownload && payload.references.length) {
@@ -116,7 +135,10 @@ export function ImportPage() {
     }
   });
   const discoverTopic = useMutation({
-    mutationFn: () => api.discoveryFromTopic({ topic: topic.trim(), sources, provider, max_per_query: 5 }),
+    mutationFn: () => {
+      discoverTopicAbort.current = new AbortController();
+      return api.discoveryFromTopic({ topic: topic.trim(), sources, provider, max_per_query: 5 }, discoverTopicAbort.current.signal);
+    },
     onSuccess: async (payload) => {
       setTopicCandidates(payload.candidates);
       if (autoDownload && payload.candidates.length) {
@@ -126,7 +148,10 @@ export function ImportPage() {
     }
   });
   const discoverPaper = useMutation({
-    mutationFn: (paperId: string) => api.discoveryFromPaper({ paper_id: paperId, sources, provider, max_per_query: 5 }),
+    mutationFn: (paperId: string) => {
+      discoverPaperAbort.current = new AbortController();
+      return api.discoveryFromPaper({ paper_id: paperId, sources, provider, max_per_query: 5 }, discoverPaperAbort.current.signal);
+    },
     onSuccess: async (payload, paperId) => {
       setPaperCandidates((current) => ({ ...current, [paperId]: payload.candidates }));
       if (autoDownload && payload.candidates.length) {
@@ -136,8 +161,10 @@ export function ImportPage() {
     }
   });
   const research = useMutation({
-    mutationFn: ({ question }: { question: string; withRelated: boolean }) =>
-      api.deepResearch({ question, provider, max_sources: 12 }),
+    mutationFn: ({ question }: { question: string; withRelated: boolean }) => {
+      cancelResearchRef.current = false;
+      return api.deepResearch({ question, provider, max_sources: 12 });
+    },
     onSuccess: async (payload, { question, withRelated }) => {
       const mainGroup: TopicGroup = {
         topic: question,
@@ -157,6 +184,7 @@ export function ImportPage() {
         }));
         setTopicGroups([mainGroup, ...subGroups]);
         for (const subTopic of relTopics) {
+          if (cancelResearchRef.current) break;
           try {
             const subPayload = await api.deepResearch({ question: subTopic, provider, max_sources: 8 });
             setTopicGroups((current) =>
@@ -167,6 +195,9 @@ export function ImportPage() {
               current.map((g) => (g.topic === subTopic ? { ...g, pending: false } : g))
             );
           }
+        }
+        if (cancelResearchRef.current) {
+          setTopicGroups((current) => current.map((g) => (g.pending ? { ...g, pending: false } : g)));
         }
       } else {
         setTopicGroups([mainGroup]);
@@ -196,6 +227,10 @@ export function ImportPage() {
     mutationFn: (paperId: string | null) => api.setPrimaryPaper(activeProject as string, paperId),
     onSuccess: (payload) => setPrimaryPaperId(payload.primary_paper_id)
   });
+
+  const extractRefsElapsed = useElapsedTimer(extractRefs.isPending);
+  const discoverPaperElapsed = useElapsedTimer(discoverPaper.isPending);
+  const discoverTopicElapsed = useElapsedTimer(discoverTopic.isPending);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -286,7 +321,23 @@ export function ImportPage() {
                 <Sparkles size={16} />
                 <span>KI-Vorschläge</span>
               </button>
+              {discoverTopic.isPending && (
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => { discoverTopicAbort.current?.abort(); discoverTopic.reset(); }}
+                >
+                  <X size={15} />
+                  <span>Abbrechen</span>
+                </button>
+              )}
             </div>
+            {discoverTopic.isPending && (
+              <div className="import-status-row">
+                <Loader2 size={14} className="spin" />
+                <span className="muted">KI-Vorschläge laufen … {discoverTopicElapsed}s</span>
+              </div>
+            )}
           </form>
 
           {warnings.map((warning) => (
@@ -329,21 +380,41 @@ export function ImportPage() {
                     <button
                       className="button"
                       type="button"
+                      title="Zitate aus PDF erkennen"
                       disabled={extractRefs.isPending}
                       onClick={() => extractRefs.mutate(paper.id)}
                     >
                       <Download size={15} />
-                      <span>Quellen erkennen</span>
+                      <span>Zitate</span>
                     </button>
+                    {extractRefs.isPending && (
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => { extractRefsAbort.current?.abort(); extractRefs.reset(); }}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
                     <button
                       className="button"
                       type="button"
+                      title="KI-Kontext: ähnliche Paper vorschlagen"
                       disabled={discoverPaper.isPending}
                       onClick={() => discoverPaper.mutate(paper.id)}
                     >
                       <Sparkles size={15} />
                       <span>KI-Kontext</span>
                     </button>
+                    {discoverPaper.isPending && (
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => { discoverPaperAbort.current?.abort(); discoverPaper.reset(); }}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
                     <button
                       className={`button ${primaryPaperId === paper.id ? "button-primary" : ""}`}
                       type="button"
@@ -352,10 +423,22 @@ export function ImportPage() {
                       onClick={() => markPrimary.mutate(primaryPaperId === paper.id ? null : paper.id)}
                     >
                       <Star size={15} />
-                      <span>{primaryPaperId === paper.id ? "Hauptquelle" : "Priorisieren"}</span>
+                      <span>{primaryPaperId === paper.id ? "Hauptquelle" : "Prio"}</span>
                     </button>
                   </div>
                 </div>
+                {extractRefs.isPending && (
+                  <div className="import-status-row">
+                    <Loader2 size={14} className="spin" />
+                    <span className="muted">Zitate werden erkannt … {extractRefsElapsed}s</span>
+                  </div>
+                )}
+                {discoverPaper.isPending && (
+                  <div className="import-status-row">
+                    <Loader2 size={14} className="spin" />
+                    <span className="muted">KI-Kontext läuft … {discoverPaperElapsed}s</span>
+                  </div>
+                )}
                 {references[paper.id]?.length ? (
                   <CandidateList
                     title={`${references[paper.id].length} Quellen erkannt`}
@@ -425,6 +508,20 @@ export function ImportPage() {
             <Globe size={16} />
             <span>Recherchieren</span>
           </button>
+          {(research.isPending || topicGroups.some((g) => g.pending)) && (
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                cancelResearchRef.current = true;
+                research.reset();
+                setTopicGroups((current) => current.map((g) => (g.pending ? { ...g, pending: false } : g)));
+              }}
+            >
+              <X size={15} />
+              <span>Abbrechen</span>
+            </button>
+          )}
         </div>
         {!isRealProject ? (
           <div className="warning-row">Wähle oben ein echtes Projekt, um graue Quellen zu speichern.</div>
@@ -636,6 +733,7 @@ function CandidateList({
   disabled: boolean;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState(false);
 
   function toggle(key: string) {
     setSelected((current) => {
@@ -658,41 +756,53 @@ function CandidateList({
   return (
     <div className="candidate-list">
       <div className="panel-heading">
-        <strong>{title}</strong>
-        <div className="button-row">
-          <button className="button" type="button" onClick={selectAll}>
-            Alle wählen
-          </button>
-          <button
-            className="button button-primary"
-            type="button"
-            disabled={disabled || !selectedPapers.length}
-            onClick={() => onDownload(selectedPapers, true)}
-          >
-            <Download size={15} />
-            <span>{selectedPapers.length} laden</span>
-          </button>
+        <button
+          type="button"
+          className="candidate-list-toggle"
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? "Aufklappen" : "Einklappen"}
+        >
+          <ChevronDown size={14} className={collapsed ? "topic-group-chevron--collapsed" : "topic-group-chevron"} />
+          <strong>{title}</strong>
+        </button>
+        {!collapsed && (
+          <div className="button-row">
+            <button className="button" type="button" onClick={selectAll}>
+              Alle
+            </button>
+            <button
+              className="button button-primary"
+              type="button"
+              disabled={disabled || !selectedPapers.length}
+              onClick={() => onDownload(selectedPapers, true)}
+            >
+              <Download size={15} />
+              <span>{selectedPapers.length} laden</span>
+            </button>
+          </div>
+        )}
+      </div>
+      {!collapsed && (
+        <div className="paper-grid">
+          {candidates.map((candidate) => {
+            const key = paperKey(candidate);
+            const reason = (candidate as DiscoveryCandidate).discovery_reason;
+            return (
+              <label key={key} className={`paper-card candidate-card ${selected.has(key) ? "candidate-selected" : ""}`}>
+                <div className="candidate-head">
+                  <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} />
+                  <strong>{candidate.title || candidate.id}</strong>
+                </div>
+                <span>
+                  {candidate.source} · {candidate.year ?? "n/a"}
+                  {candidate.has_full_text ? " · PDF" : ""}
+                </span>
+                {reason ? <p className="muted">{reason}</p> : <p>{candidate.abstract || candidate.doi || ""}</p>}
+              </label>
+            );
+          })}
         </div>
-      </div>
-      <div className="paper-grid">
-        {candidates.map((candidate) => {
-          const key = paperKey(candidate);
-          const reason = (candidate as DiscoveryCandidate).discovery_reason;
-          return (
-            <label key={key} className={`paper-card candidate-card ${selected.has(key) ? "candidate-selected" : ""}`}>
-              <div className="candidate-head">
-                <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} />
-                <strong>{candidate.title || candidate.id}</strong>
-              </div>
-              <span>
-                {candidate.source} · {candidate.year ?? "n/a"}
-                {candidate.has_full_text ? " · PDF" : ""}
-              </span>
-              {reason ? <p className="muted">{reason}</p> : <p>{candidate.abstract || candidate.doi || ""}</p>}
-            </label>
-          );
-        })}
-      </div>
+      )}
     </div>
   );
 }

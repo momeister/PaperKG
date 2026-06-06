@@ -49,6 +49,12 @@ data/nim-cache/
 .nim-cache/
 nim-cache/
 
+# User-specific runtime data — never commit, everyone starts from zero
+data/projects.json
+data/project_primary.json
+data/vocabulary.json
+data/note_assets/
+
 # Build / packaging
 build/
 dist/

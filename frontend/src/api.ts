@@ -109,15 +109,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ papers, download_pdfs: downloadPdfs, project_id: projectId || null })
     }),
-  extractReferences: (payload: { paper_id: string; pdf_path?: string; parser?: string; max_references?: number }) =>
+  extractReferences: (payload: { paper_id: string; pdf_path?: string; parser?: string; max_references?: number }, signal?: AbortSignal) =>
     request<ReferenceExtractResponse>("/papers/references/extract", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal
     }),
-  discoveryFromTopic: (payload: { topic: string; sources?: string[]; provider?: string; max_per_query?: number }) =>
-    request<DiscoveryResponse>("/discovery/from-topic", { method: "POST", body: JSON.stringify(payload) }),
-  discoveryFromPaper: (payload: { paper_id: string; pdf_path?: string; sources?: string[]; provider?: string; max_per_query?: number }) =>
-    request<DiscoveryResponse>("/discovery/from-paper", { method: "POST", body: JSON.stringify(payload) }),
+  discoveryFromTopic: (payload: { topic: string; sources?: string[]; provider?: string; max_per_query?: number }, signal?: AbortSignal) =>
+    request<DiscoveryResponse>("/discovery/from-topic", { method: "POST", body: JSON.stringify(payload), signal }),
+  discoveryFromPaper: (payload: { paper_id: string; pdf_path?: string; sources?: string[]; provider?: string; max_per_query?: number }, signal?: AbortSignal) =>
+    request<DiscoveryResponse>("/discovery/from-paper", { method: "POST", body: JSON.stringify(payload), signal }),
   deepResearch: (payload: {
     question: string;
     provider?: string;
@@ -125,7 +126,7 @@ export const api = {
     max_queries?: number;
     results_per_query?: number;
     max_sources?: number;
-  }) => request<DeepResearchResponse>("/research/deep", { method: "POST", body: JSON.stringify(payload) }),
+  }, signal?: AbortSignal) => request<DeepResearchResponse>("/research/deep", { method: "POST", body: JSON.stringify(payload), signal }),
   listGreySources: (projectId: string) =>
     request<{ project_id: string; grey_sources: GreySource[] }>(`/projects/${encodeURIComponent(projectId)}/grey-sources`),
   addGreySources: (projectId: string, sources: Record<string, unknown>[], query?: string) =>
