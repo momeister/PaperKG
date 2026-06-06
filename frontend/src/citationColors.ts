@@ -47,3 +47,35 @@ export function evidenceColorVars(index: number): EvidenceColorStyle {
     "--evidence-border": EVIDENCE_BORDER_COLORS[colorIndex]
   };
 }
+
+// Muted/desaturated variants for grey sources (deep research)
+const GREY_EVIDENCE_COLORS = ["#6b7fa8", "#9e8060", "#5a8a78", "#7a6ea0", "#906060", "#5a8498", "#8e6880", "#6e8260"];
+const GREY_SOFT_COLORS = [
+  "rgba(107,127,168,0.18)",
+  "rgba(158,128,96,0.20)",
+  "rgba(90,138,120,0.18)",
+  "rgba(122,110,160,0.18)",
+  "rgba(144,96,96,0.17)",
+  "rgba(90,132,152,0.18)",
+  "rgba(142,104,128,0.17)",
+  "rgba(110,130,96,0.18)"
+];
+const GREY_BORDER_COLORS = [
+  "rgba(107,127,168,0.40)",
+  "rgba(158,128,96,0.42)",
+  "rgba(90,138,120,0.38)",
+  "rgba(122,110,160,0.38)",
+  "rgba(144,96,96,0.36)",
+  "rgba(90,132,152,0.38)",
+  "rgba(142,104,128,0.36)",
+  "rgba(110,130,96,0.38)"
+];
+
+export function greyEvidenceColorVars(index: number): EvidenceColorStyle {
+  const colorIndex = Math.abs(index) % GREY_EVIDENCE_COLORS.length;
+  return {
+    "--evidence-color": GREY_EVIDENCE_COLORS[colorIndex],
+    "--evidence-soft": GREY_SOFT_COLORS[colorIndex],
+    "--evidence-border": GREY_BORDER_COLORS[colorIndex]
+  };
+}

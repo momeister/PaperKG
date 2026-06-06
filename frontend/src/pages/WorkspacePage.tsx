@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 
 import { api } from "../api";
-import { evidenceColorVars } from "../citationColors";
+import { evidenceColorVars, greyEvidenceColorVars } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { GreySourceView } from "../components/GreySourceView";
 import { PdfPane } from "../components/PdfPane";
@@ -56,6 +56,7 @@ import {
   loadAssistantSession,
   mergeVerification,
   noteCitation,
+  sameCitation,
   saveAssistantSession,
   shortEvidenceText,
   turnBlocks,
@@ -71,7 +72,8 @@ export type WorkspacePdfTarget =
   | { kind: "assistant"; source: VerificationSource; evidenceIndex: number }
   | { kind: "noteCitation"; citation: NoteCitation }
   | { kind: "paper"; paper: Paper }
-  | { kind: "grey"; source: GreySource };
+  | { kind: "grey"; source: GreySource }
+  | { kind: "missing"; paperId: string; title?: string };
 
 const ALL_PAPERS_SCOPES = new Set(["", "__all_papers__"]);
 
@@ -110,6 +112,7 @@ export function WorkspacePage() {
   const assistantResizeFrameRef = useRef<number | null>(null);
   const pdfResizeFrameRef = useRef<number | null>(null);
   const pdfCitationResizeFrameRef = useRef<number | null>(null);
+  const greySourceResizeFrameRef = useRef<number | null>(null);
 
   const [navigatorTab, setNavigatorTab] = useState<WorkspaceNavigatorTab>("notes");
   const [notesSnapshot, setNotesSnapshot] = useState<NotesSurfaceSnapshot>(EMPTY_NOTES_SNAPSHOT);
@@ -143,6 +146,7 @@ export function WorkspacePage() {
   const [assistantWidth, setAssistantWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "assistantWidth.v3", 420));
   const [pdfWidth, setPdfWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfWidth.v3", 220));
   const [pdfCitationListHeight, setPdfCitationListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", 220));
+  const [greySourceListHeight, setGreySourceListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "greySourceListHeight", 180));
   const [pdfTarget, setPdfTarget] = useState<WorkspacePdfTarget | null>(null);
 
   const activeTurn = useMemo(() => {
@@ -304,6 +308,7 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "assistantWidth.v3", assistantWidth), [assistantWidth, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfWidth.v3", pdfWidth), [pdfWidth, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", pdfCitationListHeight), [pdfCitationListHeight, scopedProjectId]);
+  useEffect(() => saveWorkspaceNumber(scopedProjectId, "greySourceListHeight", greySourceListHeight), [greySourceListHeight, scopedProjectId]);
 
   useEffect(() => {
     if (focusedNoteThreadId && !notesSnapshot.threads.some((thread) => thread.id === focusedNoteThreadId)) {
@@ -400,7 +405,16 @@ export function WorkspacePage() {
     setSelectedSource(source);
     setActiveEvidenceIndex(nextIndex);
     if (options.openPdf || options.syncPdfTarget) {
-      setPdfTarget({ kind: "assistant", source, evidenceIndex: nextIndex });
+      // Grey sources open in GreySourceView, not the PDF canvas
+      if (source.paper_id.startsWith("grey::")) {
+        const greyId = source.paper_id.slice(6);
+        const greySource = greySources.find((s) => s.id === greyId);
+        if (greySource) {
+          setPdfTarget({ kind: "grey", source: greySource });
+        }
+      } else {
+        setPdfTarget({ kind: "assistant", source, evidenceIndex: nextIndex });
+      }
     }
     if (options.openPdf) {
       setPdfOpen(true);
@@ -429,6 +443,24 @@ export function WorkspacePage() {
     if (meta) {
       setEvidenceOpen(true);
       openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { syncPdfTarget: pdfOpen });
+    }
+  }
+
+  function handleUnresolvedCitationClick(citationId: string) {
+    // Try to find the paper in the project papers list
+    const found = pdfPapers.find((p) => {
+      const pid = workspacePaperId(normalizeWorkspacePaper(p));
+      return pid && sameCitation(pid, citationId);
+    });
+    if (found) {
+      const normalized = normalizeWorkspacePaper(found);
+      setPdfTarget({ kind: "paper", paper: normalized });
+      setPdfOpen(true);
+      setNavigatorTab("pdfs");
+    } else {
+      setPdfTarget({ kind: "missing", paperId: citationId });
+      setPdfOpen(true);
+      setNavigatorTab("pdfs");
     }
   }
 
@@ -710,7 +742,9 @@ export function WorkspacePage() {
             onToggleScopedPaper={toggleScopedPaper}
             selectedGreyIds={selectedGreyIds}
             onToggleScopedGrey={toggleScopedGrey}
+            greySourceListHeight={greySourceListHeight}
             onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90, 520)}
+            onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80, 400)}
             onOpenAssistantPdf={openSelectedAssistantPdf}
             onActivateSession={activateAssistantTurn}
             onDeleteSession={deleteAssistantTurn}
@@ -740,6 +774,7 @@ export function WorkspacePage() {
           <PdfPane
             url={pdfView.url}
             title={pdfView.title}
+            unavailableMessage={pdfTarget?.kind === "missing" ? "Diese Quelle wurde im Antworttext zitiert, ist aber nicht als PDF im Projekt vorhanden. Sie können das Paper importieren oder als Graue Quelle hinzufügen." : undefined}
             evidences={pdfView.evidences}
             activeEvidenceIndex={pdfView.activeEvidenceIndex}
             onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
@@ -893,6 +928,7 @@ export function WorkspacePage() {
                         onCitationClick={(citation, context, quote, citationStart) =>
                           jumpToCitationIn(block.verification, citation, context, quote, block.answer.citation_links ?? [], citationStart)
                         }
+                        onUnresolvedCitationClick={handleUnresolvedCitationClick}
                         getCitationMeta={(citation, context, citationStart) =>
                           citationMetasFor(block.verification, citation, context, block.answer.citation_links ?? [], citationStart)
                         }
@@ -1174,6 +1210,9 @@ export function WorkspacePage() {
       // Grey sources render through <GreySourceView>, not the PDF canvas.
       return { url: null, title: target.source.title ?? target.source.url, evidences: [], activeEvidenceIndex: 0 };
     }
+    if (target.kind === "missing") {
+      return { url: null, title: target.title || target.paperId, evidences: [], activeEvidenceIndex: 0 };
+    }
     return {
       url: target.paper.has_full_text && workspacePaperId(target.paper) ? api.paperPdfUrl(workspacePaperId(target.paper), workspacePaperTitle(target.paper)) : null,
       title: workspacePaperTitle(target.paper),
@@ -1423,6 +1462,7 @@ function WorkspaceNavigatorBody({
   activeAssistantEvidenceIndex,
   selectedPaperIds,
   pdfCitationListHeight,
+  greySourceListHeight,
   sessions,
   activeSessionId,
   onCreateNote,
@@ -1434,6 +1474,7 @@ function WorkspaceNavigatorBody({
   selectedGreyIds,
   onToggleScopedGrey,
   onResizeCitationList,
+  onResizeGreyList,
   onOpenAssistantPdf,
   onActivateSession,
   onDeleteSession,
@@ -1456,6 +1497,7 @@ function WorkspaceNavigatorBody({
   activeAssistantEvidenceIndex: number;
   selectedPaperIds: string[];
   pdfCitationListHeight: number;
+  greySourceListHeight: number;
   sessions: AssistantTurn[];
   activeSessionId: string;
   onCreateNote: () => void;
@@ -1467,6 +1509,7 @@ function WorkspaceNavigatorBody({
   selectedGreyIds: string[];
   onToggleScopedGrey: (greyId: string) => void;
   onResizeCitationList: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizeGreyList: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onOpenAssistantPdf: () => void;
   onActivateSession: (turnId: string) => void;
   onDeleteSession: (turnId: string) => void;
@@ -1517,7 +1560,7 @@ function WorkspaceNavigatorBody({
   }
   if (tab === "pdfs") {
     const activeCitationId = selectedCitation?.id ?? (pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.id : "");
-    const targetPaperId = pdfTarget?.kind === "paper" ? workspacePaperId(pdfTarget.paper) : pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.paper_id : pdfTarget?.kind === "assistant" ? pdfTarget.source.paper_id : "";
+    const targetPaperId = pdfTarget?.kind === "paper" ? workspacePaperId(pdfTarget.paper) : pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.paper_id : pdfTarget?.kind === "assistant" ? pdfTarget.source.paper_id : pdfTarget?.kind === "missing" ? pdfTarget.paperId : "";
     const activePaperId = targetPaperId || activeAssistantSource?.paper_id || "";
     const activeAssistantEvidence = activeAssistantSource?.evidence[activeAssistantEvidenceIndex];
     const selectedCitationIndex = Number(selectedCitation?.evidence_index ?? 0);
@@ -1590,7 +1633,7 @@ function WorkspaceNavigatorBody({
             const paperId = workspacePaperId(normalizedPaper);
             const title = workspacePaperTitle(normalizedPaper);
             const selectedForScope = Boolean(paperId && selectedPaperIds.includes(paperId));
-            const isActivePaper = Boolean(paperId && activePaperId === paperId);
+            const isActivePaper = Boolean(paperId && activePaperId && (activePaperId === paperId || sameCitation(activePaperId, paperId)));
             const isPrimary = Boolean(paperId && primaryPaperId && paperId === primaryPaperId);
             return (
               <div
@@ -1635,7 +1678,7 @@ function WorkspaceNavigatorBody({
               <span>Graue Quellen</span>
               <Globe size={14} />
             </div>
-            <div className="list workspace-nav-list">
+            <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: greySourceListHeight }}>
               {greySources.map((source) => {
                 const isActiveGrey = pdfTarget?.kind === "grey" && pdfTarget.source.id === source.id;
                 const selectedForScope = selectedGreyIds.includes(source.id);
@@ -1673,6 +1716,7 @@ function WorkspaceNavigatorBody({
                 );
               })}
             </div>
+            <div className="workspace-list-resize-handle" role="separator" aria-label="Graue Quellen Hoehe anpassen" onPointerDown={onResizeGreyList} />
           </>
         ) : null}
       </section>
@@ -1810,6 +1854,9 @@ function activeScopePaperId(target: WorkspacePdfTarget | null, activeAssistantSo
     }
     if (target.kind === "grey") {
       return "";
+    }
+    if (target.kind === "missing") {
+      return target.paperId;
     }
     return workspacePaperId(target.paper);
   }

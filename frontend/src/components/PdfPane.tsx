@@ -80,6 +80,7 @@ const ANCHOR_STOPWORDS = new Set([
 type PdfPaneProps = {
   url?: string | null;
   title?: string;
+  unavailableMessage?: string;
   evidences?: VerificationEvidence[];
   activeEvidenceIndex?: number;
   onActiveEvidenceChange?: (index: number) => void;
@@ -89,6 +90,7 @@ type PdfPaneProps = {
 export function PdfPane({
   url,
   title,
+  unavailableMessage,
   evidences = [],
   activeEvidenceIndex = 0,
   onActiveEvidenceChange,
@@ -385,7 +387,21 @@ export function PdfPane({
       ) : url ? (
         <div className="pdf-placeholder">PDF wird geladen</div>
       ) : (
-        <div className="pdf-placeholder">Quelle wählen</div>
+        <div className="pdf-placeholder">
+          {unavailableMessage ? (
+            <>
+              <strong>Kein PDF verfügbar</strong>
+              <span>{title}</span>
+              <p>{unavailableMessage}</p>
+            </>
+          ) : title ? (
+            <>
+              <strong>Kein PDF verfügbar</strong>
+              <span>{title}</span>
+              <p>Diese Quelle wurde zitiert, ist aber noch nicht als PDF heruntergeladen oder nicht im Projekt vorhanden.</p>
+            </>
+          ) : "Quelle wählen"}
+        </div>
       )}
 
       {error ? <div className="inline-error">{error}</div> : null}

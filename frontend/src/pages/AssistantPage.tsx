@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 
 import { api } from "../api";
-import { evidenceColorVars } from "../citationColors";
+import { evidenceColorVars, greyEvidenceColorVars } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
@@ -1578,6 +1578,7 @@ export function formatTurnTime(value: string) {
 export function AnswerText({
   answer,
   onCitationClick,
+  onUnresolvedCitationClick,
   getCitationMeta,
   activeCitation,
   onCitationInsert,
@@ -1587,6 +1588,7 @@ export function AnswerText({
   answer: string;
   citationLinks?: CitationLink[];
   onCitationClick: (citation: string, context?: string, quote?: string, citationStart?: number) => void;
+  onUnresolvedCitationClick?: (citationId: string) => void;
   getCitationMeta: (citation: string, context?: string, citationStart?: number) => CitationMeta[] | CitationMeta | null;
   activeCitation?: { paperId: string; evidenceIndex: number };
   onCitationInsert?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
@@ -1698,9 +1700,11 @@ export function AnswerText({
                     const label = `Z${meta.evidenceIndex + 1}`;
                     const chipKey = `${hoverKey}-${meta.source.paper_id}-${meta.evidenceIndex}-${metaIndex}`;
                     const isActive = Boolean(activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
+                    const isGreySource = meta.source.paper_id.startsWith("grey::");
+                    const chipColorVars = isGreySource ? greyEvidenceColorVars(meta.evidenceIndex) : evidenceColorVars(meta.evidenceIndex);
                     return (
                       <button
-                        className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""}`}
+                        className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""} ${isGreySource ? "citation-link--grey-source" : ""}`}
                         type="button"
                         key={chipKey}
                         onClick={(event) => {
@@ -1714,7 +1718,7 @@ export function AnswerText({
                         }}
                         onPointerEnter={(event) => showCitationHover(chipKey, label, meta, quote, event)}
                         onPointerLeave={scheduleCitationHoverClose}
-                        style={evidenceColorVars(meta.evidenceIndex)}
+                        style={chipColorVars}
                         title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}`}
                       >
                         <span className="citation-index">{label}</span>
@@ -1741,13 +1745,18 @@ export function AnswerText({
                 </>
               );
             })() : (
-              <span
+              <button
                 className="citation-link citation-link--unresolved"
+                type="button"
                 title={`Quelle nicht verifiziert: ${match[1]}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUnresolvedCitationClick?.(match[1]);
+                }}
               >
                 <span className="citation-index">!</span>
                 <span className="citation-paper">{shortCitationLabel(match[1])}</span>
-              </span>
+              </button>
             )}
             {hoverCitation?.key === hoverKey || hoverCitation?.key.startsWith(`${hoverKey}-`) ? (
               <span
@@ -1757,7 +1766,7 @@ export function AnswerText({
                 onPointerEnter={cancelCitationHoverClose}
                 onPointerLeave={scheduleCitationHoverClose}
                 style={{
-                  ...evidenceColorVars(hoverCitation.evidenceIndex),
+                  ...(hoverCitation.source.paper_id.startsWith("grey::") ? greyEvidenceColorVars(hoverCitation.evidenceIndex) : evidenceColorVars(hoverCitation.evidenceIndex)),
                   left: hoverCitation.left,
                   top: hoverCitation.top,
                   width: hoverCitation.width

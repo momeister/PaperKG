@@ -943,9 +943,16 @@ h1 {
 }
 
 .citation-link--unresolved {
-  opacity: 0.45;
-  cursor: default;
-  pointer-events: none;
+  opacity: 0.55;
+  cursor: pointer;
+  --evidence-color: #8b96a5;
+  --evidence-soft: rgba(139, 150, 165, 0.15);
+  --evidence-border: rgba(139, 150, 165, 0.35);
+}
+
+.citation-link--unresolved:hover,
+.citation-link--unresolved:focus-visible {
+  opacity: 0.85;
 }
 
 .citation-link:hover,
@@ -1327,7 +1334,15 @@ h1 {
   min-width: 0;
   overflow: hidden;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
+}
+
+.workspace-nav-body > .workspace-nav-subheading {
+  padding-top: 10px;
+}
+
+.workspace-nav-body > .workspace-active-source {
+  margin-bottom: 4px;
 }
 
 .workspace-nav-toolbar,
@@ -1475,16 +1490,28 @@ h1 {
 }
 
 .workspace-list-resize-handle {
-  flex: 0 0 8px;
-  min-height: 8px;
-  margin: -4px 0;
-  border-radius: 999px;
+  flex: 0 0 14px;
+  min-height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: row-resize;
+  position: relative;
 }
 
-.workspace-list-resize-handle:hover,
-.workspace-list-resize-handle:focus-visible {
-  background: #cbd5e1;
+.workspace-list-resize-handle::after {
+  content: "";
+  display: block;
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: #c8d3de;
+  transition: background 0.15s;
+}
+
+.workspace-list-resize-handle:hover::after,
+.workspace-list-resize-handle:focus-visible::after {
+  background: #94a3b8;
   outline: none;
 }
 
@@ -1682,18 +1709,23 @@ h1 {
 
 .workspace-nav-pane .workspace-paper-row .workspace-paper-main strong {
   display: -webkit-box;
+  max-width: 100%;
   color: var(--ink);
   text-overflow: clip;
   white-space: normal;
+  overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
 }
 
 .workspace-nav-pane .workspace-paper-row .workspace-paper-main span {
   display: block;
+  min-width: 0;
+  max-width: 100%;
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+  overflow: hidden;
 }
 
 .workspace-paper-row--active-source {
@@ -2795,6 +2827,7 @@ h1 {
 }
 
 .note-citation-row__title strong {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3397,6 +3430,29 @@ h1 {
   background: #fafbfc;
   padding: 18px;
   text-align: center;
+}
+
+.pdf-placeholder strong {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.pdf-placeholder span {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.pdf-placeholder p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  max-width: 240px;
+  margin: 0 auto;
 }
 
 .empty-state {

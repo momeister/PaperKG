@@ -801,7 +801,7 @@ def _cited_paper_ids(answer_text: str) -> set[str]:
     for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
         for value in re.split(r"[,;]\s*", bracketed):
             value = value.strip()
-            if value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p"):
+            if _is_allowed_citation_label(value):
                 ids.add(value)
     return ids
 
@@ -992,7 +992,9 @@ def _invalid_citations(answer_text: str) -> list[str]:
 
 
 def _is_allowed_citation_label(value: str) -> bool:
-    return value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p")
+    # Accept any source:id format (e.g. arxiv:, crossref:, openalex:, semantic_scholar:, files:, local:, doi:)
+    # and legacy short p-prefixed IDs. Bare numbers or random tokens are rejected.
+    return bool(re.match(r'^[a-z][a-z0-9_]*:[^\s]', value)) or value.startswith("p")
 
 
 def _is_transient_generation_error(error: str) -> bool:
