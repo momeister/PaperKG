@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import React, { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, X, XCircle } from "lucide-react";
@@ -66,6 +66,27 @@ function useElapsedTimer(isPending: boolean): number {
   return s;
 }
 
+function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [val, setVal] = useState<T>(() => {
+    try {
+      const s = sessionStorage.getItem(key);
+      return s ? (JSON.parse(s) as T) : init;
+    } catch { return init; }
+  });
+  useEffect(() => {
+    try { sessionStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ }
+  }, [key, val]);
+  return [val, setVal];
+}
+
+function discoveryPhaseLabel(elapsed: number, maxN: number): string {
+  if (elapsed < 5) return "Analysiere Paper-Inhalte …";
+  if (elapsed < 14) return "Generiere Suchanfragen …";
+  if (elapsed < 28) return `Suche in Quellen … (${elapsed}s)`;
+  if (elapsed < 55) return `Verarbeite ${maxN} Vorschläge … (${elapsed}s)`;
+  return `Läuft noch … ${elapsed}s`;
+}
+
 export function ImportPage() {
   const { activeProject, provider } = useAppState();
   const navigate = useNavigate();
@@ -78,16 +99,21 @@ export function ImportPage() {
   const [results, setResults] = useState<Paper[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  const [uploaded, setUploaded] = useState<Paper[]>([]);
-  const [references, setReferences] = useState<Record<string, ReferenceCandidate[]>>({});
-  const [topicCandidates, setTopicCandidates] = useState<DiscoveryCandidate[]>([]);
-  const [paperCandidates, setPaperCandidates] = useState<Record<string, DiscoveryCandidate[]>>({});
-  const [topicGroups, setTopicGroups] = useState<TopicGroup[]>([]);
+  const [uploaded, setUploaded] = useSessionState<Paper[]>("import-uploaded", []);
+  const [references, setReferences] = useSessionState<Record<string, ReferenceCandidate[]>>("import-references", {});
+  const [topicCandidates, setTopicCandidates] = useSessionState<DiscoveryCandidate[]>("import-topic-candidates", []);
+  const [paperCandidates, setPaperCandidates] = useSessionState<Record<string, DiscoveryCandidate[]>>("import-paper-candidates", {});
+  const [topicGroups, setTopicGroups] = useSessionState<TopicGroup[]>("import-topic-groups", []);
   const [includeRelatedTopics, setIncludeRelatedTopics] = useState(false);
   const [researchQuestion, setResearchQuestion] = useState("");
   const [autoDownload, setAutoDownload] = useState(false);
   const [primaryPaperId, setPrimaryPaperId] = useState<string | null>(null);
-  const [savedFindingUrls, setSavedFindingUrls] = useState<string[]>([]);
+  const [savedFindingUrls, setSavedFindingUrls] = useSessionState<string[]>("import-saved-findings", []);
+
+  const [maxPerQuery, setMaxPerQuery] = useState(5);
+  const [maxResearchSources, setMaxResearchSources] = useState(12);
+  const [maxRelatedTopics, setMaxRelatedTopics] = useState(5);
+  const [downloadDismissed, setDownloadDismissed] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -113,6 +139,8 @@ export function ImportPage() {
       api.harvestDownload(papers, downloadPdfs, downloadProjectId),
     onSuccess: invalidateLibrary
   });
+  // Reset overlay dismiss state when a new download starts
+  useEffect(() => { if (download.isPending) setDownloadDismissed(false); }, [download.isPending]);
   const upload = useMutation({
     mutationFn: ({ file, title }: { file: File; title?: string }) =>
       api.uploadPdf(file, { title, project_id: downloadProjectId }),
@@ -137,7 +165,7 @@ export function ImportPage() {
   const discoverTopic = useMutation({
     mutationFn: () => {
       discoverTopicAbort.current = new AbortController();
-      return api.discoveryFromTopic({ topic: topic.trim(), sources, provider, max_per_query: 5 }, discoverTopicAbort.current.signal);
+      return api.discoveryFromTopic({ topic: topic.trim(), sources, provider, max_per_query: maxPerQuery }, discoverTopicAbort.current.signal);
     },
     onSuccess: async (payload) => {
       setTopicCandidates(payload.candidates);
@@ -150,7 +178,7 @@ export function ImportPage() {
   const discoverPaper = useMutation({
     mutationFn: (paperId: string) => {
       discoverPaperAbort.current = new AbortController();
-      return api.discoveryFromPaper({ paper_id: paperId, sources, provider, max_per_query: 5 }, discoverPaperAbort.current.signal);
+      return api.discoveryFromPaper({ paper_id: paperId, sources, provider, max_per_query: maxPerQuery }, discoverPaperAbort.current.signal);
     },
     onSuccess: async (payload, paperId) => {
       setPaperCandidates((current) => ({ ...current, [paperId]: payload.candidates }));
@@ -163,7 +191,7 @@ export function ImportPage() {
   const research = useMutation({
     mutationFn: ({ question }: { question: string; withRelated: boolean }) => {
       cancelResearchRef.current = false;
-      return api.deepResearch({ question, provider, max_sources: 12 });
+      return api.deepResearch({ question, provider, max_sources: maxResearchSources });
     },
     onSuccess: async (payload, { question, withRelated }) => {
       const mainGroup: TopicGroup = {
@@ -173,7 +201,7 @@ export function ImportPage() {
         collapsed: false,
         pending: false,
       };
-      const relTopics = (payload.related_topics ?? []).slice(0, 5);
+      const relTopics = (payload.related_topics ?? []).slice(0, maxRelatedTopics);
       if (withRelated && relTopics.length > 0) {
         const subGroups: TopicGroup[] = relTopics.map((t) => ({
           topic: t,
@@ -186,7 +214,7 @@ export function ImportPage() {
         for (const subTopic of relTopics) {
           if (cancelResearchRef.current) break;
           try {
-            const subPayload = await api.deepResearch({ question: subTopic, provider, max_sources: 8 });
+            const subPayload = await api.deepResearch({ question: subTopic, provider, max_sources: Math.max(6, maxResearchSources - 4) });
             setTopicGroups((current) =>
               current.map((g) => (g.topic === subTopic ? { ...g, findings: subPayload.findings, pending: false } : g))
             );
@@ -231,6 +259,7 @@ export function ImportPage() {
   const extractRefsElapsed = useElapsedTimer(extractRefs.isPending);
   const discoverPaperElapsed = useElapsedTimer(discoverPaper.isPending);
   const discoverTopicElapsed = useElapsedTimer(discoverTopic.isPending);
+  const researchElapsed = useElapsedTimer(research.isPending);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -266,13 +295,6 @@ export function ImportPage() {
           <span>KI-Vorschlägen vertrauen: Top-10 automatisch laden</span>
         </label>
       </div>
-
-      <DownloadProgress
-        pending={download.isPending}
-        data={download.data}
-        scopeLabel={isRealProject ? `Projekt: ${activeProject}` : "Alle Papers (global)"}
-        onGoToExtraction={() => navigate("/extraction")}
-      />
 
       <div className="two-column">
         <section className="panel import-panel">
@@ -332,10 +354,21 @@ export function ImportPage() {
                 </button>
               )}
             </div>
+            <div className="import-count-label" style={{ marginTop: "0.3rem" }}>
+              <span>Vorschläge je Quelle (KI-Vorschläge &amp; KI-Kontext):</span>
+              <input
+                className="import-count-input"
+                type="number"
+                min={3}
+                max={20}
+                value={maxPerQuery}
+                onChange={(e) => setMaxPerQuery(Number(e.target.value))}
+              />
+            </div>
             {discoverTopic.isPending && (
               <div className="import-status-row">
                 <Loader2 size={14} className="spin" />
-                <span className="muted">KI-Vorschläge laufen … {discoverTopicElapsed}s</span>
+                <span className="muted">{discoveryPhaseLabel(discoverTopicElapsed, maxPerQuery)}</span>
               </div>
             )}
           </form>
@@ -436,8 +469,13 @@ export function ImportPage() {
                 {discoverPaper.isPending && (
                   <div className="import-status-row">
                     <Loader2 size={14} className="spin" />
-                    <span className="muted">KI-Kontext läuft … {discoverPaperElapsed}s</span>
+                    <span className="muted">{discoveryPhaseLabel(discoverPaperElapsed, maxPerQuery)}</span>
                   </div>
+                )}
+                {!discoverPaper.isPending && !paperCandidates[paper.id]?.length && (
+                  <p className="muted" style={{ fontSize: "0.78rem", margin: "0.15rem 0 0" }}>
+                    KI analysiert das Paper, generiert Suchanfragen und findet ähnliche Paper in den gewählten Quellen.
+                  </p>
                 )}
                 {references[paper.id]?.length ? (
                   <CandidateList
@@ -478,20 +516,62 @@ export function ImportPage() {
             <span>Graue Quellen</span>
             <strong>Web-Recherche (Deep Research)</strong>
           </div>
-          <Status value={research.isPending ? "running" : research.isSuccess ? "success" : "idle"} />
+          {(() => {
+            const pendingCount = topicGroups.filter((g) => g.pending).length;
+            const doneCount = topicGroups.filter((g) => !g.pending).length;
+            const totalFindings = topicGroups.reduce((sum, g) => sum + g.findings.length, 0);
+            if (research.isPending) return <Status value="running" />;
+            if (pendingCount > 0) return (
+              <span className="muted" style={{ fontSize: "0.8rem" }}>
+                {doneCount}/{doneCount + pendingCount} Themen · {totalFindings} Treffer
+              </span>
+            );
+            if (topicGroups.length > 0) return (
+              <span className="muted" style={{ fontSize: "0.8rem" }}>
+                {totalFindings} Treffer in {topicGroups.length} {topicGroups.length === 1 ? "Thema" : "Themen"}
+              </span>
+            );
+            return <Status value="idle" />;
+          })()}
         </div>
         <p className="muted">
           Durchsucht das Web, behandelt Inhalte als nicht vertrauenswürdige Daten (Prompt-Injection-Schutz) und speichert
           bestätigte Treffer nur als projektgebundene Zusatzinfo — nicht im großen Knowledge Graph.
         </p>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={includeRelatedTopics}
-            onChange={(event) => setIncludeRelatedTopics(event.target.checked)}
-          />
-          <span>KI-Themenvorschläge einbeziehen (erweitert die Suche auf verwandte Themen)</span>
-        </label>
+        <div className="button-row" style={{ flexWrap: "wrap" }}>
+          <label className="check-row" style={{ marginRight: "0.3rem" }}>
+            <input
+              type="checkbox"
+              checked={includeRelatedTopics}
+              onChange={(event) => setIncludeRelatedTopics(event.target.checked)}
+            />
+            <span>Verwandte Themen</span>
+          </label>
+          {includeRelatedTopics && (
+            <label className="import-count-label" title="Anzahl verwandter Themen">
+              <span>Max Themen</span>
+              <input
+                className="import-count-input"
+                type="number"
+                min={1}
+                max={10}
+                value={maxRelatedTopics}
+                onChange={(e) => setMaxRelatedTopics(Number(e.target.value))}
+              />
+            </label>
+          )}
+          <label className="import-count-label" title="Anzahl Web-Quellen pro Thema">
+            <span>Quellen</span>
+            <input
+              className="import-count-input"
+              type="number"
+              min={3}
+              max={30}
+              value={maxResearchSources}
+              onChange={(e) => setMaxResearchSources(Number(e.target.value))}
+            />
+          </label>
+        </div>
         <div className="button-row">
           <input
             value={researchQuestion}
@@ -523,6 +603,22 @@ export function ImportPage() {
             </button>
           )}
         </div>
+        {research.isPending && (
+          <div className="research-progress-row">
+            <Loader2 size={14} className="spin" />
+            <span>
+              LLM generiert Suchanfragen und fasst Quellen zusammen … {researchElapsed}s
+            </span>
+          </div>
+        )}
+        {topicGroups.some((g) => g.pending) && (
+          <div className="research-progress-row">
+            <Loader2 size={14} className="spin" />
+            <span>
+              Verwandte Themen werden durchsucht ({topicGroups.filter((g) => g.pending).length} ausstehend) …
+            </span>
+          </div>
+        )}
         {!isRealProject ? (
           <div className="warning-row">Wähle oben ein echtes Projekt, um graue Quellen zu speichern.</div>
         ) : null}
@@ -541,14 +637,22 @@ export function ImportPage() {
                   <span className="topic-group-label">
                     {group.isMain ? group.topic : `Verwandtes Thema: ${group.topic}`}
                   </span>
-                  <span className="topic-group-count">
-                    {group.pending ? "Suche läuft…" : `${group.findings.length} Treffer`}
-                  </span>
+                  {group.pending ? (
+                    <span className="topic-group-count topic-group-count--pending">
+                      <Loader2 size={12} className="spin" />
+                      <span>Sucht …</span>
+                    </span>
+                  ) : (
+                    <span className="topic-group-count">{group.findings.length} Treffer</span>
+                  )}
                 </button>
                 {!group.collapsed ? (
                   <div className="topic-group-findings">
                     {group.pending ? (
-                      <div className="muted" style={{ padding: "0.5rem 0" }}>Suche läuft…</div>
+                      <div className="research-progress-row" style={{ padding: "0.5rem 0" }}>
+                        <Loader2 size={13} className="spin" />
+                        <span>Suche im Web …</span>
+                      </div>
                     ) : group.findings.length ? (
                       <div className="stack">
                         {group.findings.map((finding) => (
@@ -618,6 +722,15 @@ export function ImportPage() {
           <EmptyState title="Keine Treffer" />
         )}
       </section>
+      <DownloadProgress
+        pending={download.isPending}
+        data={download.data}
+        totalPapers={download.variables?.papers.length ?? 0}
+        scopeLabel={isRealProject ? `Projekt: ${activeProject}` : "Alle Papers (global)"}
+        onGoToExtraction={() => navigate("/extraction")}
+        dismissed={downloadDismissed}
+        onDismiss={() => setDownloadDismissed(true)}
+      />
     </section>
   );
 }
@@ -640,30 +753,47 @@ function statusLabel(status: string): string {
 function DownloadProgress({
   pending,
   data,
+  totalPapers,
   scopeLabel,
-  onGoToExtraction
+  onGoToExtraction,
+  dismissed,
+  onDismiss
 }: {
   pending: boolean;
   data?: HarvestDownloadResponse;
+  totalPapers?: number;
   scopeLabel: string;
   onGoToExtraction: () => void;
+  dismissed?: boolean;
+  onDismiss?: () => void;
 }) {
-  if (!pending && !data) {
-    return null;
-  }
+  if (dismissed && !pending) return null;
+  if (!pending && !data) return null;
   const downloaded = data?.downloaded ?? 0;
   const failed = data?.failed_downloads?.length ?? 0;
-  const total = data?.results?.length ?? 0;
+  const total = data?.results?.length ?? totalPapers ?? 0;
   return (
+    <div className="download-progress-overlay">
     <section className="panel download-progress">
       <div className="panel-heading">
         <div>
           <span>Download</span>
-          <strong>{pending ? "Lädt Paper …" : `${downloaded} von ${total} geladen`}</strong>
+          <strong>{pending ? `Lädt ${total > 0 ? `0 von ${total} ` : ""}Paper …` : `${downloaded} von ${total} geladen`}</strong>
         </div>
         <div className="download-progress-meta">
           <span className="muted">Ziel: {scopeLabel}</span>
-          {pending ? <Loader2 className="spin" size={18} /> : <Status value={failed ? "warning" : "success"} />}
+          {pending ? (
+            <Loader2 className="spin" size={18} />
+          ) : (
+            <>
+              <Status value={failed ? "warning" : "success"} />
+              {onDismiss && (
+                <button className="download-progress-dismiss" type="button" onClick={onDismiss} title="Schließen">
+                  <X size={15} />
+                </button>
+              )}
+            </>
+          )}
         </div>
       </div>
       {pending ? (
@@ -718,6 +848,7 @@ function DownloadProgress({
         </>
       ) : null}
     </section>
+    </div>
   );
 }
 

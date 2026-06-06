@@ -76,9 +76,12 @@ making claims."""
         answer_context_mode: str = "kg",
         pdf_base_dir: str = "data/pdfs",
         inline_context_texts: list[str] | None = None,
+        project_id: str | None = None,
+        metadata_db_path: str = "data/metadata.duckdb",
     ) -> GroundedAnswer:
         context_diagnostics: dict[str, Any] = {
             "answer_context_mode": answer_context_mode or "kg",
+            "project_id": project_id,
         }
         if str(answer_context_mode or "kg").strip().lower() == "pdf_if_fits":
             pdf_answer, pdf_diagnostics = self._answer_from_pdf_context_if_fits(
@@ -97,6 +100,54 @@ making claims."""
         hits = self.retriever.search(question, limit=limit, paper_ids=paper_ids)
         priority_set = {str(pid) for pid in (priority_paper_ids or []) if pid}
         hits = _prioritize_hits(hits, priority_set)
+
+        # Inject per-project grey sources (saved web research findings) as citable evidence.
+        has_grey = False
+        if project_id and project_id not in ("", "__all_papers__"):
+            try:
+                from storage.metadata_db import MetadataDB  # local import to avoid circular deps
+                with MetadataDB(metadata_db_path) as _db:
+                    grey_list = _db.list_grey_sources(project_id)
+                for grey in grey_list:
+                    if grey.get("injection_flags"):
+                        continue  # skip quarantined content
+                    cited_id = f"grey::{grey['id']}"
+                    grey_source = Source(
+                        paper_id=cited_id,
+                        title=grey.get("title") or grey.get("url", ""),
+                        year=None,
+                        doi=None,
+                        url=grey.get("url"),
+                    )
+                    grey_hit = SearchHit(source=grey_source)
+                    for quote in (grey.get("evidence") or []):
+                        grey_hit.add_evidence(Evidence(
+                            paper_id=cited_id,
+                            kind="quote",
+                            field="evidence",
+                            text=str(quote),
+                            score=6.5,
+                            metadata={"source_type": "grey", "url": grey.get("url", "")},
+                        ))
+                    if not grey_hit.evidence and grey.get("summary"):
+                        grey_hit.add_evidence(Evidence(
+                            paper_id=cited_id,
+                            kind="summary",
+                            field="summary",
+                            text=grey["summary"],
+                            score=5.5,
+                            metadata={"source_type": "grey", "url": grey.get("url", "")},
+                        ))
+                    if grey_hit.evidence:
+                        hits.append(grey_hit)
+                        has_grey = True
+                if has_grey:
+                    context_diagnostics["grey_source_count"] = sum(
+                        1 for h in hits if h.source.paper_id.startswith("grey::")
+                    )
+            except Exception:
+                pass  # never fail the answer because of grey source fetch
+
         evidence = self._evidence_for_answer(hits, max_items=_evidence_item_limit(limit, hits))
         sources = [hit.source for hit in hits if hit.evidence]
 

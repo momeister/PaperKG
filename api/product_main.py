@@ -538,9 +538,12 @@ def _paper_list_view(paper: dict[str, Any], pdf_base_dir: str = DEFAULT_PDF_BASE
 def _paper_local_pdf_path(paper: dict[str, Any], pdf_base_dir: str) -> str | None:
     pdf_url = _clean_display_text(paper.get("pdf_url"))
     if pdf_url and not re.match(r"^[a-z][a-z0-9+.-]*://", pdf_url, flags=re.IGNORECASE):
-        path = Path(pdf_url)
-        if path.exists():
-            return str(path)
+        path = Path(str(pdf_url).replace("\\", "/"))
+        try:
+            if path.exists():
+                return str(path)
+        except OSError:
+            pass
     paper_id_value = _clean_display_text(paper.get("id") or paper.get("paper_id") or paper.get("source_id"))
     title = _clean_display_text(paper.get("title"))
     return find_pdf_path(paper_id_value, title, pdf_base_dir) if paper_id_value else None
@@ -891,6 +894,29 @@ def extraction_library(
         projects = _load_projects(_projects_path(projects_path))
         member_ids = set(projects.get(project_id, []))
         rows = [row for row in rows if str(row.get("paper_id") or "") in member_ids]
+        try:
+            with MetadataDB(metadata_db_path) as _db:
+                grey_list = _db.list_grey_sources(project_id)
+            for grey in grey_list:
+                if grey.get("injection_flags"):
+                    continue
+                full_text = (grey.get("full_text") or "").strip()
+                if not full_text:
+                    continue
+                rows.append({
+                    "paper_id": f"grey::{grey['id']}",
+                    "title": grey.get("title") or grey.get("url") or grey["id"],
+                    "filename": "",
+                    "pdf_path": "",
+                    "source_type": "grey",
+                    "text": full_text[:200000],
+                    "size_bytes": len(full_text.encode("utf-8")),
+                    "modified_timestamp": grey.get("created_timestamp"),
+                    "latest_extraction_status": None,
+                    "known_paper": False,
+                })
+        except Exception:
+            pass
     if query:
         query_lower = query.lower()
         rows = [

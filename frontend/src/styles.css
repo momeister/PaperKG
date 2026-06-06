@@ -4767,3 +4767,74 @@ button.data-row {
   flex-wrap: wrap;
   gap: 0.4rem;
 }
+
+.download-progress-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, #8a93a6);
+  padding: 0.15rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+.download-progress-dismiss:hover {
+  color: var(--text, #e2e8f0);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Sticky download-progress overlay (bottom-right) */
+.download-progress-overlay {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  width: 420px;
+  max-width: calc(100vw - 2rem);
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 200;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  background: var(--surface, #151c2e);
+}
+
+/* Compact number input next to buttons */
+.import-count-input {
+  width: 4.2rem;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.4rem;
+  border: 1px solid var(--border, #2a3142);
+  border-radius: 4px;
+  background: var(--surface-2, rgba(255,255,255,0.04));
+  color: inherit;
+  text-align: center;
+}
+
+.import-count-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-muted, #8a93a6);
+  white-space: nowrap;
+}
+
+/* Research progress summary row */
+.research-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-muted, #8a93a6);
+  margin-top: 0.35rem;
+}
+
+/* Topic group count badge while pending */
+.topic-group-count--pending {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--accent, #4c8bf5);
+}

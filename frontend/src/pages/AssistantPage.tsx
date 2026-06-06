@@ -135,7 +135,8 @@ export function AssistantPage() {
         model,
         limit: answerLimitFor(value, evidenceMode),
         priority_paper_ids: primaryPaperId ? [primaryPaperId] : undefined,
-        conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined
+        conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined,
+        project_id: activeProject || undefined
       }),
     onSuccess: async (payload) => {
       let sources: VerificationSource[] = [];

@@ -273,6 +273,8 @@ export type ExtractionLibraryItem = {
   title: string;
   filename: string;
   pdf_path: string;
+  source_type?: "pdf" | "grey";
+  text?: string;
   size_bytes?: number | null;
   modified_timestamp?: string | null;
   latest_extraction_status?: string | null;

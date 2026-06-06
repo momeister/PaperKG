@@ -212,7 +212,8 @@ export function WorkspacePage() {
         paper_ids: scopedPaperIds.length ? scopedPaperIds : undefined,
         answer_context_mode: answerContextMode !== "kg" ? answerContextMode : undefined,
         inline_context_texts: inlineContextTexts.length ? inlineContextTexts : undefined,
-        conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined
+        conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined,
+        project_id: activeProject || undefined
       }),
     onSuccess: async (payload) => {
       let sources: VerificationSource[] = [];
@@ -447,6 +448,15 @@ export function WorkspacePage() {
   }
 
   function handleUnresolvedCitationClick(citationId: string) {
+    // Grey source citations from the answer pipeline use "grey::<id>" format
+    if (citationId.startsWith("grey::")) {
+      const greyId = citationId.slice(6);
+      const source = greySources.find((s) => s.id === greyId);
+      if (source) {
+        openGreySource(source);
+        return;
+      }
+    }
     // Try to find the paper in the project papers list
     const found = pdfPapers.find((p) => {
       const pid = workspacePaperId(normalizeWorkspacePaper(p));

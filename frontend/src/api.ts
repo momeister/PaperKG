@@ -206,6 +206,7 @@ export const api = {
     conversation_context?: Array<{ role: string; content: string }>;
     answer_context_mode?: "kg" | "pdf_if_fits";
     inline_context_texts?: string[];
+    project_id?: string;
   }) =>
     request<Answer>("/query/answer", { method: "POST", body: JSON.stringify(payload) }),
   verifyAnswer: (answer: Answer, options: { max_sources?: number; max_evidence_per_source?: number } = {}) =>

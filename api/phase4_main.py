@@ -52,6 +52,7 @@ class AnswerRequest(Phase4Request):
     answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
     pdf_base_dir: str = "data/pdfs"
     inline_context_texts: list[str] = Field(default_factory=list)
+    project_id: str | None = None
 
 
 class HypothesisRequest(Phase4Request):
@@ -125,6 +126,8 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         answer_context_mode=request.answer_context_mode,
         pdf_base_dir=request.pdf_base_dir,
         inline_context_texts=request.inline_context_texts or None,
+        project_id=request.project_id,
+        metadata_db_path=request.metadata_db_path,
     )
     return answer.to_dict()
 

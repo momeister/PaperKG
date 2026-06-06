@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, Database, FileSearch, ListChecks, Play, Plus, RefreshCw, Search } from "lucide-react";
+import { BookOpenCheck, Database, FileSearch, Globe, ListChecks, Play, Plus, RefreshCw, Search } from "lucide-react";
 
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -140,16 +140,20 @@ export function ExtractionPage() {
   function selectPdf(item: ExtractionLibraryItem) {
     setSelectedPdf(item);
     setPaperId(item.paper_id);
+    if (item.source_type === "grey" && item.text) {
+      setText(item.text);
+    }
     setActiveTab("run");
   }
 
-  function toggleBatch(path: string) {
-    setSelectedBatchPaths((current) => (current.includes(path) ? current.filter((item) => item !== path) : [...current, path]));
+  function toggleBatch(id: string) {
+    setSelectedBatchPaths((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
 
   function toggleAllBatch() {
-    const paths = (libraryQueryResult.data?.items ?? []).map((item) => item.pdf_path);
-    setSelectedBatchPaths((current) => (current.length === paths.length ? [] : paths));
+    const batchable = (libraryQueryResult.data?.items ?? []).filter((item) => item.source_type !== "grey" && item.pdf_path);
+    const ids = batchable.map((item) => item.paper_id);
+    setSelectedBatchPaths((current) => (current.length === ids.length ? [] : ids));
   }
 
   function submitExtract(event: FormEvent) {
@@ -169,7 +173,7 @@ export function ExtractionPage() {
         <div>
           <h1>Extraktion</h1>
           <p className="page-subtitle">
-            {activeProject ? `Projekt: ${activeProject} — nur Projekt-PDFs` : "Alle Papers — globale Bibliothek"}
+            {activeProject ? `Projekt: ${activeProject} — PDFs & Webquellen` : "Alle Papers — globale Bibliothek"}
           </p>
         </div>
         <div className="segmented extraction-tabs">
@@ -199,7 +203,7 @@ export function ExtractionPage() {
             <div className="panel-heading">
               <div>
                 <span>Input</span>
-                <strong>{selectedPdf?.filename ?? "Text oder PDF"}</strong>
+                <strong>{selectedPdf?.title || selectedPdf?.filename || "Text oder PDF"}</strong>
               </div>
               <Status value={parsePdf.isPending || extract.isPending ? "running" : lastResult?.status ?? "idle"} />
             </div>
@@ -209,23 +213,36 @@ export function ExtractionPage() {
                 <input value={paperId} onChange={(event) => setPaperId(event.target.value)} placeholder="paper-id" />
               </label>
               <label>
-                PDF
+                {selectedPdf?.source_type === "grey" ? "Webquelle" : "PDF"}
                 <select
-                  value={selectedPdf?.pdf_path ?? ""}
+                  value={selectedPdf?.paper_id ?? ""}
                   onChange={(event) => {
-                    const item = libraryItems.find((candidate) => candidate.pdf_path === event.target.value) ?? null;
+                    const item = libraryItems.find((candidate) => candidate.paper_id === event.target.value) ?? null;
                     setSelectedPdf(item);
                     if (item) {
                       setPaperId(item.paper_id);
+                      if (item.source_type === "grey" && item.text) {
+                        setText(item.text);
+                      }
                     }
                   }}
                 >
-                  <option value="">Keine PDF ausgewaehlt</option>
-                  {libraryItems.map((item) => (
-                    <option key={item.pdf_path} value={item.pdf_path}>
+                  <option value="">Keine Quelle ausgewählt</option>
+                  {libraryItems.filter((item) => item.source_type !== "grey" && item.pdf_path).map((item) => (
+                    <option key={item.paper_id} value={item.paper_id}>
                       {item.title || item.filename}
                     </option>
                   ))}
+                  {libraryItems.some((item) => item.source_type === "grey") && (
+                    <>
+                      <option disabled value="">— Webquellen —</option>
+                      {libraryItems.filter((item) => item.source_type === "grey").map((item) => (
+                        <option key={item.paper_id} value={item.paper_id}>
+                          {item.title}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </label>
               <div className="extraction-options-grid">
@@ -274,7 +291,7 @@ export function ExtractionPage() {
                 <span>Entity Linking</span>
               </label>
               <div className="button-row">
-                <button className="button" type="button" disabled={!selectedPdf || parsePdf.isPending} onClick={() => parsePdf.mutate()}>
+                <button className="button" type="button" disabled={!selectedPdf || selectedPdf.source_type === "grey" || parsePdf.isPending} onClick={() => parsePdf.mutate()}>
                   <FileSearch size={16} />
                   <span>Parsen</span>
                 </button>
@@ -307,7 +324,7 @@ export function ExtractionPage() {
             <div className="button-row">
               <button className="button" type="button" onClick={toggleAllBatch}>
                 <ListChecks size={16} />
-                <span>{selectedBatchPaths.length === libraryItems.length && libraryItems.length ? "Leeren" : "Alle"}</span>
+                <span>{selectedBatchPaths.length === libraryItems.filter((i) => i.source_type !== "grey" && i.pdf_path).length && libraryItems.length ? "Leeren" : "Alle"}</span>
               </button>
               <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending} onClick={() => batch.mutate()}>
                 <Play size={16} />
@@ -325,7 +342,7 @@ export function ExtractionPage() {
               <span>{batch.data.job.papers_failed} failed</span>
             </div>
           ) : null}
-          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.pdf_path ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
+          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.paper_id ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
           <JobsMiniList jobs={jobsQuery.data?.jobs ?? []} />
         </section>
         </div>
@@ -334,7 +351,7 @@ export function ExtractionPage() {
       {activeTab === "library" ? (
         <section className="panel">
           <LibraryToolbar query={libraryQuery} setQuery={setLibraryQuery} onRefresh={() => libraryQueryResult.refetch()} />
-          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.pdf_path ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} />
+          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.paper_id ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} />
         </section>
       ) : null}
 
@@ -463,36 +480,46 @@ function ExtractionLibraryTable({
   selectedBatchPaths: string[];
   batchMode?: boolean;
   onSelect: (item: ExtractionLibraryItem) => void;
-  onToggleBatch: (path: string) => void;
+  onToggleBatch: (id: string) => void;
 }) {
   if (!items.length) {
-    return <EmptyState title="Keine PDFs" />;
+    return <EmptyState title="Keine PDFs oder Webquellen" />;
   }
   return (
     <div className="data-table extraction-library-table">
       <div className="data-row data-row--head">
         <span>Auswahl</span>
-        <span>PDF</span>
+        <span>Quelle</span>
         <span>Paper ID</span>
         <span>Status</span>
-        <span>Groesse</span>
+        <span>Größe</span>
         <span>Aktion</span>
       </div>
-      {items.map((item) => (
-        <div className={`data-row ${selectedPath === item.pdf_path ? "data-row--active" : ""}`} key={item.pdf_path}>
-          <label className="check-row extraction-row-check">
-            <input type="checkbox" checked={selectedBatchPaths.includes(item.pdf_path)} onChange={() => onToggleBatch(item.pdf_path)} />
-          </label>
-          <strong>{item.title || item.filename}</strong>
-          <span>{item.paper_id}</span>
-          <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
-          <span>{formatBytes(item.size_bytes)}</span>
-          <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
-            <FileSearch size={15} />
-            <span>{batchMode ? "Oeffnen" : "Auswaehlen"}</span>
-          </button>
-        </div>
-      ))}
+      {items.map((item) => {
+        const isGrey = item.source_type === "grey";
+        return (
+          <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""}`} key={item.paper_id}>
+            <label className="check-row extraction-row-check">
+              {isGrey ? (
+                <Globe size={14} style={{ opacity: 0.5 }} />
+              ) : (
+                <input type="checkbox" checked={selectedBatchPaths.includes(item.paper_id)} onChange={() => onToggleBatch(item.paper_id)} />
+              )}
+            </label>
+            <strong>
+              {isGrey && <Globe size={13} style={{ marginRight: 4, verticalAlign: "middle", opacity: 0.7 }} />}
+              {item.title || item.filename}
+            </strong>
+            <span>{item.paper_id}</span>
+            <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
+            <span>{formatBytes(item.size_bytes)}</span>
+            <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
+              <FileSearch size={15} />
+              <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -662,8 +689,10 @@ function formatApiError(error: ApiError) {
   return error.message;
 }
 
-function selectedBatchItems(items: ExtractionLibraryItem[], selectedPaths: string[]) {
-  return items.filter((item) => selectedPaths.includes(item.pdf_path)).map((item) => ({ paper_id: item.paper_id, pdf_path: item.pdf_path }));
+function selectedBatchItems(items: ExtractionLibraryItem[], selectedIds: string[]) {
+  return items
+    .filter((item) => selectedIds.includes(item.paper_id) && item.source_type !== "grey" && item.pdf_path)
+    .map((item) => ({ paper_id: item.paper_id, pdf_path: item.pdf_path }));
 }
 
 function itemLabel(item: Record<string, unknown>) {
