@@ -26,7 +26,14 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("do_not_follow", re.compile(r"do\s+not\s+follow\s+(?:the\s+)?(?:above|previous|user)", re.I)),
 ]
 
-_SCRIPT_STYLE = re.compile(r"<(script|style|noscript|template)[^>]*>.*?</\1>", re.I | re.S)
+_SCRIPT_STYLE = re.compile(r"<(script|style|noscript|template|svg|head)[^>]*>.*?</\1>", re.I | re.S)
+# Block-level tags whose boundaries should become line breaks so the extracted
+# text keeps paragraph/heading/list structure instead of collapsing to one blob.
+_BLOCK_BREAK = re.compile(
+    r"</?(?:p|div|section|article|header|footer|main|aside|nav|h[1-6]|li|ul|ol|"
+    r"table|tr|thead|tbody|blockquote|pre|figure|figcaption|br|hr)\b[^>]*>",
+    re.I,
+)
 _TAG = re.compile(r"<[^>]+>")
 _ZERO_WIDTH = re.compile("[​-‏‪-‮⁠﻿­]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -34,14 +41,21 @@ _WS = re.compile(r"[ \t]+")
 _MULTI_NEWLINE = re.compile(r"\n{3,}")
 
 DEFAULT_MAX_LEN = 8000
+# Full-article capture: grey sources keep the whole readable article, not a snippet.
+FULL_TEXT_MAX_LEN = 60000
 
 
 def strip_html(raw: str) -> str:
-    """Remove scripts/styles/markup and unescape HTML entities to plain text."""
+    """Remove scripts/styles/markup and unescape HTML entities to readable text.
+
+    Block-level tag boundaries are converted to newlines first so the result keeps
+    paragraph and heading structure (important for displaying the full article).
+    """
     if not raw:
         return ""
     without_blocks = _SCRIPT_STYLE.sub(" ", raw)
-    without_tags = _TAG.sub(" ", without_blocks)
+    with_breaks = _BLOCK_BREAK.sub("\n", without_blocks)
+    without_tags = _TAG.sub(" ", with_breaks)
     return html.unescape(without_tags)
 
 
@@ -70,6 +84,7 @@ def sanitize_web_text(raw: str, max_len: int = DEFAULT_MAX_LEN) -> tuple[str, li
     text = strip_html(raw)
     text = remove_control_chars(text)
     text = _WS.sub(" ", text)
+    text = re.sub(r" *\n *", "\n", text)
     text = _MULTI_NEWLINE.sub("\n\n", text).strip()
     flags = detect_injection(text)
     if len(text) > max_len:

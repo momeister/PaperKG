@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Plus, Search, Star } from "lucide-react";
+import { ExternalLink, FileText, Globe, Plus, Search, Star } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -109,7 +109,20 @@ export function LibraryPage() {
                   </strong>
                   <span>{paper.year ?? "n/a"}</span>
                   <span>{paper.source}</span>
-                  <Status value={paper.has_full_text ? "true" : "false"} />
+                  {paper.has_full_text ? (
+                    <a
+                      className="button button-compact button-ghost"
+                      href={api.paperPdfUrl(paper.id, paper.title || "")}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="PDF in neuem Tab öffnen"
+                    >
+                      <FileText size={14} />
+                      <span>Öffnen</span>
+                    </a>
+                  ) : (
+                    <Status value="false" />
+                  )}
                   <Status value={paper.latest_extraction_status ?? "missing"} />
                   <button
                     className={`button button-compact ${isPrimary ? "button-primary" : ""}`}
@@ -158,6 +171,10 @@ export function LibraryPage() {
 }
 
 function GreySourceCard({ source, open, onToggle }: { source: GreySource; open: boolean; onToggle: () => void }) {
+  const [showFull, setShowFull] = useState(false);
+  const evidence = source.evidence ?? [];
+  const fullText = source.full_text || source.raw_excerpt || "";
+  const charCount = fullText.length;
   return (
     <article className="grey-source-card grey-source-card--library">
       <button type="button" className="grey-source-toggle" onClick={onToggle}>
@@ -170,10 +187,30 @@ function GreySourceCard({ source, open, onToggle }: { source: GreySource; open: 
             <div className="warning-row">⚠ Prompt-Injection-Flags ignoriert: {source.injection_flags.join(", ")}</div>
           ) : null}
           {source.summary ? <p>{source.summary}</p> : null}
+          {evidence.length ? (
+            <div className="grey-evidence">
+              <span className="muted">Belegstellen aus der Quelle:</span>
+              {evidence.map((quote, index) => (
+                <blockquote key={index} className="grey-evidence-quote">
+                  {quote}
+                </blockquote>
+              ))}
+            </div>
+          ) : null}
           {source.query ? <p className="muted">Frage: {source.query}</p> : null}
-          <a className="muted" href={source.url} target="_blank" rel="noreferrer">
-            {source.url}
-          </a>
+          <div className="grey-source-actions">
+            <a className="button button-compact button-ghost" href={source.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} />
+              <span>Website öffnen</span>
+            </a>
+            {fullText ? (
+              <button type="button" className="button button-compact button-ghost" onClick={() => setShowFull((v) => !v)}>
+                <FileText size={14} />
+                <span>{showFull ? "Volltext ausblenden" : `Volltext anzeigen (${charCount.toLocaleString("de-DE")} Zeichen)`}</span>
+              </button>
+            ) : null}
+          </div>
+          {showFull && fullText ? <pre className="grey-source-fulltext">{fullText}</pre> : null}
         </div>
       ) : null}
     </article>

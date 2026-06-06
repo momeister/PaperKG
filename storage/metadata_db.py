@@ -363,11 +363,18 @@ class MetadataDB:
                 title VARCHAR,
                 summary TEXT,
                 raw_excerpt TEXT,
+                full_text TEXT,
+                evidence JSON,
                 injection_flags JSON,
                 status VARCHAR DEFAULT 'saved',
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migrate older grey_sources tables that predate full-article capture.
+        self._add_missing_columns(
+            "grey_sources",
+            {"full_text": "TEXT", "evidence": "JSON"},
+        )
         self._execute("CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)")
 
         self._execute("""
@@ -1315,16 +1322,20 @@ class MetadataDB:
         grey_id = str(source.get("id") or f"grey_{uuid.uuid4().hex}")
         now = datetime.now()
         flags = source.get("injection_flags") or []
+        evidence = source.get("evidence") or []
         self._execute("""
             INSERT INTO grey_sources
-            (id, project_id, query, url, title, summary, raw_excerpt, injection_flags, status, created_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, project_id, query, url, title, summary, raw_excerpt, full_text, evidence,
+             injection_flags, status, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 query = EXCLUDED.query,
                 url = EXCLUDED.url,
                 title = EXCLUDED.title,
                 summary = EXCLUDED.summary,
                 raw_excerpt = EXCLUDED.raw_excerpt,
+                full_text = EXCLUDED.full_text,
+                evidence = EXCLUDED.evidence,
                 injection_flags = EXCLUDED.injection_flags,
                 status = EXCLUDED.status
         """, [
@@ -1335,6 +1346,8 @@ class MetadataDB:
             source.get("title"),
             source.get("summary"),
             source.get("raw_excerpt"),
+            source.get("full_text"),
+            json.dumps(evidence),
             json.dumps(flags),
             str(source.get("status") or "saved"),
             now,
@@ -1366,14 +1379,15 @@ class MetadataDB:
 
     @staticmethod
     def _decode_grey_source(row: dict[str, Any]) -> dict[str, Any]:
-        flags = row.get("injection_flags")
-        if isinstance(flags, str):
-            try:
-                row["injection_flags"] = json.loads(flags)
-            except (ValueError, TypeError):
-                row["injection_flags"] = []
-        elif flags is None:
-            row["injection_flags"] = []
+        for field in ("injection_flags", "evidence"):
+            value = row.get(field)
+            if isinstance(value, str):
+                try:
+                    row[field] = json.loads(value)
+                except (ValueError, TypeError):
+                    row[field] = []
+            elif value is None:
+                row[field] = []
         return row
 
     def add_benchmark_run(self, run: dict[str, Any]) -> dict[str, Any]:

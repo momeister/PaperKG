@@ -41,9 +41,12 @@ export type DeepResearchFinding = {
   title: string;
   snippet: string;
   summary: string;
+  evidence?: string[];
   injection_flags: string[];
   quarantined: boolean;
   raw_excerpt: string;
+  full_text?: string;
+  char_count?: number;
 };
 
 export type DeepResearchResponse = {
@@ -51,6 +54,7 @@ export type DeepResearchResponse = {
   provider: string;
   queries: string[];
   topic_summary: string;
+  related_topics?: string[];
   findings: DeepResearchFinding[];
   warnings: string[];
 };
@@ -81,6 +85,8 @@ export type GreySource = {
   title?: string | null;
   summary?: string | null;
   raw_excerpt?: string | null;
+  full_text?: string | null;
+  evidence?: string[];
   injection_flags: string[];
   status?: string;
   created_timestamp?: string;

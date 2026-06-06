@@ -153,9 +153,9 @@ class DeepResearchRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     provider: str | None = None
     search_provider: str | None = None
-    max_queries: int = Field(default=3, ge=1, le=8)
-    results_per_query: int = Field(default=4, ge=1, le=10)
-    max_sources: int = Field(default=6, ge=1, le=15)
+    max_queries: int = Field(default=5, ge=1, le=12)
+    results_per_query: int = Field(default=6, ge=1, le=15)
+    max_sources: int = Field(default=12, ge=1, le=30)
 
 
 class GreySourcePayload(BaseModel):

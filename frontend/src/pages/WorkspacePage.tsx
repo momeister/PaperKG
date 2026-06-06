@@ -7,6 +7,7 @@ import {
   ChevronUp,
   FilePlus2,
   FileText,
+  Globe,
   ListChecks,
   Maximize2,
   MessageSquareText,
@@ -21,17 +22,29 @@ import {
   Search,
   Send,
   Sparkles,
+  Star,
   Trash2
 } from "lucide-react";
 
 import { api } from "../api";
 import { evidenceColorVars } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
+import { GreySourceView } from "../components/GreySourceView";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
-import type { Answer, NoteAiMessage, NoteAiThread, NoteCitation, Paper, VerificationEvidence, VerificationSource } from "../types";
+import type {
+  Answer,
+  DeepResearchFinding,
+  GreySource,
+  NoteAiMessage,
+  NoteAiThread,
+  NoteCitation,
+  Paper,
+  VerificationEvidence,
+  VerificationSource
+} from "../types";
 import {
   AnswerText,
   answerLimitFor,
@@ -57,7 +70,10 @@ export type WorkspaceNavigatorTab = "notes" | "pdfs" | "assistantSessions";
 export type WorkspacePdfTarget =
   | { kind: "assistant"; source: VerificationSource; evidenceIndex: number }
   | { kind: "noteCitation"; citation: NoteCitation }
-  | { kind: "paper"; paper: Paper };
+  | { kind: "paper"; paper: Paper }
+  | { kind: "grey"; source: GreySource };
+
+const ALL_PAPERS_SCOPES = new Set(["", "__all_papers__"]);
 
 type PaperQuestionScope = "current" | "selected" | "all";
 type WorkspaceAssistantMode = "pdf" | "notes";
@@ -115,6 +131,7 @@ export function WorkspacePage() {
   const [assistantMode, setAssistantMode] = useState<WorkspaceAssistantMode>("pdf");
   const [focusedNoteThreadId, setFocusedNoteThreadId] = useState("");
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
+  const [useInternet, setUseInternet] = useState(() => loadWorkspaceBoolean(scopedProjectId, "useInternet", false));
 
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
@@ -142,10 +159,19 @@ export function WorkspacePage() {
       ? selectedAnswerQuote.text
       : "";
 
+  const isRealProject = !!activeProject && !ALL_PAPERS_SCOPES.has(activeProject);
   const papersQuery = useQuery({
     queryKey: ["workspace-pdfs", activeProject],
     queryFn: () => api.listPapers({ project_id: activeProject, has_full_text: true, limit: 200 })
   });
+  const greyQuery = useQuery({
+    queryKey: ["grey-sources", activeProject],
+    queryFn: () => api.listGreySources(activeProject as string),
+    enabled: isRealProject
+  });
+  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
+  const primaryPaperId = projectsQuery.data?.projects.find((entry) => entry.id === activeProject)?.primary_paper_id ?? null;
+  const greySources = greyQuery.data?.grey_sources ?? [];
 
   const currentScopePaperId = activeScopePaperId(pdfTarget, selectedSource);
   const scopedPaperIds =
@@ -211,6 +237,19 @@ export function WorkspacePage() {
     }
   });
 
+  const webMutation = useMutation({
+    mutationFn: (value: string) => api.deepResearch({ question: value, provider }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] })
+  });
+  const saveGreyMutation = useMutation({
+    mutationFn: (finding: DeepResearchFinding) =>
+      api.addGreySources(activeProject as string, [findingToGreyRecord(finding)], webMutation.data?.question),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] })
+  });
+  const webResult = webMutation.data ?? null;
+
+  useEffect(() => saveWorkspaceBoolean(scopedProjectId, "useInternet", useInternet), [useInternet, scopedProjectId]);
+
   useEffect(() => {
     assistantScopeRef.current = scopedProjectId;
     const session = loadAssistantSession(scopedProjectId);
@@ -224,6 +263,8 @@ export function WorkspacePage() {
     setRequestedCitationId("");
     setSelectedPaperIds([]);
     setFocusedNoteThreadId("");
+    webMutation.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedProjectId]);
 
   useEffect(() => {
@@ -263,10 +304,40 @@ export function WorkspacePage() {
     }
   }, []);
 
+  function openGreySource(source: GreySource) {
+    setPdfTarget({ kind: "grey", source });
+    setPdfOpen(true);
+    setNavigatorTab("pdfs");
+  }
+
+  function appendGreyQuote(text: string, source: GreySource) {
+    const quote = text.trim();
+    if (!quote) {
+      return;
+    }
+    const label = source.title || source.url;
+    const markdown = `> ${quote.replace(/\n+/g, "\n> ")}\n>\n> — Graue Quelle: [${label}](${source.url})\n\n`;
+    notesActionsRef.current?.clearInsertPreview();
+    void appendToActiveNote(markdown);
+  }
+
+  function previewGreyQuote(text: string, source: GreySource) {
+    const quote = text.trim();
+    if (!quote) {
+      return;
+    }
+    const label = source.title || source.url;
+    notesActionsRef.current?.previewAppendMarkdown(`> ${quote.replace(/\n+/g, "\n> ")}\n>\n> — Graue Quelle: [${label}](${source.url})\n\n`);
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (question.trim() && !questionBlockedByScope) {
-      answerMutation.mutate(question.trim());
+    const value = question.trim();
+    if (value && !questionBlockedByScope) {
+      answerMutation.mutate(value);
+      if (useInternet) {
+        webMutation.mutate(value);
+      }
     }
   }
 
@@ -540,6 +611,8 @@ export function WorkspacePage() {
             selectedCitation={notesSnapshot.selectedCitation}
             papers={pdfPapers}
             papersLoading={papersQuery.isLoading}
+            greySources={greySources}
+            primaryPaperId={primaryPaperId}
             pdfTarget={pdfTarget}
             activeAssistantSource={selectedSource}
             activeAssistantEvidenceIndex={activeEvidenceIndex}
@@ -567,6 +640,7 @@ export function WorkspacePage() {
               setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(paper) });
               setPdfOpen(true);
             }}
+            onOpenGrey={openGreySource}
             onToggleScopedPaper={toggleScopedPaper}
             onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90, 520)}
             onOpenAssistantPdf={openSelectedAssistantPdf}
@@ -584,14 +658,24 @@ export function WorkspacePage() {
       />
 
       {pdfOpen ? (
-        <PdfPane
-          url={pdfView.url}
-          title={pdfView.title}
-          evidences={pdfView.evidences}
-          activeEvidenceIndex={pdfView.activeEvidenceIndex}
-          onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
-          onCollapse={() => setPdfOpen(false)}
-        />
+        pdfTarget?.kind === "grey" ? (
+          <GreySourceView
+            source={pdfTarget.source}
+            onCollapse={() => setPdfOpen(false)}
+            onInsert={(text) => appendGreyQuote(text, pdfTarget.source)}
+            onInsertPreview={(text) => previewGreyQuote(text, pdfTarget.source)}
+            onInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
+          />
+        ) : (
+          <PdfPane
+            url={pdfView.url}
+            title={pdfView.title}
+            evidences={pdfView.evidences}
+            activeEvidenceIndex={pdfView.activeEvidenceIndex}
+            onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
+            onCollapse={() => setPdfOpen(false)}
+          />
+        )
       ) : (
         <CollapsedPane label="PDF" icon={<PanelRightOpen size={17} />} onOpen={() => setPdfOpen(true)} />
       )}
@@ -697,10 +781,21 @@ export function WorkspacePage() {
               <option value="20">20</option>
               <option value="25">25</option>
             </select>
+            <label
+              className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
+              title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
+            >
+              <input type="checkbox" checked={useInternet} onChange={(event) => setUseInternet(event.target.checked)} disabled={!isRealProject} />
+              <Globe size={15} />
+              <span>Internet</span>
+            </label>
             <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
               <Send size={18} />
             </button>
           </form>
+          {useInternet && !isRealProject ? (
+            <div className="scope-status">Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).</div>
+          ) : null}
           {questionBlockedByScope ? (
             <div className="scope-status">
               {paperScope === "selected" ? "Keine Paper ausgewählt" : "Kein aktives Paper"}
@@ -736,6 +831,66 @@ export function WorkspacePage() {
               <EmptyState title="Keine Antwort" />
             )}
           </section>
+          {useInternet && (webMutation.isPending || webResult || webMutation.isError) ? (
+            <section className="panel web-research-panel">
+              <div className="panel-heading">
+                <div>
+                  <span>Aus dem Internet</span>
+                  <strong>{webMutation.isPending ? "Recherchiere…" : `${webResult?.findings.length ?? 0} Grauquellen`}</strong>
+                </div>
+                <Globe size={16} />
+              </div>
+              <p className="muted">
+                Web-Treffer als untrusted Grauquellen — getrennt von der lokalen, quellenbasierten Antwort und nicht im Knowledge Graph.
+              </p>
+              {webMutation.isError ? <div className="warning-row">Internet-Recherche fehlgeschlagen.</div> : null}
+              {webResult?.warnings?.length ? <div className="warning-row">{webResult.warnings.join(" · ")}</div> : null}
+              {webResult?.related_topics?.length ? (
+                <div className="web-research-topics">
+                  <span className="muted">Verwandte Themen:</span>
+                  {webResult.related_topics.slice(0, 8).map((topic) => (
+                    <span className="topic-chip" key={topic}>
+                      {topic}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="stack web-research-findings">
+                {(webResult?.findings ?? []).map((finding, index) => (
+                  <article className="web-research-finding" key={`${finding.url}-${index}`}>
+                    <div className="web-research-finding-head">
+                      <span className="grey-badge grey-badge--mini">Grauquelle</span>
+                      <strong title={finding.title || finding.url}>{finding.title || finding.url}</strong>
+                    </div>
+                    {finding.summary ? <p>{finding.summary}</p> : null}
+                    {finding.injection_flags?.length ? (
+                      <div className="warning-row">⚠ Prompt-Injection-Flags ignoriert: {finding.injection_flags.join(", ")}</div>
+                    ) : null}
+                    <div className="web-research-finding-actions">
+                      <button className="button button-compact button-ghost" type="button" onClick={() => openGreySource(findingToGreySource(finding))}>
+                        <FileText size={14} />
+                        <span>Im Viewer öffnen</span>
+                      </button>
+                      <a className="button button-compact button-ghost" href={finding.url} target="_blank" rel="noreferrer">
+                        <Globe size={14} />
+                        <span>Website</span>
+                      </a>
+                      <button
+                        className="button button-compact"
+                        type="button"
+                        disabled={!isRealProject || saveGreyMutation.isPending}
+                        onClick={() => saveGreyMutation.mutate(finding)}
+                      >
+                        <Star size={14} />
+                        <span>Als Grauquelle speichern</span>
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {webResult && !webResult.findings.length && !webMutation.isPending ? <EmptyState title="Keine Web-Treffer" /> : null}
+              </div>
+            </section>
+          ) : null}
           <div className="workspace-assistant-actions">
             <button
               className="button"
@@ -932,6 +1087,10 @@ export function WorkspacePage() {
         evidences: noteCitationEvidence(target.citation),
         activeEvidenceIndex: 0
       };
+    }
+    if (target.kind === "grey") {
+      // Grey sources render through <GreySourceView>, not the PDF canvas.
+      return { url: null, title: target.source.title ?? target.source.url, evidences: [], activeEvidenceIndex: 0 };
     }
     return {
       url: target.paper.has_full_text && workspacePaperId(target.paper) ? api.paperPdfUrl(workspacePaperId(target.paper), workspacePaperTitle(target.paper)) : null,
@@ -1175,6 +1334,8 @@ function WorkspaceNavigatorBody({
   selectedCitation,
   papers,
   papersLoading,
+  greySources,
+  primaryPaperId,
   pdfTarget,
   activeAssistantSource,
   activeAssistantEvidenceIndex,
@@ -1186,6 +1347,7 @@ function WorkspaceNavigatorBody({
   onSelectNote,
   onOpenCitation,
   onOpenPaper,
+  onOpenGrey,
   onToggleScopedPaper,
   onResizeCitationList,
   onOpenAssistantPdf,
@@ -1201,6 +1363,8 @@ function WorkspaceNavigatorBody({
   selectedCitation: NoteCitation | null;
   papers: Paper[];
   papersLoading: boolean;
+  greySources: GreySource[];
+  primaryPaperId: string | null;
   pdfTarget: WorkspacePdfTarget | null;
   activeAssistantSource: VerificationSource | null;
   activeAssistantEvidenceIndex: number;
@@ -1212,6 +1376,7 @@ function WorkspaceNavigatorBody({
   onSelectNote: (noteId: string) => void;
   onOpenCitation: (citation: NoteCitation) => void;
   onOpenPaper: (paper: Paper) => void;
+  onOpenGrey: (source: GreySource) => void;
   onToggleScopedPaper: (paperId: string) => void;
   onResizeCitationList: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onOpenAssistantPdf: () => void;
@@ -1262,6 +1427,13 @@ function WorkspaceNavigatorBody({
           : activeAssistantSource
             ? activeAssistantEvidenceIndex
             : 0;
+    const orderedPapers = primaryPaperId
+      ? [...papers].sort((a, b) => {
+          const aPrimary = workspacePaperId(normalizeWorkspacePaper(a)) === primaryPaperId;
+          const bPrimary = workspacePaperId(normalizeWorkspacePaper(b)) === primaryPaperId;
+          return aPrimary === bPrimary ? 0 : aPrimary ? -1 : 1;
+        })
+      : papers;
     return (
       <section className="workspace-nav-body">
         {pdfTarget?.kind === "assistant" && activeAssistantSource && activeAssistantEvidence ? (
@@ -1311,15 +1483,16 @@ function WorkspaceNavigatorBody({
           <span>Projekt-PDFs</span>
         </div>
         <div className="list workspace-nav-list">
-          {papers.map((paper) => {
+          {orderedPapers.map((paper) => {
             const normalizedPaper = normalizeWorkspacePaper(paper);
             const paperId = workspacePaperId(normalizedPaper);
             const title = workspacePaperTitle(normalizedPaper);
             const selectedForScope = Boolean(paperId && selectedPaperIds.includes(paperId));
             const isActivePaper = Boolean(paperId && activePaperId === paperId);
+            const isPrimary = Boolean(paperId && primaryPaperId && paperId === primaryPaperId);
             return (
               <div
-                className={`list-row workspace-paper-row ${isActivePaper ? "workspace-paper-row--active-source list-row--active" : ""}`}
+                className={`list-row workspace-paper-row ${isPrimary ? "workspace-paper-row--primary" : ""} ${isActivePaper ? "workspace-paper-row--active-source list-row--active" : ""}`}
                 key={paperId || `${title}-${paper.year ?? "n/a"}`}
                 role="button"
                 tabIndex={0}
@@ -1343,7 +1516,10 @@ function WorkspaceNavigatorBody({
                   />
                 </label>
                 <div className="workspace-paper-main" title={title}>
-                  <strong>{title}</strong>
+                  <strong>
+                    {isPrimary ? <span className="primary-badge"><Star size={11} /> Hauptquelle</span> : null}
+                    {title}
+                  </strong>
                   <span>{[paperId || "keine ID", normalizedPaper.year ?? ""].filter(Boolean).join(" - ")}</span>
                 </div>
               </div>
@@ -1351,6 +1527,43 @@ function WorkspaceNavigatorBody({
           })}
           {!papers.length ? <EmptyState title={papersLoading ? "Lade PDFs" : "Keine PDFs"} /> : null}
         </div>
+        {greySources.length ? (
+          <>
+            <div className="workspace-nav-subheading">
+              <span>Graue Quellen</span>
+              <Globe size={14} />
+            </div>
+            <div className="list workspace-nav-list">
+              {greySources.map((source) => {
+                const isActiveGrey = pdfTarget?.kind === "grey" && pdfTarget.source.id === source.id;
+                return (
+                  <div
+                    className={`list-row workspace-paper-row workspace-grey-row ${isActiveGrey ? "workspace-paper-row--active-source list-row--active" : ""}`}
+                    key={source.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Graue Quelle ${source.title || source.url} öffnen`}
+                    onClick={() => onOpenGrey(source)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onOpenGrey(source);
+                      }
+                    }}
+                  >
+                    <div className="workspace-paper-main" title={source.title || source.url}>
+                      <strong>
+                        <span className="grey-badge grey-badge--mini">Grauquelle</span>
+                        {source.title || source.url}
+                      </strong>
+                      <span>{source.url}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
       </section>
     );
   }
@@ -1437,6 +1650,33 @@ function sameNotesSnapshot(left: NotesSurfaceSnapshot, right: NotesSurfaceSnapsh
   );
 }
 
+function findingToGreyRecord(finding: DeepResearchFinding): Record<string, unknown> {
+  return {
+    url: finding.url,
+    title: finding.title,
+    summary: finding.summary,
+    raw_excerpt: finding.raw_excerpt,
+    full_text: finding.full_text ?? finding.raw_excerpt,
+    evidence: finding.evidence ?? [],
+    injection_flags: finding.injection_flags ?? []
+  };
+}
+
+/** Adapt a (not-yet-saved) web finding to the GreySource shape for the viewer. */
+function findingToGreySource(finding: DeepResearchFinding): GreySource {
+  return {
+    id: `pending_${finding.url}`,
+    project_id: "",
+    url: finding.url,
+    title: finding.title,
+    summary: finding.summary,
+    raw_excerpt: finding.raw_excerpt,
+    full_text: finding.full_text ?? finding.raw_excerpt,
+    evidence: finding.evidence ?? [],
+    injection_flags: finding.injection_flags ?? []
+  };
+}
+
 function activeScopePaperId(target: WorkspacePdfTarget | null, activeAssistantSource: VerificationSource | null) {
   if (target) {
     if (target.kind === "assistant") {
@@ -1444,6 +1684,9 @@ function activeScopePaperId(target: WorkspacePdfTarget | null, activeAssistantSo
     }
     if (target.kind === "noteCitation") {
       return target.citation.paper_id;
+    }
+    if (target.kind === "grey") {
+      return "";
     }
     return workspacePaperId(target.paper);
   }
