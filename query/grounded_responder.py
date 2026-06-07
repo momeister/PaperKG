@@ -347,14 +347,27 @@ making claims."""
             diagnostics["fallback_reason"] = "empty_pdf_context_answer"
             return None, diagnostics
 
+        unique_contexts = _unique_citation_contexts(answer_text, known_ids)
+        translations_by_paper = {
+            paper_id_value: self._translate_claims_for_pdf_matching(
+                contexts,
+                texts_by_paper_id[paper_id_value][2],
+                provider,
+                merged_overrides,
+            )
+            for paper_id_value, contexts in _citation_contexts_by_paper(unique_contexts).items()
+            if paper_id_value in texts_by_paper_id
+        }
+
         claim_evidence: list[Evidence] = []
         papers_with_claim_evidence: set[str] = set()
-        for paper_id_value, citation_context in _unique_citation_contexts(answer_text, known_ids):
+        for paper_id_value, citation_context in unique_contexts:
             located = texts_by_paper_id.get(paper_id_value)
             if located is None:
                 continue
             source, pdf_path, pdf_text = located
-            excerpt = best_excerpt(pdf_text, citation_context)
+            match_text = translations_by_paper.get(paper_id_value, {}).get(citation_context, citation_context)
+            excerpt = best_excerpt(pdf_text, match_text, strict=True)
             if not excerpt:
                 continue
             claim_evidence.append(
@@ -622,6 +635,58 @@ making claims."""
         if repaired and not _invalid_citations(repaired, known_ids):
             return repaired
         return response
+
+    def _translate_claims_for_pdf_matching(
+        self,
+        contexts: list[str],
+        pdf_text: str,
+        provider: str | None,
+        overrides: dict[str, Any],
+    ) -> dict[str, str]:
+        """Rewrite claim snippets into the cited paper's language so `best_excerpt` can
+        anchor on them. Token-overlap matching (`highlightable_terms`) is reliable within
+        one language but breaks down across languages — e.g. a German claim about
+        "Glukokortikoiden"/"unerwünschten Ereignissen" shares essentially no tokens with
+        the English PDF text it's citing, so the matcher falls back to whatever generic,
+        ubiquitous terms (drug/disease names) happen to overlap, landing on an unrelated
+        passage. Translating the claim into the PDF's language first lets the existing,
+        validated same-language matching do its job. Returns {original_context: rewrite};
+        on any failure (no router, empty input, generation error, unparseable response) it
+        returns an empty mapping so the caller transparently keeps using the original text.
+        """
+        if self.llm_router is None or not contexts:
+            return {}
+        sample = re.sub(r"\s+", " ", pdf_text or "").strip()[:1500]
+        if not sample:
+            return {}
+        numbered = "\n".join(f"{index + 1}. {context}" for index, context in enumerate(contexts))
+        prompt = (
+            "Paper excerpt (defines the target language for the rewrite below):\n"
+            f'"""\n{sample}\n"""\n\n'
+            "Claim summaries (possibly written in a different language than the excerpt above):\n"
+            f"{numbered}\n\n"
+            "For EACH numbered claim above, output exactly one line in the form "
+            "`<number>: <rewrite>`, where <rewrite> restates that claim's key facts — "
+            "terminology, names, qualitative findings, and any numbers — in the SAME "
+            "LANGUAGE as the paper excerpt, phrased so it could plausibly appear verbatim "
+            "in that paper. If a claim is already written in that language, repeat it "
+            "unchanged. Output nothing else — no preamble, no commentary."
+        )
+        translate_overrides = dict(overrides)
+        translate_overrides["temperature"] = 0.0
+        translate_overrides["max_tokens"] = min(max(400, sum(len(item) for item in contexts) + 200), 2000)
+        try:
+            response = self.llm_router.chat(
+                [
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                provider=provider,
+                overrides=translate_overrides,
+            )
+        except Exception:
+            return {}
+        return _parse_numbered_translations(str(response or ""), contexts)
 
     def _repair_sparse_citations(
         self,
@@ -930,6 +995,31 @@ def _unique_citation_contexts(answer_text: str, known_ids: frozenset[str] = froz
                 seen.add(pair)
                 pairs.append(pair)
     return pairs
+
+
+def _citation_contexts_by_paper(pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for paper_id_value, context in pairs:
+        contexts = grouped.setdefault(paper_id_value, [])
+        if context not in contexts:
+            contexts.append(context)
+    return grouped
+
+
+def _parse_numbered_translations(response: str, originals: list[str]) -> dict[str, str]:
+    """Parse a `<number>: <rewrite>` per-line response back onto the original strings by index."""
+    translations: dict[str, str] = {}
+    for line in str(response or "").splitlines():
+        match = re.match(r"\s*(\d+)\s*[.:)]\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        index = int(match.group(1)) - 1
+        if not (0 <= index < len(originals)):
+            continue
+        rewrite = match.group(2).strip().strip('"').strip()
+        if rewrite:
+            translations[originals[index]] = rewrite
+    return translations
 
 
 def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> list[dict[str, Any]]:

@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from extraction.embedding_engine import EmbeddingEngine
-from query.grounded_responder import GroundedResponder, _citation_links_for_answer
+from query.grounded_responder import GroundedResponder, _citation_links_for_answer, _parse_numbered_translations
 from query.hybrid_retriever import HybridRetriever
 from query.hypothesis_generator import HypothesisGenerator
 from query.kg_retriever import Evidence, KGRetriever
@@ -509,6 +509,151 @@ def test_pdf_context_answer_links_citations_to_distinct_claim_excerpts(monkeypat
     # "Belege" excerpts that were mostly just author names).
     assert "Jane Doe" not in survival_evidence.text
     assert "Jane Doe" not in side_effect_evidence.text
+
+
+class GermanClaimTranslationLLMRouter(FakeLLMRouter):
+    # Reproduces Moritz's exact reported bug: a German answer citing the SAME English
+    # paper twice for two semantically distinct claims (steroid/glucocorticoid use vs.
+    # adverse-event rate). Cross-language word-overlap matching has nothing concrete to
+    # anchor on — both citations previously collapsed onto the same wrong "quality of
+    # life" decoy excerpt. This fake distinguishes the translation call (its prompt
+    # contains the "Claim summaries" marker from `_translate_claims_for_pdf_matching`)
+    # from the answer-generation call and returns canned, verbatim-anchorable English
+    # rewrites for each German claim.
+    ANSWER = (
+        "Zudem war der Bedarf an Glukokortikoiden in der Bevacizumab-Gruppe geringer [files]. "
+        "Die Rate an unerwünschten Ereignissen war in der Bevacizumab-Gruppe höher als in der Placebogruppe [files]."
+    )
+    TRANSLATIONS = (
+        "1: Glucocorticoid use over the course of the study was lower among patients who received bevacizumab "
+        "than among those who received placebo\n"
+        "2: The overall incidence of adverse events of any grade during the study was higher among patients "
+        "in the bevacizumab group than among those in the placebo group"
+    )
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        prompt = messages[-1]["content"] if messages else ""
+        if "Claim summaries" in prompt:
+            return self.TRANSLATIONS
+        return self.ANSWER
+
+
+def test_parse_numbered_translations_maps_numbered_lines_back_to_originals() -> None:
+    originals = ["Erste Behauptung", "Zweite Behauptung", "Dritte Behauptung"]
+    response = (
+        "1: First claim rewritten\n"
+        "2. Second claim, rewritten differently\n"
+        "3) \"Third claim in quotes\"\n"
+    )
+
+    mapping = _parse_numbered_translations(response, originals)
+
+    assert mapping == {
+        "Erste Behauptung": "First claim rewritten",
+        "Zweite Behauptung": "Second claim, rewritten differently",
+        "Dritte Behauptung": "Third claim in quotes",
+    }
+
+
+def test_parse_numbered_translations_ignores_unparseable_blank_or_out_of_range_lines() -> None:
+    originals = ["Erste Behauptung", "Zweite Behauptung"]
+    response = (
+        "Sure, here are the rewrites:\n"
+        "1: The first claim, rewritten\n"
+        "2:    \n"
+        "5: Out of range, should be ignored\n"
+        "not a numbered line at all\n"
+    )
+
+    mapping = _parse_numbered_translations(response, originals)
+
+    # Line 2's rewrite is blank after stripping quotes/whitespace — skipped, so the
+    # caller transparently falls back to the original `citation_context` for it.
+    assert mapping == {"Erste Behauptung": "The first claim, rewritten"}
+
+
+def test_pdf_context_answer_translates_non_english_claims_before_anchoring_citations(monkeypatch, tmp_path) -> None:
+    # Regression test for Moritz's report: in the German "PDF-Assistent", two
+    # DIFFERENT German claims about the same English paper ("Glukokortikoide" /
+    # steroid use, and "unerwünschte Ereignisse" / adverse-event rate) both showed
+    # the SAME wrong citation excerpt (a "quality of life" decoy sentence that
+    # mentions neither). Root cause: `best_excerpt` matched on raw word-overlap
+    # between the German claim text and the English PDF — German terms share no
+    # tokens with English ones, so only ubiquitous drug/disease names (present
+    # throughout the whole paper) "matched", landing both claims on the same
+    # arbitrary window. Fix: translate each claim into the PDF's language before
+    # anchoring (`_translate_claims_for_pdf_matching`) and require a concrete
+    # anchor (`best_excerpt(..., strict=True)`). This test must show both German
+    # citations resolving to DISTINCT, on-topic excerpts — not the decoy sentence.
+    from query import grounded_responder as responder_module
+
+    class PdfScopedRetriever:
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"source": {"paper_id": paper_id, "title": "Bevacizumab plus Radiotherapy-Temozolomide for Glioblastoma", "year": 2025}}
+
+        def search(self, *args, **kwargs) -> list:
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {"valid_citation_count": 2}, "sources": [{"paper_id": "files", "status": "verified"}]}
+
+    pdf_text = (
+        "Bevacizumab plus Radiotherapy-Temozolomide for Glioblastoma. Jane Doe, MD, John Smith, PhD. "
+        "We report the results of a phase 3 trial of bevacizumab plus radiotherapy-temozolomide as compared "
+        "with placebo plus radiotherapy-temozolomide in patients with newly diagnosed glioblastoma. "
+        "Quality of life: No clinically meaningful differences in the trajectory of baseline quality of life "
+        "and performance status were observed with bevacizumab as compared with placebo during the study period. "
+        "Steroid use: Glucocorticoid use over the course of the study was lower among patients who received "
+        "bevacizumab than among those who received placebo, a finding that may reflect reduced cerebral edema "
+        "in the bevacizumab group during the treatment period. "
+        "Tolerability: The overall incidence of adverse events of any grade during the study was higher among "
+        "patients in the bevacizumab group than among those in the placebo group, broadly consistent with the "
+        "known safety profile of antiangiogenic agents in this setting. "
+        "Conclusions: The addition of bevacizumab to radiotherapy-temozolomide did not significantly improve "
+        "overall survival in patients with newly diagnosed glioblastoma."
+    )
+
+    pdf_path = tmp_path / "files.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    fake_llm = GermanClaimTranslationLLMRouter()
+    monkeypatch.setattr(responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path)
+    monkeypatch.setattr(responder_module, "parse_pdf_text", lambda *args, **kwargs: pdf_text)
+    monkeypatch.setattr(responder_module, "verify_answer_sources", lambda *args, **kwargs: VerificationResult())
+
+    answer = GroundedResponder(retriever=PdfScopedRetriever(), llm_router=fake_llm).answer(
+        "Was berichtet die Studie über Sicherheit und Verträglichkeit?",
+        paper_ids=["files"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+    assert len(answer.citation_links) == 2
+    evidence_by_id = {item.evidence_id: item for item in answer.evidence}
+    glucocorticoid_evidence = evidence_by_id[answer.citation_links[0]["evidence_id"]]
+    adverse_event_evidence = evidence_by_id[answer.citation_links[1]["evidence_id"]]
+
+    # The two claims must resolve to DIFFERENT excerpts — not collapse onto the
+    # same (wrong) "quality of life" decoy, as Moritz observed ("Z6" shown twice).
+    assert glucocorticoid_evidence.evidence_id != adverse_event_evidence.evidence_id
+    assert glucocorticoid_evidence.text != adverse_event_evidence.text
+
+    assert "Glucocorticoid" in glucocorticoid_evidence.text
+    assert "adverse events" not in glucocorticoid_evidence.text
+    assert "quality of life" not in glucocorticoid_evidence.text
+
+    assert "adverse events" in adverse_event_evidence.text
+    assert "Glucocorticoid" not in adverse_event_evidence.text
+    assert "quality of life" not in adverse_event_evidence.text
+
+    # The translation call must have been issued with the PDF's language sample
+    # and the distinct German claim contexts (not the raw answer-generation prompt).
+    translation_calls = [call for call in fake_llm.calls if "Claim summaries" in call["messages"][-1]["content"]]
+    assert len(translation_calls) == 1
+    assert "Glukokortikoiden" in translation_calls[0]["messages"][-1]["content"]
+    assert "unerwünschten Ereignissen" in translation_calls[0]["messages"][-1]["content"]
 
 
 def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence() -> None:

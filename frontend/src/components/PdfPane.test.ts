@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { bestMatchFor, findPageMatch, highlightQuerySignature, normalizeHighlightBoxes, type PageMatch } from "./PdfPane";
+import {
+  bestMatchFor,
+  findPageMatch,
+  highlightQuerySignature,
+  highlightScrollTop,
+  normalizeHighlightBoxes,
+  topmostHighlightTop,
+  type PageMatch
+} from "./PdfPane";
 
 const viewport = { transform: [1, 0, 0, 1, 0, 0], scale: 1 };
 
@@ -107,5 +115,45 @@ describe("PdfPane matching", () => {
     };
 
     expect(bestMatchFor(matches, currentSignature)?.pageNumber).toBe(2);
+  });
+});
+
+describe("PdfPane highlight scroll targeting", () => {
+  // Regression coverage for: clicking a citation jumped to the right PAGE but left
+  // the highlighted passage itself off-screen on large/zoomed pages — the user had
+  // to scroll manually to find it. The fix scrolls so the highlight's top edge lands
+  // a fixed padding below the viewport top, not just the page centered.
+
+  it("positions the highlight's top edge a fixed padding below the viewport top", () => {
+    // Page starts 200px into the scroll container; highlight sits 900px down the
+    // page (e.g. near the bottom of a tall, zoomed-in page) — far below the fold.
+    expect(highlightScrollTop(200, 900, 64)).toBe(200 + 900 - 64);
+  });
+
+  it("uses the default padding when none is supplied", () => {
+    expect(highlightScrollTop(0, 500)).toBe(500 - 64);
+  });
+
+  it("never scrolls past the top of the container", () => {
+    // A highlight near the very top of a page that itself starts near (or above)
+    // the container's current scroll position must clamp to 0, not a negative offset.
+    expect(highlightScrollTop(10, 5, 64)).toBe(0);
+    expect(highlightScrollTop(0, 0)).toBe(0);
+  });
+
+  it("picks the topmost box so multi-line highlights scroll to their first line", () => {
+    const boxes = [
+      { top: 240 },
+      { top: 80 },
+      { top: 160 }
+    ];
+
+    expect(topmostHighlightTop(boxes)).toBe(80);
+  });
+
+  it("returns null for empty or missing box lists so callers can fall back to centering", () => {
+    expect(topmostHighlightTop([])).toBeNull();
+    expect(topmostHighlightTop(undefined)).toBeNull();
+    expect(topmostHighlightTop(null)).toBeNull();
   });
 });

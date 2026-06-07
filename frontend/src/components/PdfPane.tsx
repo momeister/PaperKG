@@ -196,7 +196,7 @@ export function PdfPane({
   useEffect(() => {
     const targetPage = activeMatch?.pageNumber;
     if (targetPage) {
-      jumpToPage(targetPage, "center");
+      jumpToPage(targetPage, "center", topmostHighlightTop(activeMatch?.boxes));
     }
   }, [activeEvidenceIndex, activeMatch?.pageNumber, showingSearch]);
 
@@ -221,7 +221,7 @@ export function PdfPane({
     onActiveEvidenceChange?.(index);
     const match = bestMatchFor(matches[index], highlightQuerySignature(evidenceQueries[index] ?? { phrases: [], terms: [] }));
     if (match) {
-      jumpToPage(match.pageNumber, "center");
+      jumpToPage(match.pageNumber, "center", topmostHighlightTop(match.boxes));
     }
   }
 
@@ -233,7 +233,7 @@ export function PdfPane({
     jumpToEvidence(next);
   }
 
-  function jumpToPage(pageNumber: number, block: ScrollLogicalPosition = "start") {
+  function jumpToPage(pageNumber: number, block: ScrollLogicalPosition = "start", highlightTop: number | null = null) {
     if (!pageCount) {
       return;
     }
@@ -247,6 +247,15 @@ export function PdfPane({
     const rootRect = root.getBoundingClientRect();
     const pageRect = pageNode.getBoundingClientRect();
     const relativeTop = pageRect.top - rootRect.top + root.scrollTop;
+    if (highlightTop != null) {
+      // `HighlightBox.top` is relative to `.pdf-page-surface` (inside `.pdf-page`,
+      // below the "Seite N" label) — account for that offset so the computed scroll
+      // target lines up with where the highlight is actually rendered.
+      const surface = pageNode.querySelector<HTMLElement>(".pdf-page-surface");
+      const surfaceOffset = surface ? surface.getBoundingClientRect().top - pageRect.top : 0;
+      root.scrollTo({ top: highlightScrollTop(relativeTop + surfaceOffset, highlightTop), behavior: "smooth" });
+      return;
+    }
     const centeredTop = relativeTop - Math.max(0, (root.clientHeight - pageNode.clientHeight) / 2);
     root.scrollTo({
       top: Math.max(0, block === "center" ? centeredTop : relativeTop - 12),
@@ -886,6 +895,26 @@ export function highlightQuerySignature(query: HighlightQuery) {
 export function bestMatchFor(pageMatches: Record<number, PageMatch> | undefined, querySignature: string) {
   const candidates = Object.values(pageMatches ?? {}).filter((match) => match.querySignature === querySignature && match.boxes.length);
   return candidates.sort((left, right) => right.score - left.score || Number(right.exact) - Number(left.exact) || left.pageNumber - right.pageNumber)[0] ?? null;
+}
+
+export const HIGHLIGHT_SCROLL_PADDING = 64;
+
+// Scroll target so the highlight's top edge lands `padding` px below the viewport's
+// top — not just the page centered, which can leave a highlight near a large/zoomed
+// page's bottom edge off-screen. `pageRelativeTop` is the highlighted page surface's
+// offset within the scroll container; `highlightTop` is the box's offset within that
+// surface (same coordinate space `HighlightBox.top` is rendered in).
+export function highlightScrollTop(pageRelativeTop: number, highlightTop: number, padding = HIGHLIGHT_SCROLL_PADDING): number {
+  return Math.max(0, pageRelativeTop + highlightTop - padding);
+}
+
+// Topmost (smallest `top`) box of a match — the part of the highlight that should
+// be brought into view first when scrolling to it.
+export function topmostHighlightTop(boxes: { top: number }[] | null | undefined): number | null {
+  if (!boxes || !boxes.length) {
+    return null;
+  }
+  return boxes.reduce((min, box) => (box.top < min ? box.top : min), boxes[0].top);
 }
 
 function pagesFor(pageMatches: Record<number, PageMatch> | undefined, querySignature: string) {

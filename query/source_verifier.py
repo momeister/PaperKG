@@ -305,7 +305,12 @@ def reference_fragments(evidence: dict[str, Any], max_fragments: int = 3) -> lis
     return fragments
 
 
-def best_excerpt(pdf_text: str, reference: str, window_chars: int = DEFAULT_EXCERPT_CHARS) -> str:
+def best_excerpt(
+    pdf_text: str,
+    reference: str,
+    window_chars: int = DEFAULT_EXCERPT_CHARS,
+    strict: bool = False,
+) -> str:
     clean = re.sub(r"\s+", " ", pdf_text or "").strip()
     reference_clean = re.sub(r"\s+", " ", reference or "").strip()
     if not clean or not reference_clean:
@@ -358,14 +363,29 @@ def best_excerpt(pdf_text: str, reference: str, window_chars: int = DEFAULT_EXCE
         if overlap_score > best_score:
             best_score = overlap_score
             best_start = start
-    if best_score > 0:
+    # When `quantitative` is empty, `_contains_quantitative_tokens` is vacuously true below,
+    # so this tier would otherwise accept the best-overlap window on however little overlap it
+    # found (`best_score > 0`) — including a couple of recurring proper nouns plus accidental
+    # short-token substring hits, the same "no concrete anchor" failure mode `strict` exists to
+    # reject (e.g. a German claim against an English PDF: only "bevacizumab"/"glioblastom" and
+    # noise like "der" inside "order" overlap, scoring ~2, yet this tier would confidently return
+    # a wrong window). A *strong* same-language overlap (several distinctive content terms, e.g.
+    # "fatigue"+"headaches"+"placebo"+… scoring 8) is still a legitimate anchor — so in strict
+    # mode without quantitative tokens, require the same "meaningfully strong" bar the honest
+    # fallback below uses, instead of skipping this tier outright.
+    minimum_overlap = 3 if (strict and not quantitative) else 1
+    if best_score >= minimum_overlap:
         excerpt = _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
         if _contains_quantitative_tokens(excerpt, quantitative):
             return excerpt
     # Nothing matched the (stricter) quantitative requirement — fall back to the window
     # with the best plain textual overlap, but only if it's a meaningfully strong match.
     # This covers paraphrased/computed claims whose numbers don't appear verbatim in the PDF.
-    if fallback_score >= 3:
+    # `strict` callers (e.g. anchoring a specific claim's citation) skip this tier: plain term
+    # overlap has no concrete anchor (no verbatim phrase, no matching number) and is easily
+    # dominated by names that recur throughout the whole paper — better to report no match than
+    # a confident-looking excerpt that doesn't actually support the claim.
+    if not strict and fallback_score >= 3:
         return _excerpt_around(clean, fallback_start, min(window_chars, len(clean) - fallback_start), window_chars)
     return ""
 

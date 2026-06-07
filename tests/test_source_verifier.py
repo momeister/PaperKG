@@ -262,3 +262,38 @@ def test_best_excerpt_matches_german_decimal_comma_numbers_against_english_pdf_t
     assert "10.6 months" in excerpt
     assert "6.2 months" in excerpt
     assert "Baseline characteristics" not in excerpt
+
+
+def test_best_excerpt_strict_mode_rejects_weak_generic_overlap_but_keeps_concrete_anchors() -> None:
+    # `strict=True` is for callers that anchor a SPECIFIC claim's citation (the
+    # "PDF-Assistent" claim-evidence path): a window that only shares ubiquitous,
+    # recurring terms (drug/disease names appearing throughout the whole paper) with
+    # the reference has no concrete anchor and is more likely to mislead than help —
+    # better to report "no match" (the caller then falls back to a generic, honestly
+    # labeled snippet) than a confident-looking excerpt that doesn't actually support
+    # the claim. Exact-phrase and number-anchored matches must still work normally.
+    pdf_text = (
+        "Bevacizumab plus Radiotherapy-Temozolomide for Glioblastoma. Jane Doe, MD, John Smith, PhD. "
+        "We report the results of a phase 3 trial of bevacizumab plus radiotherapy-temozolomide as "
+        "compared with placebo plus radiotherapy-temozolomide in patients with newly diagnosed glioblastoma. "
+        "Quality of life: No clinically meaningful differences in baseline quality of life and performance "
+        "status were observed with bevacizumab as compared with placebo during the study period. "
+        "The median overall survival was 16.8 months in the bevacizumab group as compared with 12.3 months "
+        "in the placebo group, a difference that was statistically significant."
+    )
+
+    # Only "bevacizumab"/"glioblastoma" overlap with the PDF — both occur in the title,
+    # methods, AND results sections, so there is no single concrete window they anchor to.
+    weak_reference = "Die Behandlung mit Bevacizumab führte bei Glioblastom-Patienten zu einer Veränderung der Lebensqualität."
+    assert best_excerpt(pdf_text, weak_reference, strict=True) == ""
+    # Non-strict mode keeps its existing, more permissive behavior (some excerpt is returned).
+    assert best_excerpt(pdf_text, weak_reference, strict=False) != ""
+
+    exact_phrase_reference = "No clinically meaningful differences in baseline quality of life and performance status were observed with bevacizumab"
+    strict_excerpt = best_excerpt(pdf_text, exact_phrase_reference, window_chars=160, strict=True)
+    assert "baseline quality of life" in strict_excerpt
+
+    number_anchor_reference = "Median overall survival reached 16.8 months with bevacizumab versus 12.3 months with placebo."
+    strict_number_excerpt = best_excerpt(pdf_text, number_anchor_reference, window_chars=160, strict=True)
+    assert "16.8 months" in strict_number_excerpt
+    assert "12.3 months" in strict_number_excerpt
