@@ -1890,14 +1890,19 @@ export function shortTitle(value: string) {
   return text.length <= 56 ? text : `${text.slice(0, 53)}...`;
 }
 
-function citationContext(parts: string[], citationIndex: number) {
-  return `${parts[citationIndex - 1] ?? ""} ${parts[citationIndex + 1] ?? ""}`.trim().slice(-700);
+export function citationContext(parts: string[], citationIndex: number) {
+  const before = (parts[citationIndex - 1] ?? "").slice(-560);
+  const after = (parts[citationIndex + 1] ?? "").slice(0, 140);
+  return `${before} ${after}`.trim();
 }
 
-function citationQuoteFromParts(parts: string[], citationIndex: number) {
+export function citationQuoteFromParts(parts: string[], citationIndex: number) {
   const before = parts.slice(0, citationIndex).join("");
   const after = parts.slice(citationIndex + 1).join("");
-  return cleanAnswerQuote(`${trailingSentenceFragment(before)}${leadingSentenceFragment(after)}`);
+  const beforeFragment = trailingSentenceFragment(before);
+  const beforeIsComplete = /[.!?]\s*$/.test(beforeFragment);
+  const combined = beforeIsComplete ? beforeFragment : `${beforeFragment}${leadingSentenceFragment(after)}`;
+  return cleanAnswerQuote(combined);
 }
 
 function trailingSentenceFragment(value: string) {

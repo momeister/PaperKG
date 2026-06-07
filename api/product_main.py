@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
@@ -569,6 +570,54 @@ def _clean_pdf_title(value: Any) -> str:
     return _clean_display_text(re.sub(r"\.pdf$", "", filename, flags=re.IGNORECASE).replace("_", " ").replace("-", " "))
 
 
+_TITLE_LINE_BLOCKLIST = (
+    "arxiv:", "doi:", "abstract", "introduction", "keywords", "page ",
+    "©", "http://", "https://", "preprint", "submitted", "draft",
+    "running head", "downloaded from", "issn", "isbn", "vol.", "volume",
+)
+
+
+def _looks_like_title_line(line: str) -> bool:
+    text = _clean_display_text(line)
+    if not (15 <= len(text) <= 200):
+        return False
+    if not re.search(r"[a-zA-Z]{3,}", text):
+        return False
+    lowered = text.lower()
+    if any(lowered.startswith(prefix) for prefix in _TITLE_LINE_BLOCKLIST):
+        return False
+    return True
+
+
+def _infer_pdf_title_from_bytes(content: bytes) -> str:
+    """Best-effort title extraction from PDF metadata or the first page's heading."""
+    try:
+        from pypdf import PdfReader
+    except Exception:
+        return ""
+    try:
+        reader = PdfReader(io.BytesIO(content))
+    except Exception:
+        return ""
+
+    try:
+        meta_title = _clean_display_text(getattr(reader.metadata, "title", None) if reader.metadata else "")
+    except Exception:
+        meta_title = ""
+    if meta_title and meta_title.lower() not in {"untitled", "untitled document"} and _looks_like_title_line(meta_title):
+        return meta_title
+
+    try:
+        first_page_text = reader.pages[0].extract_text() or ""
+    except Exception:
+        first_page_text = ""
+    for raw_line in first_page_text.splitlines():
+        line = _clean_display_text(raw_line)
+        if _looks_like_title_line(line):
+            return line
+    return ""
+
+
 @app.post("/papers/upload")
 async def upload_paper_pdf(
     request: Request,
@@ -585,18 +634,21 @@ async def upload_paper_pdf(
         raise HTTPException(status_code=400, detail="Upload body is empty.")
 
     filename = request.headers.get("x-filename") or title or paper_id or "uploaded-paper.pdf"
-    inferred_id = paper_id or Path(filename).stem
+    _GENERIC_STEMS = frozenset({"file", "document", "upload", "pdf", "paper", "doc", "untitled", "new", "temp", "tmp", "download"})
+    stem = Path(filename).stem.lower().strip()
+    inferred_id = paper_id or (f"upload-{__import__('uuid').uuid4().hex[:8]}" if stem in _GENERIC_STEMS else Path(filename).stem)
+    resolved_title = title or _infer_pdf_title_from_bytes(content) or Path(filename).stem
     storage = FileManager(pdf_base_dir)
     saved_path = storage.save_pdf(
         inferred_id,
         content,
-        display_name=title or Path(filename).stem,
+        display_name=resolved_title,
         source=source,
     )
     with MetadataDB(metadata_db_path) as db:
         canonical_id = db.ensure_paper_record(
             inferred_id,
-            title=title or Path(filename).stem,
+            title=resolved_title,
             pdf_path=str(saved_path),
             source=source,
             source_id=inferred_id,
@@ -609,6 +661,39 @@ async def upload_paper_pdf(
         "project_id": project_id,
         "attached": bool(project_paper_ids),
     }
+
+
+@app.delete("/papers/{paper_id:path}")
+def delete_paper(
+    paper_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR,
+    projects_path: str | None = None,
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        paper = db.get_paper(paper_id)
+        if not paper:
+            raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id}")
+        pdf_url = paper.get("pdf_url") or paper.get("pdf_path")
+        deleted = db.delete_paper(paper_id)
+    file_deleted = False
+    if deleted and pdf_url:
+        storage = FileManager(pdf_base_dir)
+        file_deleted = storage.delete_by_path(str(pdf_url))
+    if deleted:
+        all_projects = _load_projects(_projects_path(projects_path))
+        changed = False
+        for pid, members in all_projects.items():
+            if paper_id in members:
+                all_projects[pid] = [m for m in members if m != paper_id]
+                changed = True
+        if changed:
+            _save_projects(all_projects, _projects_path(projects_path))
+        primary = _load_primary_papers()
+        if any(v == paper_id for v in primary.values()):
+            updated = {k: v for k, v in primary.items() if v != paper_id}
+            _save_primary_papers(updated)
+    return {"deleted": deleted, "file_deleted": file_deleted, "id": paper_id}
 
 
 @app.post("/harvest/search")
@@ -897,6 +982,13 @@ def extraction_library(
         try:
             with MetadataDB(metadata_db_path) as _db:
                 grey_list = _db.list_grey_sources(project_id)
+                latest_by_paper = _latest_extraction_statuses(_db)
+                found_ids = {str(row.get("paper_id") or "") for row in rows}
+                nopdf_papers = [
+                    p for p in _db.list_papers(limit=50000)
+                    if str(p.get("id") or "") in member_ids
+                    and str(p.get("id") or "") not in found_ids
+                ]
             for grey in grey_list:
                 if grey.get("injection_flags"):
                     continue
@@ -908,12 +1000,27 @@ def extraction_library(
                     "title": grey.get("title") or grey.get("url") or grey["id"],
                     "filename": "",
                     "pdf_path": "",
+                    "pdf_available": True,
                     "source_type": "grey",
                     "text": full_text[:200000],
                     "size_bytes": len(full_text.encode("utf-8")),
                     "modified_timestamp": grey.get("created_timestamp"),
                     "latest_extraction_status": None,
                     "known_paper": False,
+                })
+            for paper in nopdf_papers:
+                pid = str(paper.get("id") or "")
+                rows.append({
+                    "paper_id": pid,
+                    "title": paper.get("title") or pid,
+                    "filename": "",
+                    "pdf_path": "",
+                    "pdf_available": False,
+                    "source_type": "pdf",
+                    "size_bytes": None,
+                    "modified_timestamp": None,
+                    "latest_extraction_status": latest_by_paper.get(pid),
+                    "known_paper": True,
                 })
         except Exception:
             pass
@@ -959,7 +1066,14 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
     text = (request.text or "").strip()
     pdf_path: Path | None = None
     parse_payload: dict[str, Any] | None = None
-    if not text:
+    if not text and request.paper_id.startswith("grey::"):
+        grey_id = request.paper_id.removeprefix("grey::")
+        with MetadataDB(request.metadata_db_path) as db:
+            grey = db.get_grey_source(grey_id)
+        if not grey or not (grey.get("full_text") or "").strip():
+            raise HTTPException(status_code=404, detail=f"Grey source has no text: {grey_id}")
+        text = grey["full_text"].strip()
+    elif not text:
         pdf_path = _resolve_extraction_pdf_path(
             request.paper_id,
             request.pdf_path,
@@ -980,6 +1094,7 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
 
     overrides = _extraction_overrides(request)
     start = time.monotonic()
+    is_grey = request.paper_id.startswith("grey::")
     try:
         result = extraction_pipeline.process(
             request.paper_id,
@@ -991,11 +1106,14 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
     except Exception as exc:
         if request.save:
             with MetadataDB(request.metadata_db_path) as db:
-                canonical_id = db.ensure_paper_record(
-                    request.paper_id,
-                    title=EntityExtractor._paper_title_from_text(text)[:240],
-                    pdf_path=str(pdf_path) if pdf_path else request.pdf_path,
-                )
+                if is_grey:
+                    canonical_id = request.paper_id
+                else:
+                    canonical_id = db.ensure_paper_record(
+                        request.paper_id,
+                        title=EntityExtractor._paper_title_from_text(text)[:240],
+                        pdf_path=str(pdf_path) if pdf_path else request.pdf_path,
+                    )
                 db.save_extraction_result(
                     paper_id=canonical_id,
                     llm_provider=request.provider or getattr(llm_router, "default_provider", "default"),
@@ -1011,12 +1129,15 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
     result_id: int | None = None
     if request.save:
         with MetadataDB(request.metadata_db_path) as db:
-            canonical_id = db.ensure_paper_record(
-                request.paper_id,
-                title=EntityExtractor._paper_title_from_text(text)[:240],
-                year=_year_from_extraction_result(result),
-                pdf_path=str(pdf_path) if pdf_path else request.pdf_path,
-            )
+            if is_grey:
+                canonical_id = request.paper_id
+            else:
+                canonical_id = db.ensure_paper_record(
+                    request.paper_id,
+                    title=EntityExtractor._paper_title_from_text(text)[:240],
+                    year=_year_from_extraction_result(result),
+                    pdf_path=str(pdf_path) if pdf_path else request.pdf_path,
+                )
             result_id = db.save_extraction_result(
                 paper_id=canonical_id,
                 llm_provider=request.provider or getattr(llm_router, "default_provider", "default"),

@@ -249,6 +249,20 @@ h1 {
   min-width: 0;
 }
 
+.pane-heading .pane-heading-actions {
+  display: flex;
+  flex: 0 1 auto;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-heading .pane-heading-actions .segmented {
+  display: flex;
+  gap: 6px;
+}
+
 .panel-heading strong,
 .pane-heading strong {
   color: var(--ink);
@@ -917,9 +931,8 @@ h1 {
 }
 
 .citation-hover-card__insert {
-  order: -1;
   width: fit-content;
-  margin: 0 0 2px auto;
+  margin: 6px 0 0 auto;
 }
 
 .citation-context-highlight {
@@ -1552,6 +1565,16 @@ h1 {
   line-height: 1.45;
 }
 
+.evidence-dock-active-quote {
+  margin-bottom: 8px;
+  gap: 4px;
+}
+
+.evidence-dock-active-quote p {
+  max-height: 150px;
+  margin: 4px 0 0;
+}
+
 .workspace-session-item {
   width: 100%;
   max-width: none;
@@ -1567,13 +1590,13 @@ h1 {
 
 .workspace-assistant-pane {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
-  gap: 10px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  gap: 8px;
   padding: 12px;
 }
 
 .workspace-assistant-pane--notes {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .workspace-assistant-pane .chat-box {
@@ -1602,14 +1625,15 @@ h1 {
   flex: 0 0 auto;
 }
 
-.workspace-assistant-mode-toggle {
-  width: 100%;
+.pane-heading-actions .workspace-assistant-mode-toggle {
+  flex-wrap: nowrap;
 }
 
 .workspace-assistant-mode-toggle button {
-  flex: 1;
-  min-height: 32px;
-  padding: 6px 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 0.76rem;
+  white-space: nowrap;
 }
 
 .workspace-scope-segment button {
@@ -4837,4 +4861,33 @@ button.data-row {
   align-items: center;
   gap: 0.3rem;
   color: var(--accent, #4c8bf5);
+}
+
+/* Danger button */
+.button-danger {
+  background: transparent;
+  border-color: #e05a5a;
+  color: #e05a5a;
+}
+
+.button-danger:hover {
+  background: #e05a5a20;
+  border-color: #e05a5a;
+}
+
+/* Muted row (e.g. paper with no PDF) */
+.data-row--muted {
+  opacity: 0.6;
+}
+
+/* Grey source card header row with delete button */
+.grey-source-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.grey-source-header .grey-source-toggle {
+  flex: 1;
 }

@@ -1,7 +1,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AnswerText, citationIds, citationMetasFor, formatAnswerForNote } from "./AssistantPage";
+import {
+  AnswerText,
+  citationContext,
+  citationIds,
+  citationMetasFor,
+  citationQuoteFromParts,
+  formatAnswerForNote
+} from "./AssistantPage";
 import type { Answer, VerificationSource } from "../types";
 
 afterEach(() => cleanup());
@@ -80,8 +87,8 @@ describe("assistant grouped citations", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: /Z1 p1/ })).toBeVisible();
-    expect(screen.getByRole("button", { name: /Z1 p2/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Z1 Earth Shape Study/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Z1 Solar Companion Study/ })).toBeVisible();
   });
 
   it("highlights the cited answer span while hovering a citation chip", () => {
@@ -93,7 +100,7 @@ describe("assistant grouped citations", () => {
       />
     );
 
-    fireEvent.pointerEnter(screen.getByRole("button", { name: /Z1 p1/ }));
+    fireEvent.pointerEnter(screen.getByRole("button", { name: /Z1 Earth Shape Study/ }));
 
     expect(container.querySelector(".citation-context-highlight")?.textContent).toContain("The Earth is round");
   });
@@ -107,17 +114,17 @@ describe("assistant grouped citations", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Z1 p1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Z1 Earth Shape Study/ }));
     expect(container.querySelector(".citation-context-highlight")?.textContent).toContain("The Earth is round");
 
-    fireEvent.click(screen.getByRole("button", { name: /Z1 p2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Z1 Solar Companion Study/ }));
     expect(container.querySelector(".citation-context-highlight")?.textContent).toContain("Earth orbits the Sun");
     expect(container.querySelector(".citation-context-highlight")?.textContent).not.toContain("The Earth is round");
 
-    fireEvent.click(screen.getByRole("button", { name: /Z1 p2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Z1 Solar Companion Study/ }));
     expect(container.querySelector(".citation-context-highlight")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Z1 p1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Z1 Earth Shape Study/ }));
     expect(container.querySelector(".citation-context-highlight")?.textContent).toContain("The Earth is round");
     fireEvent.click(container.querySelector(".answer-text-content") as HTMLElement);
     expect(container.querySelector(".citation-context-highlight")).toBeNull();
@@ -186,5 +193,38 @@ describe("assistant grouped citations", () => {
     expect(first[0].evidenceIndex).toBe(0);
     expect(second[0].evidenceIndex).toBe(1);
     expect(formatted.citations.map((citation) => citation.evidence_id)).toEqual(["ev-abstract", "ev-errors"]);
+  });
+
+  it("quotes only the preceding claim when the citation sits at a clean sentence boundary", () => {
+    const answerText = "Claim A holds true. [p1] Claim B is unrelated.";
+    const parts = answerText.split(/(\[[^\]]+\])/g);
+    const citationIndex = parts.findIndex((part) => part === "[p1]");
+
+    const quote = citationQuoteFromParts(parts, citationIndex);
+
+    expect(quote).toBe("Claim A holds true.");
+    expect(quote).not.toContain("Claim B is unrelated");
+  });
+
+  it("still combines a fragment from after the marker when it interrupts a sentence mid-claim", () => {
+    const answerText = "Researchers observed that survival [p1] improved by 20% over the trial period.";
+    const parts = answerText.split(/(\[[^\]]+\])/g);
+    const citationIndex = parts.findIndex((part) => part === "[p1]");
+
+    const quote = citationQuoteFromParts(parts, citationIndex);
+
+    expect(quote).toContain("Researchers observed that survival");
+    expect(quote).toContain("improved by 20% over the trial period.");
+  });
+
+  it("weights the citation context toward the preceding claim rather than the trailing text", () => {
+    const before = `${"Earlier background. ".repeat(40)}Survival improved by 20% in the treatment arm`;
+    const after = ` according to the trial.${"x".repeat(900)}`;
+    const parts = [before, "[p1]", after];
+
+    const context = citationContext(parts, 1);
+
+    expect(context).toContain("Survival improved by 20% in the treatment arm");
+    expect(context).toContain("according to the trial");
   });
 });

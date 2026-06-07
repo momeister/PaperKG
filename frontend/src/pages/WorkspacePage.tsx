@@ -210,6 +210,7 @@ export function WorkspacePage() {
         model,
         limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length + (inlineContextTexts.length ? 1 : 0))),
         paper_ids: scopedPaperIds.length ? scopedPaperIds : undefined,
+        priority_paper_ids: primaryPaperId ? [primaryPaperId] : undefined,
         answer_context_mode: answerContextMode !== "kg" ? answerContextMode : undefined,
         inline_context_texts: inlineContextTexts.length ? inlineContextTexts : undefined,
         conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined,
@@ -442,7 +443,6 @@ export function WorkspacePage() {
   function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "", links = answer?.citation_links ?? [], citationStart?: number) {
     const meta = citationMetaFor(pool, citation, context, links, citationStart);
     if (meta) {
-      setEvidenceOpen(true);
       openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { syncPdfTarget: pdfOpen });
     }
   }
@@ -803,31 +803,40 @@ export function WorkspacePage() {
 
       {assistantOpen ? (
         <section className={`workspace-assistant-pane ${assistantMode === "notes" ? "workspace-assistant-pane--notes" : ""}`}>
-          <PaneHeading title="Assistant" onCollapse={() => setAssistantOpen(false)} collapseSide="left" status={answerMutation.isPending ? "running" : answer?.generation_error ? "warning" : "idle"} />
-          <div className="segmented workspace-assistant-mode-toggle" aria-label="Assistant-Modus">
-            <button
-              type="button"
-              className={assistantMode === "pdf" ? "active" : ""}
-              onClick={() => {
-                notesActionsRef.current?.clearInsertPreview();
-                setAssistantMode("pdf");
-              }}
-            >
-              <FileText size={15} />
-              <span>PDF-Assistent</span>
-            </button>
-            <button
-              type="button"
-              className={assistantMode === "notes" ? "active" : ""}
-              onClick={() => {
-                notesActionsRef.current?.clearInsertPreview();
-                setAssistantMode("notes");
-              }}
-            >
-              <Sparkles size={15} />
-              <span>Notiz-Assistent</span>
-            </button>
-          </div>
+          <PaneHeading
+            title="Assistant"
+            onCollapse={() => setAssistantOpen(false)}
+            collapseSide="left"
+            status={answerMutation.isPending ? "running" : answer?.generation_error ? "warning" : "idle"}
+            actions={
+              <div className="segmented workspace-assistant-mode-toggle" aria-label="Assistant-Modus">
+                <button
+                  type="button"
+                  className={assistantMode === "pdf" ? "active" : ""}
+                  title="PDF-Assistent: Fragen zu lokalen PDFs"
+                  onClick={() => {
+                    notesActionsRef.current?.clearInsertPreview();
+                    setAssistantMode("pdf");
+                  }}
+                >
+                  <FileText size={15} />
+                  <span>PDF</span>
+                </button>
+                <button
+                  type="button"
+                  className={assistantMode === "notes" ? "active" : ""}
+                  title="Notiz-Assistent: KI-Hilfe zu deinen Notizen"
+                  onClick={() => {
+                    notesActionsRef.current?.clearInsertPreview();
+                    setAssistantMode("notes");
+                  }}
+                >
+                  <Sparkles size={15} />
+                  <span>Notizen</span>
+                </button>
+              </div>
+            }
+          />
           {assistantMode === "notes" ? (
             <WorkspaceNotesAssistant
               threads={notesSnapshot.threads}
@@ -1018,8 +1027,9 @@ export function WorkspacePage() {
           ) : null}
           <div className="workspace-assistant-actions">
             <button
-              className="button"
+              className="button button-compact button-ghost"
               type="button"
+              title="Ganze Antwort als Zitat in die aktive Notiz einfügen"
               onClick={appendAnswerToNote}
               onMouseEnter={previewAnswerToNote}
               onMouseLeave={() => notesActionsRef.current?.clearInsertPreview()}
@@ -1029,12 +1039,13 @@ export function WorkspacePage() {
               onBlur={() => notesActionsRef.current?.clearInsertPreview()}
               disabled={!answer}
             >
-              <NotebookPen size={16} />
+              <NotebookPen size={14} />
               <span>Antwort in Notiz</span>
             </button>
             <button
-              className="button"
+              className="button button-compact button-ghost"
               type="button"
+              title={`Aktives Zitat Z${activeEvidenceIndex + 1} in die aktive Notiz einfügen`}
               onClick={() => appendActiveQuote("reference")}
               onMouseEnter={() => previewActiveQuote("reference")}
               onMouseLeave={() => notesActionsRef.current?.clearInsertPreview()}
@@ -1044,12 +1055,13 @@ export function WorkspacePage() {
               onBlur={() => notesActionsRef.current?.clearInsertPreview()}
               disabled={!activeEvidence || !selectedSource}
             >
-              <Quote size={16} />
+              <Quote size={14} />
               <span>Zitat Z{activeEvidenceIndex + 1}</span>
             </button>
             <button
-              className="button"
+              className="button button-compact button-ghost"
               type="button"
+              title={`PDF-Ausschnitt zu Z${activeEvidenceIndex + 1} in die aktive Notiz einfügen`}
               onClick={() => appendActiveQuote("pdf")}
               onMouseEnter={() => previewActiveQuote("pdf")}
               onMouseLeave={() => notesActionsRef.current?.clearInsertPreview()}
@@ -1059,12 +1071,18 @@ export function WorkspacePage() {
               onBlur={() => notesActionsRef.current?.clearInsertPreview()}
               disabled={!activeEvidence?.pdf_excerpt || !selectedSource}
             >
-              <FilePlus2 size={16} />
+              <FilePlus2 size={14} />
               <span>PDF Z{activeEvidenceIndex + 1}</span>
             </button>
-            <button className="button" type="button" onClick={openSelectedAssistantPdf} disabled={!selectedSource}>
-              <FileText size={16} />
-              <span>PDF-Nachweis öffnen</span>
+            <button
+              className="button button-compact button-ghost"
+              type="button"
+              title="PDF der ausgewählten Quelle öffnen"
+              onClick={openSelectedAssistantPdf}
+              disabled={!selectedSource}
+            >
+              <FileText size={14} />
+              <span>PDF öffnen</span>
             </button>
             {noteStatus ? <span className="notes-status">{noteStatus}</span> : null}
           </div>
@@ -1087,7 +1105,23 @@ export function WorkspacePage() {
                 <span>{activeEvidence ? `Z${activeEvidenceIndex + 1} - ${shortEvidenceText(activeEvidence.reference_text)}` : "Keine Evidence"}</span>
               </button>
             ) : (
-              <div className="two-column evidence-columns">
+              <>
+                {selectedSource && activeEvidence ? (
+                  <div className="workspace-active-source evidence-dock-active-quote" style={evidenceColorVars(activeEvidenceIndex)}>
+                    <span>Aktives Zitat</span>
+                    <strong>
+                      Z{activeEvidenceIndex + 1} · {selectedSource.title || selectedSource.paper_id}
+                    </strong>
+                    <p>{activeEvidence.pdf_excerpt || activeEvidence.reference_text}</p>
+                    {selectedSource.pdf_available ? (
+                      <button className="button button-compact" type="button" onClick={openSelectedAssistantPdf}>
+                        <FileText size={15} />
+                        <span>PDF öffnen</span>
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="two-column evidence-columns">
                 <section className="evidence-panel">
                   <div className="panel-heading">
                     <div>
@@ -1133,7 +1167,8 @@ export function WorkspacePage() {
                     ))}
                   </div>
                 </section>
-              </div>
+                </div>
+              </>
             )}
           </section>
             </>
@@ -1772,13 +1807,15 @@ function PaneHeading({
   title,
   status,
   collapseSide,
-  onCollapse
+  onCollapse,
+  actions
 }: {
   eyebrow?: string;
   title: string;
   status?: string;
   collapseSide: "left" | "right";
   onCollapse: () => void;
+  actions?: ReactNode;
 }) {
   return (
     <div className="pane-heading workspace-pane-heading">
@@ -1786,6 +1823,7 @@ function PaneHeading({
         {eyebrow ? <span>{eyebrow}</span> : null}
         <strong>{title}</strong>
       </div>
+      {actions ? <div className="pane-heading-actions">{actions}</div> : null}
       <div className="button-row">
         {status ? <Status value={status} /> : null}
         <button className="icon-button" type="button" aria-label={`${title} einklappen`} onClick={onCollapse}>

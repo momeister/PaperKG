@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FileText, Globe, Plus, Search, Star } from "lucide-react";
+import { ExternalLink, FileText, Globe, Plus, Search, Star, Trash2 } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -43,6 +43,20 @@ export function LibraryPage() {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       queryClient.invalidateQueries({ queryKey: ["papers"] });
     }
+  });
+
+  const deletePaper = useMutation({
+    mutationFn: (paperId: string) => api.deletePaper(paperId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["papers"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
+    }
+  });
+
+  const deleteGrey = useMutation({
+    mutationFn: (greyId: string) => api.deleteGreySource(greyId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["grey-sources"] })
   });
 
   const allSelected = useMemo(() => new Set(selected), [selected]);
@@ -97,6 +111,7 @@ export function LibraryPage() {
               <span>PDF</span>
               <span>Extraction</span>
               <span>Hauptquelle</span>
+              <span />
             </div>
             {papers.map((paper) => {
               const isPrimary = paper.id === primaryPaperId;
@@ -133,6 +148,19 @@ export function LibraryPage() {
                   >
                     <Star size={14} />
                   </button>
+                  <button
+                    className="button button-compact button-danger"
+                    type="button"
+                    title="Paper löschen"
+                    disabled={deletePaper.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Paper "${paper.title || paper.id}" wirklich löschen?`)) {
+                        deletePaper.mutate(paper.id);
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               );
             })}
@@ -161,6 +189,11 @@ export function LibraryPage() {
                 source={source}
                 open={openGrey === source.id}
                 onToggle={() => setOpenGrey((current) => (current === source.id ? null : source.id))}
+                onDelete={() => {
+                  if (window.confirm(`Quelle "${source.title || source.url}" wirklich löschen?`)) {
+                    deleteGrey.mutate(source.id);
+                  }
+                }}
               />
             ))}
           </div>
@@ -170,17 +203,22 @@ export function LibraryPage() {
   );
 }
 
-function GreySourceCard({ source, open, onToggle }: { source: GreySource; open: boolean; onToggle: () => void }) {
+function GreySourceCard({ source, open, onToggle, onDelete }: { source: GreySource; open: boolean; onToggle: () => void; onDelete: () => void }) {
   const [showFull, setShowFull] = useState(false);
   const evidence = source.evidence ?? [];
   const fullText = source.full_text || source.raw_excerpt || "";
   const charCount = fullText.length;
   return (
     <article className="grey-source-card grey-source-card--library">
-      <button type="button" className="grey-source-toggle" onClick={onToggle}>
-        <span className="grey-badge">Graue Quelle</span>
-        <strong>{source.title || source.url}</strong>
-      </button>
+      <div className="grey-source-header">
+        <button type="button" className="grey-source-toggle" onClick={onToggle}>
+          <span className="grey-badge">Graue Quelle</span>
+          <strong>{source.title || source.url}</strong>
+        </button>
+        <button type="button" className="button button-compact button-danger" title="Quelle löschen" onClick={onDelete}>
+          <Trash2 size={13} />
+        </button>
+      </div>
       {open ? (
         <div className="grey-source-detail">
           {source.injection_flags.length ? (

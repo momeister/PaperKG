@@ -103,6 +103,20 @@ class FileManager:
             return True
         return False
 
+    def delete_by_path(self, pdf_path: str) -> bool:
+        """Delete a PDF by its stored path. Returns True if deleted."""
+        path = Path(pdf_path)
+        if not path.is_absolute():
+            path = self.base_dir / path
+        if path.exists():
+            path.unlink()
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+            return True
+        return False
+
     def list_papers(self) -> list[tuple[str, int]]:
         """
         List all stored papers as (paper_id, version) tuples.

@@ -204,15 +204,18 @@ def _location_for_reference(
 
 
 def find_pdf_path(paper_id: str, title: str = "", pdf_base_dir: str = "data/pdfs") -> str | None:
+    import re as _re
     base = Path(pdf_base_dir)
     if not base.exists():
         return None
 
     candidates = sorted(base.rglob("*.pdf"))
     for token in pdf_lookup_tokens(paper_id, title):
-        token_lower = token.lower()
+        token_escaped = _re.escape(token.lower())
+        pattern = _re.compile(r"(?<![a-z0-9])" + token_escaped + r"(?![a-z0-9])")
         for candidate in candidates:
-            if token_lower in str(candidate).lower():
+            stem = Path(candidate).stem.lower()
+            if pattern.search(stem):
                 return str(candidate)
     return None
 
@@ -328,7 +331,8 @@ def best_excerpt(pdf_text: str, reference: str, window_chars: int = DEFAULT_EXCE
         required_numbers = {token for token in quantitative if token.endswith("%")} or quantitative
         number_candidates: list[tuple[int, str]] = []
         for token in required_numbers:
-            for match in re.finditer(re.escape(token), lower):
+            token_pattern = r"(?<![a-z0-9.])" + re.escape(token) + r"(?![a-z0-9.%])"
+            for match in re.finditer(token_pattern, lower):
                 excerpt = _excerpt_around(clean, match.start(), len(match.group(0)), window_chars)
                 if not _contains_quantitative_tokens(excerpt, quantitative):
                     continue
@@ -340,19 +344,30 @@ def best_excerpt(pdf_text: str, reference: str, window_chars: int = DEFAULT_EXCE
 
     best_start = 0
     best_score = -1
+    fallback_start = 0
+    fallback_score = -1
     step = max(window_chars // 2, 120)
     for start in range(0, max(len(clean) - window_chars, 1), step):
         window = lower[start : start + window_chars]
+        overlap_score = sum(1 for token in tokens if token in window)
+        if overlap_score > fallback_score:
+            fallback_score = overlap_score
+            fallback_start = start
         if quantitative and not _contains_quantitative_tokens(window, quantitative):
             continue
-        score = sum(1 for token in tokens if token in window)
-        if score > best_score:
-            best_score = score
+        if overlap_score > best_score:
+            best_score = overlap_score
             best_start = start
-    if best_score <= 0:
-        return ""
-    excerpt = _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
-    return excerpt if _contains_quantitative_tokens(excerpt, quantitative) else ""
+    if best_score > 0:
+        excerpt = _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
+        if _contains_quantitative_tokens(excerpt, quantitative):
+            return excerpt
+    # Nothing matched the (stricter) quantitative requirement — fall back to the window
+    # with the best plain textual overlap, but only if it's a meaningfully strong match.
+    # This covers paraphrased/computed claims whose numbers don't appear verbatim in the PDF.
+    if fallback_score >= 3:
+        return _excerpt_around(clean, fallback_start, min(window_chars, len(clean) - fallback_start), window_chars)
+    return ""
 
 
 def highlightable_terms(text: str) -> list[str]:

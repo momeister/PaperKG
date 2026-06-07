@@ -481,6 +481,22 @@ class MetadataDB:
         cols = [desc[0] for desc in self.conn.description]
         return self._parse_paper_row(dict(zip(cols, result)))
 
+    def delete_paper(self, paper_id: str) -> bool:
+        if self.get_paper(paper_id) is None:
+            return False
+        self._execute("DELETE FROM papers WHERE id = ?", [paper_id])
+        self._execute("DELETE FROM paper_sources WHERE paper_id = ?", [paper_id])
+        self._execute("DELETE FROM extraction_results WHERE paper_id = ?", [paper_id])
+        try:
+            self._execute("DELETE FROM entity_embeddings WHERE paper_id = ?", [paper_id])
+        except Exception:
+            pass
+        try:
+            self._execute("DELETE FROM batch_job_items WHERE paper_id = ?", [paper_id])
+        except Exception:
+            pass
+        return True
+
     def resolve_paper_id(self, identifier: str | None) -> str | None:
         """Resolve aliases such as PDF storage IDs, arXiv IDs, and DOI strings to a stored paper ID."""
         paper = self.resolve_paper(identifier)

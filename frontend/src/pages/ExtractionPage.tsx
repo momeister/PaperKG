@@ -497,10 +497,11 @@ function ExtractionLibraryTable({
       </div>
       {items.map((item) => {
         const isGrey = item.source_type === "grey";
+        const noPdf = !isGrey && item.pdf_available === false;
         return (
-          <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""}`} key={item.paper_id}>
+          <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""} ${noPdf ? "data-row--muted" : ""}`} key={item.paper_id}>
             <label className="check-row extraction-row-check">
-              {isGrey ? (
+              {isGrey || noPdf ? (
                 <Globe size={14} style={{ opacity: 0.5 }} />
               ) : (
                 <input type="checkbox" checked={selectedBatchPaths.includes(item.paper_id)} onChange={() => onToggleBatch(item.paper_id)} />
@@ -512,11 +513,15 @@ function ExtractionLibraryTable({
             </strong>
             <span>{item.paper_id}</span>
             <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
-            <span>{formatBytes(item.size_bytes)}</span>
-            <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
-              <FileSearch size={15} />
-              <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
-            </button>
+            <span>{noPdf ? <span className="muted" title="Kein PDF verfügbar — bitte hochladen">Kein PDF</span> : formatBytes(item.size_bytes)}</span>
+            {noPdf ? (
+              <span className="muted">—</span>
+            ) : (
+              <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
+                <FileSearch size={15} />
+                <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
+              </button>
+            )}
           </div>
         );
       })}

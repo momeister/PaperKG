@@ -9,10 +9,10 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from extraction.embedding_engine import EmbeddingEngine
-from query.grounded_responder import GroundedResponder
+from query.grounded_responder import GroundedResponder, _citation_links_for_answer
 from query.hybrid_retriever import HybridRetriever
 from query.hypothesis_generator import HypothesisGenerator
-from query.kg_retriever import KGRetriever
+from query.kg_retriever import Evidence, KGRetriever
 from storage.metadata_db import MetadataDB
 
 
@@ -450,6 +450,40 @@ def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence(
         assert evidence_by_id[answer.citation_links[0]["evidence_id"]].kind == "claim"
         assert evidence_by_id[answer.citation_links[1]["evidence_id"]].kind == "method"
         assert all(isinstance(link["citation_start"], int) for link in answer.to_dict()["citation_links"])
+
+
+def test_citation_links_break_exact_score_ties_with_distinct_evidence() -> None:
+    # Both evidence items score identically against both citation contexts (same
+    # `kind`, same `score`, no shared terms/phrases with either context) — an exact
+    # tie that previously made the lowest-indexed evidence win both occurrences,
+    # showing the same excerpt ("Z1") twice instead of distinct excerpts ("Z1"/"Z2").
+    answer_text = (
+        "Widgets improve throughput significantly [p1]. "
+        "Gadgets reduce latency notably [p1]."
+    )
+    evidence = [
+        Evidence(
+            paper_id="p1",
+            kind="claim",
+            text="Researchers compiled a broad survey of annotation tooling conventions.",
+            score=0.0,
+            evidence_id="ev-a",
+        ),
+        Evidence(
+            paper_id="p1",
+            kind="claim",
+            text="Engineers documented common patterns across deployment pipeline stages.",
+            score=0.0,
+            evidence_id="ev-b",
+        ),
+    ]
+
+    links = _citation_links_for_answer(answer_text, evidence)
+
+    assert len(links) == 2
+    assert links[0]["score"] == links[1]["score"]
+    assert links[0]["evidence_id"] != links[1]["evidence_id"]
+    assert {links[0]["evidence_id"], links[1]["evidence_id"]} == {"ev-a", "ev-b"}
 
 
 def test_grounded_responder_surfaces_generation_failures() -> None:

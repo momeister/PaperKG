@@ -148,7 +148,7 @@ making claims."""
             except Exception:
                 pass  # never fail the answer because of grey source fetch
 
-        evidence = self._evidence_for_answer(hits, max_items=_evidence_item_limit(limit, hits))
+        evidence = self._evidence_for_answer(hits, max_items=_evidence_item_limit(limit, hits), priority_paper_ids=priority_set)
         sources = [hit.source for hit in hits if hit.evidence]
 
         # Inject inline context (e.g. grey-source full_text) as synthetic evidence.
@@ -198,7 +198,8 @@ making claims."""
             conversation_context=conversation_context,
             priority_paper_ids=priority_set,
         )
-        cited_ids = _cited_paper_ids(answer_text)
+        known_ids = frozenset(s.paper_id for s in sources)
+        cited_ids = _cited_paper_ids(answer_text, known_ids)
         if cited_ids:
             cited_sources = [source for source in sources if source.paper_id in cited_ids]
             cited_evidence = [item for item in evidence if item.paper_id in cited_ids]
@@ -341,18 +342,20 @@ making claims."""
             diagnostics["generation_error"] = str(exc)
             return None, diagnostics
 
+        known_ids = frozenset(source.paper_id for source in sources)
         answer_text = str(response or "").strip()
         answer_text = self._repair_invalid_citations(
             response=answer_text,
             prompt=prompt,
             provider=provider,
             overrides=merged_overrides,
+            known_ids=known_ids,
         )
         if not answer_text:
             diagnostics["fallback_reason"] = "empty_pdf_context_answer"
             return None, diagnostics
 
-        cited_ids = _cited_paper_ids(answer_text)
+        cited_ids = _cited_paper_ids(answer_text, known_ids)
         filtered_sources = [source for source in sources if not cited_ids or source.paper_id in cited_ids]
         filtered_evidence = [item for item in evidence if not cited_ids or item.paper_id in cited_ids]
         answer = GroundedAnswer(
@@ -452,11 +455,15 @@ making claims."""
                     )
                 response = str(response or "").strip()
 
+        known_ids = frozenset(item.paper_id for item in evidence) | frozenset(
+            hit.source.paper_id for hit in hits
+        )
         response = self._repair_invalid_citations(
             response=response,
             prompt=prompt,
             provider=provider,
             overrides=merged_overrides,
+            known_ids=known_ids,
         )
         response = self._repair_sparse_citations(
             response=response,
@@ -464,6 +471,7 @@ making claims."""
             provider=provider,
             overrides=merged_overrides,
             evidence=evidence,
+            known_ids=known_ids,
         )
 
         if response:
@@ -517,7 +525,12 @@ making claims."""
         max_tokens = int(overrides.get("max_tokens") or self.MIN_ANSWER_TOKENS)
         return reasoning_tokens > 0 and reasoning_tokens >= max_tokens - 1
 
-    def _evidence_for_answer(self, hits: list[SearchHit], max_items: int) -> list[Evidence]:
+    def _evidence_for_answer(
+        self,
+        hits: list[SearchHit],
+        max_items: int,
+        priority_paper_ids: set[str] | None = None,
+    ) -> list[Evidence]:
         evidence = _flatten_evidence(hits, max_items=max_items)
         paper_ids = [hit.source.paper_id for hit in hits[:3]]
         existing = {(item.paper_id, item.kind, item.text) for item in evidence}
@@ -532,7 +545,11 @@ making claims."""
                 existing.add(key)
                 evidence.append(item)
 
-        evidence.sort(key=lambda item: _answer_evidence_rank(item), reverse=True)
+        priority_ids = priority_paper_ids or set()
+        evidence.sort(
+            key=lambda item: _answer_evidence_rank(item) + (5.0 if item.paper_id in priority_ids else 0.0),
+            reverse=True,
+        )
         return evidence[:max_items]
 
     def _repair_invalid_citations(
@@ -541,10 +558,11 @@ making claims."""
         prompt: str,
         provider: str | None,
         overrides: dict[str, Any],
+        known_ids: frozenset[str] = frozenset(),
     ) -> str:
         if self.llm_router is None or not response:
             return response
-        if not _invalid_citations(response):
+        if not _invalid_citations(response, known_ids):
             return response
 
         repair_prompt = (
@@ -568,7 +586,7 @@ making claims."""
         except Exception:
             return response
         repaired = str(repaired or "").strip()
-        if repaired and not _invalid_citations(repaired):
+        if repaired and not _invalid_citations(repaired, known_ids):
             return repaired
         return response
 
@@ -579,13 +597,14 @@ making claims."""
         provider: str | None,
         overrides: dict[str, Any],
         evidence: list[Evidence],
+        known_ids: frozenset[str] = frozenset(),
     ) -> str:
-        if self.llm_router is None or not response or _invalid_citations(response):
+        if self.llm_router is None or not response or _invalid_citations(response, known_ids):
             return response
         available_ids = {item.paper_id for item in evidence if item.paper_id}
         if len(available_ids) < 3:
             return response
-        cited_ids = _cited_paper_ids(response)
+        cited_ids = _cited_paper_ids(response, known_ids)
         desired_count = min(3, len(available_ids))
         if len(cited_ids) >= desired_count:
             return response
@@ -611,9 +630,9 @@ making claims."""
         except Exception:
             return response
         repaired = str(repaired or "").strip()
-        if not repaired or _invalid_citations(repaired):
+        if not repaired or _invalid_citations(repaired, known_ids):
             return response
-        repaired_ids = _cited_paper_ids(repaired)
+        repaired_ids = _cited_paper_ids(repaired, known_ids)
         return repaired if len(repaired_ids) > len(cited_ids) else response
 
 
@@ -745,6 +764,7 @@ def _build_grounded_prompt(
             "",
             "Answer concisely using only this evidence.",
             "Include source paper IDs in square brackets for each substantive claim.",
+            "Place each citation marker at the end of the sentence or claim it supports — never before the claim or in the middle of it.",
             "When multiple papers support different parts of the answer, cite multiple distinct paper IDs instead of reusing only one source.",
             "When one claim is supported by multiple papers, cite the supporting paper IDs together in one bracket, separated by commas, for example [p1, p2].",
             "Use only paper IDs shown in the evidence as citations; never cite evidence item numbers like [1] or [4].",
@@ -787,6 +807,7 @@ def _build_pdf_context_prompt(
             "",
             "Answer using only the PDF context above.",
             "Cite the exact paper IDs shown in square brackets for every substantive claim.",
+            "Place each citation marker at the end of the sentence or claim it supports — never before the claim or in the middle of it.",
             "When multiple papers support one claim, cite them together, for example [p1, p2].",
             "If the PDF context is insufficient, say that the local PDF context does not contain enough evidence.",
         ]
@@ -847,25 +868,29 @@ def _sanitize_evidence_text(text: str) -> str:
     )
 
 
-def _cited_paper_ids(answer_text: str) -> set[str]:
+def _cited_paper_ids(answer_text: str, known_ids: frozenset[str] = frozenset()) -> set[str]:
     ids: set[str] = set()
     for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
         for value in re.split(r"[,;]\s*", bracketed):
             value = value.strip()
-            if _is_allowed_citation_label(value):
+            if _is_allowed_citation_label(value, known_ids):
                 ids.add(value)
     return ids
 
 
 def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> list[dict[str, Any]]:
     links: list[dict[str, Any]] = []
+    known_ids = frozenset(item.paper_id for item in evidence if item.paper_id)
+    used_by_paper: dict[str, set[str]] = {}
     for match in re.finditer(r"\[([^\]]+)\]", answer_text or ""):
         raw_citation = match.group(1).strip()
         context = _citation_context(answer_text, match.start(), match.end())
-        for paper_id_value in _citation_paper_ids(raw_citation):
-            best_index, best_evidence, score = _best_citation_evidence(paper_id_value, context, evidence)
+        for paper_id_value in _citation_paper_ids(raw_citation, known_ids):
+            used = used_by_paper.setdefault(paper_id_value, set())
+            best_index, best_evidence, score = _best_citation_evidence(paper_id_value, context, evidence, used)
             if best_evidence is None:
                 continue
+            used.add(best_evidence.evidence_id)
             links.append(
                 {
                     "citation": raw_citation,
@@ -881,11 +906,11 @@ def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> li
     return links
 
 
-def _citation_paper_ids(citation: str) -> list[str]:
+def _citation_paper_ids(citation: str, known_ids: frozenset[str] = frozenset()) -> list[str]:
     ids: list[str] = []
     for value in re.split(r"[,;]\s*|\s+(?:and|und)\s+", citation or ""):
         value = value.strip()
-        if value and _is_allowed_citation_label(value):
+        if value and _is_allowed_citation_label(value, known_ids):
             ids.append(value)
     return ids
 
@@ -906,6 +931,7 @@ def _best_citation_evidence(
     paper_id_value: str,
     context: str,
     evidence: list[Evidence],
+    used_evidence_ids: set[str] | None = None,
 ) -> tuple[int, Evidence | None, float]:
     candidates = [(index, item) for index, item in enumerate(evidence) if _same_paper_id(item.paper_id, paper_id_value)]
     if not candidates:
@@ -916,7 +942,10 @@ def _best_citation_evidence(
         for index, item in candidates
     ]
     scored.sort(key=lambda row: (row[2], row[1].score, -row[0]), reverse=True)
-    index, item, score = scored[0]
+    top_score = scored[0][2]
+    tied = [row for row in scored if row[2] == top_score]
+    unused_tied = [row for row in tied if row[1].evidence_id not in (used_evidence_ids or set())]
+    index, item, score = (unused_tied or tied)[0]
     return index, item, score
 
 
@@ -1026,23 +1055,29 @@ def _distinctive_phrases(value: str) -> list[str]:
     return phrases[:12]
 
 
-def _invalid_citations(answer_text: str) -> list[str]:
+def _invalid_citations(answer_text: str, known_ids: frozenset[str] = frozenset()) -> list[str]:
     invalid: list[str] = []
     for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
         parts = [part.strip() for part in re.split(r"[,;]\s*", bracketed) if part.strip()]
         if not parts:
             continue
         for part in parts:
+            if part in known_ids:
+                continue
             if re.fullmatch(r"\d+", part):
                 invalid.append(part)
             elif re.fullmatch(r"\d+(?:\s*[-,]\s*\d+)+", part):
                 invalid.append(part)
-            elif not _is_allowed_citation_label(part):
+            elif not _is_allowed_citation_label(part, known_ids):
                 invalid.append(part)
     return invalid
 
 
-def _is_allowed_citation_label(value: str) -> bool:
+def _is_allowed_citation_label(value: str, known_ids: frozenset[str] = frozenset()) -> bool:
+    # An exact match against a paper ID actually present in this answer's context is
+    # always valid, regardless of format (local uploads can have bare IDs like "files").
+    if value in known_ids:
+        return True
     # Accept any source:id format (e.g. arxiv:, crossref:, openalex:, semantic_scholar:, files:, local:, doi:)
     # and legacy short p-prefixed IDs. Bare numbers or random tokens are rejected.
     return bool(re.match(r'^[a-z][a-z0-9_]*:[^\s]', value)) or value.startswith("p")
