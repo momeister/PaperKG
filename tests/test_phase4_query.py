@@ -434,6 +434,83 @@ def test_grounded_responder_can_answer_from_pdf_context_if_it_fits(monkeypatch, 
     assert "Clinical AI reduces diagnostic errors" in fake_llm.calls[0]["messages"][1]["content"]
 
 
+class TwoClaimPdfCitationLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return (
+            "The trial reported a median overall survival of 16.8 months in the treatment group [p1]. "
+            "Patients on the new treatment also experienced more fatigue and headaches than placebo [p1]."
+        )
+
+
+def test_pdf_context_answer_links_citations_to_distinct_claim_excerpts(monkeypatch, tmp_path) -> None:
+    # Regression test for the "PDF-Assistent" bug where every [paper_id] citation in
+    # pdf_if_fits mode pointed to the SAME generic, question-anchored snippet — which,
+    # for papers whose title contains the topic terms (very common for clinical RCTs),
+    # is just the title/author block. Each citation must instead resolve to the PDF
+    # passage that actually supports its specific claim.
+    from query import grounded_responder as responder_module
+
+    class PdfScopedRetriever:
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"source": {"paper_id": paper_id, "title": "Clinical Trial of NewDrug for Disease X", "year": 2025}}
+
+        def search(self, *args, **kwargs) -> list:
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {"valid_citation_count": 2}, "sources": [{"paper_id": "p1", "status": "verified"}]}
+
+    pdf_text = (
+        "Clinical Trial of NewDrug for Disease X. Jane Doe, MD, John Smith, PhD, and Alice Lee, MD. "
+        "Abstract. Background: Disease X is a serious chronic condition affecting many patients worldwide "
+        "and current treatment options remain limited in efficacy and tolerability for most affected individuals. "
+        "Methods: We enrolled four hundred patients across twelve study centers and randomly assigned them "
+        "to receive either the new treatment or a matching placebo for a period of eighteen months under blinded conditions. "
+        "Results: The median overall survival was 16.8 months in the treatment group as compared with 11.2 months "
+        "in the placebo group, a difference that was statistically significant according to the prespecified analysis "
+        "plan for the primary endpoint. Safety analyses showed that adverse event rates were broadly comparable between "
+        "groups during the early treatment period, though longer follow up will be needed to fully characterize the "
+        "late safety profile of the new agent in this population. Patients in the treatment group reported more fatigue "
+        "and headaches than those receiving placebo during routine follow-up visits, and these complaints were noted "
+        "consistently across study sites and were generally managed with supportive care measures. Conclusions: NewDrug "
+        "improved survival but increased certain adverse events, and further studies are warranted to confirm benefit."
+    )
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    fake_llm = TwoClaimPdfCitationLLMRouter()
+    monkeypatch.setattr(responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path)
+    monkeypatch.setattr(responder_module, "parse_pdf_text", lambda *args, **kwargs: pdf_text)
+    monkeypatch.setattr(responder_module, "verify_answer_sources", lambda *args, **kwargs: VerificationResult())
+
+    answer = GroundedResponder(retriever=PdfScopedRetriever(), llm_router=fake_llm).answer(
+        "What did the trial find?",
+        paper_ids=["p1"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+    assert len(answer.citation_links) == 2
+    evidence_by_id = {item.evidence_id: item for item in answer.evidence}
+    survival_evidence = evidence_by_id[answer.citation_links[0]["evidence_id"]]
+    side_effect_evidence = evidence_by_id[answer.citation_links[1]["evidence_id"]]
+
+    assert survival_evidence.evidence_id != side_effect_evidence.evidence_id
+    assert survival_evidence.metadata.get("context_policy") == "claim_excerpt"
+    assert side_effect_evidence.metadata.get("context_policy") == "claim_excerpt"
+
+    # Each citation must link to the sentence that actually supports ITS claim …
+    assert "16.8 months" in survival_evidence.text
+    assert "fatigue and headaches" in side_effect_evidence.text
+    # … not the generic title/author block (the symptom Moritz reported: useless
+    # "Belege" excerpts that were mostly just author names).
+    assert "Jane Doe" not in survival_evidence.text
+    assert "Jane Doe" not in side_effect_evidence.text
+
+
 def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence() -> None:
     with _phase4_fixture() as db_path:
         responder = GroundedResponder(

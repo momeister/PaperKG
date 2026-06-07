@@ -8,7 +8,7 @@ from query.context_budget import decide_whole_context, effective_generation_limi
 from query.hybrid_retriever import HybridRetriever
 from query.kg_retriever import Evidence, SearchHit, Source
 from query.llm_router import LLMRouter
-from query.source_verifier import find_pdf_path, parse_pdf_text, verify_answer_sources
+from query.source_verifier import best_excerpt, find_pdf_path, parse_pdf_text, verify_answer_sources
 
 
 @dataclass
@@ -316,17 +316,9 @@ making claims."""
             diagnostics["fallback_reason"] = decision.fallback_reason or "context_budget_exceeded"
             return None, diagnostics
 
-        evidence = [
-            Evidence(
-                paper_id=source.paper_id,
-                kind="pdf",
-                field="parsed_pdf_text",
-                text=_best_pdf_context_snippet(pdf_text, question),
-                score=10.0,
-                metadata={"title": source.title, "pdf_path": pdf_path, "context_policy": "whole"},
-            )
-            for source, pdf_path, pdf_text in parsed_texts
-        ]
+        texts_by_paper_id = {
+            source.paper_id: (source, pdf_path, pdf_text) for source, pdf_path, pdf_text in parsed_texts
+        }
         prompt = _build_pdf_context_prompt(question, combined_text, conversation_context=conversation_context)
         try:
             response = self._chat_with_transient_retry(
@@ -354,6 +346,47 @@ making claims."""
         if not answer_text:
             diagnostics["fallback_reason"] = "empty_pdf_context_answer"
             return None, diagnostics
+
+        claim_evidence: list[Evidence] = []
+        papers_with_claim_evidence: set[str] = set()
+        for paper_id_value, citation_context in _unique_citation_contexts(answer_text, known_ids):
+            located = texts_by_paper_id.get(paper_id_value)
+            if located is None:
+                continue
+            source, pdf_path, pdf_text = located
+            excerpt = best_excerpt(pdf_text, citation_context)
+            if not excerpt:
+                continue
+            claim_evidence.append(
+                Evidence(
+                    paper_id=source.paper_id,
+                    kind="pdf",
+                    field="answer_claim_excerpt",
+                    text=excerpt,
+                    score=11.0,
+                    metadata={
+                        "title": source.title,
+                        "pdf_path": pdf_path,
+                        "context": citation_context,
+                        "context_policy": "claim_excerpt",
+                    },
+                )
+            )
+            papers_with_claim_evidence.add(source.paper_id)
+
+        fallback_evidence = [
+            Evidence(
+                paper_id=source.paper_id,
+                kind="pdf",
+                field="parsed_pdf_text",
+                text=_best_pdf_context_snippet(pdf_text, question),
+                score=10.0,
+                metadata={"title": source.title, "pdf_path": pdf_path, "context_policy": "whole"},
+            )
+            for source, pdf_path, pdf_text in parsed_texts
+            if source.paper_id not in papers_with_claim_evidence
+        ]
+        evidence = claim_evidence + fallback_evidence
 
         cited_ids = _cited_paper_ids(answer_text, known_ids)
         filtered_sources = [source for source in sources if not cited_ids or source.paper_id in cited_ids]
@@ -878,13 +911,32 @@ def _cited_paper_ids(answer_text: str, known_ids: frozenset[str] = frozenset()) 
     return ids
 
 
+def _citation_occurrences(answer_text: str) -> list[tuple[re.Match[str], str, str]]:
+    occurrences: list[tuple[re.Match[str], str, str]] = []
+    for match in re.finditer(r"\[([^\]]+)\]", answer_text or ""):
+        raw_citation = match.group(1).strip()
+        context = _citation_context(answer_text, match.start(), match.end())
+        occurrences.append((match, raw_citation, context))
+    return occurrences
+
+
+def _unique_citation_contexts(answer_text: str, known_ids: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    pairs: list[tuple[str, str]] = []
+    for _match, raw_citation, context in _citation_occurrences(answer_text):
+        for paper_id_value in _citation_paper_ids(raw_citation, known_ids):
+            pair = (paper_id_value, context)
+            if pair not in seen:
+                seen.add(pair)
+                pairs.append(pair)
+    return pairs
+
+
 def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> list[dict[str, Any]]:
     links: list[dict[str, Any]] = []
     known_ids = frozenset(item.paper_id for item in evidence if item.paper_id)
     used_by_paper: dict[str, set[str]] = {}
-    for match in re.finditer(r"\[([^\]]+)\]", answer_text or ""):
-        raw_citation = match.group(1).strip()
-        context = _citation_context(answer_text, match.start(), match.end())
+    for match, raw_citation, context in _citation_occurrences(answer_text):
         for paper_id_value in _citation_paper_ids(raw_citation, known_ids):
             used = used_by_paper.setdefault(paper_id_value, set())
             best_index, best_evidence, score = _best_citation_evidence(paper_id_value, context, evidence, used)
@@ -1036,7 +1088,8 @@ def _match_terms(value: str) -> list[str]:
 
 def _quantitative_tokens(value: str) -> set[str]:
     tokens = set()
-    for match in re.findall(r"\d+(?:\.\d+)?\s*%?", str(value or "")):
+    normalized = re.sub(r"(\d+),(\d+)", r"\1.\2", str(value or ""))
+    for match in re.findall(r"\d+(?:\.\d+)?\s*%?", normalized):
         clean = re.sub(r"\s+", "", match)
         if clean:
             tokens.add(clean)

@@ -238,3 +238,27 @@ def test_best_excerpt_keeps_quantitative_claim_tokens_when_matching_pdf_text() -
     assert "16% fewer diagnostic errors" in excerpt
     assert "13% fewer treatment errors" in excerpt
     assert "demonstrate potential" not in excerpt
+
+
+def test_best_excerpt_matches_german_decimal_comma_numbers_against_english_pdf_text() -> None:
+    # German claim text writes decimals with a comma ("10,6"); the PDF (English, NEJM-style)
+    # writes them with a period ("10.6"). Without normalizing the comma to a period first,
+    # _quantitative_tokens splits "10,6" into separate integer tokens {10, 6}, the anchor
+    # tier never finds "10.6"/"6.2" in the PDF, and best_excerpt falls back to an unrelated
+    # number-dense table instead of the actual claim sentence.
+    pdf_text = (
+        "Baseline characteristics were balanced between groups across all measured covariates. "
+        "The median progression-free survival was 10.6 months in the bevacizumab group as compared "
+        "with 6.2 months in the placebo group, a difference that was statistically significant. "
+        "Quality of life scores were similar between groups at twelve months of follow-up."
+    )
+    reference = (
+        "Die Studie zeigte ein progressionsfreies Überleben von 10,6 Monaten in der "
+        "Bevacizumab-Gruppe gegenüber 6,2 Monaten in der Placebo-Gruppe."
+    )
+
+    excerpt = best_excerpt(pdf_text, reference, window_chars=160)
+
+    assert "10.6 months" in excerpt
+    assert "6.2 months" in excerpt
+    assert "Baseline characteristics" not in excerpt

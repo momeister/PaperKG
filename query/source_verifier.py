@@ -519,7 +519,8 @@ def _find_longest_substring(text: str, reference: str) -> tuple[int, int] | None
 
 def _quantitative_tokens(value: str) -> set[str]:
     tokens: set[str] = set()
-    for match in re.findall(r"\d+(?:\.\d+)?\s*%?", str(value or "")):
+    normalized = re.sub(r"(\d+),(\d+)", r"\1.\2", str(value or ""))
+    for match in re.findall(r"\d+(?:\.\d+)?\s*%?", normalized):
         clean = re.sub(r"\s+", "", match)
         if clean:
             tokens.add(clean.lower())
