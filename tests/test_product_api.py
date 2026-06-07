@@ -290,6 +290,64 @@ def test_product_papers_include_pdf_display_fallbacks(tmp_path) -> None:
     assert paper["pdf_path"] == str(pdf_path)
 
 
+def test_grey_source_from_url_fetches_sanitizes_and_infers_title(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+
+    class FakeResponse:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def get(self, url):
+            assert url == "https://example.com/article"
+            return FakeResponse(
+                "<html><head><title>Widgets Outperform Gadgets</title></head>"
+                "<body><script>ignored()</script><p>Widgets reduced latency by 20%.</p></body></html>"
+            )
+
+    monkeypatch.setattr(product_main.httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(product_main.app)
+
+    response = client.post(
+        "/projects/demo/grey-sources/from-url",
+        json={"url": "https://example.com/article", "metadata_db_path": str(db_path)},
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["saved"]
+    assert saved["title"] == "Widgets Outperform Gadgets"
+    assert "Widgets reduced latency by 20%" in saved["full_text"]
+    assert "ignored()" not in saved["full_text"]
+
+    with MetadataDB(str(db_path)) as db:
+        stored = db.list_grey_sources("demo")
+    assert stored[0]["url"] == "https://example.com/article"
+
+
+def test_grey_source_from_url_rejects_non_http_scheme(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    client = TestClient(product_main.app)
+
+    response = client.post(
+        "/projects/demo/grey-sources/from-url",
+        json={"url": "javascript:alert(1)", "metadata_db_path": str(db_path)},
+    )
+
+    assert response.status_code == 400
+
+
 def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "metadata.duckdb"
     pdf_dir = tmp_path / "pdfs"
@@ -435,6 +493,102 @@ def test_product_extraction_parse_returns_structured_errors(tmp_path, monkeypatc
     assert detail["pdf_path"] == str(pdf_path.resolve())
     assert detail["parser"] == "marker"
     assert detail["error"] == "parser backend unavailable"
+
+
+def test_text_looks_garbled_distinguishes_clean_and_broken_extraction() -> None:
+    clean = "Graph transformers improve link prediction across large citation networks. " * 4
+    garbled = "x7$ q@9 ##z 1!a 0)( *&^ %$# qq1 zz9 ;;: ,,, ... !!! ??? @@@ ### $$$ %%% &&& " * 4
+
+    assert product_main._text_looks_garbled(clean) is False
+    assert product_main._text_looks_garbled(garbled) is True
+    assert product_main._text_looks_garbled("too short") is False
+
+
+def _run_garbled_title_extraction(tmp_path, monkeypatch, *, stored_title: str, garbled: bool):
+    db_path = tmp_path / "metadata.duckdb"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / "files.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    with MetadataDB(str(db_path)) as db:
+        db.ensure_paper_record("paper-1", title=stored_title, pdf_path=str(pdf_path))
+
+    extracted_text = (
+        "x7$ q@9 ##z 1!a 0)( *&^ %$# qq1 zz9 ;;: ,,, ... !!! ??? @@@ ### $$$ %%% &&& " * 4
+        if garbled
+        else "Graph transformers improve link prediction across large citation networks. " * 4
+    )
+
+    class FakeParser:
+        def parse(self, file_path, paper_id, force_parser=None):
+            return SimpleNamespace(
+                paper_id=paper_id,
+                parser="marker",
+                text=extracted_text,
+                page_count=1,
+                meta={"extraction_method": "fake"},
+            )
+
+    class FakePipeline:
+        def process(self, paper_id, text, provider=None, overrides=None, link_concepts=True):
+            return SimpleNamespace(
+                paper_id=paper_id,
+                paper_type="research",
+                concepts=[],
+                methods=[],
+                concept_candidates=[],
+                method_candidates=[],
+                relations=[],
+                claims=[],
+                cross_domain_hints=[],
+                terminology_conflicts=[],
+                temporal_coverage={"paper_year": 2026},
+                mathematical_content={"has_formulas": False},
+                language_detected="en",
+                quality_warnings=[],
+                metadata_status="valid",
+                blocking_errors=[],
+                candidate_count=0,
+                extraction_diagnostics={"mode": "fake"},
+                raw_response="{}",
+            )
+
+    monkeypatch.setattr(product_main, "parser_router", FakeParser())
+    monkeypatch.setattr(product_main, "extraction_pipeline", FakePipeline())
+    monkeypatch.setattr(product_main, "_infer_pdf_title_from_bytes", lambda content: "Inferred Real Title From PDF")
+
+    client = TestClient(product_main.app)
+    response = client.post(
+        "/extraction/extract",
+        json={
+            "paper_id": "paper-1",
+            "pdf_path": str(pdf_path),
+            "provider": "fake",
+            "model": "fake-model",
+            "metadata_db_path": str(db_path),
+            "pdf_base_dir": str(pdf_dir),
+        },
+    )
+    assert response.status_code == 200
+
+    with MetadataDB(str(db_path)) as db:
+        return db.get_paper("paper-1")
+
+
+def test_garbled_extraction_overwrites_generic_title_with_inferred_pdf_title(tmp_path, monkeypatch) -> None:
+    paper = _run_garbled_title_extraction(tmp_path, monkeypatch, stored_title="files", garbled=True)
+    assert paper["title"] == "Inferred Real Title From PDF"
+
+
+def test_clean_extraction_does_not_touch_a_fine_title(tmp_path, monkeypatch) -> None:
+    paper = _run_garbled_title_extraction(tmp_path, monkeypatch, stored_title="A Perfectly Fine Title", garbled=False)
+    assert paper["title"] == "A Perfectly Fine Title"
+
+
+def test_garbled_extraction_does_not_overwrite_a_specific_title(tmp_path, monkeypatch) -> None:
+    paper = _run_garbled_title_extraction(tmp_path, monkeypatch, stored_title="A Perfectly Fine Title", garbled=True)
+    assert paper["title"] == "A Perfectly Fine Title"
 
 
 def test_product_upload_models_jobs_and_harvest(tmp_path, monkeypatch) -> None:

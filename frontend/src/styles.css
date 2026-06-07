@@ -643,6 +643,7 @@ h1 {
 }
 
 .chat-box {
+  position: relative;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) minmax(112px, 130px) minmax(86px, 110px) 38px;
   gap: 10px;
@@ -651,6 +652,65 @@ h1 {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.chat-box--drag-over {
+  border-color: var(--blue);
+  border-style: dashed;
+  background: #eff6ff;
+}
+
+.chat-box-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 7px;
+  background: rgba(239, 246, 255, 0.92);
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.source-drop-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.source-drop-confirm-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.source-drop-confirm-body strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.source-drop-confirm-body .muted {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.source-ingest-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
 }
 
 .answer-panel {

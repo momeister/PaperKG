@@ -134,6 +134,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ sources, query })
     }),
+  addGreySourceFromUrl: (projectId: string, url: string) =>
+    request<{ project_id: string; saved: GreySource }>(`/projects/${encodeURIComponent(projectId)}/grey-sources/from-url`, {
+      method: "POST",
+      body: JSON.stringify({ url })
+    }),
   deletePaper: (paperId: string) =>
     request<{ deleted: boolean; file_deleted: boolean; id: string }>(`/papers/${encodeURIComponent(paperId)}`, { method: "DELETE" }),
   deleteGreySource: (greyId: string) =>

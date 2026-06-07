@@ -583,6 +583,14 @@ class MetadataDB:
             [title, title, year, year, pdf_path, pdf_path, pdf_path, paper_id],
         )
 
+    def update_paper_title(self, paper_id: str, title: str) -> None:
+        """Overwrite a paper's title outright (e.g. replacing a garbled-extraction
+        filename-derived title with one inferred from the PDF itself)."""
+        self._execute(
+            "UPDATE papers SET title = ?, updated_timestamp = CURRENT_TIMESTAMP WHERE id = ?",
+            [title, paper_id],
+        )
+
     def search_by_title(self, title_query: str, limit: int = 50) -> list[dict[str, Any]]:
         """
         Search papers by title substring.

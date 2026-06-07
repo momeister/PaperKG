@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type {
+  ClipboardEvent as ReactClipboardEvent,
+  DragEvent as ReactDragEvent,
+  FormEvent,
+  MutableRefObject,
+  PointerEvent as ReactPointerEvent,
+  ReactNode
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   ChevronDown,
   ChevronUp,
   FilePlus2,
+  FileSearch,
   FileText,
   Globe,
+  Link2,
   ListChecks,
   Maximize2,
   MessageSquareText,
@@ -23,7 +32,9 @@ import {
   Send,
   Sparkles,
   Star,
-  Trash2
+  Trash2,
+  Upload,
+  X
 } from "lucide-react";
 
 import { api } from "../api";
@@ -275,6 +286,115 @@ export function WorkspacePage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] })
   });
   const webResult = webMutation.data ?? null;
+
+  const [isDraggingOverChat, setIsDraggingOverChat] = useState(false);
+  const [pendingUrlSource, setPendingUrlSource] = useState<{ url: string } | null>(null);
+  const [sourceIngestStatus, setSourceIngestStatus] = useState("");
+
+  const uploadDroppedPdf = useMutation({
+    mutationFn: (file: File) => api.uploadPdf(file, isRealProject ? { project_id: activeProject } : {}),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-pdfs", activeProject] });
+      queryClient.invalidateQueries({ queryKey: ["papers"] });
+      setSourceIngestStatus(`PDF "${result.paper.title || result.paper.id}" hinzugefügt - in den Quellen sichtbar.`);
+    },
+    onError: (error) => setSourceIngestStatus(error instanceof Error ? error.message : "PDF-Upload fehlgeschlagen")
+  });
+
+  const extractDroppedSource = useMutation({
+    mutationFn: (paperId: string) => api.runExtraction({ paper_id: paperId }),
+    onSuccess: (_, paperId) => {
+      queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
+      setSourceIngestStatus(`Extraktion für "${paperId}" gestartet.`);
+    },
+    onError: (error) => setSourceIngestStatus(error instanceof Error ? error.message : "Extraktion fehlgeschlagen")
+  });
+
+  const addUrlSource = useMutation({
+    mutationFn: (url: string) => api.addGreySourceFromUrl(activeProject as string, url),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+      setSourceIngestStatus(`Webseite "${result.saved.title || result.saved.url}" als Grauquelle gespeichert.`);
+      setPendingUrlSource(null);
+    },
+    onError: (error) => setSourceIngestStatus(error instanceof Error ? error.message : "URL konnte nicht geladen werden")
+  });
+
+  const attachDroppedImage = useMutation({
+    mutationFn: async (file: File) => {
+      let noteId = notesSnapshot.activeNoteId || controlledNoteId;
+      if (!noteId) {
+        const created = await api.createNote(scopedProjectId, { title: "Neue Notiz", markdown: "" });
+        noteId = created.note.id;
+        setControlledNoteId(noteId);
+        queryClient.setQueryData(["note", noteId], { note: created.note });
+      }
+      const { asset } = await api.uploadNoteAsset(noteId, file);
+      const appended = await api.appendNote(noteId, { markdown: `![${asset.filename}](${api.noteAssetUrl(asset.id)})\n` });
+      return { noteId: appended.note.id, asset };
+    },
+    onSuccess: ({ noteId, asset }) => {
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      queryClient.invalidateQueries({ queryKey: ["note", noteId] });
+      setSourceIngestStatus(`Bild "${asset.filename}" als Notiz-Anhang gespeichert - nicht als durchsuchbare Quelle.`);
+    },
+    onError: (error) => setSourceIngestStatus(error instanceof Error ? error.message : "Bild konnte nicht gespeichert werden")
+  });
+
+  function ingestDroppedFiles(files: File[]) {
+    for (const file of files) {
+      const kind = classifyDroppedFile(file);
+      if (kind === "pdf") {
+        setSourceIngestStatus(`Lade PDF "${file.name}" hoch …`);
+        uploadDroppedPdf.mutate(file);
+      } else if (kind === "image") {
+        setSourceIngestStatus(`Speichere Bild "${file.name}" als Notiz-Anhang …`);
+        attachDroppedImage.mutate(file);
+      } else {
+        const ext = fileExtension(file.name);
+        setSourceIngestStatus(`Dateityp wird nicht unterstützt${ext ? `: .${ext}` : ""}.`);
+      }
+    }
+  }
+
+  function handleChatDragOver(event: ReactDragEvent<HTMLFormElement>) {
+    if (!Array.from(event.dataTransfer.types || []).includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    setIsDraggingOverChat(true);
+  }
+
+  function handleChatDragLeave(event: ReactDragEvent<HTMLFormElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return;
+    }
+    setIsDraggingOverChat(false);
+  }
+
+  function handleChatDrop(event: ReactDragEvent<HTMLFormElement>) {
+    const files = Array.from(event.dataTransfer.files || []);
+    if (!files.length) {
+      return;
+    }
+    event.preventDefault();
+    setIsDraggingOverChat(false);
+    ingestDroppedFiles(files);
+  }
+
+  function handleChatPaste(event: ReactClipboardEvent<HTMLFormElement>) {
+    const files = Array.from(event.clipboardData.files || []);
+    if (files.length) {
+      event.preventDefault();
+      ingestDroppedFiles(files);
+      return;
+    }
+    const text = event.clipboardData.getData("text/plain");
+    if (classifyPastedText(text) === "url") {
+      event.preventDefault();
+      setPendingUrlSource({ url: text.trim() });
+    }
+  }
 
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "useInternet", useInternet), [useInternet, scopedProjectId]);
 
@@ -881,7 +1001,20 @@ export function WorkspacePage() {
             />
           ) : (
             <>
-          <form className="chat-box" onSubmit={submit}>
+          <form
+            className={`chat-box ${isDraggingOverChat ? "chat-box--drag-over" : ""}`}
+            onSubmit={submit}
+            onDragOver={handleChatDragOver}
+            onDragLeave={handleChatDragLeave}
+            onDrop={handleChatDrop}
+            onPaste={handleChatPaste}
+          >
+            {isDraggingOverChat ? (
+              <div className="chat-box-drop-hint" aria-hidden="true">
+                <Upload size={18} />
+                <span>PDF, Bild oder Link hier ablegen</span>
+              </div>
+            ) : null}
             <Bot size={20} />
             <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Frage an den lokalen KG" />
             <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
@@ -926,6 +1059,47 @@ export function WorkspacePage() {
               </button>
             </div>
           </form>
+          {pendingUrlSource ? (
+            <div className="source-drop-confirm">
+              <Link2 size={15} />
+              <div className="source-drop-confirm-body">
+                <strong title={pendingUrlSource.url}>{pendingUrlSource.url}</strong>
+                {!isRealProject ? (
+                  <span className="muted">Web-Quellen brauchen ein echtes Projekt (nicht „Alle Papers“).</span>
+                ) : (
+                  <span className="muted">Als Grauquelle speichern? Inhalt wird bereinigt, nicht in den Knowledge Graph aufgenommen.</span>
+                )}
+              </div>
+              <button
+                className="button button-compact"
+                type="button"
+                disabled={!isRealProject || addUrlSource.isPending}
+                onClick={() => addUrlSource.mutate(pendingUrlSource.url)}
+              >
+                {addUrlSource.isPending ? "Lädt …" : "Speichern"}
+              </button>
+              <button className="icon-button" type="button" aria-label="Verwerfen" onClick={() => setPendingUrlSource(null)}>
+                <X size={15} />
+              </button>
+            </div>
+          ) : null}
+          {sourceIngestStatus ? (
+            <div className="scope-status source-ingest-status">
+              <span>{sourceIngestStatus}</span>
+              {uploadDroppedPdf.isSuccess && uploadDroppedPdf.data ? (
+                <button
+                  className="button button-compact button-ghost"
+                  type="button"
+                  title="Extraktion für die neu hinzugefügte Quelle starten"
+                  disabled={extractDroppedSource.isPending}
+                  onClick={() => extractDroppedSource.mutate(uploadDroppedPdf.data!.paper.id)}
+                >
+                  <FileSearch size={13} />
+                  <span>Extrahieren</span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {useInternet && !isRealProject ? (
             <div className="scope-status">Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).</div>
           ) : null}
@@ -1890,6 +2064,32 @@ function findingToGreySource(finding: DeepResearchFinding): GreySource {
     evidence: finding.evidence ?? [],
     injection_flags: finding.injection_flags ?? []
   };
+}
+
+export type DroppedSourceKind = "pdf" | "image" | "unsupported";
+
+/** Classify a dropped/pasted file by MIME type, falling back to its extension. */
+export function classifyDroppedFile(file: File): DroppedSourceKind {
+  const type = (file.type || "").toLowerCase();
+  if (type === "application/pdf") return "pdf";
+  if (type.startsWith("image/")) return "image";
+  const name = (file.name || "").toLowerCase();
+  if (name.endsWith(".pdf")) return "pdf";
+  if (/\.(png|jpe?g|gif|webp|svg|bmp)$/.test(name)) return "image";
+  return "unsupported";
+}
+
+const PASTED_URL_PATTERN = /^https?:\/\/\S+$/i;
+
+/** A pasted/dropped plain-text snippet counts as a URL only if it's a single bare link. */
+export function classifyPastedText(text: string): "url" | null {
+  const trimmed = text.trim();
+  return trimmed && !trimmed.includes("\n") && PASTED_URL_PATTERN.test(trimmed) ? "url" : null;
+}
+
+function fileExtension(filename: string) {
+  const match = /\.([a-z0-9]+)$/i.exec(filename || "");
+  return match ? match[1].toLowerCase() : "";
 }
 
 function activeScopePaperId(target: WorkspacePdfTarget | null, activeAssistantSource: VerificationSource | null) {

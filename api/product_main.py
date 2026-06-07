@@ -48,6 +48,7 @@ from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
 from query.web_research import run_deep_research
 from query.source_verifier import find_pdf_path
+from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
@@ -162,6 +163,11 @@ class DeepResearchRequest(BaseModel):
 class GreySourcePayload(BaseModel):
     sources: list[dict[str, Any]]
     query: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class GreySourceFromUrlPayload(BaseModel):
+    url: str
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
@@ -576,6 +582,49 @@ _TITLE_LINE_BLOCKLIST = (
     "running head", "downloaded from", "issn", "isbn", "vol.", "volume",
 )
 
+_GENERIC_TITLE_STEMS = frozenset(
+    {"file", "document", "upload", "pdf", "paper", "doc", "untitled", "new", "temp", "tmp", "download"}
+)
+
+# Below this ratio of word-like tokens (>= 3 letters) to whitespace-split tokens, parsed
+# text is treated as broken/garbled extraction (e.g. font-encoding issues, scanned noise).
+_GARBLED_TEXT_WORD_RATIO_THRESHOLD = 0.4
+_GARBLED_TEXT_SAMPLE_LEN = 2000
+
+
+def _text_looks_garbled(text: str) -> bool:
+    sample = text[:_GARBLED_TEXT_SAMPLE_LEN].strip()
+    tokens = sample.split()
+    if len(tokens) < 20:
+        return False
+    word_like = re.findall(r"[a-zA-Z]{3,}", sample)
+    return (len(word_like) / len(tokens)) < _GARBLED_TEXT_WORD_RATIO_THRESHOLD
+
+
+def _maybe_fix_garbled_pdf_title(*, paper_id: str, text: str, pdf_path: Path, metadata_db_path: str) -> None:
+    """When extraction text looks garbled and the stored title is generic/filename-derived,
+    overwrite it with a title inferred from the PDF itself (metadata or heading line) — that
+    inference is far more likely correct than anything derived from broken extracted text."""
+    if not _text_looks_garbled(text):
+        return
+    with MetadataDB(metadata_db_path) as db:
+        paper = db.get_paper(paper_id)
+        if not paper:
+            return
+        current_title = (paper.get("title") or "").strip()
+        current_stem = current_title.lower().strip()
+        filename_stem = pdf_path.stem.lower().strip()
+        looks_generic = current_stem in _GENERIC_TITLE_STEMS or current_stem == filename_stem
+        if not looks_generic:
+            return
+        try:
+            content = pdf_path.read_bytes()
+        except OSError:
+            return
+        inferred_title = _infer_pdf_title_from_bytes(content).strip()
+        if inferred_title and inferred_title != current_title:
+            db.update_paper_title(paper_id, inferred_title[:240])
+
 
 def _looks_like_title_line(line: str) -> bool:
     text = _clean_display_text(line)
@@ -587,6 +636,23 @@ def _looks_like_title_line(line: str) -> bool:
     if any(lowered.startswith(prefix) for prefix in _TITLE_LINE_BLOCKLIST):
         return False
     return True
+
+
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_HTML_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _infer_title_from_html(html: str) -> str:
+    """Cheap regex-based <title>/<h1> heuristic — no LLM call, keep URL ingest fast."""
+    for pattern in (_HTML_TITLE_RE, _HTML_H1_RE):
+        match = pattern.search(html)
+        if not match:
+            continue
+        candidate = _clean_display_text(_HTML_TAG_RE.sub(" ", match.group(1)))
+        if candidate:
+            return candidate
+    return ""
 
 
 def _infer_pdf_title_from_bytes(content: bytes) -> str:
@@ -634,9 +700,8 @@ async def upload_paper_pdf(
         raise HTTPException(status_code=400, detail="Upload body is empty.")
 
     filename = request.headers.get("x-filename") or title or paper_id or "uploaded-paper.pdf"
-    _GENERIC_STEMS = frozenset({"file", "document", "upload", "pdf", "paper", "doc", "untitled", "new", "temp", "tmp", "download"})
     stem = Path(filename).stem.lower().strip()
-    inferred_id = paper_id or (f"upload-{__import__('uuid').uuid4().hex[:8]}" if stem in _GENERIC_STEMS else Path(filename).stem)
+    inferred_id = paper_id or (f"upload-{__import__('uuid').uuid4().hex[:8]}" if stem in _GENERIC_TITLE_STEMS else Path(filename).stem)
     resolved_title = title or _infer_pdf_title_from_bytes(content) or Path(filename).stem
     storage = FileManager(pdf_base_dir)
     saved_path = storage.save_pdf(
@@ -956,6 +1021,43 @@ def add_project_grey_sources(project_id: str, payload: GreySourcePayload) -> dic
     return {"project_id": project_id, "saved": saved}
 
 
+@app.post("/projects/{project_id}/grey-sources/from-url")
+async def add_grey_source_from_url(project_id: str, payload: GreySourceFromUrlPayload) -> dict[str, Any]:
+    """Fetch, sanitize, and save a single user-pasted URL as a grey source.
+
+    Mirrors the deep-research fetch path (sanitize_web_text) but skips the LLM
+    summarization step — title comes from a cheap <title>/<h1> regex heuristic so
+    pasting a link stays fast.
+    """
+    url = payload.url.strip()
+    if not re.match(r"^https?://", url):
+        raise HTTPException(status_code=400, detail="Nur http(s)-URLs werden unterstützt")
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            headers={"User-Agent": "ScienceKG/Phase5 (local)"},
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Konnte URL nicht laden: {exc}") from exc
+
+    raw_html = response.text
+    clean, flags = sanitize_web_text(raw_html, max_len=FULL_TEXT_MAX_LEN)
+    title = _infer_title_from_html(raw_html) or url
+    record = {
+        "url": url,
+        "title": title,
+        "summary": clean[:400],
+        "full_text": clean,
+        "injection_flags": flags,
+    }
+    with MetadataDB(payload.metadata_db_path) as db:
+        saved = db.add_grey_source(project_id, record)
+    return {"project_id": project_id, "saved": saved}
+
+
 @app.delete("/grey-sources/{grey_id}")
 def delete_grey_source(grey_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
@@ -1089,6 +1191,12 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
             "metadata": _parsed_document_metadata(parsed),
             "excerpt": parsed.text[:4000],
         }
+        _maybe_fix_garbled_pdf_title(
+            paper_id=request.paper_id,
+            text=text,
+            pdf_path=pdf_path,
+            metadata_db_path=request.metadata_db_path,
+        )
     if not text:
         raise HTTPException(status_code=400, detail="No paper text or parseable PDF text provided.")
 
