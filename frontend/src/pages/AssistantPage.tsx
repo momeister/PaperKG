@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 
 import { api } from "../api";
-import { evidenceColorVars, greyEvidenceColorVars } from "../citationColors";
+import { colorVarsForPaperId, evidenceColorVars, isGreySourcePaperId } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
@@ -1619,6 +1619,11 @@ export function AnswerText({
   const parts = answer.split(/(\[[^\]]+\])/g);
   let renderedOffset = 0;
   const contextCitation = hoverCitation ?? pinnedCitation;
+  const contextCitationPaperId = contextCitation
+    ? "source" in contextCitation
+      ? contextCitation.source.paper_id
+      : contextCitation.paperId
+    : null;
 
   useEffect(() => {
     setPinnedCitation((current) => {
@@ -1680,7 +1685,7 @@ export function AnswerText({
         if (!match) {
           const highlightRange = contextCitation ? citationHoverTextRange(parts, index, contextCitation.key) : null;
           return (
-            <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, contextCitation ? evidenceColorVars(contextCitation.evidenceIndex) : undefined)}</span>
+            <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, contextCitation ? colorVarsForPaperId(contextCitationPaperId, contextCitation.evidenceIndex) : undefined)}</span>
           );
         }
         const context = citationContext(parts, index);
@@ -1701,8 +1706,8 @@ export function AnswerText({
                     const label = `Z${meta.evidenceIndex + 1}`;
                     const chipKey = `${hoverKey}-${meta.source.paper_id}-${meta.evidenceIndex}-${metaIndex}`;
                     const isActive = Boolean(activeCitation?.paperId === meta.source.paper_id && activeCitation.evidenceIndex === meta.evidenceIndex);
-                    const isGreySource = meta.source.paper_id.startsWith("grey::");
-                    const chipColorVars = isGreySource ? greyEvidenceColorVars(meta.evidenceIndex) : evidenceColorVars(meta.evidenceIndex);
+                    const isGreySource = isGreySourcePaperId(meta.source.paper_id);
+                    const chipColorVars = colorVarsForPaperId(meta.source.paper_id, meta.evidenceIndex);
                     return (
                       <button
                         className={`citation-link citation-link--mapped ${isActive ? "citation-link--active" : ""} ${isGreySource ? "citation-link--grey-source" : ""}`}
@@ -1727,10 +1732,11 @@ export function AnswerText({
                       </button>
                     );
                   })}
-                  {hiddenCount > 0 ? (
+                  {!isExpanded && hiddenCount > 0 ? (
                     <button
                       className="citation-link citation-more"
                       type="button"
+                      title="Weitere Zitate anzeigen"
                       onClick={(event) => {
                         event.stopPropagation();
                         setExpandedCitations((current) => {
@@ -1741,6 +1747,23 @@ export function AnswerText({
                       }}
                     >
                       +{hiddenCount}
+                    </button>
+                  ) : null}
+                  {isExpanded && metas.length > COLLAPSE_THRESHOLD ? (
+                    <button
+                      className="citation-link citation-more citation-less"
+                      type="button"
+                      title="Weniger anzeigen"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setExpandedCitations((current) => {
+                          const next = new Set(current);
+                          next.delete(hoverKey);
+                          return next;
+                        });
+                      }}
+                    >
+                      <ChevronUp size={13} />
                     </button>
                   ) : null}
                 </>
@@ -1767,7 +1790,7 @@ export function AnswerText({
                 onPointerEnter={cancelCitationHoverClose}
                 onPointerLeave={scheduleCitationHoverClose}
                 style={{
-                  ...(hoverCitation.source.paper_id.startsWith("grey::") ? greyEvidenceColorVars(hoverCitation.evidenceIndex) : evidenceColorVars(hoverCitation.evidenceIndex)),
+                  ...colorVarsForPaperId(hoverCitation.source.paper_id, hoverCitation.evidenceIndex),
                   left: hoverCitation.left,
                   top: hoverCitation.top,
                   width: hoverCitation.width

@@ -1042,6 +1042,12 @@ h1 {
 .citation-more:hover {
   opacity: 1;
 }
+.citation-less {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px 2px;
+}
 
 .citation-index {
   font-weight: 800;
@@ -1706,6 +1712,117 @@ h1 {
   margin-top: -4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.workspace-chat-more-toggle {
+  grid-column: 3 / 4;
+  grid-row: 2;
+  align-self: center;
+}
+
+.mention-popover {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 4px;
+  z-index: 30;
+}
+
+.mention-popover-row {
+  all: unset;
+  display: block;
+  padding: 7px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 0;
+}
+.mention-popover-row:first-child { border-radius: 7px 7px 0 0; }
+.mention-popover-row:hover { background: var(--hover); }
+.mention-popover-row--active { background: var(--accent-bg); color: var(--accent); }
+
+.mention-popover-hint {
+  display: block;
+  padding: 4px 12px 6px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+.command-help-popover {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  padding: 6px 0 8px;
+  margin-bottom: 4px;
+  z-index: 30;
+}
+
+.command-help-head {
+  padding: 4px 12px 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.command-help-row {
+  padding: 3px 12px;
+  font-size: 0.82rem;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.command-help-row code {
+  font-family: monospace;
+  font-size: 0.78rem;
+  background: var(--code-bg, var(--hover));
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.mention-chip-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 20px;
+  font-size: 0.76rem;
+  max-width: 220px;
+}
+
+.mention-chip--grey {
+  background: var(--surface-2, var(--hover));
+  color: var(--muted);
+}
+
+.mention-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-paper-select {

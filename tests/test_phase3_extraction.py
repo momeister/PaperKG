@@ -28,7 +28,12 @@ from extraction.text_normalization import normalize_key, slugify_label
 from extraction.conflict_detector import ConflictDetector
 from extraction.batch_processor import BatchProcessor
 from parsing.parser_router import ParserRouter, ParserType, ParserCharacteristics
-from parsing.marker_parser import MarkerParser
+from parsing.marker_parser import (
+    MarkerParser,
+    _classify_and_split_words,
+    _find_column_gutter,
+    _reconstruct_page_text,
+)
 from query.llm_router import LLMRouter, ProviderConfig, GenerationSettings
 from query.nim_container import NIMContainerConfig, NIMContainerManager
 
@@ -4326,6 +4331,115 @@ class TestParserRouter:
         assert "nougat service unavailable" in result.metadata["parser_fallback_error"]
 
 
+def _word(text: str, x0: float, x1: float, top: float, bottom: float) -> dict[str, Any]:
+    return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": bottom}
+
+
+class TestColumnAwareExtraction:
+    """Unit tests for the column-gutter detection / reconstruction helpers in marker_parser.
+
+    These operate on plain word-dicts (the shape pdfplumber's extract_words returns),
+    so they're testable without any PDF fixtures.
+    """
+
+    PAGE_WIDTH = 600.0
+    PAGE_HEIGHT = 800.0
+
+    def _two_column_words(self, left_x=(50, 200), right_x=(350, 500), tops=(100, 200, 300, 400, 500, 600)):
+        words = []
+        for i, top in enumerate(tops):
+            words.append(_word(f"L{i}", left_x[0], left_x[1], top, top + 12))
+            words.append(_word(f"R{i}", right_x[0], right_x[1], top, top + 12))
+        return words
+
+    def test_find_column_gutter_detects_clean_two_column_split(self):
+        words = self._two_column_words()
+        gutter = _find_column_gutter(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
+        assert gutter is not None
+        assert 200.0 < gutter < 350.0
+
+    def test_find_column_gutter_returns_none_for_single_column(self):
+        # Tile overlapping words across the whole scan band [120, 480] - no zero-occupancy
+        # run remains, so a single-column page must not produce a (false) gutter.
+        words = []
+        x = 120.0
+        top = 100.0
+        i = 0
+        while x < 480.0:
+            words.append(_word(f"w{i}", x, x + 12.0, top, top + 10.0))
+            x += 10.0
+            top += 15.0
+            i += 1
+        assert _find_column_gutter(words, self.PAGE_WIDTH, self.PAGE_HEIGHT) is None
+
+    def test_find_column_gutter_excludes_header_and_footer_margins(self):
+        # A full-width running head/footer would otherwise mask the real body gutter.
+        words = self._two_column_words()
+        words.append(_word("Running Head", 50, 550, 10, 30))   # top margin = 0.08 * 800 = 64
+        words.append(_word("Page 7", 50, 550, 770, 790))        # bottom margin = 736
+        gutter = _find_column_gutter(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
+        assert gutter is not None
+        assert 200.0 < gutter < 350.0
+
+    def test_find_column_gutter_detects_asymmetric_split_near_71_percent(self):
+        # Regression guard for band_hi_frac=0.80: the bug page's gutter sits at ~71% of the
+        # page width (asymmetric abstract/sidebar layout), which a narrower band would miss.
+        words = self._two_column_words(left_x=(50, 400), right_x=(450, 560))
+        gutter = _find_column_gutter(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
+        assert gutter is not None
+        assert 400.0 < gutter < 450.0
+        assert abs(gutter - 0.71 * self.PAGE_WIDTH) < 40.0
+
+    def test_find_column_gutter_returns_none_when_gap_too_narrow(self):
+        words = self._two_column_words(left_x=(50, 250), right_x=(253, 490))
+        assert _find_column_gutter(words, self.PAGE_WIDTH, self.PAGE_HEIGHT) is None
+
+    def test_classify_and_split_words_partitions_by_margin_then_gutter(self):
+        words = self._two_column_words(tops=(100, 200))
+        words.append(_word("HEADER", 50, 550, 10, 30))
+        words.append(_word("FOOTER", 50, 550, 770, 790))
+        header, left, right, footer = _classify_and_split_words(words, gutter_x=275.0, page_height=self.PAGE_HEIGHT)
+        assert [w["text"] for w in header] == ["HEADER"]
+        assert [w["text"] for w in footer] == ["FOOTER"]
+        assert [w["text"] for w in left] == ["L0", "L1"]
+        assert [w["text"] for w in right] == ["R0", "R1"]
+
+    def test_reconstruct_page_text_orders_whole_columns_not_interleaved_rows(self):
+        # Both columns share the same vertical positions - naive top-to-bottom reading
+        # would interleave "Left1 Right1 Left2 Right2"; reconstruction must keep each
+        # column intact and emit the left column before the right one.
+        words = [
+            _word("Left1", 50, 200, 100, 112),
+            _word("Right1", 350, 500, 100, 112),
+            _word("Left2", 50, 200, 150, 162),
+            _word("Right2", 350, 500, 150, 162),
+        ]
+        text = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
+        assert text is not None
+        assert text.index("Left1") < text.index("Left2") < text.index("Right1") < text.index("Right2")
+
+    def test_reconstruct_page_text_returns_none_without_gutter(self):
+        words = []
+        x = 120.0
+        top = 100.0
+        i = 0
+        while x < 480.0:
+            words.append(_word(f"w{i}", x, x + 12.0, top, top + 10.0))
+            x += 10.0
+            top += 15.0
+            i += 1
+        assert _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT) is None
+
+    def test_reconstruct_page_text_places_header_first_and_footer_last(self):
+        words = self._two_column_words()
+        words.append(_word("HEADER", 50, 550, 10, 30))
+        words.append(_word("FOOTER", 50, 550, 770, 790))
+        text = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
+        assert text is not None
+        assert text.index("HEADER") < text.index("L0")
+        assert text.index("R5") < text.index("FOOTER")
+
+
 class TestParserImplementations:
     """Test actual parser fallbacks."""
 
@@ -4344,6 +4458,50 @@ class TestParserImplementations:
         assert result.paper_id == "paper_001"
         assert result.page_count == 1
         assert result.meta.get("extraction_method") == "pypdf"
+
+    def test_marker_parser_two_column_pdf_uses_column_aware_reconstruction(self):
+        import re
+        from pathlib import Path
+
+        pdf_path = Path("data/pdfs/upload__files__files/upload__files__files_v1.pdf")
+        if not pdf_path.exists():
+            pytest.skip("bug-report corpus PDF not present in this checkout")
+
+        parser = MarkerParser()
+        result = parser.parse(pdf_path, "nejm_bevacizumab")
+
+        assert result.meta.get("extraction_method") == "pdfplumber_columns"
+        assert result.meta.get("columns_pages", 0) > 0
+
+        # The exact end-to-end regression check for the reported bug: this sentence was
+        # previously split across two interleaved columns ("Sub- The median
+        # progression-free survival was group analyses of ... and 10.6 months ...").
+        # After column-aware reconstruction it must appear as one contiguous sentence -
+        # the same whitespace-normalized substring match that best_excerpt performs.
+        normalized = re.sub(r"\s+", " ", result.text)
+        target = (
+            "The median progression-free survival was longer in the bevaci- "
+            "zumab group than in the placebo group (10.6 months vs. 6.2 months"
+        )
+        assert target in normalized
+
+    def test_marker_parser_single_column_pdf_keeps_naive_extraction_method(self):
+        from pathlib import Path
+
+        pdf_path = Path(
+            "data/pdfs/europe_pmc__the-potential-of-polymeric-micelles-in-the-context-of-glioblastoma-therapy"
+            "__doaj_19f65c896f46443e8854d1adcea653d7"
+            "/europe_pmc__the-potential-of-polymeric-micelles-in-the-context-of-glioblastoma-therapy"
+            "__doaj_19f65c896f46443e8854d1adcea653d7_v1.pdf"
+        )
+        if not pdf_path.exists():
+            pytest.skip("single-column corpus PDF not present in this checkout")
+
+        parser = MarkerParser()
+        result = parser.parse(pdf_path, "single_column_paper")
+
+        assert result.meta.get("extraction_method") == "pdfplumber"
+        assert result.meta.get("columns_pages") == 0
 
     def test_nougat_parser_returns_real_fallback_text(self, tmp_path):
         pdf_path = tmp_path / "input.pdf"

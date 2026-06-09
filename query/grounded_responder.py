@@ -103,7 +103,7 @@ making claims."""
 
         # Inject per-project grey sources (saved web research findings) as citable evidence.
         has_grey = False
-        if project_id and project_id not in ("", "__all_papers__"):
+        if project_id and project_id not in ("", "__all_papers__") and not paper_ids:
             try:
                 from storage.metadata_db import MetadataDB  # local import to avoid circular deps
                 with MetadataDB(metadata_db_path) as _db:

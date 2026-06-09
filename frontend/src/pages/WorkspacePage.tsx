@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  ChangeEvent,
   ClipboardEvent as ReactClipboardEvent,
   DragEvent as ReactDragEvent,
   FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   MutableRefObject,
   PointerEvent as ReactPointerEvent,
   ReactNode
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AtSign,
   Bot,
   ChevronDown,
   ChevronUp,
@@ -16,11 +19,13 @@ import {
   FileSearch,
   FileText,
   Globe,
+  HelpCircle,
   Link2,
   ListChecks,
   Maximize2,
   MessageSquareText,
   Minimize2,
+  MoreHorizontal,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
@@ -38,7 +43,7 @@ import {
 } from "lucide-react";
 
 import { api } from "../api";
-import { evidenceColorVars, greyEvidenceColorVars } from "../citationColors";
+import { colorVarsForPaperId, evidenceColorVars, isGreySourcePaperId } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { GreySourceView } from "../components/GreySourceView";
 import { PdfPane } from "../components/PdfPane";
@@ -133,6 +138,11 @@ export function WorkspacePage() {
   const [noteStatus, setNoteStatus] = useState("");
 
   const [question, setQuestion] = useState("");
+  const questionInputRef = useRef<HTMLInputElement | null>(null);
+  const [mentionState, setMentionState] = useState<{ query: string; start: number; end: number } | null>(null);
+  const [mentionHighlight, setMentionHighlight] = useState(0);
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
+  const [showCommandHelp, setShowCommandHelp] = useState(false);
   const [history, setHistory] = useState<AssistantTurn[]>(() => loadAssistantSession(scopedProjectId).history);
   const [activeTurnId, setActiveTurnId] = useState(() => loadAssistantSession(scopedProjectId).activeTurnId);
   const [selectedSource, setSelectedSource] = useState<VerificationSource | null>(null);
@@ -448,7 +458,7 @@ export function WorkspacePage() {
 
   const handleNoteCitationOpen = useCallback((citation: NoteCitation | null) => {
     if (!citation) return;
-    if (citation.paper_id.startsWith("grey::")) {
+    if (isGreySourcePaperId(citation.paper_id)) {
       const greyId = citation.paper_id.slice(6);
       const source = greySources.find((s) => s.id === greyId);
       if (source) {
@@ -505,10 +515,150 @@ export function WorkspacePage() {
     return "";
   }
 
+  function mentionMarkerLabel(paper: Paper): string {
+    const normalized = normalizeWorkspacePaper(paper);
+    const title = workspacePaperTitle(normalized);
+    const short = title.length > 42 ? `${title.slice(0, 39)}…` : title;
+    return `@[${short}]`;
+  }
+
+  function placeCursorAfter(position: number) {
+    const input = questionInputRef.current;
+    if (!input) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      input.focus();
+      input.setSelectionRange(position, position);
+    });
+  }
+
+  function applyMention(paper: Paper) {
+    if (!mentionState) {
+      return;
+    }
+    const paperId = workspacePaperId(normalizeWorkspacePaper(paper));
+    const marker = `${mentionMarkerLabel(paper)} `;
+    const before = question.slice(0, mentionState.start);
+    const after = question.slice(mentionState.end);
+    setQuestion(`${before}${marker}${after}`);
+    if (paperId) {
+      setPaperScope("selected");
+      if (!selectedPaperIds.includes(paperId)) {
+        toggleScopedPaper(paperId);
+      }
+    }
+    setMentionState(null);
+    setMentionHighlight(0);
+    placeCursorAfter(before.length + marker.length);
+  }
+
+  function openMentionPicker() {
+    const input = questionInputRef.current;
+    const caret = input?.selectionStart ?? question.length;
+    const before = question.slice(0, caret);
+    const needsSpace = before.length > 0 && !/\s$/.test(before);
+    const prefix = needsSpace ? " @" : "@";
+    const start = before.length + (needsSpace ? 1 : 0);
+    setQuestion(`${before}${prefix}${question.slice(caret)}`);
+    setMentionState({ query: "", start, end: start + 1 });
+    setMentionHighlight(0);
+    placeCursorAfter(start + 1);
+  }
+
+  function handleQuestionChange(event: ChangeEvent<HTMLInputElement>) {
+    const value = event.target.value;
+    const caret = event.target.selectionStart ?? value.length;
+    setQuestion(value);
+    const before = value.slice(0, caret);
+    const match = before.match(/(?:^|\s)@([^\s@[\]]*)$/);
+    if (match) {
+      const query = match[1];
+      setMentionState({ query, start: caret - query.length - 1, end: caret });
+      setMentionHighlight(0);
+    } else if (mentionState) {
+      setMentionState(null);
+    }
+    if (showCommandHelp && !value.trim().toLowerCase().startsWith("/help")) {
+      setShowCommandHelp(false);
+    }
+  }
+
+  function handleQuestionKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (mentionState && mentionCandidates.length) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMentionHighlight((current) => (current + 1) % mentionCandidates.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMentionHighlight((current) => (current - 1 + mentionCandidates.length) % mentionCandidates.length);
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        if (mentionCandidates.length === 1) {
+          applyMention(mentionCandidates[0]);
+        } else {
+          setMentionHighlight((current) => (current + 1) % mentionCandidates.length);
+        }
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        applyMention(mentionCandidates[mentionHighlight] ?? mentionCandidates[0]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionState(null);
+        return;
+      }
+    }
+    if (event.key === "Escape" && showCommandHelp) {
+      setShowCommandHelp(false);
+    }
+  }
+
+  function handleSlashCommand(raw: string): boolean {
+    const match = raw.match(/^\/(\w+)\s*([\s\S]*)$/);
+    if (!match) {
+      return false;
+    }
+    const [, name, rest] = match;
+    const remainder = rest.trim();
+    switch (name.toLowerCase()) {
+      case "new":
+        setConversationMode("new");
+        setQuestion(remainder);
+        return true;
+      case "selected":
+        setQuestion(remainder);
+        setPaperScope("selected");
+        if (!selectedPaperIds.length && !selectedGreyIds.length) {
+          openMentionPicker();
+        }
+        return true;
+      case "help":
+        setShowCommandHelp(true);
+        setQuestion(remainder);
+        return true;
+      default:
+        return false;
+    }
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     const value = question.trim();
-    if (value && !questionBlockedByScope) {
+    if (!value) {
+      return;
+    }
+    if (value.startsWith("/") && handleSlashCommand(value)) {
+      return;
+    }
+    if (!questionBlockedByScope) {
       answerMutation.mutate(value + verbosityInstruction(verbosity));
       if (useInternet) {
         webMutation.mutate(value);
@@ -528,7 +678,7 @@ export function WorkspacePage() {
     setActiveEvidenceIndex(nextIndex);
     if (options.openPdf || options.syncPdfTarget) {
       // Grey sources open in GreySourceView, not the PDF canvas
-      if (source.paper_id.startsWith("grey::")) {
+      if (isGreySourcePaperId(source.paper_id)) {
         const greyId = source.paper_id.slice(6);
         const greySource = greySources.find((s) => s.id === greyId);
         if (greySource) {
@@ -569,7 +719,7 @@ export function WorkspacePage() {
 
   function handleUnresolvedCitationClick(citationId: string) {
     // Grey source citations from the answer pipeline use "grey::<id>" format
-    if (citationId.startsWith("grey::")) {
+    if (isGreySourcePaperId(citationId)) {
       const greyId = citationId.slice(6);
       const source = greySources.find((s) => s.id === greyId);
       if (source) {
@@ -795,6 +945,20 @@ export function WorkspacePage() {
   }, [navigatorQuery, notesSnapshot.notes]);
 
   const pdfPapers = papersQuery.data?.items ?? [];
+  const mentionCandidates = useMemo(() => {
+    if (!mentionState) {
+      return [];
+    }
+    const needle = normalizeFilter(mentionState.query);
+    const pool = needle
+      ? pdfPapers.filter((paper) => {
+          const normalized = normalizeWorkspacePaper(paper);
+          const haystack = normalizeFilter(`${workspacePaperTitle(normalized)} ${workspacePaperId(normalized)}`);
+          return haystack.includes(needle);
+        })
+      : pdfPapers;
+    return pool.slice(0, 8);
+  }, [mentionState, pdfPapers]);
   const pdfView = pdfProps(pdfTarget);
   const navColumn = navigatorOpen ? `${navigatorWidth}px` : "46px";
   const assistantColumn = assistantOpen ? `${assistantWidth}px` : "46px";
@@ -1001,6 +1165,33 @@ export function WorkspacePage() {
             />
           ) : (
             <>
+          {mentionState && mentionCandidates.length > 0 ? (
+            <div className="mention-popover">
+              {mentionCandidates.map((paper, i) => {
+                const norm = normalizeWorkspacePaper(paper);
+                return (
+                  <button
+                    key={workspacePaperId(norm)}
+                    type="button"
+                    className={`mention-popover-row ${i === mentionHighlight ? "mention-popover-row--active" : ""}`}
+                    onMouseDown={(e) => { e.preventDefault(); applyMention(paper); }}
+                  >
+                    {workspacePaperTitle(norm)}
+                  </button>
+                );
+              })}
+              <span className="mention-popover-hint">Tab · Pfeiltasten · Enter zum Übernehmen</span>
+            </div>
+          ) : null}
+          {showCommandHelp ? (
+            <div className="command-help-popover">
+              <div className="command-help-head">Verfügbare Befehle</div>
+              <div className="command-help-row"><code>/new</code> Neues Gespräch starten</div>
+              <div className="command-help-row"><code>/selected</code> Auf ausgewählte Papers eingrenzen</div>
+              <div className="command-help-row"><code>/help</code> Diese Übersicht anzeigen</div>
+              <div className="command-help-row"><code>@Titel</code> Paper zur Auswahl hinzufügen</div>
+            </div>
+          ) : null}
           <form
             className={`chat-box ${isDraggingOverChat ? "chat-box--drag-over" : ""}`}
             onSubmit={submit}
@@ -1016,7 +1207,13 @@ export function WorkspacePage() {
               </div>
             ) : null}
             <Bot size={20} />
-            <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Frage an den lokalen KG" />
+            <input
+              ref={questionInputRef}
+              value={question}
+              onChange={handleQuestionChange}
+              onKeyDown={handleQuestionKeyDown}
+              placeholder="Frage an den lokalen KG (/ für Befehle, @ für Papers)"
+            />
             <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
               <Send size={18} />
             </button>
@@ -1031,33 +1228,71 @@ export function WorkspacePage() {
                 Alle
               </button>
             </div>
-            <div className="workspace-chat-controls">
-              <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
-                <option value="followup">Weiterfragen</option>
-                <option value="new">Neu starten</option>
-              </select>
-              <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
-                <option value="auto">Auto</option>
-                <option value="12">12</option>
-                <option value="20">20</option>
-                <option value="25">25</option>
-              </select>
-              <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
-                <option value="kurz">Kurz</option>
-                <option value="standard">Standard</option>
-                <option value="ausführlich">Ausführlich</option>
-              </select>
-              <button
-                type="button"
-                className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
-                onClick={() => setUseInternet((v) => !v)}
-                disabled={!isRealProject}
-                title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
-              >
-                <Globe size={14} />
-                <span>Mit Web</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              className="icon-button workspace-chat-more-toggle"
+              title={toolbarCollapsed ? "Mehr Optionen einblenden" : "Optionen ausblenden"}
+              onClick={() => setToolbarCollapsed((v) => !v)}
+            >
+              <MoreHorizontal size={16} />
+            </button>
+            {!toolbarCollapsed ? (
+              <div className="workspace-chat-controls">
+                <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
+                  <option value="followup">Weiterfragen</option>
+                  <option value="new">Neu starten</option>
+                </select>
+                <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
+                  <option value="auto">Auto</option>
+                  <option value="12">12</option>
+                  <option value="20">20</option>
+                  <option value="25">25</option>
+                </select>
+                <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
+                  <option value="kurz">Kurz</option>
+                  <option value="standard">Standard</option>
+                  <option value="ausführlich">Ausführlich</option>
+                </select>
+                <button
+                  type="button"
+                  className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
+                  onClick={() => setUseInternet((v) => !v)}
+                  disabled={!isRealProject}
+                  title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
+                >
+                  <Globe size={14} />
+                  <span>Mit Web</span>
+                </button>
+              </div>
+            ) : null}
+            {paperScope === "selected" && (selectedPaperIds.length > 0 || selectedGreyIds.length > 0) ? (
+              <div className="mention-chip-row">
+                {selectedPaperIds.map((pid) => {
+                  const paper = pdfPapers.find((p) => workspacePaperId(normalizeWorkspacePaper(p)) === pid);
+                  const title = paper ? workspacePaperTitle(normalizeWorkspacePaper(paper)) : pid;
+                  const short = title.length > 32 ? `${title.slice(0, 29)}…` : title;
+                  return (
+                    <span key={pid} className="mention-chip">
+                      <span className="mention-chip-label">{short}</span>
+                      <button type="button" className="icon-button" aria-label="Entfernen" onClick={() => toggleScopedPaper(pid)}>
+                        <X size={11} />
+                      </button>
+                    </span>
+                  );
+                })}
+                {selectedGreyIds.map((gid) => {
+                  const short = gid.replace(/^grey::/, "").slice(0, 32);
+                  return (
+                    <span key={gid} className="mention-chip mention-chip--grey">
+                      <span className="mention-chip-label">{short}</span>
+                      <button type="button" className="icon-button" aria-label="Entfernen" onClick={() => toggleScopedGrey(gid)}>
+                        <X size={11} />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
           </form>
           {pendingUrlSource ? (
             <div className="source-drop-confirm">
@@ -1281,7 +1516,7 @@ export function WorkspacePage() {
             ) : (
               <>
                 {selectedSource && activeEvidence ? (
-                  <div className="workspace-active-source evidence-dock-active-quote" style={evidenceColorVars(activeEvidenceIndex)}>
+                  <div className="workspace-active-source evidence-dock-active-quote" style={colorVarsForPaperId(selectedSource.paper_id, activeEvidenceIndex)}>
                     <span>Aktives Zitat</span>
                     <strong>
                       Z{activeEvidenceIndex + 1} · {selectedSource.title || selectedSource.paper_id}
@@ -1330,7 +1565,7 @@ export function WorkspacePage() {
                         className={`list-row evidence-row ${activeEvidenceIndex === index ? "list-row--active" : ""}`}
                         key={`${item.reference_text}-${index}`}
                         onClick={() => openAssistantSource(selectedSource, index)}
-                        style={evidenceColorVars(index)}
+                        style={colorVarsForPaperId(selectedSource?.paper_id, index)}
                       >
                         <strong className="evidence-row-title">
                           <span className="evidence-swatch" aria-hidden="true" />
@@ -1415,7 +1650,7 @@ export function WorkspacePage() {
       };
     }
     if (target.kind === "noteCitation") {
-      if (target.citation.paper_id.startsWith("grey::")) {
+      if (isGreySourcePaperId(target.citation.paper_id)) {
         return { url: null, title: target.citation.title ?? target.citation.paper_id, evidences: [], activeEvidenceIndex: 0 };
       }
       return {
@@ -1801,7 +2036,7 @@ function WorkspaceNavigatorBody({
     return (
       <section className="workspace-nav-body">
         {pdfTarget?.kind === "assistant" && activeAssistantSource && activeAssistantEvidence ? (
-          <div className="workspace-active-source" style={evidenceColorVars(activeAssistantEvidenceIndex)}>
+          <div className="workspace-active-source" style={colorVarsForPaperId(activeAssistantSource.paper_id, activeAssistantEvidenceIndex)}>
             <span>Aktiver Assistant-Nachweis</span>
             <strong>
               Z{activeAssistantEvidenceIndex + 1} · {activeAssistantSource.title || activeAssistantSource.paper_id}
@@ -1813,7 +2048,7 @@ function WorkspaceNavigatorBody({
             </button>
           </div>
         ) : selectedCitation ? (
-          <div className="workspace-active-source" style={evidenceColorVars(selectedCitationIndex)}>
+          <div className="workspace-active-source" style={colorVarsForPaperId(selectedCitation.paper_id, selectedCitationIndex)}>
             <span>Aktive Notizquelle</span>
             <strong>
               Z{selectedCitationIndex + 1} - {selectedCitation.title || selectedCitation.paper_id}
@@ -1831,7 +2066,7 @@ function WorkspaceNavigatorBody({
               type="button"
               key={citation.id}
               onClick={() => onOpenCitation(citation)}
-              style={evidenceColorVars(Number(citation.evidence_index ?? index))}
+              style={colorVarsForPaperId(citation.paper_id, Number(citation.evidence_index ?? index))}
             >
               <span className="note-citation-row__title">
                 <span className="citation-badge">{badge}</span>
@@ -1868,7 +2103,7 @@ function WorkspaceNavigatorBody({
                     onOpenPaper(normalizedPaper);
                   }
                 }}
-                style={isActivePaper ? evidenceColorVars(activePaperEvidenceIndex) : undefined}
+                style={isActivePaper ? colorVarsForPaperId(paperId, activePaperEvidenceIndex) : undefined}
               >
                 <label className="workspace-paper-select" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
                   <input

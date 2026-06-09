@@ -79,3 +79,13 @@ export function greyEvidenceColorVars(index: number): EvidenceColorStyle {
     "--evidence-border": GREY_BORDER_COLORS[colorIndex]
   };
 }
+
+export function isGreySourcePaperId(paperId: string | null | undefined): boolean {
+  return Boolean(paperId && paperId.startsWith("grey::"));
+}
+
+// Picks the muted grey palette for grey::-prefixed sources, the vivid palette otherwise -
+// the single place that should decide this so chat chips, evidence dock, and PDF pane agree.
+export function colorVarsForPaperId(paperId: string | null | undefined, index: number): EvidenceColorStyle {
+  return isGreySourcePaperId(paperId) ? greyEvidenceColorVars(index) : evidenceColorVars(index);
+}

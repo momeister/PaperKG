@@ -380,6 +380,49 @@ def test_grounded_responder_uses_evidence_and_skips_empty_answers() -> None:
         assert len(fake_llm.calls) == 1
 
 
+def test_grounded_responder_skips_grey_source_injection_when_paper_ids_filter_is_set() -> None:
+    with _phase4_fixture() as db_path:
+        db = MetadataDB(db_path)
+        try:
+            db.add_grey_source(
+                "proj1",
+                {
+                    "url": "https://example.test/grey1",
+                    "title": "Grey Web Finding",
+                    "evidence": ["A grey-source quote about graph transformers."],
+                },
+            )
+        finally:
+            db.close()
+
+        fake_llm = FakeLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        # User scoped the answer to specific papers ("Auswahl" mode) - grey sources must
+        # not be injected, otherwise the answer silently mixes in unrequested material.
+        scoped = responder.answer(
+            "What uses graph transformer?",
+            paper_ids=["p1"],
+            project_id="proj1",
+            metadata_db_path=db_path,
+        )
+        assert "grey_source_count" not in scoped.context_diagnostics
+        assert all(not source.paper_id.startswith("grey::") for source in scoped.sources)
+        assert all(not item.paper_id.startswith("grey::") for item in scoped.evidence)
+
+        # Without an explicit paper filter ("all sources"), grey sources are still
+        # injected as supplementary citable evidence - existing behavior is preserved.
+        unscoped = responder.answer(
+            "What uses graph transformer?",
+            project_id="proj1",
+            metadata_db_path=db_path,
+        )
+        assert unscoped.context_diagnostics.get("grey_source_count") == 1
+
+
 def test_grounded_responder_can_answer_from_pdf_context_if_it_fits(monkeypatch, tmp_path) -> None:
     from query import grounded_responder as responder_module
 

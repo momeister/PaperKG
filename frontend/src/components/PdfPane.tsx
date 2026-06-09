@@ -3,7 +3,7 @@ import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { ChevronLeft, ChevronRight, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
 
-import { evidenceColorVars } from "../citationColors";
+import { colorVarsForPaperId } from "../citationColors";
 import type { VerificationEvidence } from "../types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -305,7 +305,7 @@ export function PdfPane({
       </div>
 
       {evidences.length ? (
-        <div className="pdf-evidence-nav" style={evidenceColorVars(activeEvidenceColorIndex)}>
+        <div className="pdf-evidence-nav" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
           <button className="icon-button" type="button" aria-label="Vorherige Zitation" onClick={() => stepEvidence(-1)}>
             <ChevronLeft size={18} />
           </button>
@@ -384,6 +384,7 @@ export function PdfPane({
                 querySignature={visibleQuerySignature}
                 activeEvidenceIndex={visibleHighlightIndex}
                 evidenceColorIndex={visibleHighlightColorIndex}
+                evidences={evidences}
                 targetPage={evidenceTargetPage}
                 onMatch={updateMatch}
                 setPageRef={(node) => {
@@ -415,7 +416,7 @@ export function PdfPane({
 
       {error ? <div className="inline-error">{error}</div> : null}
       {activeEvidence ? (
-        <div className="excerpt-panel" style={evidenceColorVars(activeEvidenceColorIndex)}>
+        <div className="excerpt-panel" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
           <span>Aktive Textstelle</span>
           <p>{activeEvidenceText || "Keine Textstelle gefunden."}</p>
         </div>
@@ -434,6 +435,7 @@ function PdfPage({
   querySignature,
   activeEvidenceIndex,
   evidenceColorIndex,
+  evidences,
   targetPage,
   onMatch,
   setPageRef
@@ -447,6 +449,7 @@ function PdfPage({
   querySignature: string;
   activeEvidenceIndex: number;
   evidenceColorIndex: number;
+  evidences: VerificationEvidence[];
   targetPage?: number | null;
   onMatch: (evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => void;
   setPageRef: (node: HTMLDivElement | null) => void;
@@ -552,7 +555,13 @@ function PdfPage({
             <span
               key={box.id}
               className={`pdf-highlight ${box.evidenceIndex === activeEvidenceIndex ? "pdf-highlight--active" : ""}`}
-              style={{ left: box.left, top: box.top, width: box.width, height: box.height, ...evidenceColorVars(box.colorIndex) }}
+              style={{
+                left: box.left,
+                top: box.top,
+                width: box.width,
+                height: box.height,
+                ...colorVarsForPaperId(evidences[box.evidenceIndex]?.paper_id, box.colorIndex)
+              }}
               aria-hidden="true"
             />
           ))}
