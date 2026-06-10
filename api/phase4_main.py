@@ -53,6 +53,8 @@ class AnswerRequest(Phase4Request):
     pdf_base_dir: str = "data/pdfs"
     inline_context_texts: list[str] = Field(default_factory=list)
     project_id: str | None = None
+    grey_source_ids: list[str] = Field(default_factory=list)
+    include_project_grey: bool = False
 
 
 class HypothesisRequest(Phase4Request):
@@ -128,6 +130,8 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         inline_context_texts=request.inline_context_texts or None,
         project_id=request.project_id,
         metadata_db_path=request.metadata_db_path,
+        grey_source_ids=request.grey_source_ids or None,
+        include_project_grey=request.include_project_grey,
     )
     return answer.to_dict()
 

@@ -513,6 +513,29 @@ h1 {
   color: #9e2626;
 }
 
+.hint-row {
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid #d8dee9;
+  color: #4a5568;
+  background: #f6f8fb;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.evidence-verify-badge {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #ead198;
+  color: #835000;
+  background: #fff8e6;
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .table-row,
 .data-row {
   display: grid;
@@ -589,6 +612,13 @@ h1 {
 
 .drop-zone input {
   display: none;
+}
+
+.drop-zone--drag-over {
+  border-color: var(--blue, #2563eb);
+  border-style: dashed;
+  background: #eff6ff;
+  color: var(--blue, #2563eb);
 }
 
 .paper-grid {
@@ -1720,16 +1750,25 @@ h1 {
   align-self: center;
 }
 
+.chat-input-area {
+  position: relative;
+}
+
 .mention-popover {
+  position: absolute;
+  bottom: auto;
+  top: 100%;
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-  max-height: 220px;
+  max-height: 200px;
   overflow-y: auto;
-  margin-bottom: 4px;
+  margin-top: 4px;
   z-index: 30;
 }
 
@@ -1757,12 +1796,19 @@ h1 {
 }
 
 .command-help-popover {
+  position: absolute;
+  bottom: auto;
+  top: 100%;
+  left: 0;
+  right: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-  padding: 6px 0 8px;
-  margin-bottom: 4px;
+  padding: 4px 0 6px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
   z-index: 30;
 }
 
@@ -3656,6 +3702,41 @@ h1 {
   margin: 0 auto;
 }
 
+.pdf-placeholder-abstract {
+  margin-top: 12px;
+  max-width: 340px;
+  max-height: 240px;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.pdf-placeholder-abstract span {
+  margin-bottom: 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pdf-placeholder-abstract p {
+  max-width: none;
+  margin: 0;
+  text-align: left;
+  color: var(--ink);
+}
+
+.pdf-placeholder-link {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #4c8bf5);
+  text-decoration: none;
+}
+
+.pdf-placeholder-link:hover {
+  text-decoration: underline;
+}
+
 .empty-state {
   min-height: 120px;
   gap: 4px;
@@ -5020,6 +5101,10 @@ button.data-row {
   font-size: 0.8rem;
   color: var(--text-muted, #8a93a6);
   white-space: nowrap;
+}
+
+.import-ai-settings {
+  padding: 10px 14px;
 }
 
 /* Research progress summary row */

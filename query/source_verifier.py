@@ -10,6 +10,14 @@ from parsing.marker_parser import MarkerParser
 _PDF_TEXT_CACHE: dict[tuple[str, float, int], str] = {}
 MAX_REFERENCE_CHARS = 220
 DEFAULT_EXCERPT_CHARS = 260
+# Window for the honest "approximate region" shown when a claim cannot be anchored to an
+# exact sentence: better one larger region that contains the supporting text than a
+# confident-looking single sentence that does not.
+APPROX_REGION_CHARS = 700
+# Exact substring matches shorter than this are expanded to their surrounding sentences —
+# bare snippets like "prospectively collected and analysed." carry no context. Kept low on
+# purpose: complete sentences (~70+ chars) must stay verbatim, only fragments expand.
+_MIN_EXCERPT_CHARS = 60
 
 
 @dataclass(frozen=True)
@@ -156,6 +164,8 @@ def locate_evidence_fragments(
     max_fragments: int = 3,
     source_evidence_index: int | None = None,
 ) -> list[EvidenceLocation]:
+    if _is_claim_excerpt_evidence(evidence):
+        return [_claim_excerpt_location(evidence, pdf_text, source_evidence_index)]
     fragments = reference_fragments(evidence, max_fragments=max_fragments) or [reference_text(evidence)]
     locations: list[EvidenceLocation] = []
     for fragment_index, reference in enumerate(fragments[:max_fragments]):
@@ -179,6 +189,51 @@ def locate_evidence_fragments(
     ]
 
 
+def _is_claim_excerpt_evidence(evidence: dict[str, Any]) -> bool:
+    metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    if (metadata or {}).get("context_policy") in ("claim_excerpt", "approx_region"):
+        return True
+    return str(evidence.get("kind") or "") == "pdf" and str(evidence.get("field") or "") in (
+        "answer_claim_excerpt",
+        "answer_claim_region",
+    )
+
+
+def _claim_excerpt_location(
+    evidence: dict[str, Any],
+    pdf_text: str = "",
+    source_evidence_index: int | None = None,
+) -> EvidenceLocation:
+    """Pass the excerpt located at answer time through verbatim.
+
+    Claim-excerpt evidence already carries the precise PDF passage in its text
+    (located with strict matching, including translation of cross-language claims).
+    Re-deriving it from metadata["context"] — the paraphrased answer sentence —
+    re-locates non-strict and without translation, which is how wrong passages
+    ended up displayed as "Aktive Textstelle".
+    """
+    metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    excerpt = re.sub(r"\s+", " ", str(evidence.get("text") or "")).strip()
+    reference = re.sub(r"\s+", " ", str((metadata or {}).get("context") or "")).strip() or excerpt
+    reference = _truncate_at_sentence(reference, MAX_REFERENCE_CHARS)
+    normalized_pdf = re.sub(r"\s+", " ", pdf_text or "").lower()
+    found = bool(excerpt) and bool(normalized_pdf) and excerpt.lower() in normalized_pdf
+    terms = highlightable_terms(excerpt)
+    return EvidenceLocation(
+        evidence_id=str(evidence.get("evidence_id") or ""),
+        paper_id=str(evidence.get("paper_id") or ""),
+        kind=str(evidence.get("kind") or "evidence"),
+        field=str(evidence.get("field")) if evidence.get("field") else None,
+        reference_text=reference,
+        pdf_excerpt=excerpt,
+        matched_terms=[term for term in terms if term in excerpt.lower()] if excerpt else [],
+        found_in_pdf_text=found,
+        source_evidence_index=source_evidence_index,
+        fragment_index=0,
+        metadata=metadata or {},
+    )
+
+
 def _location_for_reference(
     evidence: dict[str, Any],
     reference: str,
@@ -186,8 +241,22 @@ def _location_for_reference(
     source_evidence_index: int | None = None,
     fragment_index: int | None = None,
 ) -> EvidenceLocation:
-    excerpt = best_excerpt(pdf_text, reference) if pdf_text else ""
+    # Prefer a confidently anchored excerpt; when none exists, show a LARGER approximate
+    # region (flagged for the UI) instead of a confident-looking but wrong single sentence.
+    excerpt = ""
+    approximate = False
+    if pdf_text:
+        excerpt = best_excerpt(pdf_text, reference, strict=True)
+        if not excerpt:
+            region = best_excerpt(pdf_text, reference, window_chars=APPROX_REGION_CHARS)
+            if region:
+                excerpt = region
+                approximate = True
     terms = highlightable_terms(reference)
+    raw_metadata = evidence.get("metadata")
+    metadata: dict[str, Any] = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    if approximate:
+        metadata["located"] = "approx_region"
     return EvidenceLocation(
         evidence_id=str(evidence.get("evidence_id") or ""),
         paper_id=str(evidence.get("paper_id") or ""),
@@ -199,7 +268,7 @@ def _location_for_reference(
         found_in_pdf_text=bool(excerpt),
         source_evidence_index=source_evidence_index,
         fragment_index=fragment_index,
-        metadata=evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {},
+        metadata=metadata,
     )
 
 
@@ -321,7 +390,11 @@ def best_excerpt(
     if exact is not None:
         position, length = exact
         matched = clean[position : position + length].strip()
-        if _is_complete_sentence(matched) and _contains_quantitative_tokens(matched, quantitative):
+        if (
+            len(matched) >= min(window_chars, _MIN_EXCERPT_CHARS)
+            and _is_complete_sentence(matched)
+            and _contains_quantitative_tokens(matched, quantitative)
+        ):
             return matched
         excerpt = _excerpt_around(clean, position, length, window_chars)
         if _contains_quantitative_tokens(excerpt, quantitative):
@@ -352,7 +425,13 @@ def best_excerpt(
     fallback_start = 0
     fallback_score = -1
     step = max(window_chars // 2, 120)
-    for start in range(0, max(len(clean) - window_chars, 1), step):
+    starts = list(range(0, max(len(clean) - window_chars, 1), step))
+    # The stepped range never reaches the document tail, so passages near the end of the
+    # text were unfindable — always scan the final window too.
+    final_start = max(len(clean) - window_chars, 0)
+    if final_start not in starts:
+        starts.append(final_start)
+    for start in starts:
         window = lower[start : start + window_chars]
         overlap_score = sum(1 for token in tokens if token in window)
         if overlap_score > fallback_score:
@@ -375,7 +454,7 @@ def best_excerpt(
     # fallback below uses, instead of skipping this tier outright.
     minimum_overlap = 3 if (strict and not quantitative) else 1
     if best_score >= minimum_overlap:
-        excerpt = _excerpt_around(clean, best_start, min(window_chars, len(clean) - best_start), window_chars)
+        excerpt = _term_centered_excerpt(clean, lower, best_start, window_chars, tokens)
         if _contains_quantitative_tokens(excerpt, quantitative):
             return excerpt
     # Nothing matched the (stricter) quantitative requirement — fall back to the window
@@ -386,8 +465,117 @@ def best_excerpt(
     # dominated by names that recur throughout the whole paper — better to report no match than
     # a confident-looking excerpt that doesn't actually support the claim.
     if not strict and fallback_score >= 3:
-        return _excerpt_around(clean, fallback_start, min(window_chars, len(clean) - fallback_start), window_chars)
+        return _term_centered_excerpt(clean, lower, fallback_start, window_chars, tokens)
     return ""
+
+
+def _term_centered_excerpt(clean: str, lower: str, start: int, window_chars: int, tokens: list[str]) -> str:
+    """Centre the excerpt on the matched terms inside the winning window.
+
+    Anchoring on the raw window start instead caused two real bugs: sentence-truncation
+    could cut the actual match off the excerpt's tail, and matches near a window edge were
+    surrounded by mostly irrelevant text.
+    """
+    window = lower[start : start + window_chars]
+    positions = [(window.find(token), len(token)) for token in tokens if token in window]
+    if not positions:
+        return _excerpt_around(clean, start, min(window_chars, len(clean) - start), window_chars)
+    first = min(position for position, _ in positions)
+    last = max(position + length for position, length in positions)
+    return _excerpt_around(clean, start + first, last - first, window_chars)
+
+
+def verbatim_excerpt(
+    pdf_text: str,
+    quote: str,
+    window_chars: int = DEFAULT_EXCERPT_CHARS,
+) -> str:
+    """Locate a model-provided verbatim quote in the PDF text (whitespace-insensitive).
+
+    Returns the surrounding sentence-aligned excerpt (always containing the full quote),
+    or "" when the quote does not occur verbatim — the caller then falls back to fuzzy
+    anchoring. This is the reliable path: the model tells us which passage it used and we
+    only trust it after exact verification.
+    """
+    clean = re.sub(r"\s+", " ", pdf_text or "").strip()
+    quote_clean = re.sub(r"\s+", " ", quote or "").strip().strip('"„“«»').strip()
+    if not clean or len(quote_clean) < 15:
+        return ""
+    position = clean.lower().find(quote_clean.lower())
+    if position < 0:
+        return ""
+    return _excerpt_around(clean, position, len(quote_clean), max(window_chars, len(quote_clean) + 80))
+
+
+def best_excerpts(
+    pdf_text: str,
+    reference: str,
+    max_excerpts: int = 3,
+    window_chars: int = DEFAULT_EXCERPT_CHARS,
+    strict: bool = False,
+    merge_gap_chars: int = 240,
+) -> list[str]:
+    """Locate one excerpt per clause of `reference` and merge neighbouring matches.
+
+    A claim whose facts are scattered across the PDF yields several distinct excerpts;
+    facts that sit next to each other yield one longer, merged excerpt instead of
+    multiple overlapping snippets.
+    """
+    clean = re.sub(r"\s+", " ", pdf_text or "").strip()
+    reference_clean = re.sub(r"\s+", " ", reference or "").strip()
+    if not clean or not reference_clean:
+        return []
+    # Split into clause-level fragments unconditionally (not only past MAX_REFERENCE_CHARS):
+    # a claim like "survival was 16.8 months; patients reported more fatigue" carries two
+    # separately locatable facts even though the whole sentence is short. The sentence split
+    # requires whitespace after the terminator so decimals like "16.8" stay intact
+    # (`_sentences` would break the clause apart at the decimal point).
+    fragments: list[str] = []
+    for sentence in re.split(r"[.!?]+\s+", reference_clean):
+        for clause in re.split(r"(?:;\s+|:\s+|\s+-\s+|\s+–\s+|\s+—\s+)", sentence):
+            clause = clause.strip(" ;:,.")
+            if len(clause) >= 25 and clause not in fragments:
+                fragments.append(clause)
+    if not fragments:
+        fragments = [reference_clean]
+
+    spans: list[tuple[int, int]] = []
+    unplaced: list[str] = []
+    for fragment in fragments[: max_excerpts * 2]:
+        excerpt = best_excerpt(clean, fragment, window_chars=window_chars, strict=strict)
+        if not excerpt:
+            continue
+        position = clean.lower().find(excerpt.lower())
+        if position < 0:
+            if excerpt not in unplaced:
+                unplaced.append(excerpt)
+            continue
+        spans.append((position, position + len(excerpt)))
+
+    if not spans and not unplaced:
+        # Individual clauses may lack anchors even when the whole reference has one.
+        whole = best_excerpt(clean, reference_clean, window_chars=window_chars, strict=strict)
+        return [whole] if whole else []
+
+    spans.sort()
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start - merged[-1][1] <= merge_gap_chars:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    excerpts: list[str] = []
+    for start, end in merged[:max_excerpts]:
+        text = clean[start:end].strip()
+        if text and text not in excerpts:
+            excerpts.append(text)
+    for extra in unplaced:
+        if len(excerpts) >= max_excerpts:
+            break
+        if extra not in excerpts:
+            excerpts.append(extra)
+    return excerpts[:max_excerpts]
 
 
 def highlightable_terms(text: str) -> list[str]:
@@ -433,8 +621,10 @@ def _sentences(text: str) -> list[str]:
     clean = re.sub(r"\s+", " ", text or "").strip()
     if not clean:
         return []
-    matches = re.findall(r"[^.!?]+(?:[.!?]+(?=\s|$)|$)", clean)
-    return [match.strip() for match in matches if match.strip()] or [clean]
+    # Split only on terminators followed by whitespace so decimal numbers stay intact —
+    # the old character-class scan broke "0.55" into "0" / "55"-fragments.
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", clean) if part.strip()]
+    return parts or [clean]
 
 
 def _truncate_at_sentence(text: str, max_chars: int) -> str:
@@ -493,9 +683,17 @@ def _excerpt_around(text: str, position: int, match_length: int, window_chars: i
     start = _nearest_sentence_start(text, raw_start, position)
     end = _nearest_sentence_end(text, raw_end)
     excerpt = text[start:end].strip()
-    if len(excerpt) > window_chars:
-        excerpt = _truncate_at_sentence(excerpt, window_chars)
-    return excerpt
+    if len(excerpt) <= window_chars:
+        return excerpt
+    truncated = _truncate_at_sentence(excerpt, window_chars)
+    if start + len(truncated) >= position + match_length:
+        return truncated
+    # Truncation would cut the match itself away (e.g. a number near the end of a long
+    # sentence shown as "0.55..."): return the complete sentence(s) carrying the match
+    # instead, even when slightly longer than the window.
+    sentence_start = _nearest_sentence_start(text, max(0, position - window_chars), position)
+    sentence_end = _nearest_sentence_end(text, position + match_length)
+    return text[sentence_start:sentence_end].strip()
 
 
 def _nearest_sentence_start(text: str, raw_start: int, match_start: int) -> int:

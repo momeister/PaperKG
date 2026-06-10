@@ -575,7 +575,7 @@ class MetadataDB:
             SET
                 title = CASE WHEN (title IS NULL OR title = '') AND ? IS NOT NULL THEN ? ELSE title END,
                 year = CASE WHEN year IS NULL AND ? IS NOT NULL THEN ? ELSE year END,
-                pdf_url = CASE WHEN (pdf_url IS NULL OR pdf_url = '') AND ? IS NOT NULL THEN ? ELSE pdf_url END,
+                pdf_url = CASE WHEN ? IS NOT NULL THEN ? ELSE pdf_url END,
                 has_full_text = CASE WHEN ? IS NOT NULL THEN true ELSE has_full_text END,
                 updated_timestamp = CURRENT_TIMESTAMP
             WHERE id = ?

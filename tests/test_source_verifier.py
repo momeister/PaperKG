@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from query.source_verifier import best_excerpt, find_pdf_path, reference_fragments, reference_text, verify_answer_sources
+from query.source_verifier import (
+    best_excerpt,
+    best_excerpts,
+    find_pdf_path,
+    locate_evidence_fragments,
+    reference_fragments,
+    reference_text,
+    verbatim_excerpt,
+    verify_answer_sources,
+)
 
 
 def test_find_pdf_path_uses_paper_id_and_title_tokens(tmp_path) -> None:
@@ -297,3 +306,205 @@ def test_best_excerpt_strict_mode_rejects_weak_generic_overlap_but_keeps_concret
     strict_number_excerpt = best_excerpt(pdf_text, number_anchor_reference, window_chars=160, strict=True)
     assert "16.8 months" in strict_number_excerpt
     assert "12.3 months" in strict_number_excerpt
+
+
+def test_verify_claim_excerpt_evidence_passes_through_located_excerpt() -> None:
+    # The answer pipeline already located the precise (English) PDF passage for a
+    # (German) cited sentence. Verification must display that excerpt verbatim instead
+    # of re-locating from the paraphrased sentence — which used to land on decoys.
+    pdf_text = (
+        "Decoy: quality of life scores were similar between groups throughout the study period. "
+        "Glucocorticoid use over the course of the study was lower among patients who received "
+        "bevacizumab than among those who received placebo. Further filler text follows here."
+    )
+    evidence = {
+        "evidence_id": "ev-claim-1",
+        "paper_id": "files",
+        "kind": "pdf",
+        "field": "answer_claim_excerpt",
+        "text": (
+            "Glucocorticoid use over the course of the study was lower among patients who received "
+            "bevacizumab than among those who received placebo."
+        ),
+        "metadata": {
+            "context": "Zudem war der Bedarf an Glukokortikoiden in der Bevacizumab-Gruppe geringer",
+            "context_policy": "claim_excerpt",
+            "title": "Bevacizumab Trial",
+        },
+    }
+
+    locations = locate_evidence_fragments(evidence, pdf_text, max_fragments=3, source_evidence_index=0)
+
+    assert len(locations) == 1
+    location = locations[0]
+    assert location.pdf_excerpt == evidence["text"]
+    assert location.reference_text.startswith("Zudem war der Bedarf")
+    assert location.found_in_pdf_text is True
+    assert "quality of life" not in location.pdf_excerpt
+    assert location.source_evidence_index == 0
+    assert location.fragment_index == 0
+
+
+def test_verify_claim_excerpt_without_pdf_text_marks_unverified() -> None:
+    evidence = {
+        "paper_id": "files",
+        "kind": "pdf",
+        "field": "answer_claim_excerpt",
+        "text": "A located excerpt that cannot be checked without parsed PDF text right now.",
+        "metadata": {"context": "Der zitierte Satz", "context_policy": "claim_excerpt"},
+    }
+
+    location = locate_evidence_fragments(evidence, "")[0]
+
+    assert location.found_in_pdf_text is False
+    assert location.pdf_excerpt == evidence["text"]
+    assert location.reference_text == "Der zitierte Satz"
+
+
+def test_best_excerpts_merges_adjacent_clause_matches_into_one_longer_excerpt() -> None:
+    pdf_text = (
+        "Introduction text comes first in this manuscript. "
+        "Median overall survival reached 16.8 months in the treatment group during follow-up. "
+        "Patients in the treatment group also reported more fatigue and headaches than placebo. "
+        "Unrelated discussion of study limitations and future work closes the section."
+    )
+    reference = (
+        "Median overall survival reached 16.8 months in the treatment group; "
+        "patients reported more fatigue and headaches than placebo"
+    )
+
+    excerpts = best_excerpts(pdf_text, reference, max_excerpts=3, strict=True)
+
+    assert len(excerpts) == 1
+    assert "16.8 months" in excerpts[0]
+    assert "fatigue and headaches" in excerpts[0]
+
+
+def test_best_excerpts_keeps_scattered_facts_as_separate_excerpts() -> None:
+    filler = "Entirely unrelated methodological discussion continues here at considerable length. " * 8
+    pdf_text = (
+        "Median overall survival reached 16.8 months in the treatment group during follow-up. "
+        + filler
+        + "Patients in the treatment group reported more fatigue and headaches than placebo overall."
+    )
+    reference = (
+        "Median overall survival reached 16.8 months in the treatment group; "
+        "patients reported more fatigue and headaches than placebo"
+    )
+
+    excerpts = best_excerpts(pdf_text, reference, max_excerpts=3, strict=True)
+
+    assert len(excerpts) == 2
+    assert any("16.8 months" in excerpt for excerpt in excerpts)
+    assert any("fatigue and headaches" in excerpt for excerpt in excerpts)
+
+
+def test_best_excerpt_expands_tiny_exact_matches_with_surrounding_context() -> None:
+    pdf_text = (
+        "Study design follows the registered protocol for all participating centres. "
+        "Prospectively collected and analysed. "
+        "Outcomes were assessed by blinded reviewers at twelve months of follow-up."
+    )
+    reference = "Prospectively collected and analysed."
+
+    excerpt = best_excerpt(pdf_text, reference)
+
+    assert "prospectively collected and analysed" in excerpt.lower()
+    # The bare snippet alone carries no context - it must be expanded to its neighbours.
+    assert len(excerpt) > len(reference) + 20
+
+
+def test_locate_evidence_falls_back_to_larger_approx_region_when_strict_fails() -> None:
+    pdf_text = (
+        "Background section of the manuscript describes prior work in depth. "
+        "Participants completed memory recall training and made fewer cognitive errors at "
+        "follow-up compared with the control group in this trial. "
+        "The appendix lists additional secondary outcomes and exploratory analyses."
+    )
+    evidence = {
+        "paper_id": "p1",
+        "kind": "claim",
+        "text": "The study reported 45% fewer cognitive errors with memory recall training.",
+        "metadata": {},
+    }
+
+    location = locate_evidence_fragments(evidence, pdf_text, max_fragments=1)[0]
+
+    # 45% appears nowhere in the PDF -> no confident anchor, but the topic region exists:
+    # show the larger approximate region and flag it for the UI.
+    assert location.found_in_pdf_text is True
+    assert "memory recall training" in location.pdf_excerpt
+    assert location.metadata.get("located") == "approx_region"
+
+
+def test_reference_fragments_keep_decimal_numbers_intact() -> None:
+    fragments = reference_fragments(
+        {
+            "paper_id": "p1",
+            "kind": "claim",
+            "metadata": {
+                "statement": (
+                    "The hazard ratio was 0.65 with a 95% confidence interval of 0.55 to 0.78 "
+                    "favouring the treatment arm in the primary analysis of the trial."
+                )
+            },
+        },
+        max_fragments=3,
+    )
+
+    assert any("0.55 to 0.78" in fragment for fragment in fragments)
+    # The old sentence scanner split decimals apart, producing fragments like "55 to 0".
+    assert all(not fragment.startswith("55 ") for fragment in fragments)
+
+
+def test_best_excerpt_never_truncates_the_match_away() -> None:
+    # One very long sentence without inner sentence boundaries; the matching number sits
+    # near its end. Plain head-truncation used to cut the match off ("..., 0.55..." bug).
+    pdf_text = (
+        "The investigators enrolled a large multicentre cohort of adult participants with "
+        "the condition of interest and followed them for a long observation period across "
+        "many sites with careful central adjudication of all endpoint events before the "
+        "final statistical analysis showed an overall response rate of 42.7% in the group"
+    )
+    reference = "overall response rate was 42.7% in the group"
+
+    excerpt = best_excerpt(pdf_text, reference, strict=True)
+
+    assert "42.7" in excerpt
+
+
+def test_verbatim_excerpt_locates_quote_whitespace_insensitively() -> None:
+    pdf_text = (
+        "Background discussion appears first. Median overall survival was 16.8 months in "
+        "the treatment group as compared with 11.2 months in the placebo group. Further "
+        "secondary outcomes are described later in the manuscript."
+    )
+    quote = "Median  overall survival was 16.8 months\nin the treatment group"
+
+    excerpt = verbatim_excerpt(pdf_text, quote)
+
+    assert "16.8 months" in excerpt
+    assert "11.2 months" in excerpt  # expanded to the full sentence
+    assert verbatim_excerpt(pdf_text, "this quote does not occur in the text at all") == ""
+
+
+def test_verify_answer_sources_keeps_fragmenting_non_claim_evidence() -> None:
+    # KG concept evidence also carries a metadata "context" key; without the
+    # claim_excerpt context_policy it must keep the legacy fragment path.
+    evidence = {
+        "paper_id": "p1",
+        "kind": "concept",
+        "field": "concepts",
+        "text": "Graph Transformer",
+        "metadata": {
+            "context": (
+                "The graph transformer is the central architecture of the system. "
+                "It links concepts across scientific papers."
+            )
+        },
+    }
+
+    locations = locate_evidence_fragments(evidence, "", max_fragments=3)
+
+    assert len(locations) >= 2
+    assert all(not location.pdf_excerpt for location in locations)

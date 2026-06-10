@@ -28,7 +28,10 @@ _FROM_PAPER_SYSTEM = (
 
 _SCHEMA_HINT = (
     'Return JSON of the form: {"topic_summary": "...", "methods": ["..."], '
+    '"related_topics": ["adjacent or broader topic 1", "..."], '
     '"queries": [{"query": "...", "reason": "..."}]}. '
+    "related_topics are 2-5 distinct research areas or subtopics closely adjacent to the main topic, "
+    "suitable as follow-up research directions. "
     "Provide between 3 and 8 queries. Keep each query concise (2-8 words)."
 )
 
@@ -78,8 +81,10 @@ def normalize_analysis(payload: Any) -> dict[str, Any]:
         elif isinstance(item, str) and item.strip():
             queries.append({"query": item.strip(), "reason": ""})
     methods = [str(method).strip() for method in (payload.get("methods") or []) if str(method).strip()]
+    related_topics = [str(t).strip() for t in (payload.get("related_topics") or []) if str(t).strip()]
     return {
         "topic_summary": str(payload.get("topic_summary") or "").strip(),
         "methods": methods,
+        "related_topics": related_topics,
         "queries": queries[:8],
     }

@@ -28,7 +28,7 @@ def test_normalize_analysis_accepts_json_string():
 
 def test_normalize_analysis_handles_garbage():
     out = normalize_analysis("not json")
-    assert out == {"topic_summary": "", "methods": [], "queries": []}
+    assert out == {"topic_summary": "", "methods": [], "queries": [], "related_topics": []}
 
 
 def test_normalize_analysis_caps_queries_at_eight():

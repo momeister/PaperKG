@@ -58,6 +58,7 @@ export type CitationMeta = {
   source: VerificationSource;
   evidenceIndex: number;
   evidenceId?: string;
+  approximate?: boolean;
 };
 
 type NoteSelectionRange = {
@@ -141,8 +142,7 @@ export function AssistantPage() {
     onSuccess: async (payload) => {
       let sources: VerificationSource[] = [];
       try {
-        const report = await api.verifyAnswer(payload, verificationLimits(payload));
-        sources = report.sources;
+        sources = await verificationSourcesFor(payload);
       } catch {
         sources = [];
       }
@@ -1117,6 +1117,7 @@ function NotesSidecar({
             Aktives Zitat Z{activeEvidenceIndex + 1} - {selectedSource.title || selectedSource.paper_id}
           </span>
           <p>{activeQuoteText || activeEvidence.reference_text}</p>
+          <EvidenceVerificationBadge source={selectedSource} evidence={activeEvidence} />
         </div>
       ) : null}
       {editorMode === "edit" ? (
@@ -1323,6 +1324,45 @@ export function answerLimitFor(question: string, mode: string, scopedPaperCount 
     return 20;
   }
   return 20;
+}
+
+export function EvidenceVerificationBadge({
+  source,
+  evidence
+}: {
+  source: VerificationSource | null | undefined;
+  evidence: VerificationSource["evidence"][number] | null | undefined;
+}) {
+  if (!source || !evidence || isGreySourcePaperId(source.paper_id)) {
+    return null;
+  }
+  if (!source.pdf_available) {
+    return <span className="evidence-verify-badge">Kein lokales PDF – Textstelle nicht prüfbar</span>;
+  }
+  if (!evidence.found_in_pdf_text) {
+    return <span className="evidence-verify-badge">Textstelle nicht im PDF verifiziert</span>;
+  }
+  const metadata = (evidence.metadata ?? {}) as Record<string, unknown>;
+  if (metadata.context_policy === "approx_region" || metadata.located === "approx_region") {
+    return <span className="evidence-verify-badge">Ungefährer Bereich – genaue Textstelle nicht gefunden</span>;
+  }
+  if (metadata.context_policy === "whole") {
+    return <span className="evidence-verify-badge">Ungefähre Stelle – Zitat nicht satzgenau lokalisiert</span>;
+  }
+  return null;
+}
+
+export async function verificationSourcesFor(payload: Answer): Promise<VerificationSource[]> {
+  // The pdf_if_fits path already ships a full verification report with the answer —
+  // re-verifying via /sources/verify-answer would parse the PDFs a second time and is
+  // the main reason highlighting the Textstellen felt slow.
+  const embedded = payload.source_verification as { sources?: VerificationSource[] } | null | undefined;
+  const embeddedSources = Array.isArray(embedded?.sources) ? embedded.sources : [];
+  if (embeddedSources.length && embeddedSources.every((source) => Array.isArray(source.evidence))) {
+    return embeddedSources;
+  }
+  const report = await api.verifyAnswer(payload, verificationLimits(payload));
+  return report.sources;
 }
 
 export function verificationLimits(answer: Answer) {
@@ -1725,7 +1765,7 @@ export function AnswerText({
                         onPointerEnter={(event) => showCitationHover(chipKey, label, meta, quote, event)}
                         onPointerLeave={scheduleCitationHoverClose}
                         style={chipColorVars}
-                        title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}`}
+                        title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}${meta.approximate ? " - Ungefähre Zuordnung" : ""}`}
                       >
                         <span className="citation-index">{label}</span>
                         <span className="citation-paper">{shortCitationLabel(meta.source.title || meta.source.paper_id)}</span>
@@ -1971,7 +2011,12 @@ export function citationMetasFor(
     const link = bestCitationLink(links, candidate, citationStart, context);
     const linkedIndex = link ? evidenceIndexForCitationLink(source, link, context) : -1;
     const evidenceIndex = linkedIndex >= 0 ? linkedIndex : bestEvidenceIndex(source, context);
-    metas.push({ source, evidenceIndex, evidenceId: source.evidence[evidenceIndex]?.evidence_id });
+    metas.push({
+      source,
+      evidenceIndex,
+      evidenceId: source.evidence[evidenceIndex]?.evidence_id,
+      approximate: Boolean(link?.approximate)
+    });
   }
   return metas;
 }
@@ -2057,9 +2102,9 @@ function evidenceContextScore(evidence: VerificationSource["evidence"][number], 
         matchedNumbers += 1;
       }
     });
-    score += matchedNumbers * 18;
+    score += matchedNumbers * 6;
     if (!matchedNumbers) {
-      score -= 30;
+      score -= 6;
     }
   }
   if (evidence.kind === "claim") {

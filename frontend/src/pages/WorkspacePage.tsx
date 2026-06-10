@@ -66,6 +66,7 @@ import {
   answerLimitFor,
   citationMetasFor,
   cleanAnswerQuote,
+  EvidenceVerificationBadge,
   formatAnswerForNote,
   formatNoteQuote,
   formatTurnTime,
@@ -77,7 +78,7 @@ import {
   shortEvidenceText,
   turnBlocks,
   turnContext,
-  verificationLimits
+  verificationSourcesFor
 } from "./AssistantPage";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
@@ -153,6 +154,7 @@ export function WorkspacePage() {
   const [verbosity, setVerbosity] = useState<"kurz" | "standard" | "ausführlich">("standard");
   const [conversationMode, setConversationMode] = useState<"followup" | "new">("followup");
   const [paperScope, setPaperScope] = useState<PaperQuestionScope>("all");
+  const [includeGlobalSources, setIncludeGlobalSources] = useState(false);
   const [assistantMode, setAssistantMode] = useState<WorkspaceAssistantMode>("pdf");
   const [focusedNoteThreadId, setFocusedNoteThreadId] = useState("");
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
@@ -196,14 +198,34 @@ export function WorkspacePage() {
     queryFn: () => api.listGreySources(activeProject as string),
     enabled: isRealProject
   });
+  // All papers of the project (not only those with a local PDF) — used to scope
+  // "Alle Quellen" questions to the project instead of the global KG.
+  const projectPapersQuery = useQuery({
+    queryKey: ["workspace-project-paper-ids", activeProject],
+    queryFn: () => api.listPapers({ project_id: activeProject, limit: 1000 }),
+    enabled: isRealProject
+  });
+  const projectPaperIds = useMemo(
+    () => (projectPapersQuery.data?.items ?? []).map((paper) => workspacePaperId(paper)).filter(Boolean),
+    [projectPapersQuery.data]
+  );
   const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
   const primaryPaperId = projectsQuery.data?.projects.find((entry) => entry.id === activeProject)?.primary_paper_id ?? null;
   const greySources = greyQuery.data?.grey_sources ?? [];
 
   const currentScopePaperId = activeScopePaperId(pdfTarget, selectedSource);
   const currentScopeIsGrey = paperScope === "current" && pdfTarget?.kind === "grey";
+  const projectOnlyScope = paperScope === "all" && isRealProject && !includeGlobalSources;
   const scopedPaperIds =
-    paperScope === "all" ? [] : paperScope === "selected" ? selectedPaperIds : currentScopePaperId ? [currentScopePaperId] : [];
+    paperScope === "all"
+      ? projectOnlyScope
+        ? projectPaperIds
+        : []
+      : paperScope === "selected"
+        ? selectedPaperIds
+        : currentScopePaperId
+          ? [currentScopePaperId]
+          : [];
   const questionBlockedByScope =
     (paperScope === "selected" && !selectedPaperIds.length && !selectedGreyIds.length) ||
     (paperScope === "current" && !currentScopePaperId && !currentScopeIsGrey);
@@ -211,14 +233,15 @@ export function WorkspacePage() {
   const answerContextMode: "kg" | "pdf_if_fits" =
     paperScope === "current" && currentScopePaperId ? "pdf_if_fits" : "kg";
 
-  const inlineContextTexts: string[] = (() => {
-    if (currentScopeIsGrey && pdfTarget?.kind === "grey" && pdfTarget.source.full_text) {
-      return [pdfTarget.source.full_text];
+  // Selected grey sources are sent by ID so the backend injects them as real grey::
+  // sources (grey chips, Belegstellen, GreySourceView) instead of an anonymous
+  // "Inline-Kontext" blob without text locations.
+  const greySourceIds: string[] = (() => {
+    if (currentScopeIsGrey && pdfTarget?.kind === "grey") {
+      return [pdfTarget.source.id];
     }
     if (paperScope === "selected" && selectedGreyIds.length) {
-      return greySources
-        .filter((s) => selectedGreyIds.includes(s.id) && s.full_text)
-        .map((s) => s.full_text as string);
+      return selectedGreyIds;
     }
     return [];
   })();
@@ -229,19 +252,20 @@ export function WorkspacePage() {
         question: value,
         provider,
         model,
-        limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length + (inlineContextTexts.length ? 1 : 0))),
-        paper_ids: scopedPaperIds.length ? scopedPaperIds : undefined,
+        limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length + (greySourceIds.length ? 1 : 0))),
+        // "__none__" keeps an empty project honest: no papers means no global fallback.
+        paper_ids: scopedPaperIds.length ? scopedPaperIds : projectOnlyScope ? ["__none__"] : undefined,
         priority_paper_ids: primaryPaperId ? [primaryPaperId] : undefined,
         answer_context_mode: answerContextMode !== "kg" ? answerContextMode : undefined,
-        inline_context_texts: inlineContextTexts.length ? inlineContextTexts : undefined,
+        grey_source_ids: greySourceIds.length ? greySourceIds : undefined,
+        include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
         conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined,
         project_id: activeProject || undefined
       }),
     onSuccess: async (payload) => {
       let sources: VerificationSource[] = [];
       try {
-        const report = await api.verifyAnswer(payload, verificationLimits(payload));
-        sources = report.sources;
+        sources = await verificationSourcesFor(payload);
       } catch {
         sources = [];
       }
@@ -644,6 +668,25 @@ export function WorkspacePage() {
         setShowCommandHelp(true);
         setQuestion(remainder);
         return true;
+      case "web":
+        setUseInternet((v) => !v);
+        setQuestion(remainder);
+        return true;
+      case "summary":
+        // Paper-targeted commands pin the scope to the current paper; without an open
+        // paper the send button stays blocked ("Kein aktives Paper") instead of silently
+        // answering from the global KG.
+        setPaperScope("current");
+        setQuestion("Fasse die wichtigsten Erkenntnisse des aktuellen Papers zusammen." + (remainder ? ` ${remainder}` : ""));
+        return true;
+      case "extract":
+        setPaperScope("current");
+        setQuestion("Extrahiere Methoden, Ergebnisse und Schlussfolgerungen." + (remainder ? ` ${remainder}` : ""));
+        return true;
+      case "compare":
+        setPaperScope("all");
+        setQuestion("Vergleiche die wichtigsten Unterschiede und Gemeinsamkeiten der Papers." + (remainder ? ` ${remainder}` : ""));
+        return true;
       default:
         return false;
     }
@@ -960,6 +1003,16 @@ export function WorkspacePage() {
     return pool.slice(0, 8);
   }, [mentionState, pdfPapers]);
   const pdfView = pdfProps(pdfTarget);
+  // When no local PDF is available, resolve the cited paper id so the PDF pane can show
+  // its abstract + a link to the original source. Grey sources render elsewhere.
+  const pdfMetaPaperId = (() => {
+    if (pdfView.url || !pdfTarget) return undefined;
+    if (pdfTarget.kind === "paper") return workspacePaperId(pdfTarget.paper) || undefined;
+    if (pdfTarget.kind === "assistant") return isGreySourcePaperId(pdfTarget.source.paper_id) ? undefined : pdfTarget.source.paper_id;
+    if (pdfTarget.kind === "noteCitation") return isGreySourcePaperId(pdfTarget.citation.paper_id) ? undefined : pdfTarget.citation.paper_id;
+    if (pdfTarget.kind === "missing") return pdfTarget.paperId || undefined;
+    return undefined;
+  })();
   const navColumn = navigatorOpen ? `${navigatorWidth}px` : "46px";
   const assistantColumn = assistantOpen ? `${assistantWidth}px` : "46px";
   const pdfColumn = pdfOpen ? `${pdfWidth}px` : "46px";
@@ -1068,6 +1121,7 @@ export function WorkspacePage() {
           <PdfPane
             url={pdfView.url}
             title={pdfView.title}
+            metaPaperId={pdfMetaPaperId}
             unavailableMessage={pdfTarget?.kind === "missing" ? "Diese Quelle wurde im Antworttext zitiert, ist aber nicht als PDF im Projekt vorhanden. Sie können das Paper importieren oder als Graue Quelle hinzufügen." : undefined}
             evidences={pdfView.evidences}
             activeEvidenceIndex={pdfView.activeEvidenceIndex}
@@ -1165,6 +1219,7 @@ export function WorkspacePage() {
             />
           ) : (
             <>
+          <div className="chat-input-area">
           {mentionState && mentionCandidates.length > 0 ? (
             <div className="mention-popover">
               {mentionCandidates.map((paper, i) => {
@@ -1188,6 +1243,10 @@ export function WorkspacePage() {
               <div className="command-help-head">Verfügbare Befehle</div>
               <div className="command-help-row"><code>/new</code> Neues Gespräch starten</div>
               <div className="command-help-row"><code>/selected</code> Auf ausgewählte Papers eingrenzen</div>
+              <div className="command-help-row"><code>/web</code> Internet-Suche ein-/ausschalten</div>
+              <div className="command-help-row"><code>/summary</code> Zusammenfassung des aktuellen Papers</div>
+              <div className="command-help-row"><code>/extract</code> Methoden, Ergebnisse &amp; Schlussfolgerungen</div>
+              <div className="command-help-row"><code>/compare</code> Papers vergleichen</div>
               <div className="command-help-row"><code>/help</code> Diese Übersicht anzeigen</div>
               <div className="command-help-row"><code>@Titel</code> Paper zur Auswahl hinzufügen</div>
             </div>
@@ -1228,6 +1287,26 @@ export function WorkspacePage() {
                 Alle
               </button>
             </div>
+            {paperScope === "all" && isRealProject ? (
+              <div className="segmented workspace-scope-segment" aria-label="Quellenbasis">
+                <button
+                  type="button"
+                  className={!includeGlobalSources ? "active" : ""}
+                  onClick={() => setIncludeGlobalSources(false)}
+                  title="Nur Paper und Quellen aus diesem Projekt verwenden"
+                >
+                  Projekt
+                </button>
+                <button
+                  type="button"
+                  className={includeGlobalSources ? "active" : ""}
+                  onClick={() => setIncludeGlobalSources(true)}
+                  title="Zusätzlich Paper aus dem globalen Wissensgraphen (alle Projekte) heranziehen"
+                >
+                  + Global
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               className="icon-button workspace-chat-more-toggle"
@@ -1294,6 +1373,7 @@ export function WorkspacePage() {
               </div>
             ) : null}
           </form>
+          </div>
           {pendingUrlSource ? (
             <div className="source-drop-confirm">
               <Link2 size={15} />
@@ -1367,6 +1447,14 @@ export function WorkspacePage() {
                       />
                     </div>
                     {block.answer.generation_error ? <div className="warning-row">{block.answer.generation_error}</div> : null}
+                    {block.answer.context_diagnostics?.fallback_reason === "no_traceable_citations" ? (
+                      <div className="warning-row">Keine verknüpfbaren Zitate – beleg-basierte Zusammenfassung angezeigt.</div>
+                    ) : null}
+                    {Number(block.answer.context_diagnostics?.uncited_sentence_count ?? 0) > 0 ? (
+                      <div className="hint-row">
+                        {String(block.answer.context_diagnostics?.uncited_sentence_count)} Aussage(n) ohne Quellenangabe.
+                      </div>
+                    ) : null}
                   </article>
                 ))}
               </div>
@@ -1522,6 +1610,7 @@ export function WorkspacePage() {
                       Z{activeEvidenceIndex + 1} · {selectedSource.title || selectedSource.paper_id}
                     </strong>
                     <p>{activeEvidence.pdf_excerpt || activeEvidence.reference_text}</p>
+                    <EvidenceVerificationBadge source={selectedSource} evidence={activeEvidence} />
                     {selectedSource.pdf_available ? (
                       <button className="button button-compact" type="button" onClick={openSelectedAssistantPdf}>
                         <FileText size={15} />

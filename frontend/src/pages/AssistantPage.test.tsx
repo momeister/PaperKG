@@ -7,7 +7,9 @@ import {
   citationIds,
   citationMetasFor,
   citationQuoteFromParts,
-  formatAnswerForNote
+  EvidenceVerificationBadge,
+  formatAnswerForNote,
+  verificationSourcesFor
 } from "./AssistantPage";
 import type { Answer, VerificationSource } from "../types";
 
@@ -226,5 +228,84 @@ describe("assistant grouped citations", () => {
 
     expect(context).toContain("Survival improved by 20% in the treatment arm");
     expect(context).toContain("according to the trial");
+  });
+});
+
+describe("evidence verification badge", () => {
+  const baseEvidence = {
+    paper_id: "p1",
+    kind: "pdf",
+    reference_text: "Der zitierte Satz",
+    pdf_excerpt: "The located excerpt.",
+    matched_terms: [],
+    found_in_pdf_text: true
+  };
+
+  it("flags sources without a local PDF", () => {
+    const source: VerificationSource = { paper_id: "p1", title: "Study", pdf_available: false, evidence: [baseEvidence] };
+
+    render(<EvidenceVerificationBadge source={source} evidence={baseEvidence} />);
+
+    expect(screen.getByText(/Kein lokales PDF/)).toBeTruthy();
+  });
+
+  it("flags excerpts that were not verified in the PDF text", () => {
+    const source: VerificationSource = { paper_id: "p1", title: "Study", pdf_available: true, evidence: [] };
+    const evidence = { ...baseEvidence, found_in_pdf_text: false };
+
+    render(<EvidenceVerificationBadge source={source} evidence={evidence} />);
+
+    expect(screen.getByText(/nicht im PDF verifiziert/)).toBeTruthy();
+  });
+
+  it("labels whole-pdf fallback evidence as approximate", () => {
+    const source: VerificationSource = { paper_id: "p1", title: "Study", pdf_available: true, evidence: [] };
+    const evidence = { ...baseEvidence, metadata: { context_policy: "whole" } };
+
+    render(<EvidenceVerificationBadge source={source} evidence={evidence} />);
+
+    expect(screen.getByText(/Ungefähre Stelle/)).toBeTruthy();
+  });
+
+  it("labels approximate regions from claim anchoring and verification", () => {
+    const source: VerificationSource = { paper_id: "p1", title: "Study", pdf_available: true, evidence: [] };
+    const fromClaim = { ...baseEvidence, metadata: { context_policy: "approx_region" } };
+    const fromVerification = { ...baseEvidence, metadata: { located: "approx_region" } };
+
+    render(<EvidenceVerificationBadge source={source} evidence={fromClaim} />);
+    expect(screen.getByText(/Ungefährer Bereich/)).toBeTruthy();
+    cleanup();
+    render(<EvidenceVerificationBadge source={source} evidence={fromVerification} />);
+    expect(screen.getByText(/Ungefährer Bereich/)).toBeTruthy();
+  });
+
+  it("reuses the verification report embedded in the answer without a second verify call", async () => {
+    const payload: Answer = {
+      question: "q",
+      answer: "Claim [p1].",
+      sources: [{ paper_id: "p1", title: "Study" }],
+      evidence: [],
+      source_verification: {
+        sources: [{ paper_id: "p1", title: "Study", pdf_available: true, evidence: [] }],
+        cited_paper_ids: ["p1"],
+        missing_source_ids: []
+      }
+    };
+
+    const sources = await verificationSourcesFor(payload);
+
+    expect(sources).toHaveLength(1);
+    expect(sources[0].paper_id).toBe("p1");
+  });
+
+  it("renders nothing for verified excerpts and grey sources", () => {
+    const verifiedSource: VerificationSource = { paper_id: "p1", title: "Study", pdf_available: true, evidence: [] };
+    const greySource: VerificationSource = { paper_id: "grey::g1", title: "Web", pdf_available: false, evidence: [] };
+
+    const verified = render(<EvidenceVerificationBadge source={verifiedSource} evidence={baseEvidence} />);
+    expect(verified.container.innerHTML).toBe("");
+    cleanup();
+    const grey = render(<EvidenceVerificationBadge source={greySource} evidence={baseEvidence} />);
+    expect(grey.container.innerHTML).toBe("");
   });
 });

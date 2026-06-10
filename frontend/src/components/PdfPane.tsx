@@ -3,8 +3,9 @@ import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { ChevronLeft, ChevronRight, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
 
+import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
-import type { VerificationEvidence } from "../types";
+import type { PaperMeta, VerificationEvidence } from "../types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -81,6 +82,7 @@ type PdfPaneProps = {
   url?: string | null;
   title?: string;
   unavailableMessage?: string;
+  metaPaperId?: string;
   evidences?: VerificationEvidence[];
   activeEvidenceIndex?: number;
   onActiveEvidenceChange?: (index: number) => void;
@@ -91,6 +93,7 @@ export function PdfPane({
   url,
   title,
   unavailableMessage,
+  metaPaperId,
   evidences = [],
   activeEvidenceIndex = 0,
   onActiveEvidenceChange,
@@ -99,6 +102,7 @@ export function PdfPane({
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [pageCount, setPageCount] = useState<number>(0);
   const [error, setError] = useState<string>("");
+  const [sourceMeta, setSourceMeta] = useState<PaperMeta | null>(null);
   const [matches, setMatches] = useState<MatchIndex>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [viewportWidth, setViewportWidth] = useState(720);
@@ -108,6 +112,27 @@ export function PdfPane({
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const resizeFrameRef = useRef<number | null>(null);
+
+  // When there is no local PDF, fetch the cited paper's metadata so the user can still
+  // read the abstract and open the original source for verification.
+  useEffect(() => {
+    if (url || !metaPaperId) {
+      setSourceMeta(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .paperMeta(metaPaperId)
+      .then((data) => {
+        if (!cancelled) setSourceMeta(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceMeta(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url, metaPaperId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -398,17 +423,22 @@ export function PdfPane({
         <div className="pdf-placeholder">PDF wird geladen</div>
       ) : (
         <div className="pdf-placeholder">
-          {unavailableMessage ? (
+          {title || sourceMeta ? (
             <>
               <strong>Kein PDF verfügbar</strong>
-              <span>{title}</span>
-              <p>{unavailableMessage}</p>
-            </>
-          ) : title ? (
-            <>
-              <strong>Kein PDF verfügbar</strong>
-              <span>{title}</span>
-              <p>Diese Quelle wurde zitiert, ist aber noch nicht als PDF heruntergeladen oder nicht im Projekt vorhanden.</p>
+              <span>{sourceMeta?.title || title}</span>
+              <p>{unavailableMessage || "Diese Quelle wurde zitiert, ist aber noch nicht als PDF heruntergeladen oder nicht im Projekt vorhanden."}</p>
+              {sourceMeta?.abstract ? (
+                <div className="pdf-placeholder-abstract">
+                  <span>Abstract</span>
+                  <p>{sourceMeta.abstract}</p>
+                </div>
+              ) : null}
+              {sourceMeta?.external_url ? (
+                <a className="pdf-placeholder-link" href={sourceMeta.external_url} target="_blank" rel="noreferrer">
+                  Quelle öffnen ↗
+                </a>
+              ) : null}
             </>
           ) : "Quelle wählen"}
         </div>

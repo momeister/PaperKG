@@ -114,6 +114,17 @@ export type Paper = {
   project_ids?: string[];
 };
 
+export type PaperMeta = {
+  paper_id: string;
+  title: string;
+  abstract: string;
+  doi?: string | null;
+  pdf_url?: string | null;
+  landing_page_url?: string | null;
+  has_local_pdf: boolean;
+  external_url?: string | null;
+};
+
 export type HealthReport = {
   status: string;
   metadata_db?: { paper_count?: number };
@@ -170,6 +181,7 @@ export type CitationLink = {
   evidence_index?: number | null;
   score?: number;
   context?: string;
+  approximate?: boolean;
 };
 
 export type Answer = {
@@ -196,6 +208,7 @@ export type VerificationEvidence = {
   source_evidence_index?: number | null;
   fragment_index?: number | null;
   evidence_index?: number | null;
+  metadata?: Record<string, unknown>;
 };
 
 export type VerificationSource = {

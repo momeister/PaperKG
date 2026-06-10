@@ -86,7 +86,7 @@ async def run_web_search(
         if name == "searxng":
             hits = await _search_searxng(client, query, settings, max_results)
         elif name == "duckduckgo":
-            hits = await _search_duckduckgo(client, query, max_results)
+            hits = await _search_duckduckgo(query, max_results)
         elif name == "tavily":
             hits = await _search_tavily(client, query, settings, max_results)
         elif name == "brave":
@@ -94,6 +94,7 @@ async def run_web_search(
         else:
             raise SearchProviderError(f"Unknown web-search provider: {name}")
 
+    hits = _filter_relevant_hits(hits, query)
     return _apply_domain_filters(hits, config)[:max_results]
 
 
@@ -128,43 +129,44 @@ async def _search_searxng(
     return hits
 
 
-_DDG_RESULT = re.compile(
-    r'<a[^>]+class="result__a"[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>',
-    re.S,
-)
-_DDG_SNIPPET = re.compile(r'<a[^>]+class="result__snippet"[^>]*>(?P<snippet>.*?)</a>', re.S)
-_HTML_TAG = re.compile(r"<[^>]+>")
+def _filter_relevant_hits(hits: list[SearchHit], query: str) -> list[SearchHit]:
+    """Drop hits with zero query-term overlap to filter out rate-limit junk results."""
+    query_terms = {w.lower() for w in re.split(r"\W+", query) if len(w) > 3}
+    if not query_terms:
+        return hits
+    out = []
+    for hit in hits:
+        text = (hit.title + " " + hit.snippet).lower()
+        if any(t in text for t in query_terms):
+            out.append(hit)
+    return out
 
 
-async def _search_duckduckgo(client: httpx.AsyncClient, query: str, max_results: int) -> list[SearchHit]:
-    response = await client.post("https://html.duckduckgo.com/html/", data={"q": query})
-    response.raise_for_status()
-    body = response.text
-    urls = _DDG_RESULT.findall(body)
-    snippets = _DDG_SNIPPET.findall(body)
-    hits: list[SearchHit] = []
-    for index, (url, title) in enumerate(urls[:max_results]):
-        snippet = snippets[index] if index < len(snippets) else ""
-        hits.append(
-            SearchHit(
-                url=_clean_ddg_url(url),
-                title=_HTML_TAG.sub("", title).strip(),
-                snippet=_HTML_TAG.sub("", snippet).strip(),
+async def _search_duckduckgo(query: str, max_results: int) -> list[SearchHit]:
+    import asyncio
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS  # type: ignore[no-redef]
+        except ImportError:
+            raise SearchProviderError(
+                "Neither 'ddgs' nor 'duckduckgo_search' is installed. Run: pip install ddgs"
             )
+
+    def _sync_search() -> list[dict[str, Any]]:
+        ddgs = DDGS(timeout=15)
+        return list(ddgs.text(query, max_results=max_results))
+
+    results = await asyncio.get_event_loop().run_in_executor(None, _sync_search)
+    return [
+        SearchHit(
+            url=str(r.get("href") or ""),
+            title=str(r.get("title") or ""),
+            snippet=str(r.get("body") or ""),
         )
-    return hits
-
-
-def _clean_ddg_url(url: str) -> str:
-    # DuckDuckGo HTML wraps targets in a redirect like //duckduckgo.com/l/?uddg=<encoded>
-    match = re.search(r"[?&]uddg=([^&]+)", url)
-    if match:
-        from urllib.parse import unquote
-
-        return unquote(match.group(1))
-    if url.startswith("//"):
-        return "https:" + url
-    return url
+        for r in results
+    ]
 
 
 async def _search_tavily(

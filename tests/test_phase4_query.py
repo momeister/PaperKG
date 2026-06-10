@@ -9,10 +9,19 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from extraction.embedding_engine import EmbeddingEngine
-from query.grounded_responder import GroundedResponder, _citation_links_for_answer, _parse_numbered_translations
+from query.grounded_responder import (
+    _CONTEXT_MATCH_SCORE,
+    GroundedResponder,
+    _best_citation_evidence,
+    _build_grounded_prompt,
+    _citation_links_for_answer,
+    _map_numeric_citations,
+    _parse_numbered_translations,
+    _strip_invalid_citations,
+)
 from query.hybrid_retriever import HybridRetriever
 from query.hypothesis_generator import HypothesisGenerator
-from query.kg_retriever import Evidence, KGRetriever
+from query.kg_retriever import Evidence, KGRetriever, SearchHit, Source
 from storage.metadata_db import MetadataDB
 
 
@@ -751,6 +760,50 @@ def test_citation_links_break_exact_score_ties_with_distinct_evidence() -> None:
     assert {links[0]["evidence_id"], links[1]["evidence_id"]} == {"ev-a", "ev-b"}
 
 
+def test_strip_invalid_citations_removes_bibliography_numbers() -> None:
+    known = frozenset({"arxiv:1234", "files"})
+    text = (
+        "Bevacizumab did not improve survival [arxiv:1234, 17]. "
+        "Adverse events were higher [26, 29]. "
+        "The local upload agrees [files]."
+    )
+
+    stripped = _strip_invalid_citations(text, known)
+
+    assert "[arxiv:1234]" in stripped  # valid id kept, bibliography number 17 dropped
+    assert "[files]" in stripped
+    assert "[26, 29]" not in stripped  # pure-numeric bracket removed entirely
+    assert "Adverse events were higher." in stripped  # sentence text preserved, dead bracket gone
+
+
+def test_best_citation_evidence_prefers_exact_context_match() -> None:
+    context = "Overall survival was not improved"
+    evidence = [
+        Evidence(
+            paper_id="files",
+            kind="pdf",
+            text="Unrelated chunk that happens to share the numbers 17 22 29.",
+            score=11.0,
+            evidence_id="ev-wrong",
+            metadata={"context": "A different sentence entirely"},
+        ),
+        Evidence(
+            paper_id="files",
+            kind="pdf",
+            text="The located excerpt describing overall survival outcomes.",
+            score=11.0,
+            evidence_id="ev-right",
+            metadata={"context": context},
+        ),
+    ]
+
+    index, item, score = _best_citation_evidence("files", context, evidence)
+
+    assert item is not None and item.evidence_id == "ev-right"
+    assert index == 1
+    assert score == _CONTEXT_MATCH_SCORE
+
+
 def test_grounded_responder_surfaces_generation_failures() -> None:
     with _phase4_fixture() as db_path:
         responder = GroundedResponder(
@@ -902,3 +955,484 @@ def test_phase4_api_endpoints(monkeypatch) -> None:
         assert health_response.json()["metadata_db"]["paper_count"] == 3
         assert benchmark_response.status_code == 200
         assert benchmark_response.json()["summary"]["case_count"] >= 1
+
+
+def test_map_numeric_citations_replaces_evidence_numbers_with_paper_ids() -> None:
+    evidence = [
+        Evidence(paper_id="arxiv:2501.00001", kind="claim", field="claims", text="Claim one", score=7.0),
+        Evidence(paper_id="p2", kind="claim", field="claims", text="Claim two", score=6.0),
+    ]
+    text = "First finding [1]. Second finding [2]. Out of range [99]. Bibliography copy [17-22]."
+
+    mapped = _map_numeric_citations(text, evidence)
+
+    assert "[arxiv:2501.00001]" in mapped
+    assert "[p2]" in mapped
+    assert "[99]" in mapped
+    assert "[17-22]" in mapped
+    assert "[1]" not in mapped
+    assert "[2]" not in mapped
+
+
+class NumericCitationLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return "Graph transformers link scientific concepts across papers [1]."
+
+
+def test_generate_answer_maps_numeric_citations_without_llm_repair() -> None:
+    fake_llm = NumericCitationLLMRouter()
+    responder = GroundedResponder(retriever=None, llm_router=fake_llm)
+    source = Source(paper_id="arxiv:2501.00001", title="Paper One", year=2025, doi=None, url=None)
+    hit = SearchHit(source=source)
+    item = Evidence(
+        paper_id="arxiv:2501.00001",
+        kind="claim",
+        field="claims",
+        text="Graph transformers link scientific concepts across papers.",
+        score=7.0,
+    )
+    hit.add_evidence(item)
+
+    text, error, diagnostics = responder._generate_answer(
+        question="What links concepts?",
+        hits=[hit],
+        evidence=[item],
+        provider=None,
+        model=None,
+        overrides=None,
+    )
+
+    assert "[arxiv:2501.00001]" in text
+    assert "[1]" not in text
+    assert error is None
+    # The numeric citation is resolved deterministically - no LLM repair round trip.
+    assert len(fake_llm.calls) == 1
+    assert diagnostics.get("uncited_sentence_count") == 0
+
+
+class UncitedThenCitedLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        if len(self.calls) == 1:
+            return "Zebra migrations remain wholly mysterious to everyone involved somehow."
+        return "Graph transformers link scientific concepts across papers [arxiv:2501.00001]."
+
+
+def test_sparse_repair_fires_when_answer_has_zero_citations_and_few_sources() -> None:
+    fake_llm = UncitedThenCitedLLMRouter()
+    responder = GroundedResponder(retriever=None, llm_router=fake_llm)
+    source = Source(paper_id="arxiv:2501.00001", title="Paper One", year=2025, doi=None, url=None)
+    hit = SearchHit(source=source)
+    item = Evidence(
+        paper_id="arxiv:2501.00001",
+        kind="claim",
+        field="claims",
+        text="Graph transformers link scientific concepts across papers.",
+        score=7.0,
+    )
+    hit.add_evidence(item)
+
+    text, error, diagnostics = responder._generate_answer(
+        question="What links concepts?",
+        hits=[hit],
+        evidence=[item],
+        provider=None,
+        model=None,
+        overrides=None,
+    )
+
+    # Zero citations must trigger the sparse repair even with a single available source.
+    assert "[arxiv:2501.00001]" in text
+    assert len(fake_llm.calls) == 2
+    assert error is None
+    assert "fallback_reason" not in diagnostics
+
+
+class AlwaysUncitedLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return "Zebra migrations remain wholly mysterious to everyone involved somehow."
+
+
+def test_zero_citation_answer_falls_back_to_extractive_with_note() -> None:
+    fake_llm = AlwaysUncitedLLMRouter()
+    responder = GroundedResponder(retriever=None, llm_router=fake_llm)
+    source = Source(paper_id="p1", title="Graph Paper", year=2024, doi=None, url=None)
+    hit = SearchHit(source=source)
+    item = Evidence(
+        paper_id="p1",
+        kind="claim",
+        field="claims",
+        text="Graph transformers link scientific concepts across papers.",
+        score=7.0,
+    )
+    hit.add_evidence(item)
+
+    text, error, diagnostics = responder._generate_answer(
+        question="What links concepts?",
+        hits=[hit],
+        evidence=[item],
+        provider=None,
+        model=None,
+        overrides=None,
+    )
+
+    # Sentence attachment finds no overlap, so the answer is replaced by the
+    # always-cited extractive fallback - never an uncited answer.
+    assert text.startswith("Hinweis:")
+    assert "[p1]" in text
+    assert error is None
+    assert diagnostics["fallback_reason"] == "no_traceable_citations"
+
+
+def test_best_citation_evidence_does_not_steal_other_contexts_claim_excerpt() -> None:
+    foreign = Evidence(
+        paper_id="files",
+        kind="pdf",
+        field="answer_claim_excerpt",
+        text="Patients in the treatment group reported more fatigue and headaches than those receiving placebo.",
+        score=11.0,
+        metadata={"context": "Anderer Satz ueber Muedigkeit", "context_policy": "claim_excerpt", "title": "Trial"},
+    )
+    whole = Evidence(
+        paper_id="files",
+        kind="pdf",
+        field="parsed_pdf_text",
+        text="Median overall survival was longer in the treatment group than in the placebo group.",
+        score=10.0,
+        metadata={"context_policy": "whole", "title": "Trial"},
+    )
+    # The citation context lexically overlaps the OTHER claim excerpt - previously that
+    # foreign excerpt won the fallback and the wrong passage was displayed.
+    context = "The treatment group reported more fatigue and headaches than placebo"
+
+    index, best, score = _best_citation_evidence("files", context, [foreign, whole])
+
+    assert best is not None
+    assert best.metadata.get("context_policy") == "whole"
+    assert index == 1
+    assert score < _CONTEXT_MATCH_SCORE
+
+
+class OneAnchoredOneUnanchoredPdfLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        prompt = messages[-1]["content"] if messages else ""
+        if "Claim summaries" in prompt:
+            return ""  # no usable translations -> claims are matched with their original wording
+        return (
+            "The median overall survival was 16.8 months in the treatment group [p1]. "
+            "Zebras enjoy quantum knitting tournaments on Mars every winter [p1]."
+        )
+
+
+def test_pdf_context_keeps_whole_pdf_fallback_and_flags_unmatched_citation_links(monkeypatch, tmp_path) -> None:
+    from query import grounded_responder as responder_module
+
+    class PdfScopedRetriever:
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"source": {"paper_id": paper_id, "title": "Clinical Trial of NewDrug", "year": 2025}}
+
+        def search(self, *args, **kwargs) -> list:
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {"valid_citation_count": 2}, "sources": []}
+
+    pdf_text = (
+        "Clinical Trial of NewDrug. Results: The median overall survival was 16.8 months in the "
+        "treatment group as compared with 11.2 months in the placebo group according to the primary "
+        "analysis. Safety findings were broadly comparable between the randomized study groups."
+    )
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    fake_llm = OneAnchoredOneUnanchoredPdfLLMRouter()
+    monkeypatch.setattr(responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path)
+    monkeypatch.setattr(responder_module, "parse_pdf_text", lambda *args, **kwargs: pdf_text)
+    monkeypatch.setattr(responder_module, "verify_answer_sources", lambda *args, **kwargs: VerificationResult())
+
+    answer = GroundedResponder(retriever=PdfScopedRetriever(), llm_router=fake_llm).answer(
+        "What did the trial find?",
+        paper_ids=["p1"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+    # The un-anchorable claim is counted and the paper keeps its whole-pdf fallback evidence.
+    assert answer.context_diagnostics["unmatched_claim_context_count"] == 1
+    policies = [item.metadata.get("context_policy") for item in answer.evidence]
+    assert "claim_excerpt" in policies
+    assert "whole" in policies
+
+    assert len(answer.citation_links) == 2
+    anchored_link, unmatched_link = answer.citation_links
+    assert "approximate" not in anchored_link
+    assert unmatched_link.get("approximate") is True
+    # The unmatched citation links to the honest whole-pdf snippet, not to the other
+    # claim excerpt.
+    evidence_by_id = {item.evidence_id: item for item in answer.evidence}
+    assert evidence_by_id[anchored_link["evidence_id"]].metadata.get("context_policy") == "claim_excerpt"
+    assert "16.8" in evidence_by_id[anchored_link["evidence_id"]].text
+    assert evidence_by_id[unmatched_link["evidence_id"]].metadata.get("context_policy") == "whole"
+
+
+def test_grounded_prompt_marks_grey_evidence_as_web_source() -> None:
+    paper_source = Source(paper_id="p1", title="Graph Paper", year=2024, doi=None, url=None)
+    grey_source = Source(paper_id="grey::g1", title="Web Finding", year=None, doi=None, url="https://example.test")
+    paper_hit = SearchHit(source=paper_source)
+    grey_hit = SearchHit(source=grey_source)
+    paper_item = Evidence(paper_id="p1", kind="claim", field="claims", text="Paper claim text.", score=7.0)
+    grey_item = Evidence(
+        paper_id="grey::g1",
+        kind="quote",
+        field="evidence",
+        text="Grey quote text.",
+        score=1.5,
+        metadata={"source_type": "grey"},
+    )
+    paper_hit.add_evidence(paper_item)
+    grey_hit.add_evidence(grey_item)
+
+    prompt = _build_grounded_prompt("What?", [paper_hit, grey_hit], [paper_item, grey_item])
+
+    lines = prompt.splitlines()
+    grey_line = next(line for line in lines if "[grey::g1]" in line)
+    paper_line = next(line for line in lines if "[p1]" in line and "Graph Paper" in line)
+    assert "(Webquelle)" in grey_line
+    assert "(Webquelle)" not in paper_line
+    assert "more current than papers" in prompt
+    # Papers stay the primary sources; web sources support them in the same bracket.
+    assert "after the paper ID" in prompt
+
+
+def test_answer_injects_selected_grey_sources_even_with_paper_ids() -> None:
+    # "Auswahl" mode: explicitly selected grey sources arrive as IDs and must be injected
+    # as citable grey:: sources (instead of the old anonymous "Inline-Kontext" blob),
+    # even though an explicit paper filter is set.
+    with _phase4_fixture() as db_path:
+        db = MetadataDB(db_path)
+        try:
+            db.add_grey_source(
+                "proj1",
+                {
+                    "id": "g_selected",
+                    "url": "https://example.test/grey-selected",
+                    "title": "Selected Web Finding",
+                    "evidence": ["A grey-source quote about graph transformers."],
+                    "full_text": "Long article body. Graph transformer adoption is accelerating in industry labs.",
+                },
+            )
+        finally:
+            db.close()
+
+        fake_llm = FakeLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+        answer = responder.answer(
+            "What uses graph transformer?",
+            paper_ids=["p1"],
+            project_id="proj1",
+            grey_source_ids=["g_selected"],
+            metadata_db_path=db_path,
+        )
+
+        assert answer.context_diagnostics.get("selected_grey_count") == 1
+        # The grey source must reach the LLM as citable (Webquelle) evidence — the final
+        # answer.evidence is trimmed to whatever the (fake) LLM actually cited.
+        prompt = fake_llm.calls[0]["messages"][1]["content"]
+        assert "[grey::g_selected]" in prompt
+        assert "(Webquelle)" in prompt
+
+
+def test_answer_includes_project_grey_with_paper_filter_when_flag_set() -> None:
+    # "Alle Quellen" scoped to the project's papers: include_project_grey keeps the
+    # project's web findings as supplementary citable evidence despite the paper filter.
+    with _phase4_fixture() as db_path:
+        db = MetadataDB(db_path)
+        try:
+            db.add_grey_source(
+                "proj1",
+                {
+                    "id": "g_project",
+                    "url": "https://example.test/grey-project",
+                    "title": "Project Web Finding",
+                    "evidence": ["A grey-source quote about graph transformers."],
+                },
+            )
+        finally:
+            db.close()
+
+        fake_llm = FakeLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+        answer = responder.answer(
+            "What uses graph transformer?",
+            paper_ids=["p1"],
+            project_id="proj1",
+            include_project_grey=True,
+            metadata_db_path=db_path,
+        )
+
+        assert answer.context_diagnostics.get("grey_source_count") == 1
+        prompt = fake_llm.calls[0]["messages"][1]["content"]
+        assert "[grey::g_project]" in prompt
+
+
+class ApproxRegionPdfLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        prompt = messages[-1]["content"] if messages else ""
+        if "Claim summaries" in prompt:
+            return ""
+        # The 45% figure does NOT appear in the PDF -> strict anchoring fails, but the
+        # surrounding topic terms do appear -> an approximate region must be shown.
+        return "The study reported 45% fewer cognitive errors with memory recall training [p1]."
+
+
+def test_pdf_context_falls_back_to_approx_region_for_unanchorable_numbers(monkeypatch, tmp_path) -> None:
+    from query import grounded_responder as responder_module
+
+    class PdfScopedRetriever:
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"source": {"paper_id": paper_id, "title": "Cognitive Training Study", "year": 2025}}
+
+        def search(self, *args, **kwargs) -> list:
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {"valid_citation_count": 1}, "sources": []}
+
+    pdf_text = (
+        "Cognitive Training Study. Methods and procedures are described below in detail. "
+        "Participants completed memory recall training over twelve weeks and made substantially "
+        "fewer cognitive errors at follow-up compared with the control group in this study. "
+        "Additional outcomes are reported in the appendix of this manuscript."
+    )
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    fake_llm = ApproxRegionPdfLLMRouter()
+    monkeypatch.setattr(responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path)
+    monkeypatch.setattr(responder_module, "parse_pdf_text", lambda *args, **kwargs: pdf_text)
+    monkeypatch.setattr(responder_module, "verify_answer_sources", lambda *args, **kwargs: VerificationResult())
+
+    answer = GroundedResponder(retriever=PdfScopedRetriever(), llm_router=fake_llm).answer(
+        "What did the study find?",
+        paper_ids=["p1"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+    assert answer.context_diagnostics.get("approx_region_context_count") == 1
+    region_items = [
+        item for item in answer.evidence if item.metadata.get("context_policy") == "approx_region"
+    ]
+    assert len(region_items) == 1
+    assert "memory recall training" in region_items[0].text
+    # The citation links to its own (approximate) region via the exact context match.
+    assert answer.citation_links
+    assert answer.citation_links[0]["evidence_id"] == region_items[0].evidence_id
+
+
+_QUOTE_PDF_TEXT = (
+    "Clinical Trial of NewDrug. Results: The median overall survival was 16.8 months in the "
+    "treatment group as compared with 11.2 months in the placebo group according to the primary "
+    "analysis. Patients in the treatment group reported more fatigue and headaches than placebo "
+    "during routine follow-up visits across all participating study sites."
+)
+
+
+class ModelQuotePdfLLMRouter(FakeLLMRouter):
+    ANSWER = (
+        "Die Überlebenszeit war unter der Behandlung länger [p1]{{The median overall survival was "
+        "16.8 months in the treatment group as compared with 11.2 months in the placebo group}}. "
+        "Zudem traten mehr Nebenwirkungen auf [p1]{{Patients in the treatment group reported more "
+        "fatigue and headaches than placebo}}."
+    )
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return self.ANSWER
+
+
+def _pdf_context_answer(monkeypatch, tmp_path, fake_llm, pdf_text):
+    from query import grounded_responder as responder_module
+
+    class PdfScopedRetriever:
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"source": {"paper_id": paper_id, "title": "Clinical Trial of NewDrug", "year": 2025}}
+
+        def search(self, *args, **kwargs) -> list:
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {}, "sources": []}
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path)
+    monkeypatch.setattr(responder_module, "parse_pdf_text", lambda *args, **kwargs: pdf_text)
+    monkeypatch.setattr(responder_module, "verify_answer_sources", lambda *args, **kwargs: VerificationResult())
+    return GroundedResponder(retriever=PdfScopedRetriever(), llm_router=fake_llm).answer(
+        "What did the trial find?",
+        paper_ids=["p1"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+
+def test_pdf_context_anchors_citations_on_verified_model_quotes(monkeypatch, tmp_path) -> None:
+    # The reliable path: the model appends the verbatim passage it used; the backend
+    # verifies it character-for-character instead of re-locating a (German) paraphrase.
+    fake_llm = ModelQuotePdfLLMRouter()
+
+    answer = _pdf_context_answer(monkeypatch, tmp_path, fake_llm, _QUOTE_PDF_TEXT)
+
+    assert "{{" not in answer.answer and "}}" not in answer.answer
+    assert answer.context_diagnostics.get("model_quote_verbatim_count") == 2
+    # Quotes resolve every context, so no translation LLM round trip happens.
+    assert len(fake_llm.calls) == 1
+    quote_items = [item for item in answer.evidence if item.metadata.get("anchor") == "model_quote"]
+    assert len(quote_items) == 2
+    assert any("16.8 months" in item.text for item in quote_items)
+    assert any("fatigue and headaches" in item.text for item in quote_items)
+    assert len(answer.citation_links) == 2
+    linked_ids = {link["evidence_id"] for link in answer.citation_links}
+    assert linked_ids == {item.evidence_id for item in quote_items}
+
+
+class SharedQuotePdfLLMRouter(FakeLLMRouter):
+    ANSWER = (
+        "Die Überlebenszeit war unter der Behandlung länger [p1]{{The median overall survival was "
+        "16.8 months in the treatment group as compared with 11.2 months in the placebo group}}. "
+        "Der Unterschied war klinisch bedeutsam [p1]{{The median overall survival was 16.8 months "
+        "in the treatment group as compared with 11.2 months in the placebo group}}."
+    )
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return self.ANSWER
+
+
+def test_pdf_context_deduplicates_shared_excerpt_across_citations(monkeypatch, tmp_path) -> None:
+    # Two answer sentences backed by the SAME passage must share one evidence entry
+    # (with both contexts recorded) instead of listing duplicate quotes.
+    fake_llm = SharedQuotePdfLLMRouter()
+
+    answer = _pdf_context_answer(monkeypatch, tmp_path, fake_llm, _QUOTE_PDF_TEXT)
+
+    claim_items = [item for item in answer.evidence if item.metadata.get("context_policy") == "claim_excerpt"]
+    assert len(claim_items) == 1
+    assert len(claim_items[0].metadata.get("contexts") or []) == 2
+    assert len(answer.citation_links) == 2
+    assert {link["evidence_id"] for link in answer.citation_links} == {claim_items[0].evidence_id}

@@ -11,6 +11,7 @@ them per project as supplementary, lower-trust context only.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import httpx
@@ -24,6 +25,11 @@ from research.search_provider import ResearchConfig, SearchHit, load_research_co
 # How much of each article is fed to the summarizer LLM. The full article is still
 # stored on the finding regardless of this cap so the user keeps the whole text.
 _SUMMARY_INPUT_LEN = 16000
+
+_BOILERPLATE_RE = re.compile(
+    r"^(copyright\b|©|\(c\)\s*\d{4}|all rights reserved|terms of use)",
+    re.IGNORECASE,
+)
 
 _SUMMARY_SYSTEM = (
     "You are a careful research assistant. You will receive a user question and a block of "
@@ -72,7 +78,7 @@ def _summarize_source(
     haystack = clean_text.lower()
     for item in raw_evidence:
         quote = str(item or "").strip()
-        if not quote:
+        if not quote or _BOILERPLATE_RE.match(quote):
             continue
         # Keep only quotes that are actually present in the source (anti-hallucination).
         if quote.lower() in haystack or len(quote) < 24:
@@ -163,8 +169,8 @@ async def run_deep_research(
         "provider": search_provider or config.default_provider,
         "queries": queries,
         "topic_summary": analysis.get("topic_summary", ""),
-        # Related topics/methods the user can explore for more context.
-        "related_topics": analysis.get("methods", []),
+        # Related topics the user can explore for more context.
+        "related_topics": analysis.get("related_topics") or analysis.get("methods", []),
         "findings": findings,
         "warnings": warnings,
     }

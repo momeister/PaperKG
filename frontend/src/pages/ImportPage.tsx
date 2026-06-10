@@ -1,7 +1,7 @@
-import React, { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import React, { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, X, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, X, XCircle } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -114,6 +114,7 @@ export function ImportPage() {
   const [maxResearchSources, setMaxResearchSources] = useState(12);
   const [maxRelatedTopics, setMaxRelatedTopics] = useState(5);
   const [downloadDismissed, setDownloadDismissed] = useState(false);
+  const [dropZoneDragOver, setDropZoneDragOver] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -125,6 +126,7 @@ export function ImportPage() {
   function invalidateLibrary() {
     queryClient.invalidateQueries({ queryKey: ["papers"] });
     queryClient.invalidateQueries({ queryKey: ["health"] });
+    queryClient.invalidateQueries({ queryKey: ["workspace-pdfs"] });
   }
 
   const search = useMutation({
@@ -283,6 +285,22 @@ export function ImportPage() {
     files.forEach((file) => upload.mutate({ file, title: file.name.replace(/\.pdf$/i, "") }));
   }
 
+  function onDropZoneDragOver(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDropZoneDragOver(true);
+  }
+
+  function onDropZoneDragLeave() {
+    setDropZoneDragOver(false);
+  }
+
+  function onDropZoneDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDropZoneDragOver(false);
+    const files = Array.from(event.dataTransfer.files).filter((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
+    files.forEach((file) => upload.mutate({ file, title: file.name.replace(/\.pdf$/i, "") }));
+  }
+
   return (
     <section className="page">
       <div className="page-title">
@@ -354,17 +372,6 @@ export function ImportPage() {
                 </button>
               )}
             </div>
-            <div className="import-count-label" style={{ marginTop: "0.3rem" }}>
-              <span>Vorschläge je Quelle (KI-Vorschläge &amp; KI-Kontext):</span>
-              <input
-                className="import-count-input"
-                type="number"
-                min={3}
-                max={20}
-                value={maxPerQuery}
-                onChange={(e) => setMaxPerQuery(Number(e.target.value))}
-              />
-            </div>
             {discoverTopic.isPending && (
               <div className="import-status-row">
                 <Loader2 size={14} className="spin" />
@@ -388,13 +395,41 @@ export function ImportPage() {
             </div>
             <Status value={upload.isPending ? "running" : upload.isSuccess ? "success" : "idle"} />
           </div>
-          <label className="drop-zone">
+          <label
+            className={`drop-zone ${dropZoneDragOver ? "drop-zone--drag-over" : ""}`}
+            onDragOver={onDropZoneDragOver}
+            onDragLeave={onDropZoneDragLeave}
+            onDrop={onDropZoneDrop}
+          >
             <FileUp size={34} />
-            <span>PDF auswählen</span>
+            <span>{dropZoneDragOver ? "Loslassen zum Hochladen" : "PDF hierher ziehen oder auswählen"}</span>
             <input type="file" accept="application/pdf" multiple onChange={onFiles} />
           </label>
         </section>
       </div>
+
+      <section className="panel import-ai-settings">
+        <div className="panel-heading">
+          <div>
+            <span>KI</span>
+            <strong>KI-Einstellungen</strong>
+          </div>
+        </div>
+        <p className="muted" style={{ fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
+          Die KI analysiert Thema oder hochgeladene Papers und sucht in den oben gewählten Quellen nach verwandten Werken.
+        </p>
+        <div className="import-count-label">
+          <span>Paper je Suchanfrage (KI-Vorschläge &amp; KI-Kontext):</span>
+          <input
+            className="import-count-input"
+            type="number"
+            min={3}
+            max={20}
+            value={maxPerQuery}
+            onChange={(e) => setMaxPerQuery(Number(e.target.value))}
+          />
+        </div>
+      </section>
 
       {uploaded.length ? (
         <section className="panel">
@@ -491,6 +526,7 @@ export function ImportPage() {
                     candidates={paperCandidates[paper.id]}
                     onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
                     disabled={download.isPending}
+                    onClear={() => setPaperCandidates((prev) => { const next = { ...prev }; delete next[paper.id]; return next; })}
                   />
                 ) : null}
               </article>
@@ -506,6 +542,7 @@ export function ImportPage() {
             candidates={topicCandidates}
             onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
             disabled={download.isPending}
+            onClear={() => setTopicCandidates([])}
           />
         </section>
       ) : null}
@@ -516,23 +553,36 @@ export function ImportPage() {
             <span>Graue Quellen</span>
             <strong>Web-Recherche (Deep Research)</strong>
           </div>
-          {(() => {
-            const pendingCount = topicGroups.filter((g) => g.pending).length;
-            const doneCount = topicGroups.filter((g) => !g.pending).length;
-            const totalFindings = topicGroups.reduce((sum, g) => sum + g.findings.length, 0);
-            if (research.isPending) return <Status value="running" />;
-            if (pendingCount > 0) return (
-              <span className="muted" style={{ fontSize: "0.8rem" }}>
-                {doneCount}/{doneCount + pendingCount} Themen · {totalFindings} Treffer
-              </span>
-            );
-            if (topicGroups.length > 0) return (
-              <span className="muted" style={{ fontSize: "0.8rem" }}>
-                {totalFindings} Treffer in {topicGroups.length} {topicGroups.length === 1 ? "Thema" : "Themen"}
-              </span>
-            );
-            return <Status value="idle" />;
-          })()}
+          <div className="button-row" style={{ gap: "0.5rem", alignItems: "center" }}>
+            {(() => {
+              const pendingCount = topicGroups.filter((g) => g.pending).length;
+              const doneCount = topicGroups.filter((g) => !g.pending).length;
+              const totalFindings = topicGroups.reduce((sum, g) => sum + g.findings.length, 0);
+              if (research.isPending) return <Status value="running" />;
+              if (pendingCount > 0) return (
+                <span className="muted" style={{ fontSize: "0.8rem" }}>
+                  {doneCount}/{doneCount + pendingCount} Themen · {totalFindings} Treffer
+                </span>
+              );
+              if (topicGroups.length > 0) return (
+                <span className="muted" style={{ fontSize: "0.8rem" }}>
+                  {totalFindings} Treffer in {topicGroups.length} {topicGroups.length === 1 ? "Thema" : "Themen"}
+                </span>
+              );
+              return <Status value="idle" />;
+            })()}
+            {topicGroups.length > 0 && !research.isPending && !topicGroups.some((g) => g.pending) ? (
+              <button
+                className="button"
+                type="button"
+                title="Ergebnisse löschen"
+                onClick={() => { setTopicGroups([]); setSavedFindingUrls([]); }}
+              >
+                <X size={14} />
+                <span>Leeren</span>
+              </button>
+            ) : null}
+          </div>
         </div>
         <p className="muted">
           Durchsucht das Web, behandelt Inhalte als nicht vertrauenswürdige Daten (Prompt-Injection-Schutz) und speichert
@@ -725,6 +775,7 @@ export function ImportPage() {
       <DownloadProgress
         pending={download.isPending}
         data={download.data}
+        error={download.error}
         totalPapers={download.variables?.papers.length ?? 0}
         scopeLabel={isRealProject ? `Projekt: ${activeProject}` : "Alle Papers (global)"}
         onGoToExtraction={() => navigate("/extraction")}
@@ -753,6 +804,7 @@ function statusLabel(status: string): string {
 function DownloadProgress({
   pending,
   data,
+  error,
   totalPapers,
   scopeLabel,
   onGoToExtraction,
@@ -761,6 +813,7 @@ function DownloadProgress({
 }: {
   pending: boolean;
   data?: HarvestDownloadResponse;
+  error?: unknown;
   totalPapers?: number;
   scopeLabel: string;
   onGoToExtraction: () => void;
@@ -768,17 +821,20 @@ function DownloadProgress({
   onDismiss?: () => void;
 }) {
   if (dismissed && !pending) return null;
-  if (!pending && !data) return null;
+  if (!pending && !data && !error) return null;
   const downloaded = data?.downloaded ?? 0;
   const failed = data?.failed_downloads?.length ?? 0;
   const total = data?.results?.length ?? totalPapers ?? 0;
+  const errorMessage = error instanceof Error ? error.message : error ? String(error) : null;
   return (
     <div className="download-progress-overlay">
     <section className="panel download-progress">
       <div className="panel-heading">
         <div>
           <span>Download</span>
-          <strong>{pending ? `Lädt ${total > 0 ? `0 von ${total} ` : ""}Paper …` : `${downloaded} von ${total} geladen`}</strong>
+          <strong>
+            {errorMessage ? "Download fehlgeschlagen" : pending ? `Lädt ${total > 0 ? `0 von ${total} ` : ""}Paper …` : `${downloaded} von ${total} geladen`}
+          </strong>
         </div>
         <div className="download-progress-meta">
           <span className="muted">Ziel: {scopeLabel}</span>
@@ -786,7 +842,7 @@ function DownloadProgress({
             <Loader2 className="spin" size={18} />
           ) : (
             <>
-              <Status value={failed ? "warning" : "success"} />
+              <Status value={errorMessage ? "error" : failed ? "warning" : "success"} />
               {onDismiss && (
                 <button className="download-progress-dismiss" type="button" onClick={onDismiss} title="Schließen">
                   <X size={15} />
@@ -796,9 +852,19 @@ function DownloadProgress({
           )}
         </div>
       </div>
+      {pending && total > 50 ? (
+        <p className="muted" style={{ fontSize: "0.8rem", margin: "0.2rem 0 0" }}>
+          Große Mengen ({total} Paper) können mehrere Minuten dauern. Seite offen lassen.
+        </p>
+      ) : null}
       {pending ? (
         <div className="download-progress-bar">
           <div className="download-progress-bar-fill" />
+        </div>
+      ) : null}
+      {errorMessage ? (
+        <div className="warning-row" style={{ marginTop: "0.4rem" }}>
+          <strong>Fehler:</strong> {errorMessage}
         </div>
       ) : null}
       {!pending && data ? (
@@ -856,12 +922,14 @@ function CandidateList({
   title,
   candidates,
   onDownload,
-  disabled
+  disabled,
+  onClear
 }: {
   title: string;
   candidates: DiscoveryCandidate[] | ReferenceCandidate[];
   onDownload: (papers: Paper[], downloadPdfs: boolean) => void;
   disabled: boolean;
+  onClear?: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState(false);
@@ -896,22 +964,34 @@ function CandidateList({
           <ChevronDown size={14} className={collapsed ? "topic-group-chevron--collapsed" : "topic-group-chevron"} />
           <strong>{title}</strong>
         </button>
-        {!collapsed && (
-          <div className="button-row">
-            <button className="button" type="button" onClick={selectAll}>
-              Alle
+        <div className="button-row">
+          {!collapsed && (
+            <>
+              <button className="button" type="button" onClick={selectAll}>
+                Alle
+              </button>
+              {candidates.length > 50 && (
+                <span className="muted" style={{ fontSize: "0.75rem", whiteSpace: "nowrap" }}>
+                  <AlertTriangle size={12} style={{ verticalAlign: "middle" }} /> &gt;50 Paper = mehrere Min.
+                </span>
+              )}
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={disabled || !selectedPapers.length}
+                onClick={() => onDownload(selectedPapers, true)}
+              >
+                <Download size={15} />
+                <span>{selectedPapers.length} laden</span>
+              </button>
+            </>
+          )}
+          {onClear && (
+            <button className="button" type="button" title="Vorschläge löschen" onClick={onClear}>
+              <X size={14} />
             </button>
-            <button
-              className="button button-primary"
-              type="button"
-              disabled={disabled || !selectedPapers.length}
-              onClick={() => onDownload(selectedPapers, true)}
-            >
-              <Download size={15} />
-              <span>{selectedPapers.length} laden</span>
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {!collapsed && (
         <div className="paper-grid">

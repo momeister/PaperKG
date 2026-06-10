@@ -19,6 +19,7 @@ import type {
   NoteAiEditResponse,
   NoteAiThread,
   Paper,
+  PaperMeta,
   Project,
   Provider,
   RewriteResponse,
@@ -92,6 +93,7 @@ export const api = {
   getDashboard: (projectId: string) => request<Dashboard>(`/projects/${encodeURIComponent(projectId)}/dashboard`),
   listPapers: (params: Record<string, string | number | boolean | null | undefined> = {}) =>
     request<{ items: Paper[]; total: number; limit: number; offset: number }>("/papers", { query: params }),
+  paperMeta: (paperId: string) => request<PaperMeta>("/paper/meta", { query: { paper_id: paperId } }),
   uploadPdf: (file: File, params: { paper_id?: string; title?: string; project_id?: string }) =>
     request<{ paper: Paper; pdf_path: string; project_id?: string | null; attached?: boolean }>("/papers/upload", {
       method: "POST",
@@ -214,6 +216,8 @@ export const api = {
     answer_context_mode?: "kg" | "pdf_if_fits";
     inline_context_texts?: string[];
     project_id?: string;
+    grey_source_ids?: string[];
+    include_project_grey?: boolean;
   }) =>
     request<Answer>("/query/answer", { method: "POST", body: JSON.stringify(payload) }),
   verifyAnswer: (answer: Answer, options: { max_sources?: number; max_evidence_per_source?: number } = {}) =>
