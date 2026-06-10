@@ -423,14 +423,18 @@ export function AssistantPage() {
   function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "", links: CitationLink[] = [], citationStart?: number) {
     const meta = citationMetaFor(pool, citation, context, links, citationStart);
     if (meta) {
-      setEvidenceOpen(true);
-      selectSource(meta.source, meta.evidenceIndex);
-      setSelectedAnswerQuote({
-        paperId: meta.source.paper_id,
-        evidenceIndex: meta.evidenceIndex,
-        text: cleanAnswerQuote(quote || context)
-      });
+      jumpToCitationMeta(meta, context, quote);
     }
+  }
+
+  function jumpToCitationMeta(meta: CitationMeta, context = "", quote = "") {
+    setEvidenceOpen(true);
+    selectSource(meta.source, meta.evidenceIndex);
+    setSelectedAnswerQuote({
+      paperId: meta.source.paper_id,
+      evidenceIndex: meta.evidenceIndex,
+      text: cleanAnswerQuote(quote || context)
+    });
   }
 
   function updateNotesDraft(value: string) {
@@ -650,6 +654,7 @@ export function AssistantPage() {
                         onCitationClick={(citation, context, quote, citationStart) =>
                           jumpToCitationIn(block.verification, citation, context, quote, block.answer.citation_links ?? [], citationStart)
                         }
+                        onCitationMetaClick={(meta, context, quote) => jumpToCitationMeta(meta, context, quote)}
                         getCitationMeta={(citation, context, citationStart) =>
                           citationMetasFor(block.verification, citation, context, block.answer.citation_links ?? [], citationStart)
                         }
@@ -1619,6 +1624,7 @@ export function formatTurnTime(value: string) {
 export function AnswerText({
   answer,
   onCitationClick,
+  onCitationMetaClick,
   onUnresolvedCitationClick,
   getCitationMeta,
   activeCitation,
@@ -1629,6 +1635,10 @@ export function AnswerText({
   answer: string;
   citationLinks?: CitationLink[];
   onCitationClick: (citation: string, context?: string, quote?: string, citationStart?: number) => void;
+  // Preferred click target: receives the chip's own meta, so a bracket with several
+  // fragment chips (Z3, Z7) jumps to the clicked fragment instead of re-resolving to
+  // the first one.
+  onCitationMetaClick?: (meta: CitationMeta, context?: string, quote?: string) => void;
   onUnresolvedCitationClick?: (citationId: string) => void;
   getCitationMeta: (citation: string, context?: string, citationStart?: number) => CitationMeta[] | CitationMeta | null;
   activeCitation?: { paperId: string; evidenceIndex: number };
@@ -1760,7 +1770,11 @@ export function AnswerText({
                           setPinnedCitation((current) =>
                             current?.key === chipKey ? null : { key: chipKey, paperId: meta.source.paper_id, evidenceIndex: meta.evidenceIndex }
                           );
-                          onCitationClick(meta.source.paper_id, context, quote, partStart);
+                          if (onCitationMetaClick) {
+                            onCitationMetaClick(meta, context, quote);
+                          } else {
+                            onCitationClick(meta.source.paper_id, context, quote, partStart);
+                          }
                         }}
                         onPointerEnter={(event) => showCitationHover(chipKey, label, meta, quote, event)}
                         onPointerLeave={scheduleCitationHoverClose}
@@ -2008,15 +2022,43 @@ export function citationMetasFor(
       continue;
     }
     seen.add(source.paper_id);
-    const link = bestCitationLink(links, candidate, citationStart, context);
-    const linkedIndex = link ? evidenceIndexForCitationLink(source, link, context) : -1;
-    const evidenceIndex = linkedIndex >= 0 ? linkedIndex : bestEvidenceIndex(source, context);
-    metas.push({
-      source,
-      evidenceIndex,
-      evidenceId: source.evidence[evidenceIndex]?.evidence_id,
-      approximate: Boolean(link?.approximate)
-    });
+    // A claim located to several PDF passages ships one link per fragment, all at the
+    // same citation offset — resolve every fragment so each Belegstelle gets a chip.
+    const occurrenceLinks =
+      typeof citationStart === "number"
+        ? links.filter((link) => sameCitation(link.paper_id, candidate) && link.citation_start === citationStart)
+        : [];
+    const resolvedLinks = occurrenceLinks.length
+      ? occurrenceLinks
+      : (() => {
+          const best = bestCitationLink(links, candidate, citationStart, context);
+          return best ? [best] : [];
+        })();
+    const seenIndices = new Set<number>();
+    let resolvedAny = false;
+    for (const link of resolvedLinks) {
+      const linkedIndex = evidenceIndexForCitationLink(source, link, context);
+      if (linkedIndex < 0 || seenIndices.has(linkedIndex)) {
+        continue;
+      }
+      seenIndices.add(linkedIndex);
+      resolvedAny = true;
+      metas.push({
+        source,
+        evidenceIndex: linkedIndex,
+        evidenceId: source.evidence[linkedIndex]?.evidence_id,
+        approximate: Boolean(link.approximate)
+      });
+    }
+    if (!resolvedAny) {
+      const evidenceIndex = bestEvidenceIndex(source, context);
+      metas.push({
+        source,
+        evidenceIndex,
+        evidenceId: source.evidence[evidenceIndex]?.evidence_id,
+        approximate: Boolean(resolvedLinks[0]?.approximate)
+      });
+    }
   }
   return metas;
 }

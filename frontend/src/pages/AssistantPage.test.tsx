@@ -132,6 +132,53 @@ describe("assistant grouped citations", () => {
     expect(container.querySelector(".citation-context-highlight")).toBeNull();
   });
 
+  it("returns one meta per fragment link at the same citation offset", () => {
+    // A claim synthesized from two PDF passages ships two links at the same
+    // citation_start — both Belegstellen must surface as separate chips.
+    const fragmentVerification: VerificationSource[] = [
+      {
+        paper_id: "p1",
+        title: "Fragment Study",
+        pdf_available: true,
+        evidence: [
+          {
+            evidence_id: "ev-frag-a",
+            paper_id: "p1",
+            kind: "pdf",
+            reference_text: "Survival improved while side effects increased.",
+            pdf_excerpt: "The median overall survival was 16.8 months in the treatment group.",
+            matched_terms: [],
+            found_in_pdf_text: true
+          },
+          {
+            evidence_id: "ev-frag-b",
+            paper_id: "p1",
+            kind: "pdf",
+            reference_text: "Survival improved while side effects increased.",
+            pdf_excerpt: "Patients in the treatment group reported more fatigue and headaches.",
+            matched_terms: [],
+            found_in_pdf_text: true
+          }
+        ]
+      }
+    ];
+    const links = [
+      { citation: "p1", citation_start: 48, citation_end: 52, paper_id: "p1", evidence_id: "ev-frag-a" },
+      { citation: "p1", citation_start: 48, citation_end: 52, paper_id: "p1", evidence_id: "ev-frag-b" }
+    ];
+
+    const metas = citationMetasFor(
+      fragmentVerification,
+      "p1",
+      "Survival improved while side effects increased.",
+      links,
+      48
+    );
+
+    expect(metas.map((meta) => meta.evidenceId)).toEqual(["ev-frag-a", "ev-frag-b"]);
+    expect(metas.map((meta) => meta.evidenceIndex)).toEqual([0, 1]);
+  });
+
   it("uses citation links to map repeated paper citations to distinct evidence", () => {
     const repeatedVerification: VerificationSource[] = [
       {

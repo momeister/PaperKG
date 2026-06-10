@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,75 @@ APPROX_REGION_CHARS = 700
 # bare snippets like "prospectively collected and analysed." carry no context. Kept low on
 # purpose: complete sentences (~70+ chars) must stay verbatim, only fragments expand.
 _MIN_EXCERPT_CHARS = 60
+
+# Characters that PDFs and LLM quotes render differently although they mean the same
+# text: typographic quotes/apostrophes, dash variants, soft hyphens, ligatures (the
+# NFKD fallback folds those plus accents). A model that "cleans up" such characters
+# while quoting verbatim must still verify against the PDF text.
+_MATCH_CHAR_EQUIV = {
+    "­": "",  # soft hyphen
+    "‘": "'",
+    "’": "'",
+    "‚": "'",
+    "′": "'",
+    "´": "'",
+    "`": "'",
+    "“": '"',
+    "”": '"',
+    "„": '"',
+    "«": '"',
+    "»": '"',
+    "–": "-",
+    "—": "-",
+    "‐": "-",
+    "‑": "-",
+    "−": "-",
+}
+
+_NORMALIZED_TEXT_CACHE: dict[str, tuple[str, list[int]]] = {}
+
+
+def _normalized_for_match(text: str) -> tuple[str, list[int]]:
+    """Fold text for matching and keep a map from folded indices to original indices."""
+    cached = _NORMALIZED_TEXT_CACHE.get(text) if len(text) > 4096 else None
+    if cached is not None:
+        return cached
+    chars: list[str] = []
+    index_map: list[int] = []
+    for index, original in enumerate(text):
+        replacement = _MATCH_CHAR_EQUIV.get(original)
+        if replacement is None:
+            decomposed = unicodedata.normalize("NFKD", original)
+            replacement = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+        replacement = replacement.lower()
+        for folded in replacement:
+            chars.append(folded)
+            index_map.append(index)
+    result = ("".join(chars), index_map)
+    if len(text) > 4096:
+        if len(_NORMALIZED_TEXT_CACHE) >= 6:
+            _NORMALIZED_TEXT_CACHE.clear()
+        _NORMALIZED_TEXT_CACHE[text] = result
+    return result
+
+
+def _find_normalized(haystack: str, needle: str) -> tuple[int, int] | None:
+    """Unicode-folded substring search; returns (start, length) in the original haystack."""
+    needle_norm, _ = _normalized_for_match(needle)
+    needle_norm = needle_norm.strip()
+    if not needle_norm:
+        return None
+    hay_norm, hay_map = _normalized_for_match(haystack)
+    position = hay_norm.find(needle_norm)
+    if position < 0:
+        return None
+    start = hay_map[position]
+    end = hay_map[position + len(needle_norm) - 1] + 1
+    return start, end - start
+
+
+def _normalized_contains(haystack: str, needle: str) -> bool:
+    return _find_normalized(haystack, needle) is not None
 
 
 @dataclass(frozen=True)
@@ -217,7 +287,9 @@ def _claim_excerpt_location(
     reference = re.sub(r"\s+", " ", str((metadata or {}).get("context") or "")).strip() or excerpt
     reference = _truncate_at_sentence(reference, MAX_REFERENCE_CHARS)
     normalized_pdf = re.sub(r"\s+", " ", pdf_text or "").lower()
-    found = bool(excerpt) and bool(normalized_pdf) and excerpt.lower() in normalized_pdf
+    found = bool(excerpt) and bool(normalized_pdf) and (
+        excerpt.lower() in normalized_pdf or _normalized_contains(normalized_pdf, excerpt)
+    )
     terms = highlightable_terms(excerpt)
     return EvidenceLocation(
         evidence_id=str(evidence.get("evidence_id") or ""),
@@ -502,9 +574,15 @@ def verbatim_excerpt(
     if not clean or len(quote_clean) < 15:
         return ""
     position = clean.lower().find(quote_clean.lower())
+    length = len(quote_clean)
     if position < 0:
-        return ""
-    return _excerpt_around(clean, position, len(quote_clean), max(window_chars, len(quote_clean) + 80))
+        # PDFs and models render ligatures, dash variants, and typographic quotes
+        # differently; fold both sides before declaring the quote a misquote.
+        located = _find_normalized(clean, quote_clean)
+        if located is None:
+            return ""
+        position, length = located
+    return _excerpt_around(clean, position, length, max(window_chars, length + 80))
 
 
 def best_excerpts(
@@ -732,6 +810,11 @@ def _find_longest_substring(text: str, reference: str) -> tuple[int, int] | None
         position = lower.find(chunk)
         if position >= 0:
             return position, len(chunk)
+        # Retry with unicode folding: extraction-time text and the current PDF parse can
+        # disagree on ligatures, dash variants, and typographic quotes only.
+        located = _find_normalized(text, chunk)
+        if located is not None:
+            return located
     return None
 
 

@@ -1436,3 +1436,73 @@ def test_pdf_context_deduplicates_shared_excerpt_across_citations(monkeypatch, t
     assert len(claim_items[0].metadata.get("contexts") or []) == 2
     assert len(answer.citation_links) == 2
     assert {link["evidence_id"] for link in answer.citation_links} == {claim_items[0].evidence_id}
+
+
+class MultiQuotePdfLLMRouter(FakeLLMRouter):
+    # One claim synthesized from TWO separate passages: the model appends both passages
+    # as consecutive {{...}} blocks after the same citation bracket.
+    ANSWER = (
+        "Die Behandlung verlängerte das Überleben, verursachte aber mehr Nebenwirkungen [p1]"
+        "{{The median overall survival was 16.8 months in the treatment group as compared "
+        "with 11.2 months in the placebo group}}"
+        "{{Patients in the treatment group reported more fatigue and headaches than placebo}}."
+    )
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return self.ANSWER
+
+
+def test_pdf_context_links_every_quoted_passage_of_one_citation(monkeypatch, tmp_path) -> None:
+    # Moritz's report: a summary drawing on two PDF passages only ever showed ONE
+    # Belegstelle. Both quoted passages must become evidence AND both must be linked
+    # to the citation (same citation_start, two links).
+    fake_llm = MultiQuotePdfLLMRouter()
+
+    answer = _pdf_context_answer(monkeypatch, tmp_path, fake_llm, _QUOTE_PDF_TEXT)
+
+    assert "{{" not in answer.answer and "}}" not in answer.answer
+    assert answer.context_diagnostics.get("model_quote_verbatim_count") == 2
+    quote_items = [item for item in answer.evidence if item.metadata.get("anchor") == "model_quote"]
+    assert len(quote_items) == 2
+    assert any("16.8 months" in item.text for item in quote_items)
+    assert any("fatigue and headaches" in item.text for item in quote_items)
+
+    assert len(answer.citation_links) == 2
+    assert len({link["citation_start"] for link in answer.citation_links}) == 1
+    assert {link["evidence_id"] for link in answer.citation_links} == {
+        item.evidence_id for item in quote_items
+    }
+
+
+def test_citation_links_flag_zero_overlap_kg_evidence_as_approximate() -> None:
+    # The claim-kind bonus alone used to bind a citation to an unrelated passage with a
+    # confident look — multiple citations then displayed the same wrong excerpt. Links
+    # without any shared term/number must carry the honest `approximate` flag.
+    answer_text = "Quantum entanglement enables teleportation protocols [p1]."
+    unrelated = [
+        Evidence(
+            paper_id="p1",
+            kind="claim",
+            text="Researchers surveyed annotation tooling conventions for biology labs.",
+            score=5.0,
+            evidence_id="ev-unrelated",
+        )
+    ]
+    related = [
+        Evidence(
+            paper_id="p1",
+            kind="claim",
+            text="Quantum entanglement enables teleportation protocols across long distances.",
+            score=5.0,
+            evidence_id="ev-related",
+        )
+    ]
+
+    unrelated_links = _citation_links_for_answer(answer_text, unrelated)
+    related_links = _citation_links_for_answer(answer_text, related)
+
+    assert unrelated_links[0]["evidence_id"] == "ev-unrelated"
+    assert unrelated_links[0].get("approximate") is True
+    assert related_links[0]["evidence_id"] == "ev-related"
+    assert "approximate" not in related_links[0]

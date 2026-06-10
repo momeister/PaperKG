@@ -508,3 +508,36 @@ def test_verify_answer_sources_keeps_fragmenting_non_claim_evidence() -> None:
 
     assert len(locations) >= 2
     assert all(not location.pdf_excerpt for location in locations)
+
+
+def test_verbatim_excerpt_folds_ligatures_smart_quotes_and_dashes() -> None:
+    # PDFs render ligatures (ﬁ), typographic quotes, and dash variants that models
+    # normalize away when copying a quote "verbatim" — the quote must still verify,
+    # and the returned excerpt must keep the PDF's own characters.
+    pdf_text = (
+        "Methods are described elsewhere. Patients reported signiﬁcant beneﬁts in the "
+        "“real-world” cohort — efficacy was maintained over the full follow-up period "
+        "across all participating study sites."
+    )
+    quote = 'Patients reported significant benefits in the "real-world" cohort'
+
+    excerpt = verbatim_excerpt(pdf_text, quote)
+
+    assert excerpt
+    assert "signiﬁcant" in excerpt
+    assert "beneﬁts" in excerpt
+
+
+def test_best_excerpt_matches_despite_unicode_dash_and_ligature_variants() -> None:
+    # Extraction-time evidence text and the current PDF parse can disagree on unicode
+    # variants only; the strict exact-substring tier must still anchor the claim.
+    pdf_text = (
+        "Background text about the study design and its endpoints. The risk–beneﬁt "
+        "profile remained favourable throughout the study period and was confirmed in "
+        "sensitivity analyses. Further unrelated discussion follows here."
+    )
+    reference = "The risk-benefit profile remained favourable throughout the study period"
+
+    excerpt = best_excerpt(pdf_text, reference, strict=True)
+
+    assert "risk–beneﬁt" in excerpt

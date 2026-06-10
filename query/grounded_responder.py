@@ -358,7 +358,9 @@ making claims."""
         ]
         combined_text = "\n\n--- PAPER TEXT ---\n\n".join(sections)
         merged_overrides = {
-            "temperature": 0.1,
+            # Deterministic by default: repeated questions should produce the same
+            # citations and quotes, not a different set per run.
+            "temperature": 0.0,
             "top_p": 0.9,
             "max_tokens": self._answer_max_tokens(provider),
             **(overrides or {}),
@@ -413,13 +415,16 @@ making claims."""
         # must never be treated as citations. Contexts are bracket-agnostic, so the
         # (paper_id, context) keys stay valid across the repair/strip steps below.
         answer_text, model_quotes = _extract_model_quotes(answer_text)
-        quotes_by_context: dict[tuple[str, str], str] = {}
+        quotes_by_context: dict[tuple[str, str], list[str]] = {}
         for match, raw_citation, context in _citation_occurrences(answer_text):
-            quote = model_quotes.get(match.end())
-            if not quote:
+            quotes = model_quotes.get(match.end())
+            if not quotes:
                 continue
             for paper_id_value in _citation_paper_ids(raw_citation, known_ids):
-                quotes_by_context.setdefault((paper_id_value, context), quote)
+                bucket = quotes_by_context.setdefault((paper_id_value, context), [])
+                for quote in quotes:
+                    if quote not in bucket:
+                        bucket.append(quote)
         answer_text = self._repair_invalid_citations(
             response=answer_text,
             prompt=prompt,
@@ -435,19 +440,31 @@ making claims."""
         unique_contexts = _unique_citation_contexts(answer_text, known_ids)
 
         # Reliable path first: verify each model-provided quote character-for-character in
-        # the PDF. Only contexts without a verified quote need the translate-and-fuzzy-match
-        # fallback (which also makes the extra translation LLM call rarer).
-        verbatim_by_pair: dict[tuple[str, str], str] = {}
+        # the PDF (a claim synthesized from several passages ships several {{...}} blocks
+        # and keeps one verified excerpt per passage). Only contexts without any quote need
+        # the translate-and-fuzzy-match fallback (which also makes the extra translation
+        # LLM call rarer).
+        verbatim_by_pair: dict[tuple[str, str], list[str]] = {}
+        unverified_quotes_by_pair: dict[tuple[str, str], list[str]] = {}
+        verified_quote_count = 0
         for paper_id_value, citation_context in unique_contexts:
             located = texts_by_paper_id.get(paper_id_value)
-            quote = quotes_by_context.get((paper_id_value, citation_context))
-            if located is None or not quote:
+            quotes = quotes_by_context.get((paper_id_value, citation_context)) or []
+            if located is None or not quotes:
                 continue
-            excerpt = verbatim_excerpt(located[2], quote)
-            if excerpt:
-                verbatim_by_pair[(paper_id_value, citation_context)] = excerpt
-        if verbatim_by_pair:
-            diagnostics["model_quote_verbatim_count"] = len(verbatim_by_pair)
+            for quote in quotes:
+                excerpt = verbatim_excerpt(located[2], quote)
+                if excerpt:
+                    bucket = verbatim_by_pair.setdefault((paper_id_value, citation_context), [])
+                    if excerpt not in bucket:
+                        bucket.append(excerpt)
+                    verified_quote_count += 1
+                else:
+                    unverified_quotes_by_pair.setdefault(
+                        (paper_id_value, citation_context), []
+                    ).append(quote)
+        if verified_quote_count:
+            diagnostics["model_quote_verbatim_count"] = verified_quote_count
 
         pending_contexts = [
             (paper_id_value, citation_context)
@@ -479,32 +496,42 @@ making claims."""
 
             anchor: str | None = None
             policy = "claim_excerpt"
-            verbatim = verbatim_by_pair.get((paper_id_value, citation_context))
-            if verbatim:
-                excerpts = [verbatim]
+            pair = (paper_id_value, citation_context)
+            quotes = quotes_by_context.get(pair) or []
+            # Verified quotes are the reliable anchors; one excerpt per quoted passage.
+            excerpts = list(verbatim_by_pair.get(pair) or [])
+            if excerpts:
                 anchor = "model_quote"
-            else:
-                # An unverified model quote is still a better (same-language) anchor than
-                # the paraphrased answer sentence.
-                quote = quotes_by_context.get((paper_id_value, citation_context))
-                match_text = quote or translations_by_paper.get(paper_id_value, {}).get(
-                    citation_context, citation_context
-                )
-                # Scattered facts -> several distinct excerpts; adjacent facts -> one longer
-                # merged excerpt (best_excerpts handles both).
-                excerpts = best_excerpts(pdf_text, match_text, max_excerpts=3, strict=True)
-                if excerpts and quote:
-                    anchor = "model_quote_fuzzy"
-                if not excerpts:
-                    # No confident anchor: show one larger approximate region (flagged for
-                    # the UI) rather than nothing or a wrong-looking single sentence.
-                    region = best_excerpt(pdf_text, match_text, window_chars=APPROX_REGION_CHARS)
-                    if not region:
-                        unmatched_claim_contexts += 1
-                        continue
-                    excerpts = [region]
-                    policy = "approx_region"
-                    approx_region_contexts += 1
+            # An unverified (misquoted) model quote is still a better (same-language)
+            # anchor than the paraphrased answer sentence; without any quote, fall back
+            # to the translated claim text. Scattered facts -> several distinct excerpts;
+            # adjacent facts -> one longer merged excerpt (best_excerpts handles both).
+            fuzzy_references = list(unverified_quotes_by_pair.get(pair) or [])
+            if not excerpts and not fuzzy_references:
+                fuzzy_references = [
+                    translations_by_paper.get(paper_id_value, {}).get(
+                        citation_context, citation_context
+                    )
+                ]
+            for fuzzy_reference in fuzzy_references:
+                for excerpt in best_excerpts(pdf_text, fuzzy_reference, max_excerpts=3, strict=True):
+                    _add_distinct_excerpt(excerpts, excerpt)
+            if anchor is None and excerpts and quotes:
+                anchor = "model_quote_fuzzy"
+            excerpts = excerpts[:3]
+            if not excerpts:
+                # No confident anchor: show one larger approximate region (flagged for
+                # the UI) rather than nothing or a wrong-looking single sentence.
+                region_reference = quotes[0] if quotes else translations_by_paper.get(
+                    paper_id_value, {}
+                ).get(citation_context, citation_context)
+                region = best_excerpt(pdf_text, region_reference, window_chars=APPROX_REGION_CHARS)
+                if not region:
+                    unmatched_claim_contexts += 1
+                    continue
+                excerpts = [region]
+                policy = "approx_region"
+                approx_region_contexts += 1
 
             for rank, excerpt in enumerate(excerpts):
                 # The same passage may support several answer sentences: keep ONE evidence
@@ -577,8 +604,10 @@ making claims."""
                 answer.to_dict(),
                 pdf_base_dir=pdf_base_dir,
                 parse_pdfs=True,
-                max_sources=10,
-                max_evidence_per_source=5,
+                max_sources=12,
+                # Multi-fragment claims plus the whole-pdf fallback can exceed the old
+                # cap of 5 per source; unverified leftovers showed as missing evidence.
+                max_evidence_per_source=10,
             ).to_dict()
         except Exception as exc:
             answer.context_diagnostics["source_verification_error"] = str(exc)
@@ -606,7 +635,9 @@ making claims."""
             priority_paper_ids=priority_paper_ids,
         )
         merged_overrides = {
-            "temperature": 0.1,
+            # Deterministic by default: repeated questions should produce the same
+            # citations, not a different set per run.
+            "temperature": 0.0,
             "top_p": 0.9,
             "max_tokens": self._answer_max_tokens(provider),
             **(overrides or {}),
@@ -1114,6 +1145,9 @@ def _build_pdf_context_prompt(
             "(character-for-character, in the PDF's own language) from the PDF context, wrapped in "
             "double curly braces, e.g. [p1]{{exact passage from the PDF}}. Never paraphrase, "
             "translate, or shorten the text inside the braces; it is removed before the answer is shown.",
+            "When one claim combines information from several separate passages, append each passage "
+            "in its own double-brace block directly after the same citation, e.g. "
+            "[p1]{{first passage}}{{second passage}} — do not merge distant passages into one block.",
             "Place each citation marker at the end of the sentence or claim it supports — never before the claim or in the middle of it.",
             "When multiple papers support one claim, cite them together, for example [p1, p2].",
             "Do not copy reference or citation numbers from the source text (superscripts like [17-22] or [26, 29]); cite only the paper IDs shown above.",
@@ -1241,6 +1275,34 @@ def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> li
     for match, raw_citation, context in _citation_occurrences(answer_text):
         for paper_id_value in _citation_paper_ids(raw_citation, known_ids):
             used = used_by_paper.setdefault(paper_id_value, set())
+            # A claim whose facts were located in several PDF passages gets one link per
+            # located fragment, so the UI can offer every Belegstelle — not only the best.
+            exact_items = (
+                [
+                    (index, item)
+                    for index, item in enumerate(evidence)
+                    if _same_paper_id(item.paper_id, paper_id_value)
+                    and context in _evidence_claim_contexts(item)
+                ]
+                if context
+                else []
+            )
+            if exact_items:
+                for exact_index, exact_evidence in exact_items:
+                    used.add(exact_evidence.evidence_id)
+                    links.append(
+                        {
+                            "citation": raw_citation,
+                            "citation_start": match.start(),
+                            "citation_end": match.end(),
+                            "paper_id": paper_id_value,
+                            "evidence_id": exact_evidence.evidence_id,
+                            "evidence_index": exact_index,
+                            "score": round(_CONTEXT_MATCH_SCORE, 4),
+                            "context": context,
+                        }
+                    )
+                continue
             best_index, best_evidence, score = _best_citation_evidence(paper_id_value, context, evidence, used)
             if best_evidence is None:
                 continue
@@ -1256,7 +1318,13 @@ def _citation_links_for_answer(answer_text: str, evidence: list[Evidence]) -> li
                 "context": context,
             }
             link_metadata = best_evidence.metadata if isinstance(best_evidence.metadata, dict) else {}
-            if score < _CONTEXT_MATCH_SCORE and link_metadata.get("context_policy") in ("whole", "claim_excerpt"):
+            if score < _CONTEXT_MATCH_SCORE and (
+                link_metadata.get("context_policy") in ("whole", "claim_excerpt")
+                or not _has_meaningful_overlap(context, best_evidence)
+            ):
+                # Honest flag: this citation could not be tied to a passage that shares
+                # concrete content with its sentence — the UI shows it as approximate
+                # instead of presenting a confident-looking but unrelated excerpt.
                 link["approximate"] = True
             links.append(link)
     return links
@@ -1377,6 +1445,43 @@ def _citation_evidence_score(context: str, evidence: Evidence) -> float:
         if phrase in target_norm:
             score += 8.0
     return score
+
+
+def _has_meaningful_overlap(context: str, evidence: Evidence) -> bool:
+    """True when the cited sentence shares concrete content with the evidence text.
+
+    Used for the honest `approximate` flag: a claim-kind bonus alone can rank an
+    evidence item first without a single shared term, which is how one passage ended
+    up displayed for two or three unrelated citations.
+    """
+    target = _evidence_match_text(evidence)
+    context_norm = _match_normalize(context)
+    target_norm = _match_normalize(target)
+    if not context_norm or not target_norm:
+        return False
+    if context_norm in target_norm or target_norm in context_norm:
+        return True
+    quantitative = _quantitative_tokens(context)
+    if quantitative and any(token in _quantitative_tokens(target) for token in quantitative):
+        return True
+    target_terms = set(_match_terms(target))
+    shared = sum(1 for term in _match_terms(context) if term in target_terms)
+    return shared >= 2
+
+
+def _add_distinct_excerpt(excerpts: list[str], excerpt: str) -> None:
+    """Append an excerpt unless it duplicates (or is contained in) one already kept."""
+    new_norm = re.sub(r"\s+", " ", excerpt or "").strip().lower()
+    if not new_norm:
+        return
+    for index, existing in enumerate(excerpts):
+        existing_norm = re.sub(r"\s+", " ", existing).strip().lower()
+        if new_norm in existing_norm:
+            return
+        if existing_norm in new_norm:
+            excerpts[index] = excerpt
+            return
+    excerpts.append(excerpt)
 
 
 def _evidence_claim_contexts(item: Evidence) -> list[str]:
@@ -1500,20 +1605,22 @@ _SENTENCE_RE = re.compile(r"(?:\[[^\]\n]*\]|[^.!?\n])+[.!?]*")
 _MODEL_QUOTE_RE = re.compile(r"[ \t]*\{\{(.*?)\}\}", re.DOTALL)
 
 
-def _extract_model_quotes(answer_text: str) -> tuple[str, dict[int, str]]:
+def _extract_model_quotes(answer_text: str) -> tuple[str, dict[int, list[str]]]:
     """Strip `{{...}}` quote blocks from the answer and collect their quotes.
 
     The PDF-context prompt asks the model to append, after each citation bracket, the
-    exact passage it used — copied verbatim from the PDF. That removes the guesswork of
-    re-locating a paraphrase: we verify the quote character-for-character and only fall
-    back to fuzzy anchoring when the model misquoted. Returns the cleaned answer plus
-    quotes keyed by the end offset of the citation bracket directly before each block
-    (matching `_citation_occurrences`' match.end() on the cleaned text).
+    exact passage(s) it used — copied verbatim from the PDF. That removes the guesswork
+    of re-locating a paraphrase: we verify each quote character-for-character and only
+    fall back to fuzzy anchoring when the model misquoted. A claim synthesized from
+    several passages ships several consecutive blocks ([p1]{{a}}{{b}}); all of them are
+    collected under the same citation. Returns the cleaned answer plus quote lists keyed
+    by the end offset of the citation bracket directly before each block (matching
+    `_citation_occurrences`' match.end() on the cleaned text).
     """
     text = str(answer_text or "")
     if "{{" not in text:
         return text, {}
-    quotes: dict[int, str] = {}
+    quotes: dict[int, list[str]] = {}
     cleaned_parts: list[str] = []
     last = 0
     for match in _MODEL_QUOTE_RE.finditer(text):
@@ -1521,7 +1628,9 @@ def _extract_model_quotes(answer_text: str) -> tuple[str, dict[int, str]]:
         quote = re.sub(r"\s+", " ", match.group(1)).strip().strip("\"„“«»'").strip()
         before = "".join(cleaned_parts).rstrip()
         if quote and before.endswith("]"):
-            quotes[len(before)] = quote
+            bucket = quotes.setdefault(len(before), [])
+            if quote not in bucket:
+                bucket.append(quote)
         last = match.end()
     cleaned_parts.append(text[last:])
     return "".join(cleaned_parts), quotes

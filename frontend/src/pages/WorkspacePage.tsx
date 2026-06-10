@@ -80,6 +80,7 @@ import {
   turnContext,
   verificationSourcesFor
 } from "./AssistantPage";
+import type { CitationMeta } from "./AssistantPage";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
 
@@ -760,6 +761,10 @@ export function WorkspacePage() {
     }
   }
 
+  function jumpToCitationMeta(meta: CitationMeta, context = "", quote = "") {
+    openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { syncPdfTarget: pdfOpen });
+  }
+
   function handleUnresolvedCitationClick(citationId: string) {
     // Grey source citations from the answer pipeline use "grey::<id>" format
     if (isGreySourcePaperId(citationId)) {
@@ -1436,6 +1441,7 @@ export function WorkspacePage() {
                         onCitationClick={(citation, context, quote, citationStart) =>
                           jumpToCitationIn(block.verification, citation, context, quote, block.answer.citation_links ?? [], citationStart)
                         }
+                        onCitationMetaClick={(meta, context, quote) => jumpToCitationMeta(meta, context, quote)}
                         onUnresolvedCitationClick={handleUnresolvedCitationClick}
                         getCitationMeta={(citation, context, citationStart) =>
                           citationMetasFor(block.verification, citation, context, block.answer.citation_links ?? [], citationStart)

@@ -45,6 +45,56 @@ describe("PdfPane matching", () => {
     expect(match?.boxes[0].top).toBeLessThan(120);
   });
 
+  it("marks every matching sentence chunk of a long excerpt, not only the best one", () => {
+    // A multi-sentence excerpt rarely matches the page text as one phrase; its sentence
+    // chunks do. The union of all chunk matches must be highlighted — previously only
+    // the single best chunk was marked, so part of the passage stayed unmarked.
+    const sentenceA = "The median overall survival was 16.8 months in the treatment group.";
+    const sentenceB = "Patients in the treatment group reported more fatigue and headaches than placebo.";
+    const match = findPageMatch(
+      [
+        textItem(sentenceA, 10, 100, 480),
+        textItem("Unrelated filler text between the two passages keeps them apart on the page.", 10, 130, 480),
+        textItem(sentenceB, 10, 160, 540)
+      ],
+      {
+        phrases: [`${sentenceA} ${sentenceB}`, sentenceA, sentenceB],
+        terms: []
+      },
+      viewport,
+      0,
+      0
+    );
+
+    expect(match?.exact).toBe(true);
+    expect(match?.matchedText).toContain("16.8 months");
+    expect(match?.matchedText).toContain("fatigue and headaches");
+    const rowTops = new Set(match?.boxes.map((box) => Math.round(box.top / 10)));
+    expect(rowTops.size).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not treat one short chunk of a long excerpt as a confident match", () => {
+    // "exact" gates early scrolling and cross-page highlights: a stray short chunk on
+    // another page must not pass as the passage itself.
+    const longExcerpt =
+      "The trial enrolled four hundred patients across twelve centers and randomized them " +
+      "to treatment or placebo for eighteen months under blinded conditions, with more " +
+      "fatigue and headaches reported in the treatment group during routine follow-up.";
+    const match = findPageMatch(
+      [textItem("Background mentions more fatigue and headaches in passing here.", 10, 100, 420)],
+      {
+        phrases: [longExcerpt, "more fatigue and headaches"],
+        terms: []
+      },
+      viewport,
+      0,
+      0
+    );
+
+    expect(match).not.toBeNull();
+    expect(match?.exact).toBe(false);
+  });
+
   it("uses compact term windows and rejects terms spread across a broad page", () => {
     const compact = findPageMatch(
       [textItem("Alert fatigue requires classification thresholds that protect sensitivity in clinical deployment.", 10, 100, 560)],

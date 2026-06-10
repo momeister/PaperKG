@@ -104,6 +104,7 @@ export function PdfPane({
   const [error, setError] = useState<string>("");
   const [sourceMeta, setSourceMeta] = useState<PaperMeta | null>(null);
   const [matches, setMatches] = useState<MatchIndex>({});
+  const [scannedPages, setScannedPages] = useState<Record<string, Record<number, true>>>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [viewportWidth, setViewportWidth] = useState(720);
   const [zoom, setZoom] = useState(1);
@@ -112,6 +113,7 @@ export function PdfPane({
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const resizeFrameRef = useRef<number | null>(null);
+  const lastJumpKeyRef = useRef<string>("");
 
   // When there is no local PDF, fetch the cited paper's metadata so the user can still
   // read the abstract and open the original source for verification.
@@ -185,9 +187,14 @@ export function PdfPane({
   const evidencePages = pagesFor(matches[activeEvidenceIndex], highlightQuerySignature(activeQuery));
   const evidenceTargetPage = showingSearch ? activeMatch?.pageNumber ?? null : evidenceMatch?.pageNumber ?? null;
   const activeEvidenceText = showingSearch ? activeMatch?.matchedText ?? "" : evidenceMatch?.matchedText ?? "";
+  // Pages report in asynchronously; until every page was scanned for the current query
+  // the "best" match keeps changing — gate scrolling and "not found" messages on this.
+  const activeScanKey = `${visibleHighlightIndex}|${visibleQuerySignature}`;
+  const scanComplete = pageCount > 0 && Object.keys(scannedPages[activeScanKey] ?? {}).length >= pageCount;
 
   useEffect(() => {
     setMatches({});
+    setScannedPages({});
   }, [evidenceSignature, searchTerm, url]);
 
   useEffect(() => {
@@ -220,12 +227,31 @@ export function PdfPane({
 
   useEffect(() => {
     const targetPage = activeMatch?.pageNumber;
-    if (targetPage) {
-      jumpToPage(targetPage, "center", topmostHighlightTop(activeMatch?.boxes));
+    if (!targetPage) {
+      return;
     }
-  }, [activeEvidenceIndex, activeMatch?.pageNumber, showingSearch]);
+    // Jump once per query: either as soon as a confident (exact) match appears, or after
+    // every page reported in. Jumping on every interim "best" match made the view hop
+    // between pages while the document was still being scanned.
+    if (!scanComplete && !activeMatch?.exact) {
+      return;
+    }
+    const jumpKey = `${url ?? ""}|${activeScanKey}|${targetPage}`;
+    if (lastJumpKeyRef.current === jumpKey) {
+      return;
+    }
+    lastJumpKeyRef.current = jumpKey;
+    jumpToPage(targetPage, "center", topmostHighlightTop(activeMatch?.boxes));
+  }, [activeEvidenceIndex, activeMatch?.pageNumber, activeMatch?.exact, scanComplete, activeScanKey, showingSearch, url]);
 
   const updateMatch = useCallback((evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => {
+    setScannedPages((current) => {
+      const key = `${evidenceIndex}|${querySignature}`;
+      if (current[key]?.[pageNumber]) {
+        return current;
+      }
+      return { ...current, [key]: { ...(current[key] ?? {}), [pageNumber]: true as const } };
+    });
     setMatches((current) => {
       const existing = { ...(current[evidenceIndex] ?? {}) };
       const previous = existing[pageNumber];
@@ -344,7 +370,17 @@ export function PdfPane({
           <button className="icon-button" type="button" aria-label="Nächste Zitation" onClick={() => stepEvidence(1)}>
             <ChevronRight size={18} />
           </button>
-          <span>{evidenceMatch ? `Seite ${evidenceMatch.pageNumber}` : evidencePages.length ? `Seite ${evidencePages[0]}` : "keine Textstelle gefunden"}</span>
+          <span>
+            {evidenceMatch
+              ? `Seite ${evidenceMatch.pageNumber}`
+              : evidencePages.length
+                ? `Seite ${evidencePages[0]}`
+                : showingSearch
+                  ? ""
+                  : url && document && !scanComplete
+                    ? "suche Textstelle…"
+                    : "keine Textstelle gefunden"}
+          </span>
         </div>
       ) : null}
 
@@ -448,7 +484,12 @@ export function PdfPane({
       {activeEvidence ? (
         <div className="excerpt-panel" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
           <span>Aktive Textstelle</span>
-          <p>{activeEvidenceText || "Keine Textstelle gefunden."}</p>
+          <p>
+            {activeEvidenceText ||
+              (url && document && !scanComplete
+                ? "Suche Textstelle…"
+                : activeEvidence?.pdf_excerpt || "Keine Textstelle gefunden.")}
+          </p>
         </div>
       ) : null}
     </aside>
@@ -565,7 +606,10 @@ function PdfPage({
 
       const match = findPageMatch(textContent.items, evidenceQuery, viewport, activeEvidenceIndex, evidenceColorIndex);
       onMatch(activeEvidenceIndex, pageNumber, querySignature, match);
-      setBoxes(targetPage === pageNumber ? match?.boxes ?? [] : []);
+      // Confident (exact) matches render on every page they appear on — an excerpt that
+      // crosses a page boundary stays fully marked; weak term-window matches render only
+      // on the single best page to avoid scattering noise across the document.
+      setBoxes(match && (targetPage === pageNumber || match.exact) ? match.boxes : []);
     }
 
     renderPage();
@@ -668,33 +712,67 @@ function bestPhraseMatch(
   evidenceIndex: number,
   colorIndex = evidenceIndex
 ): Omit<PageMatch, "pageNumber" | "querySignature"> | null {
-  let best: Omit<PageMatch, "pageNumber" | "querySignature"> | null = null;
+  // Union matching: a multi-sentence excerpt rarely matches the page text as ONE phrase
+  // (hyphenation/line breaks split it), but its sentence chunks do. Highlighting only the
+  // single best chunk marked just part of the passage — collect every matching phrase
+  // span and mark them all.
+  type PhraseSpan = { start: number; end: number; text: string };
+  const spans: PhraseSpan[] = [];
+  let longestPhraseLength = 0;
   for (const phrase of phrases) {
     const normalizedPhrase = normalizeText(phrase);
     if (!normalizedPhrase) {
       continue;
     }
+    longestPhraseLength = Math.max(longestPhraseLength, normalizedPhrase.length);
     let position = pageText.indexOf(normalizedPhrase);
     while (position >= 0) {
       const end = position + normalizedPhrase.length;
-      if (textRangeHasBoundary(pageText, position, end)) {
-        const boxes = normalizeHighlightBoxes(boxesForTextRange(items, position, end, viewport, evidenceIndex, colorIndex)).slice(0, 18);
-        if (boxes.length) {
-          const candidate = {
-            score: 10000 + normalizedPhrase.length * 2 - boxes.length,
-            exact: true,
-            matchedText: compactText(phrase),
-            boxes
-          };
-          if (!best || candidate.score > best.score) {
-            best = candidate;
-          }
-        }
+      if (
+        textRangeHasBoundary(pageText, position, end) &&
+        // Sub-phrases of an already covered span add nothing (phrases arrive longest-first).
+        !spans.some((span) => position >= span.start && end <= span.end)
+      ) {
+        spans.push({ start: position, end, text: compactText(phrase) });
       }
       position = pageText.indexOf(normalizedPhrase, end);
     }
   }
-  return best;
+  if (!spans.length) {
+    return null;
+  }
+
+  spans.sort((left, right) => left.start - right.start || right.end - left.end);
+  const merged: PhraseSpan[] = [];
+  for (const span of spans) {
+    const previous = merged[merged.length - 1];
+    if (previous && span.start <= previous.end + 1) {
+      if (span.end > previous.end) {
+        previous.text = `${previous.text} ${span.text}`;
+        previous.end = span.end;
+      }
+      continue;
+    }
+    merged.push({ ...span });
+  }
+
+  const boxes = normalizeHighlightBoxes(
+    merged.flatMap((span) => boxesForTextRange(items, span.start, span.end, viewport, evidenceIndex, colorIndex))
+  ).slice(0, 36);
+  if (!boxes.length) {
+    return null;
+  }
+  const coveredLength = merged.reduce((sum, span) => sum + (span.end - span.start), 0);
+  // "exact" gates early scrolling and cross-page rendering: require the match to cover a
+  // meaningful share of the queried passage so a stray short chunk on another page does
+  // not count as the passage itself.
+  const exact = coveredLength >= Math.min(200, Math.max(40, Math.round(longestPhraseLength * 0.55)));
+  return {
+    score: (exact ? 10000 : 5000) + coveredLength * 2 - boxes.length,
+    exact,
+    matchedText: merged.map((span) => span.text).join(" … "),
+    boxes
+  };
 }
 
 function bestTermWindowMatch(
@@ -899,10 +977,12 @@ function buildHighlightQuery(evidence: VerificationEvidence): HighlightQuery {
   const excerpt = compactText(evidence.pdf_excerpt);
   const reference = compactText(evidence.reference_text);
   const referenceTerms = extractTerms(`${excerpt} ${reference}`);
-  const phrases = [...extractPhrases(excerpt, 180), ...extractPhrases(reference, 160)].slice(0, 5);
+  // Allow the FULL excerpt as a phrase (excerpts are typically 260–700 chars; the old
+  // 180-char cap silently dropped it, so only one sentence chunk ended up highlighted).
+  const phrases = [...extractPhrases(excerpt, 800), ...extractPhrases(reference, 160)].slice(0, 9);
   const terms = extractTerms(`${explicit.join(" ")} ${excerpt} ${reference}`).filter(isAnchorTerm);
   return {
-    phrases: Array.from(new Set(phrases)).slice(0, 4),
+    phrases: Array.from(new Set(phrases)).slice(0, 8),
     terms: Array.from(new Set([...explicit, ...referenceTerms, ...terms])).filter(isAnchorTerm).slice(0, 18)
   };
 }
