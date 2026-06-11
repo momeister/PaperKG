@@ -1101,6 +1101,9 @@ def _build_grounded_prompt(
             "have different supporting sources. Before adding a second ID to a bracket, check that "
             "this second paper's evidence really contains the same statement — if you are unsure, "
             "cite only the single best-supporting paper for that sentence.",
+            "However, when a sentence combines findings that no single source fully covers, cite "
+            "every source whose evidence is required, together in one bracket, so the citations "
+            "fully support the sentence on their own.",
             "Use only paper IDs shown in the evidence as citations; never cite evidence item numbers like [1] or [4].",
             "Do not copy reference or citation numbers from the source text (superscripts like [17-22] or [26, 29]); cite only the paper IDs shown above.",
             "When quantitative findings or metrics are present, include the most important numbers.",

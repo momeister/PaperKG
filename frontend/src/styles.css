@@ -5752,3 +5752,135 @@ button.data-row {
 .grey-source-header .grey-source-toggle {
   flex: 1;
 }
+
+/* === Workspace-Fixes (Juni 2026): Scroll, Scope-Buttons, Navigator-Aktionen, unbelegte Aussagen === */
+
+/* Die Workspace-Seite scrollt nur in ihren Spalten, nie als ganze Seite. */
+.workspace:has(.workspace-page) {
+  height: 100vh;
+  overflow: hidden;
+  grid-template-rows: 64px minmax(0, 1fr);
+}
+
+/* Scope-Segmente (Dieses/Auswahl/Alle und Projekt/+ Global) kompakt und gleich gross. */
+.workspace-scope-segment button {
+  flex: 0 1 auto;
+  min-height: 26px;
+  padding: 4px 9px;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+/* Web-Recherche-Panel: eigener Scrollbereich statt abgeschnittener Treffer. */
+.workspace-assistant-pane > .web-research-panel {
+  flex: 0 1 auto;
+  min-height: 110px;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+/* Aussagen ohne Quellenangabe werden gestrichelt unterstrichen. */
+.uncited-sentence {
+  text-decoration: underline dashed rgba(187, 121, 16, 0.85);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+/* Navigator: Zeilen mit Hover-Aktionen (Hauptquelle, Entfernen, Loeschen). */
+.workspace-paper-row.workspace-nav-actionable-row {
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+}
+
+.workspace-row-actions {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-row-actions .icon-button {
+  opacity: 0;
+  transition: opacity 0.12s;
+  padding: 3px 4px;
+  color: var(--muted);
+}
+
+.workspace-nav-actionable-row:hover .workspace-row-actions .icon-button,
+.workspace-nav-actionable-row:focus-within .workspace-row-actions .icon-button,
+.workspace-nav-actionable-row:hover > .nav-delete-btn,
+.workspace-nav-actionable-row:focus-within > .nav-delete-btn {
+  opacity: 1;
+}
+
+.workspace-row-actions .nav-delete-btn:hover {
+  color: #dc2626;
+}
+
+.workspace-row-actions .nav-action-btn:hover,
+.workspace-row-actions .icon-button--active {
+  color: #b88705;
+  opacity: 1;
+}
+
+/* Notizquellen-Zeile: klickbarer Rumpf + Loeschen-Knopf nebeneinander. */
+.note-citation-row.workspace-nav-actionable-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.note-citation-row__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.note-citation-row__body span:not(.citation-badge) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-citation-row.workspace-nav-actionable-row > .nav-delete-btn {
+  opacity: 0;
+}
+
+/* Einklappbare Abschnitts-Ueberschriften im Navigator. */
+.workspace-nav-subheading--toggle {
+  justify-content: flex-start;
+  gap: 7px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 8px 0 4px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.workspace-nav-subheading--toggle:hover span {
+  color: var(--ink);
+}
+
+.workspace-nav-subheading--toggle svg {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.workspace-nav-subheading--toggle strong {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 7px;
+  min-width: 22px;
+  text-align: center;
+}

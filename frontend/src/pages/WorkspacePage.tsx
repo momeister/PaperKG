@@ -115,10 +115,11 @@ export type WorkspaceCommandDef = {
 
 /** Claude-Code-Stil: alles, was sonst in anderen Tabs passiert, ist hier als Slash-Befehl erreichbar. */
 export const WORKSPACE_COMMANDS: WorkspaceCommandDef[] = [
-  { name: "web", description: "Web-Recherche für diese Frage aktivieren (überall im Text erkannt)", group: "frage" },
-  { name: "new", aliases: ["neu"], description: "Neues Gespräch starten", group: "frage" },
-  { name: "selected", aliases: ["auswahl"], description: "Auf ausgewählte Quellen eingrenzen", group: "frage" },
-  { name: "alle", aliases: ["all"], description: "Auf alle Quellen des Projekts erweitern", group: "frage" },
+  { name: "web", description: "Web-Recherche parallel zur Frage (Treffer manuell übernehmen)", group: "frage" },
+  { name: "webfrage", aliases: ["webanswer"], args: "<frage>", description: "Web-Recherche + Antwort direkt aus den Treffern (speichert Grauquellen)", group: "frage" },
+  { name: "new", aliases: ["neu"], args: "[frage]", description: "Neues Gespräch — mit Frage: sofort stellen; Weiterfragen bleibt an", group: "frage" },
+  { name: "selected", aliases: ["auswahl"], args: "[frage]", description: "Auf ausgewählte Quellen eingrenzen", group: "frage" },
+  { name: "alle", aliases: ["all"], args: "[frage]", description: "Auf alle Quellen des Projekts erweitern", group: "frage" },
   { name: "summary", args: "[fokus]", description: "Zusammenfassung des aktuellen Papers", group: "frage" },
   { name: "extract", args: "[fokus]", description: "Methoden, Ergebnisse & Schlussfolgerungen", group: "frage" },
   { name: "compare", args: "[fokus]", description: "Papers vergleichen", group: "frage" },
@@ -126,6 +127,8 @@ export const WORKSPACE_COMMANDS: WorkspaceCommandDef[] = [
   { name: "notiz", args: "[titel]", description: "Neue Notiz anlegen", group: "aktion" },
   { name: "suche", aliases: ["papers", "import"], args: "<thema>", description: "Neue Papers suchen & herunterladen (arXiv)", group: "aktion" },
   { name: "extraktion", description: "Extraktion für aktuelles/ausgewählte Paper starten", group: "aktion" },
+  { name: "hauptquelle", description: "Aktuell geöffnetes Paper als Hauptquelle setzen/entfernen", group: "aktion" },
+  { name: "entfernen", aliases: ["loeschen"], description: "Aktuell geöffnetes Paper bzw. Grauquelle aus dem Projekt entfernen", group: "aktion" },
   { name: "help", aliases: ["hilfe"], description: "Befehlsübersicht anzeigen", group: "frage" }
 ];
 
@@ -231,6 +234,9 @@ export function WorkspacePage() {
   const [evidenceMode, setEvidenceMode] = useState("auto");
   const [verbosity, setVerbosity] = useState<"kurz" | "standard" | "ausführlich">("standard");
   const [conversationMode, setConversationMode] = useState<"followup" | "new">("followup");
+  // One-shot flag from "/new" without question: the next question starts a fresh
+  // session, but the Weiterfragen mode itself stays untouched.
+  const [nextTurnIsNew, setNextTurnIsNew] = useState(false);
   const [paperScope, setPaperScope] = useState<PaperQuestionScope>("all");
   const [includeGlobalSources, setIncludeGlobalSources] = useState(false);
   const [assistantMode, setAssistantMode] = useState<WorkspaceAssistantMode>("pdf");
@@ -297,57 +303,75 @@ export function WorkspacePage() {
   const primaryPaperId = projectsQuery.data?.projects.find((entry) => entry.id === activeProject)?.primary_paper_id ?? null;
   const greySources = greyQuery.data?.grey_sources ?? [];
 
-  const currentScopePaperId = activeScopePaperId(pdfTarget, selectedSource);
-  const currentScopeIsGrey = paperScope === "current" && pdfTarget?.kind === "grey";
-  const projectOnlyScope = paperScope === "all" && isRealProject && !includeGlobalSources;
-  const scopedPaperIds =
-    paperScope === "all"
-      ? projectOnlyScope
-        ? projectPaperIds
-        : []
-      : paperScope === "selected"
-        ? selectedPaperIds
-        : currentScopePaperId
-          ? [currentScopePaperId]
+  /**
+   * Scope derivation lives in a function (not render-time consts) so a slash command
+   * such as "/summary fokus" can switch the scope and ask in the same Enter — the
+   * request is built from the command's scope, not the stale render state.
+   */
+  function deriveScope(scope: PaperQuestionScope) {
+    const currentId = activeScopePaperId(pdfTarget, selectedSource);
+    const currentIsGrey = scope === "current" && pdfTarget?.kind === "grey";
+    const projectOnly = scope === "all" && isRealProject && !includeGlobalSources;
+    const papers =
+      scope === "all"
+        ? projectOnly
+          ? projectPaperIds
+          : []
+        : scope === "selected"
+          ? selectedPaperIds
+          : currentId
+            ? [currentId]
+            : [];
+    // Selected grey sources are sent by ID so the backend injects them as real grey::
+    // sources (grey chips, Belegstellen, GreySourceView) instead of an anonymous
+    // "Inline-Kontext" blob without text locations.
+    const greyIds =
+      currentIsGrey && pdfTarget?.kind === "grey"
+        ? [pdfTarget.source.id]
+        : scope === "selected" && selectedGreyIds.length
+          ? selectedGreyIds
           : [];
-  const questionBlockedByScope =
-    (paperScope === "selected" && !selectedPaperIds.length && !selectedGreyIds.length) ||
-    (paperScope === "current" && !currentScopePaperId && !currentScopeIsGrey);
+    return {
+      currentScopePaperId: currentId,
+      currentScopeIsGrey: currentIsGrey,
+      projectOnlyScope: projectOnly,
+      scopedPaperIds: papers,
+      greySourceIds: greyIds,
+      blocked:
+        (scope === "selected" && !selectedPaperIds.length && !selectedGreyIds.length) ||
+        (scope === "current" && !currentId && !currentIsGrey),
+      answerContextMode: (scope === "current" && currentId ? "pdf_if_fits" : "kg") as "kg" | "pdf_if_fits"
+    };
+  }
 
-  const answerContextMode: "kg" | "pdf_if_fits" =
-    paperScope === "current" && currentScopePaperId ? "pdf_if_fits" : "kg";
+  const scopeInfo = deriveScope(paperScope);
+  const { currentScopePaperId, currentScopeIsGrey } = scopeInfo;
+  const questionBlockedByScope = scopeInfo.blocked;
 
-  // Selected grey sources are sent by ID so the backend injects them as real grey::
-  // sources (grey chips, Belegstellen, GreySourceView) instead of an anonymous
-  // "Inline-Kontext" blob without text locations.
-  const greySourceIds: string[] = (() => {
-    if (currentScopeIsGrey && pdfTarget?.kind === "grey") {
-      return [pdfTarget.source.id];
-    }
-    if (paperScope === "selected" && selectedGreyIds.length) {
-      return selectedGreyIds;
-    }
-    return [];
-  })();
+  type AskVariables = { value: string; scope: PaperQuestionScope; newTurn: boolean; extraGreyIds?: string[] };
 
   const answerMutation = useMutation({
-    mutationFn: (value: string) =>
-      api.answer({
-        question: value,
+    mutationFn: (vars: AskVariables) => {
+      const info = deriveScope(vars.scope);
+      const greyIds = Array.from(new Set([...info.greySourceIds, ...(vars.extraGreyIds ?? [])]));
+      return api.answer({
+        question: vars.value,
         provider,
         model,
-        limit: answerLimitFor(value, evidenceMode, paperScope === "all" ? 0 : Math.max(1, scopedPaperIds.length + (greySourceIds.length ? 1 : 0))),
-        // "__none__" keeps an empty project honest: no papers means no global fallback.
-        paper_ids: scopedPaperIds.length ? scopedPaperIds : projectOnlyScope ? ["__none__"] : undefined,
+        limit: answerLimitFor(vars.value, evidenceMode, vars.scope === "all" ? 0 : Math.max(1, info.scopedPaperIds.length + (greyIds.length ? 1 : 0))),
+        // "__none__" keeps the scope honest: without scoped papers the backend must not
+        // fall back to the global KG — also when only grey sources are in scope.
+        paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : info.projectOnlyScope || greyIds.length ? ["__none__"] : undefined,
         priority_paper_ids: primaryPaperId ? [primaryPaperId] : undefined,
-        answer_context_mode: answerContextMode !== "kg" ? answerContextMode : undefined,
-        grey_source_ids: greySourceIds.length ? greySourceIds : undefined,
-        include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
-        conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined,
+        answer_context_mode: info.answerContextMode !== "kg" ? info.answerContextMode : undefined,
+        grey_source_ids: greyIds.length ? greyIds : undefined,
+        include_project_grey: vars.scope === "all" && isRealProject ? true : undefined,
+        conversation_context: conversationMode === "followup" && !vars.newTurn && activeTurn ? turnContext(activeTurn) : undefined,
         project_id: activeProject || undefined,
         llm_overrides: Object.values(llmParams).some((value) => value !== undefined) ? llmParams : undefined
-      }),
-    onSuccess: async (payload) => {
+      });
+    },
+    onSuccess: async (payload, vars) => {
       let sources: VerificationSource[] = [];
       try {
         sources = await verificationSourcesFor(payload);
@@ -361,7 +385,7 @@ export function WorkspacePage() {
         verification: sources,
         createdAt: new Date().toISOString()
       };
-      if (conversationMode === "followup" && activeTurn) {
+      if (conversationMode === "followup" && !vars.newTurn && activeTurn) {
         const turnId = activeTurn.id;
         setHistory((current) =>
           current.map((turn) => {
@@ -518,6 +542,74 @@ export function WorkspacePage() {
     onError: (error) => logAction("Notiz anlegen fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
   });
 
+  const removePaperMutation = useMutation({
+    mutationFn: (paperId: string) => api.removeProjectPaper(activeProject as string, paperId),
+    onSuccess: (_, paperId) => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-pdfs", activeProject] });
+      queryClient.invalidateQueries({ queryKey: ["workspace-project-paper-ids", activeProject] });
+      queryClient.invalidateQueries({ queryKey: ["papers"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setSelectedPaperIds((current) => current.filter((id) => id !== paperId));
+      setPdfTarget((current) => (current?.kind === "paper" && workspacePaperId(current.paper) === paperId ? null : current));
+      logAction("Paper entfernt", `${paperId} aus dem Projekt entfernt (bleibt in der Bibliothek).`);
+    },
+    onError: (error) => logAction("Paper entfernen fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  const deleteGreyMutation = useMutation({
+    mutationFn: (greyId: string) => api.deleteGreySource(greyId),
+    onSuccess: (_, greyId) => {
+      queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+      setSelectedGreyIds((current) => current.filter((id) => id !== greyId));
+      setPdfTarget((current) => (current?.kind === "grey" && current.source.id === greyId ? null : current));
+      logAction("Grauquelle gelöscht", greyId);
+    },
+    onError: (error) => logAction("Grauquelle löschen fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  const setPrimaryMutation = useMutation({
+    mutationFn: (paperId: string | null) => api.setPrimaryPaper(activeProject as string, paperId),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      logAction("Hauptquelle", result.primary_paper_id ? `„${result.primary_paper_id}" ist jetzt Hauptquelle.` : "Hauptquelle entfernt.");
+    },
+    onError: (error) => logAction("Hauptquelle fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  const deleteCitationMutation = useMutation({
+    mutationFn: ({ noteId, citationId }: { noteId: string; citationId: string }) => api.deleteNoteCitation(noteId, citationId),
+    onSuccess: (_, { noteId }) => {
+      queryClient.invalidateQueries({ queryKey: ["note", noteId] });
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      logAction("Notizquelle gelöscht", "Der Zitat-Eintrag wurde entfernt; der Notiztext bleibt unverändert.");
+    },
+    onError: (error) => logAction("Notizquelle löschen fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  /** "/webfrage": research the web, persist findings as grey sources, then answer from them. */
+  async function runWebAnswerCommand(value: string) {
+    const actionId = logAction("Web-Antwort", `Recherchiere im Web zu „${value}" …`, "pending");
+    try {
+      const research = await api.deepResearch({ question: value, provider });
+      const findings = research.findings.slice(0, 8);
+      if (!findings.length) {
+        updateAction(actionId, { status: "error", detail: "Keine Web-Treffer gefunden." });
+        return;
+      }
+      const saved = await api.addGreySources(activeProject as string, findings.map(findingToGreyRecord), research.question);
+      queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+      const ids = saved.saved.map((source) => source.id).filter(Boolean);
+      updateAction(actionId, { detail: `${ids.length} Grauquellen gespeichert — beantworte die Frage …` });
+      answerMutation.mutate(
+        { value: value + verbosityInstruction(verbosity), scope: paperScope, newTurn: nextTurnIsNew, extraGreyIds: ids },
+        { onSettled: () => updateAction(actionId, { status: "ok", detail: `${ids.length} Grauquellen gespeichert und in der Antwort verwendet.` }) }
+      );
+      setNextTurnIsNew(false);
+    } catch (error) {
+      updateAction(actionId, { status: "error", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   function runExtractionCommand() {
     const targets = paperScope === "selected" && selectedPaperIds.length ? selectedPaperIds : currentScopePaperId ? [currentScopePaperId] : [];
     if (!targets.length) {
@@ -625,6 +717,7 @@ export function WorkspacePage() {
     setFocusedNoteThreadId("");
     setActionLog([]);
     setCommandSearch(null);
+    setNextTurnIsNew(false);
     setWebOfferDismissedFor("");
     setChatSettingsOpen(false);
     setActionsMenuOpen(false);
@@ -883,85 +976,162 @@ export function WorkspacePage() {
     }
   }
 
-  function handleSlashCommand(raw: string): boolean {
+  type SlashCommandResult = { handled: boolean; ask?: string; scope?: PaperQuestionScope; newTurn?: boolean };
+
+  function handleSlashCommand(raw: string): SlashCommandResult {
     const match = raw.match(/^\/([\wäöüß]+)\s*([\s\S]*)$/i);
     if (!match) {
-      return false;
+      return { handled: false };
     }
     const [, name, rest] = match;
     const remainder = rest.trim();
     switch (name.toLowerCase()) {
       case "new":
       case "neu":
-        setConversationMode("new");
-        setQuestion(remainder);
-        return true;
+        // One-shot: only this (or the next) question starts a new session — the
+        // Weiterfragen mode stays active for everything afterwards.
+        if (remainder) {
+          return { handled: true, ask: remainder, newTurn: true };
+        }
+        setNextTurnIsNew(true);
+        setQuestion("");
+        logAction("Neues Gespräch", "Die nächste Frage startet eine neue Session — Weiterfragen bleibt aktiv.");
+        return { handled: true };
       case "selected":
       case "auswahl":
-        setQuestion(remainder);
         setPaperScope("selected");
         if (!selectedPaperIds.length && !selectedGreyIds.length) {
+          setQuestion(remainder);
           openMentionPicker();
+          return { handled: true };
         }
-        return true;
+        if (remainder) {
+          return { handled: true, ask: remainder, scope: "selected" };
+        }
+        setQuestion("");
+        return { handled: true };
       case "alle":
       case "all":
         setPaperScope("all");
-        setQuestion(remainder);
-        return true;
+        if (remainder) {
+          return { handled: true, ask: remainder, scope: "all" };
+        }
+        setQuestion("");
+        return { handled: true };
       case "help":
       case "hilfe":
         setShowCommandHelp(true);
         setQuestion(remainder);
-        return true;
+        return { handled: true };
       case "web":
         setUseInternet((v) => !v);
         setQuestion(remainder);
-        return true;
+        return { handled: true };
+      case "webfrage":
+      case "webanswer":
+        if (!remainder) {
+          logAction("Web-Antwort", "Frage fehlt — /webfrage <Frage> verwenden.", "error");
+          return { handled: true };
+        }
+        if (!isRealProject) {
+          logAction("Web-Antwort", "Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).", "error");
+          return { handled: true };
+        }
+        setQuestion("");
+        void runWebAnswerCommand(remainder);
+        return { handled: true };
       case "summary":
         // Paper-targeted commands pin the scope to the current paper; without an open
-        // paper the send button stays blocked ("Kein aktives Paper") instead of silently
+        // paper the question is rejected ("Kein aktives Paper") instead of silently
         // answering from the global KG.
         setPaperScope("current");
-        setQuestion("Fasse die wichtigsten Erkenntnisse des aktuellen Papers zusammen." + (remainder ? ` ${remainder}` : ""));
-        return true;
+        return { handled: true, ask: "Fasse die wichtigsten Erkenntnisse des aktuellen Papers zusammen." + (remainder ? ` ${remainder}` : ""), scope: "current" };
       case "extract":
         setPaperScope("current");
-        setQuestion("Extrahiere Methoden, Ergebnisse und Schlussfolgerungen." + (remainder ? ` ${remainder}` : ""));
-        return true;
+        return { handled: true, ask: "Extrahiere Methoden, Ergebnisse und Schlussfolgerungen." + (remainder ? ` ${remainder}` : ""), scope: "current" };
       case "compare":
         setPaperScope("all");
-        setQuestion("Vergleiche die wichtigsten Unterschiede und Gemeinsamkeiten der Papers." + (remainder ? ` ${remainder}` : ""));
-        return true;
+        return { handled: true, ask: "Vergleiche die wichtigsten Unterschiede und Gemeinsamkeiten der Papers." + (remainder ? ` ${remainder}` : ""), scope: "all" };
       case "projekt":
         if (!remainder) {
           logAction("Projekt anlegen", "Name fehlt — /projekt <Name> verwenden.", "error");
-          return true;
+          return { handled: true };
         }
         createProjectCommand.mutate(remainder);
         setQuestion("");
-        return true;
+        return { handled: true };
       case "notiz":
         createNoteCommand.mutate(remainder);
         setQuestion("");
-        return true;
+        return { handled: true };
       case "suche":
       case "papers":
       case "import":
         if (!remainder) {
           logAction("Paper-Suche", "Thema fehlt — /suche <Thema> verwenden.", "error");
-          return true;
+          return { handled: true };
         }
         logAction("Paper-Suche", `Suche nach „${remainder}" …`, "pending");
         paperSearchCommand.mutate(remainder);
         setQuestion("");
-        return true;
+        return { handled: true };
       case "extraktion":
         runExtractionCommand();
         setQuestion("");
-        return true;
+        return { handled: true };
+      case "hauptquelle": {
+        if (!isRealProject) {
+          logAction("Hauptquelle", "Hauptquellen gibt es nur in echten Projekten.", "error");
+          return { handled: true };
+        }
+        const target = currentScopePaperId || (selectedPaperIds.length === 1 ? selectedPaperIds[0] : "");
+        if (!target) {
+          logAction("Hauptquelle", "Kein Paper geöffnet oder eindeutig ausgewählt.", "error");
+          return { handled: true };
+        }
+        setPrimaryMutation.mutate(target === primaryPaperId ? null : target);
+        setQuestion("");
+        return { handled: true };
+      }
+      case "entfernen":
+      case "loeschen": {
+        if (!isRealProject) {
+          logAction("Entfernen", "Quellen entfernen gibt es nur in echten Projekten.", "error");
+          return { handled: true };
+        }
+        if (pdfTarget?.kind === "grey") {
+          deleteGreyMutation.mutate(pdfTarget.source.id);
+        } else if (currentScopePaperId) {
+          removePaperMutation.mutate(currentScopePaperId);
+        } else {
+          logAction("Entfernen", "Kein Paper oder Grauquelle geöffnet.", "error");
+          return { handled: true };
+        }
+        setQuestion("");
+        return { handled: true };
+      }
       default:
-        return false;
+        return { handled: false };
+    }
+  }
+
+  /** Dispatch a question; scope/newTurn overrides come from slash commands. */
+  function ask(value: string, options: { scope?: PaperQuestionScope; newTurn?: boolean; web?: boolean } = {}) {
+    const scope = options.scope ?? paperScope;
+    const info = deriveScope(scope);
+    if (info.blocked) {
+      logAction("Frage nicht gestellt", scope === "selected" ? "Keine Quellen ausgewählt." : "Kein aktives Paper geöffnet.", "error");
+      return;
+    }
+    const newTurn = options.newTurn ?? nextTurnIsNew;
+    answerMutation.mutate({ value: value + verbosityInstruction(verbosity), scope, newTurn });
+    setNextTurnIsNew(false);
+    setQuestion("");
+    const runWeb = options.web ?? useInternet;
+    if (runWeb && isRealProject) {
+      webMutation.mutate(value);
+    } else if (runWeb && !isRealProject) {
+      logAction("Web-Recherche", "Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).", "error");
     }
   }
 
@@ -979,22 +1149,21 @@ export function WorkspacePage() {
       return;
     }
     const value = inline.text;
-    if (value.startsWith("/") && handleSlashCommand(value)) {
-      return;
-    }
-    const runWeb = useInternet || inline.web;
-    if (inline.web) {
-      setUseInternet(true);
-      setQuestion(value);
-    }
-    if (!questionBlockedByScope) {
-      answerMutation.mutate(value + verbosityInstruction(verbosity));
-      if (runWeb && isRealProject) {
-        webMutation.mutate(value);
-      } else if (runWeb && !isRealProject) {
-        logAction("Web-Recherche", "Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).", "error");
+    if (value.startsWith("/")) {
+      // Befehl + Frage in einem Enter: erst der Befehl (Scope, neue Session, Aktion),
+      // direkt danach die Frage — kein zweites Enter nötig.
+      const command = handleSlashCommand(value);
+      if (command.handled) {
+        if (command.ask) {
+          ask(command.ask, { scope: command.scope, newTurn: command.newTurn, web: inline.web || undefined });
+        }
+        return;
       }
     }
+    if (inline.web) {
+      setUseInternet(true);
+    }
+    ask(value, { web: inline.web || undefined });
   }
 
   function openAssistantSource(source: VerificationSource | null, evidenceIndex = 0, quote = "", options: { openPdf?: boolean; syncPdfTarget?: boolean } = {}) {
@@ -1101,9 +1270,12 @@ export function WorkspacePage() {
     if (!evidence) {
       return;
     }
-    const citation = noteCitation(source, evidence, evidenceIndex);
+    // The text that lands in the note is also stored on the citation, so clicking
+    // the citation later shows exactly this passage again.
+    const insertedText = meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text;
+    const citation = noteCitation(source, evidence, evidenceIndex, insertedText);
     notesActionsRef.current?.clearInsertPreview();
-    void appendToActiveNote(formatNoteQuote(meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id), [citation]);
+    void appendToActiveNote(formatNoteQuote(insertedText, source, evidenceIndex, citation.id), [citation]);
   }
 
   function previewCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "") {
@@ -1111,8 +1283,9 @@ export function WorkspacePage() {
     if (!evidence) {
       return;
     }
-    const citation = noteCitation(source, evidence, evidenceIndex);
-    notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id));
+    const insertedText = meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text;
+    const citation = noteCitation(source, evidence, evidenceIndex, insertedText);
+    notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(insertedText, source, evidenceIndex, citation.id));
   }
 
   function toggleScopedPaper(paperId: string) {
@@ -1168,7 +1341,7 @@ export function WorkspacePage() {
       return;
     }
     const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : meaningfulQuote(activeAnswerQuote) || activeEvidence.reference_text;
-    const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
+    const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex, quote);
     notesActionsRef.current?.clearInsertPreview();
     void appendToActiveNote(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id), [citation]);
   }
@@ -1185,7 +1358,7 @@ export function WorkspacePage() {
       return;
     }
     const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : meaningfulQuote(activeAnswerQuote) || activeEvidence.reference_text;
-    const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
+    const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex, quote);
     notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id));
   }
 
@@ -1404,6 +1577,16 @@ export function WorkspacePage() {
             onActivateSession={activateAssistantTurn}
             onDeleteSession={deleteAssistantTurn}
             onDeleteNote={(noteId) => notesActionsRef.current?.deleteNote(noteId)}
+            isRealProject={isRealProject}
+            onDeletePaper={(paperId) => removePaperMutation.mutate(paperId)}
+            onDeleteGrey={(greyId) => deleteGreyMutation.mutate(greyId)}
+            onSetPrimary={(paperId) => setPrimaryMutation.mutate(paperId)}
+            onDeleteCitation={(citation) => {
+              const noteId = notesSnapshot.activeNoteId || controlledNoteId;
+              if (noteId) {
+                deleteCitationMutation.mutate({ noteId, citationId: citation.id });
+              }
+            }}
           />
         </aside>
       ) : (
@@ -1984,6 +2167,7 @@ export function WorkspacePage() {
                         onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
                         onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
                         onCitationInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
+                        markUncited={Number(block.answer.context_diagnostics?.uncited_sentence_count ?? 0) > 0}
                       />
                     </div>
                     {block.answer.generation_error ? <div className="warning-row">{block.answer.generation_error}</div> : null}
@@ -1992,7 +2176,7 @@ export function WorkspacePage() {
                     ) : null}
                     {Number(block.answer.context_diagnostics?.uncited_sentence_count ?? 0) > 0 ? (
                       <div className="hint-row">
-                        {String(block.answer.context_diagnostics?.uncited_sentence_count)} Aussage(n) ohne Quellenangabe.
+                        {String(block.answer.context_diagnostics?.uncited_sentence_count)} Aussage(n) ohne Quellenangabe — im Text gestrichelt unterstrichen.
                       </div>
                     ) : null}
                   </article>
@@ -2561,7 +2745,12 @@ function WorkspaceNavigatorBody({
   onOpenAssistantPdf,
   onActivateSession,
   onDeleteSession,
-  onDeleteNote
+  onDeleteNote,
+  isRealProject,
+  onDeletePaper,
+  onDeleteGrey,
+  onSetPrimary,
+  onDeleteCitation
 }: {
   tab: WorkspaceNavigatorTab;
   query: string;
@@ -2597,7 +2786,16 @@ function WorkspaceNavigatorBody({
   onActivateSession: (turnId: string) => void;
   onDeleteSession: (turnId: string) => void;
   onDeleteNote: (noteId: string) => void;
+  isRealProject: boolean;
+  onDeletePaper: (paperId: string) => void;
+  onDeleteGrey: (greyId: string) => void;
+  onSetPrimary: (paperId: string | null) => void;
+  onDeleteCitation: (citation: NoteCitation) => void;
 }) {
+  // Collapsible sections keep the PDFs tab tidy when many sources pile up.
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const sectionCollapsed = (key: string) => collapsedSections[key] === true;
+  const toggleSection = (key: string) => setCollapsedSections((current) => ({ ...current, [key]: !current[key] }));
   if (tab === "notes") {
     return (
       <section className="workspace-nav-body">
@@ -2682,34 +2880,54 @@ function WorkspaceNavigatorBody({
             <strong>
               Z{selectedCitationIndex + 1} - {selectedCitation.title || selectedCitation.paper_id}
             </strong>
-            <p>{selectedCitation.pdf_excerpt || selectedCitation.reference_text || selectedCitation.paper_id}</p>
+            <p>{selectedCitation.reference_text || selectedCitation.pdf_excerpt || selectedCitation.paper_id}</p>
           </div>
         ) : null}
-        <div className="workspace-nav-subheading">
+        <button className="workspace-nav-subheading workspace-nav-subheading--toggle" type="button" onClick={() => toggleSection("citations")}>
           <span>Notizquellen</span>
-        </div>
-        <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: pdfCitationListHeight }}>
-          {citations.map(({ citation, badge, title, evidence }, index) => (
-            <button
-              className={`list-row note-citation-row ${activeCitationId === citation.id ? "note-citation-row--active list-row--active" : ""}`}
-              type="button"
-              key={citation.id}
-              onClick={() => onOpenCitation(citation)}
-              style={colorVarsForPaperId(citation.paper_id, Number(citation.evidence_index ?? index))}
-            >
-              <span className="note-citation-row__title">
-                <span className="citation-badge">{badge}</span>
-                <strong>{title}</strong>
-              </span>
-              <span>{evidence || citation.paper_id}</span>
-            </button>
-          ))}
-          {!citations.length ? <div className="muted-row">Keine Quellen in der aktiven Notiz</div> : null}
-        </div>
-        <div className="workspace-list-resize-handle" role="separator" aria-label="Notizquellen Hoehe anpassen" onPointerDown={onResizeCitationList} />
-        <div className="workspace-nav-subheading">
+          <strong>{citations.length}</strong>
+          {sectionCollapsed("citations") ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+        </button>
+        {!sectionCollapsed("citations") ? (
+          <>
+            <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: pdfCitationListHeight }}>
+              {citations.map(({ citation, badge, title, evidence }, index) => (
+                <div
+                  className={`list-row note-citation-row workspace-nav-actionable-row ${activeCitationId === citation.id ? "note-citation-row--active list-row--active" : ""}`}
+                  key={citation.id}
+                  style={colorVarsForPaperId(citation.paper_id, Number(citation.evidence_index ?? index))}
+                >
+                  <button className="note-citation-row__body" type="button" onClick={() => onOpenCitation(citation)}>
+                    <span className="note-citation-row__title">
+                      <span className="citation-badge">{badge}</span>
+                      <strong>{title}</strong>
+                    </span>
+                    <span>{evidence || citation.paper_id}</span>
+                  </button>
+                  <button
+                    className="icon-button nav-delete-btn"
+                    type="button"
+                    title="Notizquelle löschen (Notiztext bleibt erhalten)"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteCitation(citation);
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+              {!citations.length ? <div className="muted-row">Keine Quellen in der aktiven Notiz</div> : null}
+            </div>
+            <div className="workspace-list-resize-handle" role="separator" aria-label="Notizquellen Hoehe anpassen" onPointerDown={onResizeCitationList} />
+          </>
+        ) : null}
+        <button className="workspace-nav-subheading workspace-nav-subheading--toggle" type="button" onClick={() => toggleSection("papers")}>
           <span>Projekt-PDFs</span>
-        </div>
+          <strong>{papers.length}</strong>
+          {sectionCollapsed("papers") ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+        </button>
+        {!sectionCollapsed("papers") ? (
         <div className="list workspace-nav-list">
           {orderedPapers.map((paper) => {
             const normalizedPaper = normalizeWorkspacePaper(paper);
@@ -2720,7 +2938,7 @@ function WorkspaceNavigatorBody({
             const isPrimary = Boolean(paperId && primaryPaperId && paperId === primaryPaperId);
             return (
               <div
-                className={`list-row workspace-paper-row ${isPrimary ? "workspace-paper-row--primary" : ""} ${isActivePaper ? "workspace-paper-row--active-source list-row--active" : ""}`}
+                className={`list-row workspace-paper-row workspace-nav-actionable-row ${isPrimary ? "workspace-paper-row--primary" : ""} ${isActivePaper ? "workspace-paper-row--active-source list-row--active" : ""}`}
                 key={paperId || `${title}-${paper.year ?? "n/a"}`}
                 role="button"
                 tabIndex={0}
@@ -2750,24 +2968,48 @@ function WorkspaceNavigatorBody({
                   </strong>
                   <span>{[paperId || "keine ID", normalizedPaper.year ?? ""].filter(Boolean).join(" - ")}</span>
                 </div>
+                {isRealProject && paperId ? (
+                  <span className="workspace-row-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                    <button
+                      className={`icon-button nav-action-btn ${isPrimary ? "icon-button--active" : ""}`}
+                      type="button"
+                      title={isPrimary ? "Hauptquelle entfernen" : "Als Hauptquelle setzen"}
+                      onClick={() => onSetPrimary(isPrimary ? null : paperId)}
+                    >
+                      <Star size={12} />
+                    </button>
+                    <button
+                      className="icon-button nav-delete-btn"
+                      type="button"
+                      title="Paper aus dem Projekt entfernen (bleibt in der Bibliothek)"
+                      onClick={() => onDeletePaper(paperId)}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </span>
+                ) : null}
               </div>
             );
           })}
           {!papers.length ? <EmptyState title={papersLoading ? "Lade PDFs" : "Keine PDFs"} /> : null}
         </div>
+        ) : null}
         {greySources.length ? (
           <>
-            <div className="workspace-nav-subheading">
+            <button className="workspace-nav-subheading workspace-nav-subheading--toggle" type="button" onClick={() => toggleSection("grey")}>
               <span>Graue Quellen</span>
-              <Globe size={14} />
-            </div>
+              <strong>{greySources.length}</strong>
+              {sectionCollapsed("grey") ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+            </button>
+            {!sectionCollapsed("grey") ? (
+            <>
             <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: greySourceListHeight }}>
               {greySources.map((source) => {
                 const isActiveGrey = pdfTarget?.kind === "grey" && pdfTarget.source.id === source.id;
                 const selectedForScope = selectedGreyIds.includes(source.id);
                 return (
                   <div
-                    className={`list-row workspace-paper-row workspace-grey-row ${isActiveGrey ? "workspace-paper-row--active-source list-row--active" : ""}`}
+                    className={`list-row workspace-paper-row workspace-grey-row workspace-nav-actionable-row ${isActiveGrey ? "workspace-paper-row--active-source list-row--active" : ""}`}
                     key={source.id}
                     role="button"
                     tabIndex={0}
@@ -2795,11 +3037,25 @@ function WorkspaceNavigatorBody({
                         {source.url}
                       </span>
                     </div>
+                    {isRealProject ? (
+                      <span className="workspace-row-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                        <button
+                          className="icon-button nav-delete-btn"
+                          type="button"
+                          title="Grauquelle löschen"
+                          onClick={() => onDeleteGrey(source.id)}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </span>
+                    ) : null}
                   </div>
                 );
               })}
             </div>
             <div className="workspace-list-resize-handle" role="separator" aria-label="Graue Quellen Hoehe anpassen" onPointerDown={onResizeGreyList} />
+            </>
+            ) : null}
           </>
         ) : null}
       </section>

@@ -551,7 +551,9 @@ export function NotesSurface({
         const badge = ref?.badge || fallbackBadge;
         const label = ref?.label || badge;
         const title = ref?.title || citation.title || citation.paper_id;
-        const evidence = citation.pdf_excerpt || citation.reference_text || citation.kind || "";
+        // reference_text first: it holds the passage that was actually inserted into
+        // the note; pdf_excerpt may be a (different) located excerpt or even a URL.
+        const evidence = citation.reference_text || citation.pdf_excerpt || citation.kind || "";
         return { citation, badge, label, title: shortText(title, 96), evidence: shortText(evidence, 150), colorIndex: citationColorIndex(citation, index) };
       }),
     [citationRefs, citations]

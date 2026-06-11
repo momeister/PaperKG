@@ -434,6 +434,28 @@ def add_project_papers(
     return {"project": _project_view(project_id, projects[project_id], {})}
 
 
+@app.delete("/projects/{project_id}/papers/{paper_id:path}")
+def remove_project_paper(
+    project_id: str,
+    paper_id: str,
+    projects_path: str | None = None,
+) -> dict[str, Any]:
+    """Detach a paper from a project (the paper itself stays in the library)."""
+    path = _projects_path(projects_path)
+    projects = _load_projects(path)
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+    if paper_id not in projects[project_id]:
+        raise HTTPException(status_code=404, detail=f"Paper not in project: {paper_id}")
+    projects[project_id] = [pid for pid in projects[project_id] if pid != paper_id]
+    _save_projects(projects, path)
+    primaries = _load_primary_papers()
+    if primaries.get(project_id) == paper_id:
+        primaries.pop(project_id, None)
+        _save_primary_papers(primaries)
+    return {"project": _project_view(project_id, projects[project_id], {}), "removed": paper_id}
+
+
 class PrimaryPaperPayload(BaseModel):
     paper_id: str | None = None
 
@@ -496,7 +518,7 @@ def list_papers(
     has_full_text: bool | None = None,
     extraction_status: str | None = None,
     sort: str = "added_desc",
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     projects = _load_projects(_projects_path(projects_path))
@@ -1595,6 +1617,19 @@ def append_note(
     if note is None:
         raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
     return {"note": _note_view(note)}
+
+
+@app.delete("/notes/{note_id}/citations/{citation_id}")
+def delete_note_citation(
+    note_id: str,
+    citation_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_note_citation(note_id, citation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Citation not found: {citation_id}")
+    return {"deleted": True, "id": citation_id}
 
 
 @app.post("/notes/{note_id}/versions/restore-latest")

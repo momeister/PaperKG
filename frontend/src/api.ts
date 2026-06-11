@@ -154,6 +154,16 @@ export const api = {
     request<{ deleted: boolean; file_deleted: boolean; id: string }>(`/papers/${encodeURIComponent(paperId)}`, { method: "DELETE" }),
   deleteGreySource: (greyId: string) =>
     request<{ deleted: boolean; id: string }>(`/grey-sources/${encodeURIComponent(greyId)}`, { method: "DELETE" }),
+  removeProjectPaper: (projectId: string, paperId: string) =>
+    request<{ project: Project; removed: string }>(
+      `/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,
+      { method: "DELETE" }
+    ),
+  deleteNoteCitation: (noteId: string, citationId: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/notes/${encodeURIComponent(noteId)}/citations/${encodeURIComponent(citationId)}`,
+      { method: "DELETE" }
+    ),
   setPrimaryPaper: (projectId: string, paperId: string | null) =>
     request<{ project_id: string; primary_paper_id: string | null }>(
       `/projects/${encodeURIComponent(projectId)}/primary-paper`,

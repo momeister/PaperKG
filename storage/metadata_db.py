@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -37,8 +38,24 @@ class MetadataDB:
         db_file.parent.mkdir(parents=True, exist_ok=True)
         if db_file.exists() and db_file.stat().st_size == 0:
             db_file.unlink()
-        self.conn = duckdb.connect(str(db_file))
+        self.conn = self._connect_with_retry(db_file)
         self._init_schema()
+
+    @staticmethod
+    def _connect_with_retry(db_file: Path, attempts: int = 12, delay: float = 0.25):
+        # Windows file locks are transient when several processes (API worker,
+        # reload child, batch scripts) touch the DB at the same moment; a short
+        # retry turns those races into a brief wait instead of a 500.
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return duckdb.connect(str(db_file))
+            except duckdb.IOException as error:
+                last_error = error
+                if attempt == attempts - 1:
+                    break
+                time.sleep(delay)
+        raise last_error  # type: ignore[misc]
 
     def __enter__(self) -> "MetadataDB":
         return self
@@ -1560,6 +1577,13 @@ class MetadataDB:
             return None
         cols = [desc[0] for desc in self.conn.description]
         return dict(zip(cols, row))
+
+    def delete_note_citation(self, note_id: str, citation_id: str) -> bool:
+        existing = self.get_note_citation(citation_id)
+        if existing is None or str(existing.get("note_id")) != str(note_id):
+            return False
+        self._execute("DELETE FROM note_citations WHERE id = ? AND note_id = ?", [citation_id, note_id])
+        return True
 
     def list_note_citations(self, note_id: str) -> list[dict[str, Any]]:
         rows = self._execute("""

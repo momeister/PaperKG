@@ -519,7 +519,7 @@ export function AssistantPage() {
         ? selectedAnswerQuote.text
         : "";
     const quote = source === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : meaningfulQuote(answerQuote) || activeEvidence.reference_text;
-    const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
+    const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex, quote);
     appendToProjectNote(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id), [citation]);
   }
 
@@ -1389,14 +1389,24 @@ export function formatNoteQuote(quote: string, source: VerificationSource, evide
   return `> ${text}\n\nQuelle: [Z${evidenceIndex + 1} - ${title}](sciencekg://citation/${citationId}) (${source.paper_id})`;
 }
 
-export function noteCitation(source: VerificationSource, evidence: VerificationSource["evidence"][number], evidenceIndex: number) {
+export function noteCitation(
+  source: VerificationSource,
+  evidence: VerificationSource["evidence"][number],
+  evidenceIndex: number,
+  quote = ""
+) {
+  // The inserted quote is what the user saw and saved; persisting it as the
+  // citation's reference_text guarantees that clicking the citation later shows
+  // the same passage instead of an unrelated evidence excerpt.
+  const quoteText = cleanCitationText(meaningfulQuote(quote));
+  const referenceText = quoteText || cleanCitationText(evidence.reference_text);
   return {
-    id: stableCitationId(source, evidence, evidenceIndex),
+    id: stableCitationId(source, evidence, evidenceIndex, referenceText),
     paper_id: source.paper_id,
     title: source.title,
     kind: evidence.kind,
     evidence_id: evidence.evidence_id ?? null,
-    reference_text: cleanCitationText(evidence.reference_text),
+    reference_text: referenceText,
     pdf_excerpt: cleanCitationText(evidence.pdf_excerpt),
     evidence_index: evidenceIndex
   };
@@ -1422,8 +1432,8 @@ export function formatAnswerForNote(answer: Answer, verification: VerificationSo
   return { markdown, citations: Array.from(citations.values()) };
 }
 
-function stableCitationId(source: VerificationSource, evidence: VerificationSource["evidence"][number], evidenceIndex: number) {
-  return `cite_${stableHash([source.paper_id, evidence.evidence_id ?? evidenceIndex, evidence.reference_text, evidence.pdf_excerpt].join("|"))}`;
+function stableCitationId(source: VerificationSource, evidence: VerificationSource["evidence"][number], evidenceIndex: number, referenceText?: string) {
+  return `cite_${stableHash([source.paper_id, evidence.evidence_id ?? evidenceIndex, referenceText ?? evidence.reference_text, evidence.pdf_excerpt].join("|"))}`;
 }
 
 function stableHash(value: string) {
@@ -1671,7 +1681,8 @@ export function AnswerText({
   activeCitation,
   onCitationInsert,
   onCitationInsertPreview,
-  onCitationInsertPreviewClear
+  onCitationInsertPreviewClear,
+  markUncited = false
 }: {
   answer: string;
   citationLinks?: CitationLink[];
@@ -1686,6 +1697,9 @@ export function AnswerText({
   onCitationInsert?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
   onCitationInsertPreview?: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
   onCitationInsertPreviewClear?: () => void;
+  /** Underline (dashed) sentences without an adjacent citation so the
+   *  "N Aussage(n) ohne Quellenangabe" hint becomes locatable in the text. */
+  markUncited?: boolean;
 }) {
   const [pinnedCitation, setPinnedCitation] = useState<{
     key: string;
@@ -1775,9 +1789,19 @@ export function AnswerText({
         const match = /^\[([^\]]+)\]$/.exec(part);
         if (!match) {
           const highlightRange = contextCitation ? citationHoverTextRange(parts, index, contextCitation.key) : null;
-          return (
-            <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, contextCitation ? colorVarsForPaperId(contextCitationPaperId, contextCitation.evidenceIndex) : undefined)}</span>
-          );
+          if (highlightRange) {
+            return (
+              <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, contextCitation ? colorVarsForPaperId(contextCitationPaperId, contextCitation.evidenceIndex) : undefined)}</span>
+            );
+          }
+          if (markUncited && parts.length > 1) {
+            return (
+              <span key={`${part}-${index}`}>
+                {renderUncitedPart(part, isCitationPart(parts[index - 1]), isCitationPart(parts[index + 1]))}
+              </span>
+            );
+          }
+          return <span key={`${part}-${index}`}>{part}</span>;
         }
         const context = citationContext(parts, index);
         const quote = citationQuoteFromParts(parts, index);
@@ -1927,6 +1951,82 @@ export function AnswerText({
         );
       })}
     </span>
+  );
+}
+
+function isCitationPart(value: string | undefined) {
+  return Boolean(value && /^\[[^\]]+\]$/.test(value));
+}
+
+/**
+ * Split a text part (between citation brackets) into sentence segments and flag the
+ * ones no citation is adjacent to. The sentence directly before a bracket is covered
+ * by that bracket; the fragment directly after a bracket still belongs to the cited
+ * sentence. Everything substantial in between has no Quellenangabe.
+ */
+export function uncitedTextSegments(
+  part: string,
+  prevIsCitation: boolean,
+  nextIsCitation: boolean
+): Array<{ text: string; uncited: boolean }> {
+  if (!part) {
+    return [];
+  }
+  const boundaries: number[] = [];
+  for (let index = 0; index < part.length; index += 1) {
+    if (".!?".includes(part[index]) && isSentenceBoundary(part, index)) {
+      boundaries.push(index);
+    }
+  }
+  const segments: Array<{ text: string; first: boolean; last: boolean }> = [];
+  let cursor = 0;
+  for (const boundary of boundaries) {
+    segments.push({ text: part.slice(cursor, boundary + 1), first: cursor === 0, last: false });
+    cursor = boundary + 1;
+  }
+  if (cursor < part.length) {
+    segments.push({ text: part.slice(cursor), first: cursor === 0, last: true });
+  } else if (segments.length) {
+    segments[segments.length - 1].last = true;
+  }
+  return segments.map((segment) => {
+    const coveredByPrev = segment.first && prevIsCitation;
+    const coveredByNext = segment.last && nextIsCitation;
+    return { text: segment.text, uncited: !coveredByPrev && !coveredByNext && isSubstantialStatement(segment.text) };
+  });
+}
+
+/** Headings, bullets-only fragments and short connectors are not "Aussagen". */
+function isSubstantialStatement(value: string) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length < 30 || /^#{1,6}\s/.test(value.trim())) {
+    return false;
+  }
+  const words = text.split(/\s+/).filter((word) => /[\p{L}]{2,}/u.test(word));
+  return words.length >= 5;
+}
+
+function renderUncitedPart(part: string, prevIsCitation: boolean, nextIsCitation: boolean) {
+  const segments = uncitedTextSegments(part, prevIsCitation, nextIsCitation);
+  if (!segments.some((segment) => segment.uncited)) {
+    return part;
+  }
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.uncited ? (
+          <span
+            key={`${segment.text.slice(0, 24)}-${index}`}
+            className="uncited-sentence"
+            title="Aussage ohne Quellenangabe — nicht direkt aus den lokalen Quellen belegt"
+          >
+            {segment.text}
+          </span>
+        ) : (
+          <span key={`${segment.text.slice(0, 24)}-${index}`}>{segment.text}</span>
+        )
+      )}
+    </>
   );
 }
 
