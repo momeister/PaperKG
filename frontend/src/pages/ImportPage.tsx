@@ -108,7 +108,13 @@ export function ImportPage() {
   const [researchQuestion, setResearchQuestion] = useState("");
   const [autoDownload, setAutoDownload] = useState(false);
   const [primaryPaperId, setPrimaryPaperId] = useState<string | null>(null);
-  const [savedFindingUrls, setSavedFindingUrls] = useSessionState<string[]>("import-saved-findings", []);
+  // Saved findings are tracked PER PROJECT — a grey source saved in one project must
+  // stay saveable in every other project (a global list blocked that).
+  const [savedFindingsByProject, setSavedFindingsByProject] = useSessionState<Record<string, string[]>>(
+    "import-saved-findings.v2",
+    {}
+  );
+  const savedFindingUrls = savedFindingsByProject[activeProject ?? ""] ?? [];
 
   const [maxPerQuery, setMaxPerQuery] = useState(5);
   const [maxResearchSources, setMaxResearchSources] = useState(12);
@@ -251,7 +257,12 @@ export function ImportPage() {
         ],
         researchQuestion
       ),
-    onSuccess: (_data, finding) => setSavedFindingUrls((current) => [...current, finding.url])
+    onSuccess: (_data, finding) =>
+      setSavedFindingsByProject((current) => {
+        const key = activeProject ?? "";
+        const urls = current[key] ?? [];
+        return urls.includes(finding.url) ? current : { ...current, [key]: [...urls, finding.url] };
+      })
   });
   const markPrimary = useMutation({
     mutationFn: (paperId: string | null) => api.setPrimaryPaper(activeProject as string, paperId),
@@ -576,7 +587,16 @@ export function ImportPage() {
                 className="button"
                 type="button"
                 title="Ergebnisse löschen"
-                onClick={() => { setTopicGroups([]); setSavedFindingUrls([]); }}
+                onClick={() => {
+                  setTopicGroups([]);
+                  setSavedFindingsByProject((current) => {
+                    const key = activeProject ?? "";
+                    if (!current[key]?.length) {
+                      return current;
+                    }
+                    return { ...current, [key]: [] };
+                  });
+                }}
               >
                 <X size={14} />
                 <span>Leeren</span>

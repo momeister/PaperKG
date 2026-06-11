@@ -1,5 +1,12 @@
 import { createContext, useContext } from "react";
 
+export type LlmParams = {
+  temperature?: number;
+  top_p?: number;
+  max_tokens?: number;
+  context_size?: number;
+};
+
 export type AppState = {
   activeProject?: string;
   setActiveProject: (project?: string) => void;
@@ -7,6 +14,8 @@ export type AppState = {
   setProvider: (provider?: string) => void;
   model?: string;
   setModel: (model?: string) => void;
+  llmParams: LlmParams;
+  setLlmParams: (params: LlmParams) => void;
 };
 
 export const AppStateContext = createContext<AppState | null>(null);

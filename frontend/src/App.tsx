@@ -20,6 +20,7 @@ import {
 
 import { api, API_BASE_URL } from "./api";
 import { AppStateContext } from "./state";
+import type { LlmParams } from "./state";
 import { Status } from "./components/Status";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { ExtractionPage } from "./pages/ExtractionPage";
@@ -45,15 +46,43 @@ const navigation = [
   { to: "/settings", label: "Settings", icon: Settings }
 ];
 
+function loadStoredLlmParams(): LlmParams {
+  try {
+    const raw = localStorage.getItem("sciencekg.llmParams");
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as LlmParams;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function App() {
   const [activeProject, setActiveProject] = useState<string | undefined>(() => localStorage.getItem("sciencekg.project") ?? undefined);
   const [provider, setProvider] = useState<string | undefined>(() => localStorage.getItem("sciencekg.provider") ?? undefined);
   const [model, setModel] = useState<string | undefined>(() => localStorage.getItem("sciencekg.model") ?? undefined);
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("sciencekg.sidebar.open") !== "false");
+  const [llmParams, setLlmParams] = useState<LlmParams>(loadStoredLlmParams);
+  const [paramsOpen, setParamsOpen] = useState(false);
 
   const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000 });
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders });
+  // Local providers (LM Studio, Ollama) know their loaded models best — discover them
+  // live instead of relying on the static list in config.yaml.
+  const activeProviderInfo = providersQuery.data?.providers.find((item) => item.name === provider);
+  const supportsDiscovery = ["lm_studio", "ollama", "openai_compatible", "openai", "nvidia"].includes(
+    activeProviderInfo?.provider_type ?? ""
+  );
+  const discoveredModelsQuery = useQuery({
+    queryKey: ["models-discovered", provider],
+    queryFn: () => api.discoverModels(provider as string),
+    enabled: Boolean(provider) && supportsDiscovery,
+    staleTime: 60_000,
+    retry: false
+  });
 
   useEffect(() => {
     if (!activeProject || !projectsQuery.data?.projects) {
@@ -87,11 +116,36 @@ export default function App() {
     localStorage.setItem("sciencekg.sidebar.open", String(sidebarOpen));
   }, [sidebarOpen]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem("sciencekg.llmParams", JSON.stringify(llmParams));
+    } catch {
+      // Storage unavailable — params just stay session-local.
+    }
+  }, [llmParams]);
+
   const selectedProvider = providersQuery.data?.providers.find((item) => item.name === provider);
+  const modelOptions = useMemo(() => {
+    const merged = [...(discoveredModelsQuery.data?.models ?? []), ...(selectedProvider?.models ?? [])];
+    if (selectedProvider?.default_model) {
+      merged.push(selectedProvider.default_model);
+    }
+    if (model) {
+      merged.push(model);
+    }
+    return Array.from(new Set(merged.filter(Boolean)));
+  }, [discoveredModelsQuery.data?.models, selectedProvider, model]);
   const state = useMemo(
-    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel }),
-    [activeProject, provider, model]
+    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams }),
+    [activeProject, provider, model, llmParams]
   );
+
+  function updateLlmParam(key: keyof LlmParams, rawValue: string) {
+    setLlmParams({
+      ...llmParams,
+      [key]: rawValue === "" ? undefined : Number(rawValue)
+    });
+  }
 
   return (
     <AppStateContext.Provider value={state}>
@@ -144,19 +198,80 @@ export default function App() {
               <label>
                 Modell
                 <select value={model ?? selectedProvider?.default_model ?? ""} onChange={(event) => setModel(event.target.value || undefined)}>
-                  {(selectedProvider?.models ?? []).map((item) => (
+                  {modelOptions.map((item) => (
                     <option key={item} value={item}>
                       {item}
                     </option>
                   ))}
                 </select>
               </label>
+              {discoveredModelsQuery.isFetching ? <span className="topbar-hint">erkenne Modelle…</span> : null}
             </div>
             <div className="topbar-health">
               <Status value={healthQuery.data?.status ?? "loading"} />
               <span>{healthQuery.data?.warnings?.length ?? 0} Warnungen</span>
               <span>{API_BASE_URL}</span>
-              <SlidersHorizontal size={17} />
+              <span className="llm-params-wrap">
+                <button
+                  className={`icon-button ${paramsOpen || Object.values(llmParams).some((value) => value !== undefined) ? "icon-button--active" : ""}`}
+                  type="button"
+                  aria-label="LLM-Parameter anpassen"
+                  title="LLM-Parameter anpassen"
+                  onClick={() => setParamsOpen((current) => !current)}
+                >
+                  <SlidersHorizontal size={17} />
+                </button>
+                {paramsOpen ? (
+                  <div className="llm-params-popover">
+                    <strong>LLM-Parameter</strong>
+                    <p className="muted">Gelten für Assistant-Antworten; leer = Provider-Default.</p>
+                    <label>
+                      Temperatur
+                      <input
+                        type="number" min="0" max="2" step="0.05"
+                        value={llmParams.temperature ?? ""}
+                        placeholder={String(selectedProvider?.settings?.temperature ?? 0.2)}
+                        onChange={(event) => updateLlmParam("temperature", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Top-p
+                      <input
+                        type="number" min="0.05" max="1" step="0.05"
+                        value={llmParams.top_p ?? ""}
+                        placeholder={String(selectedProvider?.settings?.top_p ?? 0.95)}
+                        onChange={(event) => updateLlmParam("top_p", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Max. Tokens
+                      <input
+                        type="number" min="128" max="131072" step="128"
+                        value={llmParams.max_tokens ?? ""}
+                        placeholder={String(selectedProvider?.settings?.max_tokens ?? 2048)}
+                        onChange={(event) => updateLlmParam("max_tokens", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Kontext
+                      <input
+                        type="number" min="1024" max="262144" step="1024"
+                        value={llmParams.context_size ?? ""}
+                        placeholder={String(selectedProvider?.settings?.context_size ?? 32768)}
+                        onChange={(event) => updateLlmParam("context_size", event.target.value)}
+                      />
+                    </label>
+                    <div className="button-row">
+                      <button className="button button-compact" type="button" onClick={() => setLlmParams({})}>
+                        Zurücksetzen
+                      </button>
+                      <button className="button button-compact button-primary" type="button" onClick={() => setParamsOpen(false)}>
+                        Fertig
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </span>
             </div>
           </header>
 

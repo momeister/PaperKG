@@ -171,6 +171,11 @@ class GreySourceFromUrlPayload(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
+class WorkspaceSessionPayload(BaseModel):
+    payload: dict[str, Any]
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
 class ExtractionParseRequest(BaseModel):
     paper_id: str = Field(min_length=1, max_length=240)
     pdf_path: str | None = Field(default=None, max_length=1000)
@@ -1140,6 +1145,26 @@ async def add_grey_source_from_url(project_id: str, payload: GreySourceFromUrlPa
     with MetadataDB(payload.metadata_db_path) as db:
         saved = db.add_grey_source(project_id, record)
     return {"project_id": project_id, "saved": saved}
+
+
+@app.get("/workspace/sessions/{project_id}")
+def get_workspace_session(project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+    """Server-side workspace assistant session (chat history + verification payloads).
+
+    Sessions used to live only in localStorage, where large verification payloads
+    routinely blew the quota and the save silently failed — conversations vanished
+    on reload. DuckDB has no such limit.
+    """
+    with MetadataDB(metadata_db_path) as db:
+        session = db.get_workspace_session(project_id)
+    return session or {"project_id": project_id, "payload": {}, "updated_timestamp": None}
+
+
+@app.put("/workspace/sessions/{project_id}")
+def save_workspace_session(project_id: str, request: WorkspaceSessionPayload) -> dict[str, Any]:
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.save_workspace_session(project_id, request.payload)
+    return session
 
 
 @app.delete("/grey-sources/{grey_id}")
@@ -2222,7 +2247,12 @@ def _run_note_ai_chat(
                 "Du bist ein lokaler wissenschaftlicher Markdown-Schreibassistent. "
                 "Bearbeite nur den bereitgestellten Text und den bisherigen Verlauf zu diesem Kontext. "
                 "Gib direkt Markdown zurueck. Nutze ausschliesslich bereitgestellte KG-Evidenz, "
-                "wenn du neue Belege ergaenzt, und zitiere dann mit den angegebenen Paper-IDs in eckigen Klammern."
+                "wenn du neue Belege ergaenzt, und zitiere dann mit den angegebenen Paper-IDs in eckigen Klammern. "
+                "WICHTIG: Markdown-Links der Form [Zx - Titel](sciencekg://citation/...) sind Quellenanker "
+                "und duerfen niemals entfernt, gekuerzt oder umformuliert werden. Wenn du einen Satz oder ein "
+                "Zitat behaeltst, kuerzt oder umschreibst, uebernimm seinen sciencekg://-Link zeichengenau "
+                "(Linktext UND URL) an der passenden Stelle deiner Antwort. Auch Blockzitate (> ...) mit "
+                "solchen Links behalten ihre Quellenzeile."
             ),
         }
     ]

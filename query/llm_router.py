@@ -2,12 +2,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
 import yaml
+
+# Reasoning models (Qwen3, DeepSeek-R1, ...) emit <think>...</think> blocks before the
+# actual answer. LM Studio and Ollama return them inline in `content`, which corrupts
+# downstream parsing (citation brackets inside the reasoning get picked up, JSON
+# extraction grabs the wrong braces). Strip them centrally so every caller is safe.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+
+
+def strip_reasoning_blocks(text: str) -> str:
+	cleaned = _THINK_BLOCK_RE.sub("", str(text or ""))
+	open_match = _THINK_OPEN_RE.search(cleaned)
+	if open_match:
+		# Unterminated think block: the model hit its token limit while reasoning.
+		# Everything after <think> is reasoning, not answer.
+		cleaned = cleaned[: open_match.start()]
+	return cleaned.strip()
 
 
 @dataclass
@@ -402,7 +420,7 @@ class LLMRouter:
 			"done_reason": data.get("done_reason"),
 		}
 		message = data.get("message") or {}
-		return str(message.get("content", "")).strip()
+		return strip_reasoning_blocks(str(message.get("content", "")))
 
 	def _chat_openai_compatible(
 		self,
@@ -488,7 +506,12 @@ class LLMRouter:
 		if not choices:
 			return ""
 		message = choices[0].get("message") or {}
-		return str(message.get("content", "")).strip()
+		content = str(message.get("content", "") or "")
+		if not content.strip():
+			# Some LM Studio builds put the entire output of reasoning models into
+			# `reasoning_content` and leave `content` empty.
+			content = str(message.get("reasoning_content", "") or "")
+		return strip_reasoning_blocks(content)
 
 	@staticmethod
 	def _nvidia_chat_template_kwargs(model: str, value: Any) -> dict[str, Any] | None:

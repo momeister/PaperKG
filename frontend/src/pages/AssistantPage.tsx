@@ -286,6 +286,10 @@ export function AssistantPage() {
     setNoteStatus("");
     setConversationMode("followup");
     setWorkspaceMode("questions");
+    // Grey-source bookkeeping is project-scoped: a URL saved in project A must stay
+    // saveable after switching to project B.
+    setWebFindings([]);
+    setSavedGreyUrls([]);
   }, [scopedProjectId]);
 
   useEffect(() => {
@@ -514,7 +518,7 @@ export function AssistantPage() {
       selectedAnswerQuote?.paperId === selectedSource.paper_id && selectedAnswerQuote.evidenceIndex === activeEvidenceIndex
         ? selectedAnswerQuote.text
         : "";
-    const quote = source === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : answerQuote || activeEvidence.reference_text;
+    const quote = source === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : meaningfulQuote(answerQuote) || activeEvidence.reference_text;
     const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
     appendToProjectNote(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id), [citation]);
   }
@@ -1541,31 +1545,68 @@ function notesStorageKey(projectId: string) {
   return `sciencekg.assistant.notes.${projectId}`;
 }
 
-export function loadAssistantSession(projectId: string): { history: AssistantTurn[]; activeTurnId: string } {
+export type AssistantSession = { history: AssistantTurn[]; activeTurnId: string; savedAt?: number };
+
+export function loadAssistantSession(projectId: string): AssistantSession {
   try {
     const raw = window.localStorage.getItem(assistantStorageKey(projectId));
     if (!raw) {
-      return { history: [], activeTurnId: "" };
+      return { history: [], activeTurnId: "", savedAt: 0 };
     }
-    const payload = JSON.parse(raw) as Partial<{ history: AssistantTurn[]; activeTurnId: string }>;
+    const payload = JSON.parse(raw) as Partial<AssistantSession>;
     const history = Array.isArray(payload.history) ? payload.history : [];
     return {
       history,
-      activeTurnId: payload.activeTurnId || history[history.length - 1]?.id || ""
+      activeTurnId: payload.activeTurnId || history[history.length - 1]?.id || "",
+      savedAt: Number(payload.savedAt) || 0
     };
   } catch {
-    return { history: [], activeTurnId: "" };
+    return { history: [], activeTurnId: "", savedAt: 0 };
   }
 }
 
+const serverSessionSaveTimers = new Map<string, number>();
+
 export function saveAssistantSession(projectId: string, session: { history: AssistantTurn[]; activeTurnId: string }) {
+  const payload = { history: session.history.slice(-25), activeTurnId: session.activeTurnId, savedAt: Date.now() };
   try {
-    window.localStorage.setItem(
-      assistantStorageKey(projectId),
-      JSON.stringify({ history: session.history.slice(-25), activeTurnId: session.activeTurnId })
-    );
+    // localStorage is only a fast boot cache; the payloads (verification excerpts)
+    // regularly exceed its quota, which used to lose whole conversations on reload.
+    window.localStorage.setItem(assistantStorageKey(projectId), JSON.stringify(payload));
   } catch {
-    // Local storage can be disabled in private/browser test contexts.
+    // Quota exceeded or storage disabled — the server copy below still persists.
+  }
+  const existing = serverSessionSaveTimers.get(projectId);
+  if (existing !== undefined) {
+    window.clearTimeout(existing);
+  }
+  serverSessionSaveTimers.set(
+    projectId,
+    window.setTimeout(() => {
+      serverSessionSaveTimers.delete(projectId);
+      api.saveWorkspaceSession(projectId, payload).catch(() => {
+        // Offline backend: the localStorage cache above still covers reloads.
+      });
+    }, 1200)
+  );
+}
+
+/** Authoritative session from the backend; resolves null when none exists or offline. */
+export async function fetchAssistantSession(projectId: string): Promise<AssistantSession | null> {
+  try {
+    const result = await api.getWorkspaceSession(projectId);
+    const payload = (result.payload ?? {}) as Partial<AssistantSession>;
+    const history = Array.isArray(payload.history) ? payload.history : [];
+    if (!history.length) {
+      return null;
+    }
+    return {
+      history,
+      activeTurnId: payload.activeTurnId || history[history.length - 1]?.id || "",
+      savedAt: Number(payload.savedAt) || 0
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -1982,21 +2023,96 @@ export function citationQuoteFromParts(parts: string[], citationIndex: number) {
   return cleanAnswerQuote(combined);
 }
 
+// Tokens before a period that do NOT end a sentence ("vs.", "z. B.", "Abb. 3", "et al.").
+const SENTENCE_ABBREVIATIONS = new Set([
+  "vs", "bzw", "ca", "etc", "et", "al", "z", "b", "u", "a", "d", "h", "i", "e", "o", "ä",
+  "nr", "no", "fig", "abb", "tab", "s", "p", "pp", "vol", "ed", "eds", "resp", "approx",
+  "vgl", "ggf", "evtl", "inkl", "max", "min", "sog", "str", "jr", "dr", "prof", "st"
+]);
+
+/**
+ * True when `[.!?]` at `index` really ends a sentence. Guards against the truncation
+ * bug where quotes collapsed to fragments like "10)." or "8% vs. 5% vs. 8%).":
+ * a period after an abbreviation, between digits, or inside an open parenthesis is
+ * punctuation inside the sentence, not its end.
+ */
+export function isSentenceBoundary(text: string, index: number) {
+  const char = text[index];
+  if (!char || !".!?".includes(char)) {
+    return false;
+  }
+  if (char === ".") {
+    const before = text.slice(0, index);
+    const wordMatch = /([\p{L}\p{N}%]+)$/u.exec(before);
+    const word = wordMatch ? wordMatch[1] : "";
+    if (word && SENTENCE_ABBREVIATIONS.has(word.toLowerCase().replace(/[^a-zä-ü]/g, ""))) {
+      return false;
+    }
+    // Single letters ("z.", "B.") and pure numbers ("3." / "2.5") rarely end sentences.
+    if (/^[\p{L}]$/u.test(word)) {
+      return false;
+    }
+    const after = text.slice(index + 1).trimStart();
+    if (/^\d/.test(text.slice(index + 1)) || /^[a-zäöüß,;)]/.test(after)) {
+      return false;
+    }
+  }
+  // A boundary inside an unclosed parenthesis is part of a parenthetical, not the end.
+  let depth = 0;
+  for (let i = 0; i < index; i += 1) {
+    if (text[i] === "(") depth += 1;
+    else if (text[i] === ")") depth = Math.max(0, depth - 1);
+  }
+  return depth === 0;
+}
+
 function trailingSentenceFragment(value: string) {
   const trimmed = value.trimEnd();
-  const boundaries = ["\n\n", "\n- ", "\n* ", ". ", "! ", "? "].map((boundary) => trimmed.lastIndexOf(boundary));
-  const start = Math.max(...boundaries);
+  let start = -1;
+  for (const boundary of ["\n\n", "\n- ", "\n* "]) {
+    start = Math.max(start, trimmed.lastIndexOf(boundary));
+  }
+  for (const match of trimmed.matchAll(/[.!?](?=\s)/g)) {
+    const index = match.index ?? -1;
+    if (index > start && isSentenceBoundary(trimmed, index)) {
+      start = index;
+    }
+  }
   const offset = start >= 0 ? start + 1 : 0;
   return trimmed.slice(offset).replace(/^\s*[-*]\s+/, "").trimStart();
 }
 
 function leadingSentenceFragment(value: string) {
-  const trimmed = value.trimStart();
+  let trimmed = value.trimStart();
   if (/^[.!?]/.test(trimmed)) {
     return trimmed[0];
   }
-  const stop = trimmed.search(/[.!?](?:\s|$)|\n{2,}/);
-  return stop >= 0 ? trimmed.slice(0, stop + 1) : "";
+  const paragraphStop = trimmed.search(/\n{2,}/);
+  if (paragraphStop >= 0) {
+    trimmed = trimmed.slice(0, paragraphStop);
+  }
+  for (const match of trimmed.matchAll(/[.!?](?=\s|$)/g)) {
+    const index = match.index ?? -1;
+    if (index >= 0 && isSentenceBoundary(trimmed, index)) {
+      return trimmed.slice(0, index + 1);
+    }
+  }
+  return paragraphStop >= 0 ? trimmed : "";
+}
+
+/**
+ * Quote text is only worth storing when it carries real content. Fragments such as
+ * "10)." slipped through when sentence detection failed — callers fall back to the
+ * evidence excerpt instead of persisting a meaningless fragment.
+ */
+export function meaningfulQuote(quote: string) {
+  const text = String(quote || "").trim();
+  if (!text) {
+    return "";
+  }
+  const letters = text.replace(/[^\p{L}]/gu, "");
+  const words = text.split(/\s+/).filter((word) => /[\p{L}]{2,}/u.test(word));
+  return letters.length >= 12 && words.length >= 3 ? text : "";
 }
 
 export function citationIds(citation: string) {

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import { ChevronLeft, ChevronRight, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, Languages, Layers, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
+import { useAppState } from "../state";
 import type { PaperMeta, VerificationEvidence } from "../types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -39,6 +40,17 @@ type MatchIndex = Record<number, Record<number, PageMatch>>;
 type HighlightQuery = {
   phrases: string[];
   terms: string[];
+};
+
+// Search renders as its own highlight layer (parallel to evidence highlights)
+// instead of replacing them.
+export const SEARCH_LAYER_INDEX = -1;
+
+export type HighlightLayer = {
+  index: number;
+  colorIndex: number;
+  query: HighlightQuery;
+  signature: string;
 };
 
 type IndexedTextItem = {
@@ -110,6 +122,12 @@ export function PdfPane({
   const [zoom, setZoom] = useState(1);
   const [fitMode, setFitMode] = useState<"width" | "page">("width");
   const [searchTerm, setSearchTerm] = useState("");
+  const [showAllEvidences, setShowAllEvidences] = useState(false);
+  const { provider, model } = useAppState();
+  const [translateLanguage, setTranslateLanguage] = useState("Deutsch");
+  const [translation, setTranslation] = useState("");
+  const [translateError, setTranslateError] = useState("");
+  const [isTranslating, setIsTranslating] = useState(false);
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const resizeFrameRef = useRef<number | null>(null);
@@ -174,28 +192,89 @@ export function PdfPane({
   const evidenceQueries = useMemo(() => evidences.map(buildHighlightQuery), [evidenceSignature]);
   const searchQuery = useMemo(() => buildSearchQuery(searchTerm), [searchTerm]);
   const showingSearch = Boolean(searchTerm.trim());
-  const visibleHighlightIndex = showingSearch ? -1 : activeEvidenceIndex;
   const activeEvidence = evidences[activeEvidenceIndex];
   const activeEvidenceColorIndex = evidenceColorIndex(activeEvidence, activeEvidenceIndex);
-  const visibleHighlightColorIndex = showingSearch ? visibleHighlightIndex : activeEvidenceColorIndex;
   const activeQuery = evidenceQueries[activeEvidenceIndex] ?? { phrases: [], terms: [] };
-  const visibleQuery = showingSearch ? searchQuery : activeQuery;
-  const visibleQuerySignature = highlightQuerySignature(visibleQuery);
-  const activeMatch = bestMatchFor(matches[visibleHighlightIndex], visibleQuerySignature);
-  const evidenceMatch = bestMatchFor(matches[activeEvidenceIndex], highlightQuerySignature(activeQuery));
-  const activePages = pagesFor(matches[visibleHighlightIndex], visibleQuerySignature);
-  const evidencePages = pagesFor(matches[activeEvidenceIndex], highlightQuerySignature(activeQuery));
-  const evidenceTargetPage = showingSearch ? activeMatch?.pageNumber ?? null : evidenceMatch?.pageNumber ?? null;
-  const activeEvidenceText = showingSearch ? activeMatch?.matchedText ?? "" : evidenceMatch?.matchedText ?? "";
+  const activeQuerySignature = highlightQuerySignature(activeQuery);
+  // Highlight layers render in parallel: the active citation, optionally every other
+  // citation ("Alle Zitate"), and the search — search no longer replaces the citation
+  // highlight.
+  const layers = useMemo<HighlightLayer[]>(() => {
+    const list: HighlightLayer[] = [];
+    evidenceQueries.forEach((query, index) => {
+      if ((index === activeEvidenceIndex || showAllEvidences) && (query.phrases.length || query.terms.length)) {
+        list.push({
+          index,
+          colorIndex: evidenceColorIndex(evidences[index], index),
+          query,
+          signature: highlightQuerySignature(query)
+        });
+      }
+    });
+    if (showingSearch) {
+      list.push({
+        index: SEARCH_LAYER_INDEX,
+        colorIndex: SEARCH_LAYER_INDEX,
+        query: searchQuery,
+        signature: highlightQuerySignature(searchQuery)
+      });
+    }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evidenceQueries, evidenceSignature, activeEvidenceIndex, showAllEvidences, showingSearch, searchQuery]);
+  const layersSignature = layers.map((layer) => `${layer.index}#${layer.signature}`).join("");
+  // Scrolling follows the search while typing, otherwise the active citation.
+  const scrollLayerIndex = showingSearch ? SEARCH_LAYER_INDEX : activeEvidenceIndex;
+  const scrollSignature = showingSearch ? highlightQuerySignature(searchQuery) : activeQuerySignature;
+  const activeMatch = bestMatchFor(matches[scrollLayerIndex], scrollSignature);
+  const evidenceMatch = bestMatchFor(matches[activeEvidenceIndex], activeQuerySignature);
+  const searchMatchPages = showingSearch ? pagesFor(matches[SEARCH_LAYER_INDEX], highlightQuerySignature(searchQuery)) : [];
+  const evidencePages = pagesFor(matches[activeEvidenceIndex], activeQuerySignature);
+  const targetPages = useMemo(() => {
+    const result: Record<number, number | null> = {};
+    for (const layer of layers) {
+      result[layer.index] = bestMatchFor(matches[layer.index], layer.signature)?.pageNumber ?? null;
+    }
+    return result;
+  }, [layers, matches]);
+  const targetPagesSignature = layers.map((layer) => `${layer.index}:${targetPages[layer.index] ?? ""}`).join(",");
+  const activeEvidenceText = evidenceMatch?.matchedText ?? "";
   // Pages report in asynchronously; until every page was scanned for the current query
   // the "best" match keeps changing — gate scrolling and "not found" messages on this.
-  const activeScanKey = `${visibleHighlightIndex}|${visibleQuerySignature}`;
+  const activeScanKey = `${scrollLayerIndex}|${scrollSignature}`;
   const scanComplete = pageCount > 0 && Object.keys(scannedPages[activeScanKey] ?? {}).length >= pageCount;
 
   useEffect(() => {
     setMatches({});
     setScannedPages({});
-  }, [evidenceSignature, searchTerm, url]);
+  }, [evidenceSignature, searchTerm, url, showAllEvidences]);
+
+  useEffect(() => {
+    setTranslation("");
+    setTranslateError("");
+  }, [activeEvidenceIndex, evidenceSignature, url]);
+
+  async function translateActiveExcerpt() {
+    const text = (activeEvidenceText || activeEvidence?.pdf_excerpt || activeEvidence?.reference_text || "").trim();
+    if (!text || isTranslating) {
+      return;
+    }
+    setIsTranslating(true);
+    setTranslateError("");
+    try {
+      const result = await api.rewriteNote({
+        text,
+        instruction: `Übersetze den folgenden Text nach ${translateLanguage}. Gib ausschließlich die Übersetzung aus, ohne Kommentar.`,
+        provider,
+        model
+      });
+      setTranslation(result.text);
+    } catch (error) {
+      setTranslateError(error instanceof Error ? error.message : "Übersetzung fehlgeschlagen");
+    } finally {
+      setIsTranslating(false);
+    }
+  }
 
   useEffect(() => {
     const node = canvasWrapRef.current;
@@ -370,16 +449,26 @@ export function PdfPane({
           <button className="icon-button" type="button" aria-label="Nächste Zitation" onClick={() => stepEvidence(1)}>
             <ChevronRight size={18} />
           </button>
+          <button
+            className={`icon-button ${showAllEvidences ? "icon-button--active" : ""}`}
+            type="button"
+            aria-pressed={showAllEvidences}
+            aria-label={showAllEvidences ? "Nur aktives Zitat markieren" : "Alle Zitate parallel markieren"}
+            title={showAllEvidences ? "Nur aktives Zitat markieren" : "Alle Zitate parallel markieren"}
+            onClick={() => setShowAllEvidences((current) => !current)}
+            disabled={evidences.length < 2}
+          >
+            <Layers size={16} />
+          </button>
           <span>
             {evidenceMatch
               ? `Seite ${evidenceMatch.pageNumber}`
               : evidencePages.length
                 ? `Seite ${evidencePages[0]}`
-                : showingSearch
-                  ? ""
-                  : url && document && !scanComplete
-                    ? "suche Textstelle…"
-                    : "keine Textstelle gefunden"}
+                : url && document && !scanComplete
+                  ? "suche Textstelle…"
+                  : "keine Textstelle gefunden"}
+            {showAllEvidences && evidences.length > 1 ? " · alle Zitate markiert" : ""}
           </span>
         </div>
       ) : null}
@@ -407,7 +496,7 @@ export function PdfPane({
             <button className={`icon-button ${searchTerm ? "" : "pdf-search-clear--hidden"}`} type="button" aria-label="Suche leeren" onClick={() => setSearchTerm("")} disabled={!searchTerm}>
               <X size={17} />
             </button>
-            <span>{showingSearch ? (activePages.length ? `Treffer auf Seite ${activePages.join(", ")}` : "keine Treffer") : ""}</span>
+            <span>{showingSearch ? (searchMatchPages.length ? `Treffer auf Seite ${searchMatchPages.join(", ")}` : "keine Treffer") : ""}</span>
           </div>
           <div className="pdf-zoom-nav">
             <button className="icon-button" type="button" aria-label="Verkleinern" onClick={() => setZoom((current) => Math.max(0.65, current - 0.1))}>
@@ -441,12 +530,12 @@ export function PdfPane({
                 containerWidth={viewportWidth}
                 zoom={zoom}
                 fitMode={fitMode}
-                evidenceQuery={visibleQuery}
-                querySignature={visibleQuerySignature}
-                activeEvidenceIndex={visibleHighlightIndex}
-                evidenceColorIndex={visibleHighlightColorIndex}
+                layers={layers}
+                layersSignature={layersSignature}
+                activeEvidenceIndex={activeEvidenceIndex}
                 evidences={evidences}
-                targetPage={evidenceTargetPage}
+                targetPages={targetPages}
+                targetPagesSignature={targetPagesSignature}
                 onMatch={updateMatch}
                 setPageRef={(node) => {
                   pageRefs.current[pageNumber] = node;
@@ -483,18 +572,51 @@ export function PdfPane({
       {error ? <div className="inline-error">{error}</div> : null}
       {activeEvidence ? (
         <div className="excerpt-panel" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
-          <span>Aktive Textstelle</span>
+          <div className="excerpt-panel-topline">
+            <span>Aktive Textstelle</span>
+            <span className="excerpt-translate-controls">
+              <Languages size={13} />
+              <select
+                aria-label="Zielsprache für Übersetzung"
+                value={translateLanguage}
+                onChange={(event) => setTranslateLanguage(event.target.value)}
+              >
+                {EXCERPT_TRANSLATE_LANGUAGES.map((language) => (
+                  <option key={language} value={language}>
+                    {language}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="button button-compact button-ghost"
+                type="button"
+                disabled={isTranslating || !(activeEvidenceText || activeEvidence?.pdf_excerpt || activeEvidence?.reference_text)}
+                onClick={() => void translateActiveExcerpt()}
+              >
+                {isTranslating ? "Übersetzt…" : "Übersetzen"}
+              </button>
+            </span>
+          </div>
           <p>
             {activeEvidenceText ||
               (url && document && !scanComplete
                 ? "Suche Textstelle…"
                 : activeEvidence?.pdf_excerpt || "Keine Textstelle gefunden.")}
           </p>
+          {translateError ? <div className="inline-error">{translateError}</div> : null}
+          {translation ? (
+            <div className="excerpt-translation">
+              <span>Übersetzung ({translateLanguage})</span>
+              <p>{translation}</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </aside>
   );
 }
+
+const EXCERPT_TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spanisch", "Italienisch", "Portugiesisch", "Niederländisch", "Polnisch", "Chinesisch", "Japanisch"];
 
 function PdfPage({
   document,
@@ -502,12 +624,12 @@ function PdfPage({
   containerWidth,
   zoom,
   fitMode,
-  evidenceQuery,
-  querySignature,
+  layers,
+  layersSignature,
   activeEvidenceIndex,
-  evidenceColorIndex,
   evidences,
-  targetPage,
+  targetPages,
+  targetPagesSignature,
   onMatch,
   setPageRef
 }: {
@@ -516,17 +638,22 @@ function PdfPage({
   containerWidth: number;
   zoom: number;
   fitMode: "width" | "page";
-  evidenceQuery: HighlightQuery;
-  querySignature: string;
+  layers: HighlightLayer[];
+  layersSignature: string;
   activeEvidenceIndex: number;
-  evidenceColorIndex: number;
   evidences: VerificationEvidence[];
-  targetPage?: number | null;
+  targetPages: Record<number, number | null>;
+  targetPagesSignature: string;
   onMatch: (evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => void;
   setPageRef: (node: HTMLDivElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const textLayerRef = useRef<HTMLDivElement | null>(null);
   const pageRef = useRef<HTMLDivElement | null>(null);
+  const layersRef = useRef(layers);
+  const targetPagesRef = useRef(targetPages);
+  layersRef.current = layers;
+  targetPagesRef.current = targetPages;
   const [isNearViewport, setIsNearViewport] = useState(pageNumber <= 2);
   const [boxes, setBoxes] = useState<HighlightBox[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -604,12 +731,44 @@ function PdfPage({
         return;
       }
 
-      const match = findPageMatch(textContent.items, evidenceQuery, viewport, activeEvidenceIndex, evidenceColorIndex);
-      onMatch(activeEvidenceIndex, pageNumber, querySignature, match);
-      // Confident (exact) matches render on every page they appear on — an excerpt that
-      // crosses a page boundary stays fully marked; weak term-window matches render only
-      // on the single best page to avoid scattering noise across the document.
-      setBoxes(match && (targetPage === pageNumber || match.exact) ? match.boxes : []);
+      // Every highlight layer (active citation, parallel citations, search) scans the
+      // page independently; their boxes render side by side.
+      const collected: HighlightBox[] = [];
+      for (const layer of layersRef.current) {
+        const match = findPageMatch(textContent.items, layer.query, viewport, layer.index, layer.colorIndex);
+        onMatch(layer.index, pageNumber, layer.signature, match);
+        // Confident (exact) matches render on every page they appear on — an excerpt that
+        // crosses a page boundary stays fully marked; weak term-window matches render only
+        // on the single best page to avoid scattering noise across the document.
+        if (match && (targetPagesRef.current[layer.index] === pageNumber || match.exact)) {
+          collected.push(...match.boxes);
+        }
+      }
+      setBoxes(collected);
+
+      // Selectable text layer: pdf.js positions transparent spans over the canvas so
+      // normal text selection/copy works in the PDF view.
+      const textLayerNode = textLayerRef.current;
+      if (textLayerNode) {
+        textLayerNode.replaceChildren();
+        if (isNearViewport) {
+          textLayerNode.style.setProperty("--scale-factor", String(viewport.scale));
+          textLayerNode.style.setProperty("--total-scale-factor", String(viewport.scale));
+          try {
+            const TextLayerCtor = (pdfjs as unknown as { TextLayer?: new (options: Record<string, unknown>) => { render: () => Promise<void> } }).TextLayer;
+            if (TextLayerCtor) {
+              const textLayer = new TextLayerCtor({
+                textContentSource: textContent,
+                container: textLayerNode,
+                viewport
+              });
+              await textLayer.render();
+            }
+          } catch {
+            // Selection layer is an enhancement — rendering continues without it.
+          }
+        }
+      }
     }
 
     renderPage();
@@ -617,7 +776,7 @@ function PdfPage({
       cancelled = true;
       renderTask?.cancel?.();
     };
-  }, [document, pageNumber, containerWidth, zoom, fitMode, evidenceQuery, querySignature, activeEvidenceIndex, evidenceColorIndex, targetPage, onMatch, isNearViewport]);
+  }, [document, pageNumber, containerWidth, zoom, fitMode, layersSignature, targetPagesSignature, onMatch, isNearViewport]);
 
   return (
     <div className="pdf-page" ref={combinedPageRef} style={{ width: size.width || undefined }}>
@@ -625,21 +784,26 @@ function PdfPage({
       <div className="pdf-page-surface" style={{ width: size.width || undefined, height: size.height || undefined }}>
         <canvas ref={canvasRef} />
         <div className="pdf-highlight-layer">
-          {normalizeHighlightBoxes(boxes).map((box) => (
+          {/* Boxes are pre-normalized per layer; normalizing across layers would merge
+              differently colored highlights into one. */}
+          {boxes.map((box) => (
             <span
               key={box.id}
-              className={`pdf-highlight ${box.evidenceIndex === activeEvidenceIndex ? "pdf-highlight--active" : ""}`}
+              className={`pdf-highlight ${box.evidenceIndex === activeEvidenceIndex ? "pdf-highlight--active" : ""} ${box.evidenceIndex === SEARCH_LAYER_INDEX ? "pdf-highlight--search" : ""}`}
               style={{
                 left: box.left,
                 top: box.top,
                 width: box.width,
                 height: box.height,
-                ...colorVarsForPaperId(evidences[box.evidenceIndex]?.paper_id, box.colorIndex)
+                ...(box.evidenceIndex === SEARCH_LAYER_INDEX
+                  ? {}
+                  : colorVarsForPaperId(evidences[box.evidenceIndex]?.paper_id, box.colorIndex))
               }}
               aria-hidden="true"
             />
           ))}
         </div>
+        <div className="pdf-text-layer" ref={textLayerRef} />
       </div>
     </div>
   );

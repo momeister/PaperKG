@@ -55,6 +55,7 @@ class AnswerRequest(Phase4Request):
     project_id: str | None = None
     grey_source_ids: list[str] = Field(default_factory=list)
     include_project_grey: bool = False
+    llm_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class HypothesisRequest(Phase4Request):
@@ -122,6 +123,7 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         limit=request.limit,
         provider=request.provider,
         model=request.model,
+        overrides=_sanitized_llm_overrides(request.llm_overrides),
         conversation_context=request.conversation_context,
         paper_ids=request.paper_ids or None,
         priority_paper_ids=request.priority_paper_ids or None,
@@ -134,6 +136,31 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         include_project_grey=request.include_project_grey,
     )
     return answer.to_dict()
+
+
+_LLM_OVERRIDE_BOUNDS: dict[str, tuple[float, float]] = {
+    "temperature": (0.0, 2.0),
+    "top_p": (0.05, 1.0),
+    "max_tokens": (128, 131072),
+    "context_size": (1024, 262144),
+    "repeat_penalty": (0.8, 2.0),
+}
+
+
+def _sanitized_llm_overrides(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Allow only known generation knobs (clamped) from client-side LLM settings."""
+    cleaned: dict[str, Any] = {}
+    for key, (low, high) in _LLM_OVERRIDE_BOUNDS.items():
+        value = (raw or {}).get(key)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        number = min(high, max(low, number))
+        cleaned[key] = int(number) if key in {"max_tokens", "context_size"} else number
+    return cleaned or None
 
 
 @app.post("/sources/verify-answer")

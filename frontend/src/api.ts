@@ -141,6 +141,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url })
     }),
+  getWorkspaceSession: (projectId: string) =>
+    request<{ project_id: string; payload: Record<string, unknown>; updated_timestamp?: string | null }>(
+      `/workspace/sessions/${encodeURIComponent(projectId)}`
+    ),
+  saveWorkspaceSession: (projectId: string, payload: Record<string, unknown>) =>
+    request<{ project_id: string; payload: Record<string, unknown> }>(`/workspace/sessions/${encodeURIComponent(projectId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ payload })
+    }),
   deletePaper: (paperId: string) =>
     request<{ deleted: boolean; file_deleted: boolean; id: string }>(`/papers/${encodeURIComponent(paperId)}`, { method: "DELETE" }),
   deleteGreySource: (greyId: string) =>
@@ -218,6 +227,7 @@ export const api = {
     project_id?: string;
     grey_source_ids?: string[];
     include_project_grey?: boolean;
+    llm_overrides?: Record<string, number | undefined>;
   }) =>
     request<Answer>("/query/answer", { method: "POST", body: JSON.stringify(payload) }),
   verifyAnswer: (answer: Answer, options: { max_sources?: number; max_evidence_per_source?: number } = {}) =>

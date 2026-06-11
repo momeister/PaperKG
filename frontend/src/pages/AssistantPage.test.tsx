@@ -9,11 +9,39 @@ import {
   citationQuoteFromParts,
   EvidenceVerificationBadge,
   formatAnswerForNote,
+  isSentenceBoundary,
+  meaningfulQuote,
   verificationSourcesFor
 } from "./AssistantPage";
 import type { Answer, VerificationSource } from "../types";
 
 afterEach(() => cleanup());
+
+describe("sentence boundaries for note quotes", () => {
+  it("does not treat abbreviations or parenthetical numbers as sentence ends", () => {
+    const text = "Die Rate sank deutlich (8% vs. 5% vs. 8%). Danach folgt mehr Text.";
+    const vsIndex = text.indexOf("vs.") + 2;
+    expect(isSentenceBoundary(text, vsIndex)).toBe(false);
+    const realEnd = text.indexOf(").") + 1;
+    expect(isSentenceBoundary(text, realEnd)).toBe(true);
+  });
+
+  it("keeps the full sentence when extracting the quote around a citation", () => {
+    const answer = "Die Reduktion war signifikant (8% vs. 5% vs. 8%) in allen Gruppen [p1]. Weiter geht es.";
+    const parts = answer.split(/(\[[^\]]+\])/g);
+    const quote = citationQuoteFromParts(parts, 1);
+    expect(quote).toContain("Die Reduktion war signifikant");
+    expect(quote).toContain("8% vs. 5%");
+  });
+
+  it("rejects meaningless quote fragments and accepts real sentences", () => {
+    expect(meaningfulQuote("10).")).toBe("");
+    expect(meaningfulQuote("8% vs. 5% vs. 8%).")).toBe("");
+    expect(meaningfulQuote("Die Studie zeigt eine deutliche Reduktion der Ereignisse.")).toBe(
+      "Die Studie zeigt eine deutliche Reduktion der Ereignisse."
+    );
+  });
+});
 
 const verification: VerificationSource[] = [
   {

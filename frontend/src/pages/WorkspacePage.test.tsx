@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyDroppedFile, classifyPastedText } from "./WorkspacePage";
+import type { Answer } from "../types";
+import {
+  answerSuggestsWebSearch,
+  classifyDroppedFile,
+  classifyPastedText,
+  extractInlineWebToken,
+  matchWorkspaceCommands
+} from "./WorkspacePage";
 
 function file(name: string, type: string) {
   return new File(["x"], name, { type });
@@ -37,5 +44,48 @@ describe("dropped/pasted source classification", () => {
     expect(classifyPastedText("See https://example.com for details")).toBeNull();
     expect(classifyPastedText("https://example.com/a\nhttps://example.com/b")).toBeNull();
     expect(classifyPastedText("")).toBeNull();
+  });
+});
+
+describe("inline /web token", () => {
+  it("detects /web anywhere in the prompt and strips it", () => {
+    expect(extractInlineWebToken("/web Was sagt die Studie?")).toEqual({ text: "Was sagt die Studie?", web: true });
+    expect(extractInlineWebToken("Was sagt die Studie? /web")).toEqual({ text: "Was sagt die Studie?", web: true });
+    expect(extractInlineWebToken("Was sagt /web die Studie?")).toEqual({ text: "Was sagt die Studie?", web: true });
+  });
+
+  it("leaves prompts without the token untouched", () => {
+    expect(extractInlineWebToken("Wie funktioniert ein Webserver?")).toEqual({ text: "Wie funktioniert ein Webserver?", web: false });
+    expect(extractInlineWebToken("/website example.com")).toEqual({ text: "/website example.com", web: false });
+  });
+});
+
+describe("command palette matching", () => {
+  it("matches commands by prefix on name and alias", () => {
+    expect(matchWorkspaceCommands("su").map((command) => command.name)).toContain("suche");
+    expect(matchWorkspaceCommands("auswahl").map((command) => command.name)).toContain("selected");
+    expect(matchWorkspaceCommands("").length).toBeGreaterThan(5);
+  });
+
+  it("returns nothing for unknown commands", () => {
+    expect(matchWorkspaceCommands("zzz")).toHaveLength(0);
+  });
+});
+
+describe("web search offer heuristic", () => {
+  const baseAnswer: Answer = { question: "q", answer: "", sources: [], evidence: [] };
+
+  it("offers web search for explicit no-answer responses", () => {
+    expect(answerSuggestsWebSearch({ ...baseAnswer, no_answer: true })).toBe(true);
+    expect(answerSuggestsWebSearch({ ...baseAnswer, answer: "The local KG does not contain enough evidence." })).toBe(true);
+    expect(answerSuggestsWebSearch({ ...baseAnswer, answer: "Es gibt nicht genug Evidenz im lokalen Bestand." })).toBe(true);
+    expect(
+      answerSuggestsWebSearch({ ...baseAnswer, answer: "x", context_diagnostics: { fallback_reason: "no_traceable_citations" } })
+    ).toBe(true);
+  });
+
+  it("stays quiet for substantive answers", () => {
+    expect(answerSuggestsWebSearch({ ...baseAnswer, answer: "Die Studie zeigt einen Effekt von 12% [arxiv:1]." })).toBe(false);
+    expect(answerSuggestsWebSearch(null)).toBe(false);
   });
 });

@@ -11,30 +11,32 @@ import type {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AtSign,
   Bot,
   ChevronDown,
   ChevronUp,
+  Command,
+  DownloadCloud,
   FilePlus2,
   FileSearch,
   FileText,
+  FolderPlus,
   Globe,
-  HelpCircle,
   Link2,
   ListChecks,
   Maximize2,
   MessageSquareText,
   Minimize2,
-  MoreHorizontal,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Pin,
+  Plus,
   Quote,
   Search,
   Send,
+  Settings2,
   Sparkles,
   Star,
   Trash2,
@@ -67,10 +69,12 @@ import {
   citationMetasFor,
   cleanAnswerQuote,
   EvidenceVerificationBadge,
+  fetchAssistantSession,
   formatAnswerForNote,
   formatNoteQuote,
   formatTurnTime,
   loadAssistantSession,
+  meaningfulQuote,
   mergeVerification,
   noteCitation,
   sameCitation,
@@ -101,6 +105,80 @@ type WorkspaceAssistantMode = "pdf" | "notes";
 type AssistantAnswerBlock = ReturnType<typeof turnBlocks>[number];
 type AssistantTurn = Parameters<typeof turnBlocks>[0];
 
+export type WorkspaceCommandDef = {
+  name: string;
+  aliases?: string[];
+  args?: string;
+  description: string;
+  group: "frage" | "aktion";
+};
+
+/** Claude-Code-Stil: alles, was sonst in anderen Tabs passiert, ist hier als Slash-Befehl erreichbar. */
+export const WORKSPACE_COMMANDS: WorkspaceCommandDef[] = [
+  { name: "web", description: "Web-Recherche für diese Frage aktivieren (überall im Text erkannt)", group: "frage" },
+  { name: "new", aliases: ["neu"], description: "Neues Gespräch starten", group: "frage" },
+  { name: "selected", aliases: ["auswahl"], description: "Auf ausgewählte Quellen eingrenzen", group: "frage" },
+  { name: "alle", aliases: ["all"], description: "Auf alle Quellen des Projekts erweitern", group: "frage" },
+  { name: "summary", args: "[fokus]", description: "Zusammenfassung des aktuellen Papers", group: "frage" },
+  { name: "extract", args: "[fokus]", description: "Methoden, Ergebnisse & Schlussfolgerungen", group: "frage" },
+  { name: "compare", args: "[fokus]", description: "Papers vergleichen", group: "frage" },
+  { name: "projekt", args: "<name>", description: "Neues Projekt anlegen und aktivieren", group: "aktion" },
+  { name: "notiz", args: "[titel]", description: "Neue Notiz anlegen", group: "aktion" },
+  { name: "suche", aliases: ["papers", "import"], args: "<thema>", description: "Neue Papers suchen & herunterladen (arXiv)", group: "aktion" },
+  { name: "extraktion", description: "Extraktion für aktuelles/ausgewählte Paper starten", group: "aktion" },
+  { name: "help", aliases: ["hilfe"], description: "Befehlsübersicht anzeigen", group: "frage" }
+];
+
+export function matchWorkspaceCommands(query: string): WorkspaceCommandDef[] {
+  const needle = query.trim().toLowerCase().split(/\s+/)[0] ?? "";
+  if (!needle) {
+    return WORKSPACE_COMMANDS;
+  }
+  return WORKSPACE_COMMANDS.filter(
+    (command) => command.name.startsWith(needle) || (command.aliases ?? []).some((alias) => alias.startsWith(needle))
+  );
+}
+
+/**
+ * `/web` (und nur /web) wirkt inline: egal wo es im Prompt steht, es wird entfernt und
+ * aktiviert die Web-Recherche für genau diese Frage.
+ */
+export function extractInlineWebToken(value: string): { text: string; web: boolean } {
+  let web = false;
+  const text = value
+    .replace(/(^|\s)\/web\b/gi, (_match, prefix: string) => {
+      web = true;
+      return prefix;
+    })
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return { text, web };
+}
+
+/** Erkennvermerk, dass eine Antwort faktisch leer ausging und das Web helfen könnte. */
+export function answerSuggestsWebSearch(answer: Answer | null | undefined): boolean {
+  if (!answer) {
+    return false;
+  }
+  if (answer.no_answer) {
+    return true;
+  }
+  if (answer.context_diagnostics?.fallback_reason === "no_traceable_citations") {
+    return true;
+  }
+  return /not contain enough evidence|does not contain enough|nicht genug (?:Evidenz|Belege)|keine ausreichenden? (?:Evidenz|Belege)|konnte keine .{0,40}finden/i.test(
+    answer.answer || ""
+  );
+}
+
+type WorkspaceActionEntry = {
+  id: string;
+  title: string;
+  detail: string;
+  status: "ok" | "error" | "pending";
+  createdAt: string;
+};
+
 const EMPTY_NOTES_SNAPSHOT: NotesSurfaceSnapshot = {
   activeNoteId: "",
   title: "",
@@ -120,7 +198,7 @@ const EMPTY_NOTES_SNAPSHOT: NotesSurfaceSnapshot = {
 };
 
 export function WorkspacePage() {
-  const { activeProject, provider, model } = useAppState();
+  const { activeProject, setActiveProject, provider, model, llmParams } = useAppState();
   const scopedProjectId = noteProjectId(activeProject);
   const scopeLabel = projectScopeLabel(activeProject);
   const queryClient = useQueryClient();
@@ -143,7 +221,6 @@ export function WorkspacePage() {
   const questionInputRef = useRef<HTMLInputElement | null>(null);
   const [mentionState, setMentionState] = useState<{ query: string; start: number; end: number } | null>(null);
   const [mentionHighlight, setMentionHighlight] = useState(0);
-  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const [history, setHistory] = useState<AssistantTurn[]>(() => loadAssistantSession(scopedProjectId).history);
   const [activeTurnId, setActiveTurnId] = useState(() => loadAssistantSession(scopedProjectId).activeTurnId);
@@ -161,6 +238,12 @@ export function WorkspacePage() {
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
   const [selectedGreyIds, setSelectedGreyIds] = useState<string[]>([]);
   const [useInternet, setUseInternet] = useState(() => loadWorkspaceBoolean(scopedProjectId, "useInternet", false));
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const [actionLog, setActionLog] = useState<WorkspaceActionEntry[]>([]);
+  const [commandSearch, setCommandSearch] = useState<{ query: string; results: Paper[]; selected: string[] } | null>(null);
+  const [webOfferDismissedFor, setWebOfferDismissedFor] = useState("");
 
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
@@ -261,7 +344,8 @@ export function WorkspacePage() {
         grey_source_ids: greySourceIds.length ? greySourceIds : undefined,
         include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
         conversation_context: conversationMode === "followup" && activeTurn ? turnContext(activeTurn) : undefined,
-        project_id: activeProject || undefined
+        project_id: activeProject || undefined,
+        llm_overrides: Object.values(llmParams).some((value) => value !== undefined) ? llmParams : undefined
       }),
     onSuccess: async (payload) => {
       let sources: VerificationSource[] = [];
@@ -376,6 +460,82 @@ export function WorkspacePage() {
     onError: (error) => setSourceIngestStatus(error instanceof Error ? error.message : "Bild konnte nicht gespeichert werden")
   });
 
+  function logAction(title: string, detail: string, status: WorkspaceActionEntry["status"] = "ok") {
+    const entry: WorkspaceActionEntry = {
+      id: `act_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      title,
+      detail,
+      status,
+      createdAt: new Date().toISOString()
+    };
+    setActionLog((current) => [...current.slice(-7), entry]);
+    return entry.id;
+  }
+
+  function updateAction(id: string, patch: Partial<Pick<WorkspaceActionEntry, "detail" | "status">>) {
+    setActionLog((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+  }
+
+  const createProjectCommand = useMutation({
+    mutationFn: (name: string) => api.createProject(name),
+    onSuccess: ({ project }) => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setActiveProject(project.id);
+      logAction("Projekt angelegt", `„${project.name}" ist jetzt aktiv.`);
+    },
+    onError: (error) => logAction("Projekt anlegen fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  const paperSearchCommand = useMutation({
+    mutationFn: (query: string) => api.harvestSearch({ query, sources: ["arxiv"], max_results: 10 }),
+    onSuccess: (payload) => {
+      setCommandSearch({ query: payload.query, results: payload.results, selected: payload.results.slice(0, 3).map((paper) => paper.id) });
+    },
+    onError: (error) => logAction("Paper-Suche fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  const downloadPapersCommand = useMutation({
+    mutationFn: (papers: Paper[]) => api.harvestDownload(papers, true, isRealProject ? (activeProject as string) : undefined),
+    onSuccess: (payload) => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-pdfs", activeProject] });
+      queryClient.invalidateQueries({ queryKey: ["papers"] });
+      logAction("Papers heruntergeladen", `${payload.downloaded} PDFs geladen, ${payload.inserted} Einträge gespeichert.`);
+      setCommandSearch(null);
+    },
+    onError: (error) => logAction("Download fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  const createNoteCommand = useMutation({
+    mutationFn: (noteTitle: string) => api.createNote(scopedProjectId, { title: noteTitle || "Neue Notiz", markdown: `# ${noteTitle || "Neue Notiz"}\n\n` }),
+    onSuccess: ({ note }) => {
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      queryClient.setQueryData(["note", note.id], { note });
+      setControlledNoteId(note.id);
+      notesActionsRef.current?.selectNote(note.id);
+      setNotesOpen(true);
+      logAction("Notiz angelegt", `„${note.title}" geöffnet.`);
+    },
+    onError: (error) => logAction("Notiz anlegen fehlgeschlagen", error instanceof Error ? error.message : String(error), "error")
+  });
+
+  function runExtractionCommand() {
+    const targets = paperScope === "selected" && selectedPaperIds.length ? selectedPaperIds : currentScopePaperId ? [currentScopePaperId] : [];
+    if (!targets.length) {
+      logAction("Extraktion", "Kein Paper aktiv oder ausgewählt — zuerst ein PDF öffnen oder Quellen anhaken.", "error");
+      return;
+    }
+    for (const paperId of targets) {
+      const actionId = logAction("Extraktion gestartet", paperId, "pending");
+      api
+        .runExtraction({ paper_id: paperId, provider, model })
+        .then((result) => {
+          updateAction(actionId, { status: result.status === "failed" ? "error" : "ok", detail: `${paperId}: ${result.status}` });
+          queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
+        })
+        .catch((error) => updateAction(actionId, { status: "error", detail: `${paperId}: ${error instanceof Error ? error.message : String(error)}` }));
+    }
+  }
+
   function ingestDroppedFiles(files: File[]) {
     for (const file of files) {
       const kind = classifyDroppedFile(file);
@@ -434,6 +594,22 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "useInternet", useInternet), [useInternet, scopedProjectId]);
 
   useEffect(() => {
+    if (!chatSettingsOpen && !actionsMenuOpen) {
+      return;
+    }
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".chat-tool-wrap")) {
+        return;
+      }
+      setChatSettingsOpen(false);
+      setActionsMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [chatSettingsOpen, actionsMenuOpen]);
+
+  useEffect(() => {
     assistantScopeRef.current = scopedProjectId;
     const session = loadAssistantSession(scopedProjectId);
     setHistory(session.history);
@@ -447,7 +623,27 @@ export function WorkspacePage() {
     setSelectedPaperIds([]);
     setSelectedGreyIds([]);
     setFocusedNoteThreadId("");
+    setActionLog([]);
+    setCommandSearch(null);
+    setWebOfferDismissedFor("");
+    setChatSettingsOpen(false);
+    setActionsMenuOpen(false);
     webMutation.reset();
+    // The backend copy is authoritative: localStorage drops large sessions silently
+    // (quota), so reloads must restore the conversation from the server.
+    let cancelled = false;
+    void fetchAssistantSession(scopedProjectId).then((server) => {
+      if (cancelled || !server || assistantScopeRef.current !== scopedProjectId) {
+        return;
+      }
+      if (!session.history.length || (server.savedAt ?? 0) >= (session.savedAt ?? 0)) {
+        setHistory(server.history);
+        setActiveTurnId(server.activeTurnId);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedProjectId]);
 
@@ -609,7 +805,48 @@ export function WorkspacePage() {
     }
   }
 
+  function applyPaletteCommand(command: WorkspaceCommandDef) {
+    if (command.args) {
+      const next = `/${command.name} `;
+      setQuestion(next);
+      placeCursorAfter(next.length);
+      return;
+    }
+    setQuestion("");
+    handleSlashCommand(`/${command.name}`);
+  }
+
   function handleQuestionKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (paletteQuery !== null && paletteCandidates.length) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setPaletteIndex((current) => (current + 1) % paletteCandidates.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setPaletteIndex((current) => (current - 1 + paletteCandidates.length) % paletteCandidates.length);
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const candidate = paletteCandidates[paletteIndex] ?? paletteCandidates[0];
+        const next = `/${candidate.name} `;
+        setQuestion(next);
+        placeCursorAfter(next.length);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        applyPaletteCommand(paletteCandidates[paletteIndex] ?? paletteCandidates[0]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setQuestion("");
+        return;
+      }
+    }
     if (mentionState && mentionCandidates.length) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -647,7 +884,7 @@ export function WorkspacePage() {
   }
 
   function handleSlashCommand(raw: string): boolean {
-    const match = raw.match(/^\/(\w+)\s*([\s\S]*)$/);
+    const match = raw.match(/^\/([\wäöüß]+)\s*([\s\S]*)$/i);
     if (!match) {
       return false;
     }
@@ -655,17 +892,25 @@ export function WorkspacePage() {
     const remainder = rest.trim();
     switch (name.toLowerCase()) {
       case "new":
+      case "neu":
         setConversationMode("new");
         setQuestion(remainder);
         return true;
       case "selected":
+      case "auswahl":
         setQuestion(remainder);
         setPaperScope("selected");
         if (!selectedPaperIds.length && !selectedGreyIds.length) {
           openMentionPicker();
         }
         return true;
+      case "alle":
+      case "all":
+        setPaperScope("all");
+        setQuestion(remainder);
+        return true;
       case "help":
+      case "hilfe":
         setShowCommandHelp(true);
         setQuestion(remainder);
         return true;
@@ -688,6 +933,33 @@ export function WorkspacePage() {
         setPaperScope("all");
         setQuestion("Vergleiche die wichtigsten Unterschiede und Gemeinsamkeiten der Papers." + (remainder ? ` ${remainder}` : ""));
         return true;
+      case "projekt":
+        if (!remainder) {
+          logAction("Projekt anlegen", "Name fehlt — /projekt <Name> verwenden.", "error");
+          return true;
+        }
+        createProjectCommand.mutate(remainder);
+        setQuestion("");
+        return true;
+      case "notiz":
+        createNoteCommand.mutate(remainder);
+        setQuestion("");
+        return true;
+      case "suche":
+      case "papers":
+      case "import":
+        if (!remainder) {
+          logAction("Paper-Suche", "Thema fehlt — /suche <Thema> verwenden.", "error");
+          return true;
+        }
+        logAction("Paper-Suche", `Suche nach „${remainder}" …`, "pending");
+        paperSearchCommand.mutate(remainder);
+        setQuestion("");
+        return true;
+      case "extraktion":
+        runExtractionCommand();
+        setQuestion("");
+        return true;
       default:
         return false;
     }
@@ -695,17 +967,32 @@ export function WorkspacePage() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const value = question.trim();
-    if (!value) {
+    const raw = question.trim();
+    if (!raw) {
       return;
     }
+    // `/web` darf an beliebiger Stelle im Prompt stehen und wird zuerst angewendet.
+    const inline = extractInlineWebToken(raw);
+    if (inline.web && !inline.text) {
+      setUseInternet((v) => !v);
+      setQuestion("");
+      return;
+    }
+    const value = inline.text;
     if (value.startsWith("/") && handleSlashCommand(value)) {
       return;
     }
+    const runWeb = useInternet || inline.web;
+    if (inline.web) {
+      setUseInternet(true);
+      setQuestion(value);
+    }
     if (!questionBlockedByScope) {
       answerMutation.mutate(value + verbosityInstruction(verbosity));
-      if (useInternet) {
+      if (runWeb && isRealProject) {
         webMutation.mutate(value);
+      } else if (runWeb && !isRealProject) {
+        logAction("Web-Recherche", "Internet-Recherche braucht ein echtes Projekt (nicht „Alle Papers“).", "error");
       }
     }
   }
@@ -816,7 +1103,7 @@ export function WorkspacePage() {
     }
     const citation = noteCitation(source, evidence, evidenceIndex);
     notesActionsRef.current?.clearInsertPreview();
-    void appendToActiveNote(formatNoteQuote(quote || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id), [citation]);
+    void appendToActiveNote(formatNoteQuote(meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id), [citation]);
   }
 
   function previewCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "") {
@@ -825,7 +1112,7 @@ export function WorkspacePage() {
       return;
     }
     const citation = noteCitation(source, evidence, evidenceIndex);
-    notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(quote || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id));
+    notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text, source, evidenceIndex, citation.id));
   }
 
   function toggleScopedPaper(paperId: string) {
@@ -880,7 +1167,7 @@ export function WorkspacePage() {
     if (!selectedSource || !activeEvidence) {
       return;
     }
-    const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : activeAnswerQuote || activeEvidence.reference_text;
+    const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : meaningfulQuote(activeAnswerQuote) || activeEvidence.reference_text;
     const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
     notesActionsRef.current?.clearInsertPreview();
     void appendToActiveNote(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id), [citation]);
@@ -897,7 +1184,7 @@ export function WorkspacePage() {
     if (!selectedSource || !activeEvidence) {
       return;
     }
-    const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : activeAnswerQuote || activeEvidence.reference_text;
+    const quote = sourceKind === "pdf" ? activeEvidence.pdf_excerpt || activeEvidence.reference_text : meaningfulQuote(activeAnswerQuote) || activeEvidence.reference_text;
     const citation = noteCitation(selectedSource, activeEvidence, activeEvidenceIndex);
     notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(quote, selectedSource, activeEvidenceIndex, citation.id));
   }
@@ -993,6 +1280,22 @@ export function WorkspacePage() {
   }, [navigatorQuery, notesSnapshot.notes]);
 
   const pdfPapers = papersQuery.data?.items ?? [];
+  // Befehlspalette: sichtbar solange der erste Token noch getippt wird ("/su…").
+  const paletteQuery = /^\/\S*$/.test(question) ? question.slice(1) : null;
+  const paletteCandidates = useMemo(() => (paletteQuery !== null ? matchWorkspaceCommands(paletteQuery) : []), [paletteQuery]);
+  const activeCommandHint = useMemo(() => {
+    const match = question.match(/^\/([\wäöüß]+)\s/i);
+    if (!match) {
+      return null;
+    }
+    const name = match[1].toLowerCase();
+    return WORKSPACE_COMMANDS.find((command) => command.name === name || (command.aliases ?? []).includes(name)) ?? null;
+  }, [question]);
+  useEffect(() => setPaletteIndex(0), [paletteQuery]);
+  const latestAnswerNeedsWeb = useMemo(
+    () => Boolean(latestBlock && answerSuggestsWebSearch(latestBlock.answer)),
+    [latestBlock]
+  );
   const mentionCandidates = useMemo(() => {
     if (!mentionState) {
       return [];
@@ -1243,21 +1546,62 @@ export function WorkspacePage() {
               <span className="mention-popover-hint">Tab · Pfeiltasten · Enter zum Übernehmen</span>
             </div>
           ) : null}
+          {paletteQuery !== null && paletteCandidates.length > 0 ? (
+            <div className="command-palette-popover" role="listbox" aria-label="Befehle">
+              <div className="command-palette-head">
+                <Command size={13} />
+                <span>Befehle</span>
+              </div>
+              {paletteCandidates.map((command, index) => (
+                <button
+                  type="button"
+                  key={command.name}
+                  className={`command-palette-row ${index === paletteIndex ? "command-palette-row--active" : ""}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyPaletteCommand(command);
+                  }}
+                >
+                  <code>
+                    /{command.name}
+                    {command.args ? <em> {command.args}</em> : null}
+                  </code>
+                  <span>{command.description}</span>
+                  {command.group === "aktion" ? <small>Aktion</small> : null}
+                </button>
+              ))}
+              <span className="mention-popover-hint">↑↓ wählen · Tab vervollständigen · Enter ausführen</span>
+            </div>
+          ) : null}
+          {activeCommandHint ? (
+            <div className="command-arg-hint">
+              <code>/{activeCommandHint.name}</code>
+              {activeCommandHint.args ? <em>{activeCommandHint.args}</em> : null}
+              <span>{activeCommandHint.description}</span>
+            </div>
+          ) : null}
           {showCommandHelp ? (
             <div className="command-help-popover">
-              <div className="command-help-head">Verfügbare Befehle</div>
-              <div className="command-help-row"><code>/new</code> Neues Gespräch starten</div>
-              <div className="command-help-row"><code>/selected</code> Auf ausgewählte Papers eingrenzen</div>
-              <div className="command-help-row"><code>/web</code> Internet-Suche ein-/ausschalten</div>
-              <div className="command-help-row"><code>/summary</code> Zusammenfassung des aktuellen Papers</div>
-              <div className="command-help-row"><code>/extract</code> Methoden, Ergebnisse &amp; Schlussfolgerungen</div>
-              <div className="command-help-row"><code>/compare</code> Papers vergleichen</div>
-              <div className="command-help-row"><code>/help</code> Diese Übersicht anzeigen</div>
+              <div className="command-help-head">
+                <span>Verfügbare Befehle</span>
+                <button className="icon-button icon-button--compact" type="button" aria-label="Hilfe schließen" onClick={() => setShowCommandHelp(false)}>
+                  <X size={13} />
+                </button>
+              </div>
+              {WORKSPACE_COMMANDS.map((command) => (
+                <div className="command-help-row" key={command.name}>
+                  <code>
+                    /{command.name}
+                    {command.args ? ` ${command.args}` : ""}
+                  </code>
+                  {command.description}
+                </div>
+              ))}
               <div className="command-help-row"><code>@Titel</code> Paper zur Auswahl hinzufügen</div>
             </div>
           ) : null}
           <form
-            className={`chat-box ${isDraggingOverChat ? "chat-box--drag-over" : ""}`}
+            className={`chat-composer ${isDraggingOverChat ? "chat-box--drag-over" : ""}`}
             onSubmit={submit}
             onDragOver={handleChatDragOver}
             onDragLeave={handleChatDragLeave}
@@ -1270,85 +1614,180 @@ export function WorkspacePage() {
                 <span>PDF, Bild oder Link hier ablegen</span>
               </div>
             ) : null}
-            <Bot size={20} />
-            <input
-              ref={questionInputRef}
-              value={question}
-              onChange={handleQuestionChange}
-              onKeyDown={handleQuestionKeyDown}
-              placeholder="Frage an den lokalen KG (/ für Befehle, @ für Papers)"
-            />
-            <button className="icon-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
-              <Send size={18} />
-            </button>
-            <div className="segmented workspace-scope-segment" aria-label="Paper-Scope">
-              <button type="button" className={paperScope === "current" ? "active" : ""} onClick={() => setPaperScope("current")}>
-                Dieses
-              </button>
-              <button type="button" className={paperScope === "selected" ? "active" : ""} onClick={() => setPaperScope("selected")}>
-                Auswahl
-              </button>
-              <button type="button" className={paperScope === "all" ? "active" : ""} onClick={() => setPaperScope("all")}>
-                Alle
+            <div className="chat-composer-input">
+              <Bot size={18} />
+              <input
+                ref={questionInputRef}
+                value={question}
+                onChange={handleQuestionChange}
+                onKeyDown={handleQuestionKeyDown}
+                placeholder="Frage stellen — / für Befehle, @ für Papers"
+              />
+              <button className="icon-button chat-send-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
+                <Send size={17} />
               </button>
             </div>
-            {paperScope === "all" && isRealProject ? (
-              <div className="segmented workspace-scope-segment" aria-label="Quellenbasis">
-                <button
-                  type="button"
-                  className={!includeGlobalSources ? "active" : ""}
-                  onClick={() => setIncludeGlobalSources(false)}
-                  title="Nur Paper und Quellen aus diesem Projekt verwenden"
-                >
-                  Projekt
+            <div className="chat-composer-toolbar">
+              <div className="segmented workspace-scope-segment" aria-label="Paper-Scope">
+                <button type="button" className={paperScope === "current" ? "active" : ""} onClick={() => setPaperScope("current")} title="Nur das gerade geöffnete Paper">
+                  Dieses
                 </button>
-                <button
-                  type="button"
-                  className={includeGlobalSources ? "active" : ""}
-                  onClick={() => setIncludeGlobalSources(true)}
-                  title="Zusätzlich Paper aus dem globalen Wissensgraphen (alle Projekte) heranziehen"
-                >
-                  + Global
+                <button type="button" className={paperScope === "selected" ? "active" : ""} onClick={() => setPaperScope("selected")} title="Nur angehakte Quellen">
+                  Auswahl
+                </button>
+                <button type="button" className={paperScope === "all" ? "active" : ""} onClick={() => setPaperScope("all")} title="Alle Quellen des Projekts">
+                  Alle
                 </button>
               </div>
-            ) : null}
-            <button
-              type="button"
-              className="icon-button workspace-chat-more-toggle"
-              title={toolbarCollapsed ? "Mehr Optionen einblenden" : "Optionen ausblenden"}
-              onClick={() => setToolbarCollapsed((v) => !v)}
-            >
-              <MoreHorizontal size={16} />
-            </button>
-            {!toolbarCollapsed ? (
-              <div className="workspace-chat-controls">
-                <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
-                  <option value="followup">Weiterfragen</option>
-                  <option value="new">Neu starten</option>
-                </select>
-                <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
-                  <option value="auto">Auto</option>
-                  <option value="12">12</option>
-                  <option value="20">20</option>
-                  <option value="25">25</option>
-                </select>
-                <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
-                  <option value="kurz">Kurz</option>
-                  <option value="standard">Standard</option>
-                  <option value="ausführlich">Ausführlich</option>
-                </select>
+              {paperScope === "all" && isRealProject ? (
+                <div className="segmented workspace-scope-segment" aria-label="Quellenbasis">
+                  <button
+                    type="button"
+                    className={!includeGlobalSources ? "active" : ""}
+                    onClick={() => setIncludeGlobalSources(false)}
+                    title="Nur Paper und Quellen aus diesem Projekt verwenden"
+                  >
+                    Projekt
+                  </button>
+                  <button
+                    type="button"
+                    className={includeGlobalSources ? "active" : ""}
+                    onClick={() => setIncludeGlobalSources(true)}
+                    title="Zusätzlich Paper aus dem globalen Wissensgraphen (alle Projekte) heranziehen"
+                  >
+                    + Global
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
+                onClick={() => setUseInternet((v) => !v)}
+                disabled={!isRealProject}
+                title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph) — auch per /web"
+              >
+                <Globe size={14} />
+                <span>Web</span>
+              </button>
+              <span className="chat-composer-spacer" />
+              <span className="chat-tool-wrap">
                 <button
                   type="button"
-                  className={`internet-toggle ${useInternet ? "internet-toggle--on" : ""}`}
-                  onClick={() => setUseInternet((v) => !v)}
-                  disabled={!isRealProject}
-                  title="Zusätzlich das Web durchsuchen (Grauquellen, nicht im Knowledge Graph)"
+                  className={`icon-button ${chatSettingsOpen ? "icon-button--active" : ""}`}
+                  aria-label="Antwort-Einstellungen"
+                  title="Antwort-Einstellungen (Chatmodus, Evidenz, Länge)"
+                  onClick={() => {
+                    setChatSettingsOpen((v) => !v);
+                    setActionsMenuOpen(false);
+                  }}
                 >
-                  <Globe size={14} />
-                  <span>Mit Web</span>
+                  <Settings2 size={16} />
                 </button>
-              </div>
-            ) : null}
+                {chatSettingsOpen ? (
+                  <div className="chat-tool-popover">
+                    <label>
+                      Chatmodus
+                      <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
+                        <option value="followup">Weiterfragen</option>
+                        <option value="new">Neu starten</option>
+                      </select>
+                    </label>
+                    <label>
+                      Evidenzmenge
+                      <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
+                        <option value="auto">Auto</option>
+                        <option value="12">12</option>
+                        <option value="20">20</option>
+                        <option value="25">25</option>
+                      </select>
+                    </label>
+                    <label>
+                      Antwortlänge
+                      <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
+                        <option value="kurz">Kurz</option>
+                        <option value="standard">Standard</option>
+                        <option value="ausführlich">Ausführlich</option>
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
+              </span>
+              <span className="chat-tool-wrap">
+                <button
+                  type="button"
+                  className={`icon-button ${actionsMenuOpen ? "icon-button--active" : ""}`}
+                  aria-label="Workspace-Aktionen"
+                  title="Workspace-Aktionen: Papers importieren, Projekt anlegen, Extraktion …"
+                  onClick={() => {
+                    setActionsMenuOpen((v) => !v);
+                    setChatSettingsOpen(false);
+                  }}
+                >
+                  <Plus size={16} />
+                </button>
+                {actionsMenuOpen ? (
+                  <div className="chat-tool-popover chat-actions-menu">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        setQuestion("/suche ");
+                        placeCursorAfter(7);
+                      }}
+                    >
+                      <DownloadCloud size={15} />
+                      <span>Papers suchen &amp; importieren</span>
+                      <code>/suche</code>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        setQuestion("/projekt ");
+                        placeCursorAfter(9);
+                      }}
+                    >
+                      <FolderPlus size={15} />
+                      <span>Neues Projekt anlegen</span>
+                      <code>/projekt</code>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        createNoteCommand.mutate("");
+                      }}
+                    >
+                      <NotebookPen size={15} />
+                      <span>Neue Notiz</span>
+                      <code>/notiz</code>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        runExtractionCommand();
+                      }}
+                    >
+                      <FileSearch size={15} />
+                      <span>Extraktion starten</span>
+                      <code>/extraktion</code>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        setShowCommandHelp(true);
+                      }}
+                    >
+                      <Command size={15} />
+                      <span>Alle Befehle anzeigen</span>
+                      <code>/help</code>
+                    </button>
+                  </div>
+                ) : null}
+              </span>
+            </div>
             {paperScope === "selected" && (selectedPaperIds.length > 0 || selectedGreyIds.length > 0) ? (
               <div className="mention-chip-row">
                 {selectedPaperIds.map((pid) => {
@@ -1428,7 +1867,102 @@ export function WorkspacePage() {
               {paperScope === "selected" ? "Keine Quellen ausgewählt" : "Kein aktives Paper"}
             </div>
           ) : null}
+          {actionLog.length ? (
+            <div className="workspace-action-log">
+              {actionLog.map((entry) => (
+                <div className={`workspace-action-entry workspace-action-entry--${entry.status}`} key={entry.id}>
+                  <strong>{entry.title}</strong>
+                  <span>{entry.detail}</span>
+                  <button
+                    className="icon-button icon-button--compact"
+                    type="button"
+                    aria-label="Eintrag entfernen"
+                    onClick={() => setActionLog((current) => current.filter((item) => item.id !== entry.id))}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {paperSearchCommand.isPending ? <div className="scope-status">Suche Papers …</div> : null}
+          {commandSearch ? (
+            <section className="panel command-search-panel">
+              <div className="panel-heading">
+                <div>
+                  <span>Paper-Suche</span>
+                  <strong>„{commandSearch.query}" — {commandSearch.results.length} Treffer</strong>
+                </div>
+                <button className="icon-button" type="button" aria-label="Suche schließen" onClick={() => setCommandSearch(null)}>
+                  <X size={15} />
+                </button>
+              </div>
+              <div className="list command-search-list">
+                {commandSearch.results.map((paper) => {
+                  const checked = commandSearch.selected.includes(paper.id);
+                  return (
+                    <label className="list-row command-search-row" key={paper.id}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setCommandSearch((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  selected: checked
+                                    ? current.selected.filter((id) => id !== paper.id)
+                                    : [...current.selected, paper.id]
+                                }
+                              : current
+                          )
+                        }
+                      />
+                      <div>
+                        <strong>{paper.title}</strong>
+                        <span>{[paper.id, paper.year ?? ""].filter(Boolean).join(" · ")}</span>
+                      </div>
+                    </label>
+                  );
+                })}
+                {!commandSearch.results.length ? <EmptyState title="Keine Treffer" /> : null}
+              </div>
+              <div className="button-row">
+                <button
+                  className="button button-primary button-compact"
+                  type="button"
+                  disabled={!commandSearch.selected.length || downloadPapersCommand.isPending}
+                  onClick={() => downloadPapersCommand.mutate(commandSearch.results.filter((paper) => commandSearch.selected.includes(paper.id)))}
+                >
+                  <DownloadCloud size={14} />
+                  <span>{downloadPapersCommand.isPending ? "Lädt …" : `${commandSearch.selected.length} herunterladen${isRealProject ? " → Projekt" : ""}`}</span>
+                </button>
+              </div>
+            </section>
+          ) : null}
           <section className="answer-panel workspace-answer-panel">
+            {activeTurn && latestBlock && latestAnswerNeedsWeb && isRealProject && !webMutation.isPending && webOfferDismissedFor !== latestBlock.id ? (
+              <div className="web-offer-card">
+                <Globe size={15} />
+                <div>
+                  <strong>Lokal keine ausreichende Antwort gefunden.</strong>
+                  <span>Soll ich im Internet nachschlagen? Treffer landen als Grauquellen, nicht im Knowledge Graph.</span>
+                </div>
+                <button
+                  className="button button-compact button-primary"
+                  type="button"
+                  onClick={() => {
+                    setUseInternet(true);
+                    webMutation.mutate(latestBlock.question);
+                  }}
+                >
+                  Im Web nachschlagen
+                </button>
+                <button className="icon-button" type="button" aria-label="Hinweis ausblenden" onClick={() => setWebOfferDismissedFor(latestBlock.id)}>
+                  <X size={14} />
+                </button>
+              </div>
+            ) : null}
             {activeTurn ? (
               <div className="answer-blocks">
                 {activeBlocks.map((block, index) => (

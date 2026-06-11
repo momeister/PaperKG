@@ -974,6 +974,42 @@ def test_map_numeric_citations_replaces_evidence_numbers_with_paper_ids() -> Non
     assert "[2]" not in mapped
 
 
+def test_map_numeric_citations_resolves_z_labels_from_lm_studio_models() -> None:
+    """Qwen via LM Studio copies the UI's Z-labels into brackets ([Z1]) — map them too."""
+    evidence = [
+        Evidence(paper_id="arxiv:2501.00001", kind="claim", field="claims", text="Claim one", score=7.0),
+        Evidence(paper_id="p2", kind="claim", field="claims", text="Claim two", score=6.0),
+    ]
+    text = "First finding [Z1]. Second finding [z 2]. Unknown [Z99]."
+
+    mapped = _map_numeric_citations(text, evidence)
+
+    assert "[arxiv:2501.00001]" in mapped
+    assert "[p2]" in mapped
+    assert "[Z99]" in mapped
+
+
+def test_normalize_citation_brackets_converts_cjk_variants() -> None:
+    from query.grounded_responder import _normalize_citation_brackets
+
+    text = "Befund eins 【arxiv:2501.00001】 und Befund zwei ［p2］."
+    normalized = _normalize_citation_brackets(text)
+
+    assert "[arxiv:2501.00001]" in normalized
+    assert "[p2]" in normalized
+    assert "【" not in normalized
+
+
+def test_llm_router_strips_reasoning_blocks() -> None:
+    from query.llm_router import strip_reasoning_blocks
+
+    answer = "<think>Let me reason about [1] and [2]...</think>The finding holds [arxiv:2501.00001]."
+    assert strip_reasoning_blocks(answer) == "The finding holds [arxiv:2501.00001]."
+    # Unterminated reasoning (token limit hit mid-thought) must not leak as answer text.
+    assert strip_reasoning_blocks("<think>endless reasoning without close") == ""
+    assert strip_reasoning_blocks("Plain answer [p1].") == "Plain answer [p1]."
+
+
 class NumericCitationLLMRouter(FakeLLMRouter):
     def chat(self, messages, provider=None, overrides=None) -> str:
         self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})

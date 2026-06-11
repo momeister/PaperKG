@@ -389,6 +389,17 @@ class MetadataDB:
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Workspace assistant sessions (chat history incl. verification payloads).
+        # Persisted server-side because the payloads routinely exceed the browser's
+        # localStorage quota, which silently dropped sessions on reload.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS workspace_sessions (
+                project_id VARCHAR PRIMARY KEY,
+                payload JSON,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_benchmark_runs_kind ON benchmark_runs(kind)")
 
         self._execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
@@ -1413,6 +1424,35 @@ class MetadataDB:
             elif value is None:
                 row[field] = []
         return row
+
+    def get_workspace_session(self, project_id: str) -> dict[str, Any] | None:
+        rows = self._execute(
+            "SELECT payload, updated_timestamp FROM workspace_sessions WHERE project_id = ?",
+            [str(project_id)],
+        ).fetchall()
+        if not rows:
+            return None
+        payload = rows[0][0]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                payload = {}
+        return {
+            "project_id": str(project_id),
+            "payload": payload if isinstance(payload, dict) else {},
+            "updated_timestamp": rows[0][1],
+        }
+
+    def save_workspace_session(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._execute("""
+            INSERT INTO workspace_sessions (project_id, payload, updated_timestamp)
+            VALUES (?, ?, ?)
+            ON CONFLICT (project_id) DO UPDATE SET
+                payload = EXCLUDED.payload,
+                updated_timestamp = EXCLUDED.updated_timestamp
+        """, [str(project_id), json.dumps(payload or {}), datetime.now()])
+        return self.get_workspace_session(project_id) or {"project_id": str(project_id), "payload": {}}
 
     def add_benchmark_run(self, run: dict[str, Any]) -> dict[str, Any]:
         """Persist a benchmark/eval run so past runs and their metadata stay visible."""

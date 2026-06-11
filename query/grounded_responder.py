@@ -663,7 +663,7 @@ making claims."""
                 {},
             )
 
-        response = str(response or "").strip()
+        response = _normalize_citation_brackets(str(response or "").strip())
         if not response and self._should_retry_empty_response(merged_overrides):
             retry_overrides = dict(merged_overrides)
             current_tokens = int(retry_overrides.get("max_tokens") or self.MIN_ANSWER_TOKENS)
@@ -689,7 +689,7 @@ making claims."""
                         str(exc),
                         {},
                     )
-                response = str(response or "").strip()
+                response = _normalize_citation_brackets(str(response or "").strip())
 
         known_ids = frozenset(item.paper_id for item in evidence) | frozenset(
             hit.source.paper_id for hit in hits
@@ -1096,6 +1096,11 @@ def _build_grounded_prompt(
             "Place each citation marker at the end of the sentence or claim it supports — never before the claim or in the middle of it.",
             "When multiple papers support different parts of the answer, cite multiple distinct paper IDs instead of reusing only one source.",
             "When one claim is supported by multiple papers, cite the supporting paper IDs together in one bracket, separated by commas, for example [p1, p2].",
+            "Cite per sentence ONLY the paper IDs whose evidence actually states that specific fact. "
+            "Never copy the citation list of a neighboring sentence: two adjacent sentences usually "
+            "have different supporting sources. Before adding a second ID to a bracket, check that "
+            "this second paper's evidence really contains the same statement — if you are unsure, "
+            "cite only the single best-supporting paper for that sentence.",
             "Use only paper IDs shown in the evidence as citations; never cite evidence item numbers like [1] or [4].",
             "Do not copy reference or citation numbers from the source text (superscripts like [17-22] or [26, 29]); cite only the paper IDs shown above.",
             "When quantitative findings or metrics are present, include the most important numbers.",
@@ -1150,6 +1155,9 @@ def _build_pdf_context_prompt(
             "[p1]{{first passage}}{{second passage}} — do not merge distant passages into one block.",
             "Place each citation marker at the end of the sentence or claim it supports — never before the claim or in the middle of it.",
             "When multiple papers support one claim, cite them together, for example [p1, p2].",
+            "Cite per sentence ONLY the papers whose text actually contains that specific fact; never "
+            "copy the citation list of a neighboring sentence. If only one paper supports a sentence, "
+            "cite exactly that one paper.",
             "Do not copy reference or citation numbers from the source text (superscripts like [17-22] or [26, 29]); cite only the paper IDs shown above.",
             "If the PDF context is insufficient, say that the local PDF context does not contain enough evidence.",
             "When the PDF contains both a positive result and an important caveat — side effects, "
@@ -1636,6 +1644,26 @@ def _extract_model_quotes(answer_text: str) -> tuple[str, dict[int, list[str]]]:
     return "".join(cleaned_parts), quotes
 
 
+def _normalize_citation_brackets(answer_text: str) -> str:
+    """Normalize model-specific citation bracket variants to ASCII `[...]`.
+
+    Qwen-family models (especially via LM Studio) often emit fullwidth CJK brackets
+    (【p1】) or lenticular variants around citations; downstream parsing only knows
+    ASCII brackets, so those citations rendered as broken text instead of Z-chips.
+    """
+    text = str(answer_text or "")
+    if not text:
+        return text
+    return (
+        text.replace("【", "[")
+        .replace("】", "]")
+        .replace("〔", "[")
+        .replace("〕", "]")
+        .replace("［", "[")
+        .replace("］", "]")
+    )
+
+
 def _map_numeric_citations(
     answer_text: str,
     evidence: list[Evidence],
@@ -1658,8 +1686,11 @@ def _map_numeric_citations(
         mapped: list[str] = []
         changed = False
         for part in parts:
-            if not _is_allowed_citation_label(part, known_ids) and re.fullmatch(r"\d+", part):
-                index = int(part)
+            # Bare numbers refer to the numbered evidence list; some models (Qwen via
+            # LM Studio) also copy the UI's Z-labels and emit [Z1] — map both forms.
+            numeric = re.fullmatch(r"(?:[Zz]\s*)?(\d+)", part)
+            if not _is_allowed_citation_label(part, known_ids) and numeric:
+                index = int(numeric.group(1))
                 if 1 <= index <= len(evidence) and evidence[index - 1].paper_id:
                     mapped.append(evidence[index - 1].paper_id)
                     changed = True

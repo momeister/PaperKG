@@ -16,6 +16,7 @@ import {
   Highlighter,
   ImagePlus,
   Italic,
+  Languages,
   Link,
   List,
   NotebookPen,
@@ -83,6 +84,19 @@ type ThreadTextDiff = {
 };
 
 const THREAD_RANGE_TEXT_LIMIT = 16000;
+
+const TABLE_PICKER_COLS = 6;
+const TABLE_PICKER_ROWS = 6;
+const TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spanisch", "Italienisch", "Portugiesisch", "Niederländisch", "Polnisch", "Chinesisch", "Japanisch"];
+
+export function buildMarkdownTable(cols: number, rows: number) {
+  const safeCols = Math.max(1, cols);
+  const safeRows = Math.max(1, rows);
+  const header = `| ${Array.from({ length: safeCols }, (_, index) => `Spalte ${index + 1}`).join(" | ")} |`;
+  const separator = `|${Array.from({ length: safeCols }, () => " --- ").join("|")}|`;
+  const bodyRow = `| ${Array.from({ length: safeCols }, () => "    ").join(" | ")} |`;
+  return `\n\n${header}\n${separator}\n${Array.from({ length: safeRows }, () => bodyRow).join("\n")}\n`;
+}
 
 type ThreadStoredRange = {
   start: number;
@@ -195,6 +209,9 @@ export function NotesSurface({
   const [noteQuestion, setNoteQuestion] = useState("");
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
   const [noteSearchIndex, setNoteSearchIndex] = useState(0);
+  const [tableMenuOpen, setTableMenuOpen] = useState(false);
+  const [tableHover, setTableHover] = useState({ cols: 0, rows: 0 });
+  const [translateLanguage, setTranslateLanguage] = useState("Deutsch");
   const [aiPopoverBottomPadding, setAiPopoverBottomPadding] = useState(0);
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [selectedCitation, setSelectedCitation] = useState<NoteCitation | null>(null);
@@ -326,10 +343,12 @@ export function NotesSurface({
     }
   });
   const aiEdit = useMutation({
-    mutationFn: () =>
+    // `instructionOverride` lets quick actions (Übersetzen) fire without waiting for
+    // the `aiInstruction` state update.
+    mutationFn: (instructionOverride?: string | void) =>
       api.createNoteAiThread(activeNoteId, {
         selected_text: stripHighlightMarkers(selection?.text ?? ""),
-        instruction: aiInstruction,
+        instruction: typeof instructionOverride === "string" && instructionOverride ? instructionOverride : aiInstruction,
         provider,
         model,
         use_kg_evidence: true,
@@ -1056,10 +1075,15 @@ export function NotesSurface({
     if (!selection) {
       return;
     }
+    // AI rewrites tend to shorten quotes and silently drop their
+    // [Zx - ...](sciencekg://citation/...) anchors — the note then loses its source
+    // trail. Re-attach every citation link of the replaced range that the rewrite
+    // did not carry over.
+    const replaced = withPreservedCitationLinks(markdown.slice(selection.start, selection.end), value);
     const thread = activeThreadId ? threads.find((item) => item.id === activeThreadId) : null;
     pushUndo();
-    updateMarkdown(`${markdown.slice(0, selection.start)}${value}${markdown.slice(selection.end)}`);
-    rememberThreadResultRange(thread, selection.start, selection.start + value.length, value);
+    updateMarkdown(`${markdown.slice(0, selection.start)}${replaced}${markdown.slice(selection.end)}`);
+    rememberThreadResultRange(thread, selection.start, selection.start + replaced.length, replaced);
     setSelection(null);
     setAiPreview("");
     setAiInstruction("");
@@ -1968,9 +1992,45 @@ export function NotesSurface({
                   <option value="#a76500">Amber</option>
                   <option value="#ba3434">Rot</option>
                 </select>
-                <button className="icon-button" type="button" aria-label="Tabelle" onClick={() => insertAtSelection("\n\n| Spalte 1 | Spalte 2 |\n|---|---|\n| Wert | Wert |\n")}>
-                  <Table2 size={17} />
-                </button>
+                <span className="table-builder-wrap">
+                  <button
+                    className={`icon-button ${tableMenuOpen ? "active" : ""}`}
+                    type="button"
+                    aria-label="Tabelle einfügen"
+                    aria-expanded={tableMenuOpen}
+                    onClick={() => setTableMenuOpen((current) => !current)}
+                  >
+                    <Table2 size={17} />
+                  </button>
+                  {tableMenuOpen ? (
+                    <div className="table-builder-popover" onMouseLeave={() => setTableHover({ cols: 0, rows: 0 })}>
+                      <div className="table-builder-grid" role="grid" aria-label="Tabellengröße wählen">
+                        {Array.from({ length: TABLE_PICKER_ROWS }, (_, rowIndex) =>
+                          Array.from({ length: TABLE_PICKER_COLS }, (_, colIndex) => {
+                            const isActive = colIndex < tableHover.cols && rowIndex < tableHover.rows;
+                            return (
+                              <button
+                                key={`${rowIndex}-${colIndex}`}
+                                type="button"
+                                className={`table-builder-cell ${isActive ? "table-builder-cell--active" : ""}`}
+                                aria-label={`${colIndex + 1} Spalten, ${rowIndex + 1} Zeilen`}
+                                onMouseEnter={() => setTableHover({ cols: colIndex + 1, rows: rowIndex + 1 })}
+                                onFocus={() => setTableHover({ cols: colIndex + 1, rows: rowIndex + 1 })}
+                                onClick={() => {
+                                  insertAtSelection(buildMarkdownTable(colIndex + 1, rowIndex + 1));
+                                  setTableMenuOpen(false);
+                                }}
+                              />
+                            );
+                          })
+                        )}
+                      </div>
+                      <span className="table-builder-label">
+                        {tableHover.cols > 0 ? `${tableHover.cols} × ${tableHover.rows}` : "Größe wählen"}
+                      </span>
+                    </div>
+                  ) : null}
+                </span>
                 <button className="icon-button" type="button" aria-label="Bild einfuegen" onClick={() => imageInputRef.current?.click()} disabled={!activeNoteId}>
                   <ImagePlus size={17} />
                 </button>
@@ -2081,26 +2141,55 @@ export function NotesSurface({
                         </div>
                         <blockquote>{selectionPreview}</blockquote>
                         {!aiPreview ? (
-                          <div className="selection-ai-question-row">
-                            <input
-                              value={aiInstruction}
-                              onChange={(event) => setAiInstruction(event.target.value)}
-                              onFocus={pinSelectionForQuestion}
-                              onKeyDown={handleSelectionQuestionKeyDown}
-                              placeholder="KI-Frage zu dieser Auswahl"
-                            />
-                            <button
-                              className="button button-primary"
-                              type="button"
-                              disabled={!aiInstruction.trim() || aiEdit.isPending}
-                              onClick={() => {
-                                pinSelectionForQuestion();
-                                aiEdit.mutate();
-                              }}
-                            >
-                              Fragen
-                            </button>
-                          </div>
+                          <>
+                            <div className="selection-ai-question-row">
+                              <input
+                                value={aiInstruction}
+                                onChange={(event) => setAiInstruction(event.target.value)}
+                                onFocus={pinSelectionForQuestion}
+                                onKeyDown={handleSelectionQuestionKeyDown}
+                                placeholder="KI-Frage zu dieser Auswahl"
+                              />
+                              <button
+                                className="button button-primary"
+                                type="button"
+                                disabled={!aiInstruction.trim() || aiEdit.isPending}
+                                onClick={() => {
+                                  pinSelectionForQuestion();
+                                  aiEdit.mutate();
+                                }}
+                              >
+                                Fragen
+                              </button>
+                            </div>
+                            <div className="selection-ai-quick-row">
+                              <Languages size={14} />
+                              <select
+                                aria-label="Zielsprache"
+                                value={translateLanguage}
+                                onChange={(event) => setTranslateLanguage(event.target.value)}
+                              >
+                                {TRANSLATE_LANGUAGES.map((language) => (
+                                  <option key={language} value={language}>
+                                    {language}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                className="button button-compact"
+                                type="button"
+                                disabled={aiEdit.isPending}
+                                onClick={() => {
+                                  pinSelectionForQuestion();
+                                  aiEdit.mutate(
+                                    `Übersetze den markierten Text nach ${translateLanguage}. Behalte Markdown-Formatierung und alle Zitatlinks ([Zx - ...](sciencekg://citation/...)) unverändert bei. Gib nur die Übersetzung aus.`
+                                  );
+                                }}
+                              >
+                                {aiEdit.isPending ? "Übersetzt…" : "Übersetzen"}
+                              </button>
+                            </div>
+                          </>
                         ) : null}
                         {aiEdit.isError ? <div className="inline-error">KI-Antwort fehlgeschlagen: {formatError(aiEdit.error)}</div> : null}
                         {aiPreview ? (
@@ -3157,6 +3246,31 @@ function parseMarkdownCitationRefs(markdown: string): CitationMarkdownRef[] {
     });
   }
   return refs;
+}
+
+/**
+ * Guarantee that every sciencekg://citation link of the replaced text survives an AI
+ * rewrite. Links the rewrite kept (same citation id) stay untouched; dropped ones are
+ * appended as a compact source line so the quote's provenance is never lost.
+ */
+export function withPreservedCitationLinks(originalText: string, replacementText: string): string {
+  const pattern = /\[([^\]]+)\]\(sciencekg:\/\/citation\/([^)]+)\)/g;
+  const lost: string[] = [];
+  const seen = new Set<string>();
+  for (const match of originalText.matchAll(pattern)) {
+    const citationId = match[2];
+    if (citationId === "preview" || seen.has(citationId)) {
+      continue;
+    }
+    seen.add(citationId);
+    if (!replacementText.includes(`sciencekg://citation/${citationId}`)) {
+      lost.push(`[${match[1].trim()}](sciencekg://citation/${citationId})`);
+    }
+  }
+  if (!lost.length) {
+    return replacementText;
+  }
+  return `${replacementText.trimEnd()}\n\nQuellen: ${lost.join(" · ")}`;
 }
 
 function findNoteSearchRanges(markdown: string, query: string) {
