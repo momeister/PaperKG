@@ -120,6 +120,10 @@ making claims."""
         hits = self.retriever.search(question, limit=limit, paper_ids=paper_ids)
         priority_set = {str(pid) for pid in (priority_paper_ids or []) if pid}
         hits = _prioritize_hits(hits, priority_set)
+        if hits:
+            best_score = max((getattr(h, "score", 0) or 0) for h in hits)
+            if best_score < 2.0:
+                context_diagnostics["low_relevance"] = True
 
         # Inject grey sources (saved web research findings) as citable evidence.
         # Two paths: explicitly selected grey sources (grey_source_ids, e.g. "Auswahl" mode)
@@ -627,12 +631,14 @@ making claims."""
         if self.llm_router is None:
             return _extractive_answer(question, hits, evidence), None, {}
 
+        verbose_mode = bool((overrides or {}).get("verbose_mode", False))
         prompt = _build_grounded_prompt(
             question,
             hits,
             evidence,
             conversation_context=conversation_context,
             priority_paper_ids=priority_paper_ids,
+            verbose=verbose_mode,
         )
         merged_overrides = {
             # Deterministic by default: repeated questions should produce the same
@@ -640,7 +646,7 @@ making claims."""
             "temperature": 0.0,
             "top_p": 0.9,
             "max_tokens": self._answer_max_tokens(provider),
-            **(overrides or {}),
+            **{k: v for k, v in (overrides or {}).items() if k != "verbose_mode"},
         }
         if model:
             merged_overrides["model"] = model
@@ -1046,6 +1052,7 @@ def _build_grounded_prompt(
     evidence: list[Evidence],
     conversation_context: list[dict[str, Any]] | None = None,
     priority_paper_ids: set[str] | None = None,
+    verbose: bool = False,
 ) -> str:
     source_titles = {
         hit.source.paper_id: hit.source.title or hit.source.paper_id
@@ -1088,10 +1095,16 @@ def _build_grounded_prompt(
             "only as supporting or updating context. Cite a (Webquelle) alone only for information that no "
             "paper evidence covers, such as recent developments or current events."
         )
+    answer_instruction = (
+        "Gib eine ausführliche, gut strukturierte Antwort auf Basis der Belege. "
+        "Erkläre alle relevanten Aspekte und gehe auf Zusammenhänge ein."
+        if verbose
+        else "Answer concisely using only this evidence."
+    )
     lines.extend(
         [
             "",
-            "Answer concisely using only this evidence.",
+            answer_instruction,
             "Include source paper IDs in square brackets for each substantive claim.",
             "Place each citation marker at the end of the sentence or claim it supports — never before the claim or in the middle of it.",
             "When multiple papers support different parts of the answer, cite multiple distinct paper IDs instead of reusing only one source.",

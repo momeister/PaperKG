@@ -84,8 +84,18 @@ export function isGreySourcePaperId(paperId: string | null | undefined): boolean
   return Boolean(paperId && paperId.startsWith("grey::"));
 }
 
-// Picks the muted grey palette for grey::-prefixed sources, the vivid palette otherwise -
-// the single place that should decide this so chat chips, evidence dock, and PDF pane agree.
+function _stableColorIndex(paperId: string): number {
+  let h = 0;
+  for (let i = 0; i < paperId.length; i++) {
+    h = (Math.imul(31, h) + paperId.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+// Picks the muted grey palette for grey::-prefixed sources, the vivid palette otherwise.
+// Color is derived from the paper_id hash so the same source always gets the same
+// color across all answer chips and evidence dock items, regardless of evidence position.
 export function colorVarsForPaperId(paperId: string | null | undefined, index: number): EvidenceColorStyle {
-  return isGreySourcePaperId(paperId) ? greyEvidenceColorVars(index) : evidenceColorVars(index);
+  const colorIndex = paperId ? _stableColorIndex(paperId) : index;
+  return isGreySourcePaperId(paperId) ? greyEvidenceColorVars(colorIndex) : evidenceColorVars(colorIndex);
 }

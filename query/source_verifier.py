@@ -161,7 +161,7 @@ def verify_answer_sources(
     pdf_base_dir: str = "data/pdfs",
     parse_pdfs: bool = True,
     max_sources: int = 10,
-    max_evidence_per_source: int = 5,
+    max_evidence_per_source: int = 15,
 ) -> VerificationReport:
     sources = [
         source for source in (answer_payload.get("sources") or [])
@@ -195,13 +195,14 @@ def verify_answer_sources(
         locations: list[EvidenceLocation] = []
         for source_evidence_index, item in source_evidence:
             remaining = max_evidence_per_source - len(locations)
-            if remaining <= 0:
-                break
+            # Always emit at least one location per evidence item so every
+            # evidence_id stays resolvable in the frontend, even when the
+            # slot budget from earlier (multi-fragment) items is exhausted.
             locations.extend(
                 locate_evidence_fragments(
                     item,
                     pdf_text,
-                    max_fragments=remaining,
+                    max_fragments=max(1, remaining),
                     source_evidence_index=source_evidence_index,
                 )
             )

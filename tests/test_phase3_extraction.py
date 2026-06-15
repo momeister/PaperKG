@@ -30,6 +30,7 @@ from extraction.batch_processor import BatchProcessor
 from parsing.parser_router import ParserRouter, ParserType, ParserCharacteristics
 from parsing.marker_parser import (
     MarkerParser,
+    _chars_to_spaced_text,
     _classify_and_split_words,
     _find_column_gutter,
     _reconstruct_page_text,
@@ -4438,6 +4439,56 @@ class TestColumnAwareExtraction:
         assert text is not None
         assert text.index("HEADER") < text.index("L0")
         assert text.index("R5") < text.index("FOOTER")
+
+
+class TestCharsToSpacedText:
+    """Tests for _chars_to_spaced_text char-level space insertion."""
+
+    def _char(self, text: str, x0: float, x1: float, top: float = 100.0, size: float = 10.0) -> dict:
+        return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + size, "size": size}
+
+    def test_inserts_space_at_word_boundary(self):
+        # Two words separated by a gap larger than 0.22 * font_size
+        # font_size=10, threshold = 0.22 * 10 = 2.2 — gap of 5 should insert space
+        chars = [
+            *[self._char(c, 10 * i, 10 * i + 8) for i, c in enumerate("Hello")],
+            *[self._char(c, 60 + 10 * i, 60 + 10 * i + 8) for i, c in enumerate("World")],
+        ]
+        result = _chars_to_spaced_text(chars)
+        assert result == "Hello World"
+
+    def test_no_space_within_word(self):
+        # Characters directly adjacent (gap = 0) should not get spaces
+        chars = [self._char("A", 0, 8), self._char("B", 8, 16), self._char("C", 16, 24)]
+        result = _chars_to_spaced_text(chars)
+        assert result == "ABC"
+
+    def test_new_line_on_y_gap(self):
+        chars = [
+            self._char("L", 10, 18, top=100.0),
+            self._char("1", 18, 24, top=100.0),
+            self._char("L", 10, 18, top=115.0),
+            self._char("2", 18, 24, top=115.0),
+        ]
+        result = _chars_to_spaced_text(chars)
+        assert result == "L1\nL2"
+
+    def test_empty_input(self):
+        assert _chars_to_spaced_text([]) == ""
+
+    def test_fixes_merged_tokens(self):
+        # Simulate a PDF where two words have no space between them in extract_text
+        # but the chars have a measurable x-gap >= 0.22 * size
+        size = 10.0
+        gap = 3.0  # 3pt > 0.22 * 10 = 2.2 → should insert space
+        chars = [
+            self._char("I", 0, 5, size=size),
+            self._char("n", 5, 11, size=size),
+            self._char("a", 11 + gap, 17 + gap, size=size),
+            self._char("n", 17 + gap, 23 + gap, size=size),
+        ]
+        result = _chars_to_spaced_text(chars)
+        assert " " in result  # space was inserted at the gap
 
 
 class TestParserImplementations:

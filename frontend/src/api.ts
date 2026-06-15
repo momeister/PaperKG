@@ -22,6 +22,7 @@ import type {
   PaperMeta,
   Project,
   Provider,
+  ResearchNode,
   RewriteResponse,
   ReviewEntity,
   VerificationSource,
@@ -200,6 +201,7 @@ export const api = {
     }),
   runExtractionBatch: (payload: {
     items: Array<{ paper_id: string; pdf_path: string }>;
+    job_id?: string;
     provider?: string;
     model?: string;
     temperature?: number;
@@ -216,6 +218,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  getExtractionBatchItems: (jobId: string) =>
+    request<{ job_id: string; items: import("./types").BatchJobItem[] }>(`/extraction/batch/${jobId}/items`),
+  cancelExtractionBatch: (jobId: string) =>
+    request<{ job_id: string; status: string }>(`/extraction/batch/${jobId}/cancel`, { method: "POST", body: "{}" }),
   getExtractionHistory: (paperId = "") =>
     request<{ items: ExtractionHistoryItem[]; total: number }>("/extraction/history", { query: { paper_id: paperId } }),
   getExtractionVocabulary: () => request<{ items: VocabularyEntry[]; total: number }>("/extraction/vocabulary"),
@@ -362,5 +368,66 @@ export const api = {
   getBenchmarkRuns: (kind?: "extraction" | "qa") =>
     request<{ items: BenchmarkRun[]; total: number }>("/benchmark/runs", { query: { kind } }),
   deleteBenchmarkRun: (runId: string) =>
-    request<{ deleted: boolean; id: string }>(`/benchmark/runs/${encodeURIComponent(runId)}`, { method: "DELETE" })
+    request<{ deleted: boolean; id: string }>(`/benchmark/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
+  clarifyQuestion: (question: string, provider?: string | null, model?: string | null) =>
+    request<{ directions: string[] }>("/research/clarify", {
+      method: "POST",
+      body: JSON.stringify({ question, provider: provider ?? null, model: model ?? null })
+    })
 };
+
+export interface ResearchTreeRequest {
+  question: string;
+  project_id?: string | null;
+  depth?: number;
+  branches?: number;
+  provider?: string | null;
+  model?: string | null;
+  paper_ids?: string[];
+  grey_source_ids?: string[];
+  include_project_grey?: boolean;
+  auto_harvest?: boolean;
+}
+
+export async function streamResearchTree(
+  payload: ResearchTreeRequest,
+  onNode: (node: ResearchNode) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const target = new URL("/research/tree", API_BASE_URL);
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, text || `Backend error ${response.status}`);
+  }
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          onNode(JSON.parse(line.slice(6)) as ResearchNode);
+        } catch {
+          // malformed SSE line – skip
+        }
+      }
+    }
+  }
+}

@@ -1,12 +1,12 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, Database, FileSearch, Globe, ListChecks, Play, Plus, RefreshCw, Search } from "lucide-react";
+import { BookOpenCheck, ChevronDown, ChevronRight, Database, FileSearch, FilterX, Globe, ListChecks, Play, Plus, RefreshCw, Search, X } from "lucide-react";
 
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { Status } from "../components/Status";
 import { useAppState } from "../state";
-import type { ExtractionHistoryItem, ExtractionLibraryItem, ExtractionResultPayload, ExtractionRunResponse } from "../types";
+import type { BatchJobItem, ExtractionHistoryItem, ExtractionLibraryItem, ExtractionResultPayload, ExtractionRunResponse } from "../types";
 
 type ExtractionTab = "run" | "library" | "vocabulary" | "history";
 
@@ -41,6 +41,8 @@ export function ExtractionPage() {
   const [maxTokens, setMaxTokens] = useState(16384);
   const [selectedBatchPaths, setSelectedBatchPaths] = useState<string[]>([]);
   const [lastResult, setLastResult] = useState<ExtractionRunResponse | null>(null);
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [pendingJobId, setPendingJobId] = useState<string | null>(null);
   const [vocabCanonical, setVocabCanonical] = useState("");
   const [vocabAliases, setVocabAliases] = useState("");
   const [vocabDomain, setVocabDomain] = useState("");
@@ -106,17 +108,37 @@ export function ExtractionPage() {
   });
 
   const batch = useMutation({
-    mutationFn: () =>
-      api.runExtractionBatch({
+    mutationFn: () => {
+      const jobId = crypto.randomUUID();
+      setPendingJobId(jobId);
+      return api.runExtractionBatch({
         items: selectedBatchItems(libraryQueryResult.data?.items ?? [], selectedBatchPaths),
+        job_id: jobId,
         ...options,
         resume: true
-      }),
+      });
+    },
+    onSettled: () => setPendingJobId(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["extraction-history"] });
       queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
       queryClient.invalidateQueries({ queryKey: ["health"] });
+    }
+  });
+
+  const batchItemsQuery = useQuery({
+    queryKey: ["batch-items", pendingJobId],
+    queryFn: () => api.getExtractionBatchItems(pendingJobId!),
+    enabled: !!pendingJobId,
+    refetchInterval: 2000,
+  });
+
+  const cancelBatch = useMutation({
+    mutationFn: (jobId: string) => api.cancelExtractionBatch(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
     }
   });
 
@@ -144,6 +166,7 @@ export function ExtractionPage() {
       setText(item.text);
     }
     setActiveTab("run");
+    setWorkbenchOpen(true);
   }
 
   function toggleBatch(id: string) {
@@ -151,9 +174,18 @@ export function ExtractionPage() {
   }
 
   function toggleAllBatch() {
-    const batchable = (libraryQueryResult.data?.items ?? []).filter((item) => item.source_type !== "grey" && item.pdf_path);
+    const batchable = (libraryQueryResult.data?.items ?? []).filter(
+      (item) => item.source_type !== "grey" && item.pdf_path && item.pdf_available !== false && item.latest_extraction_status !== "success"
+    );
     const ids = batchable.map((item) => item.paper_id);
     setSelectedBatchPaths((current) => (current.length === ids.length ? [] : ids));
+  }
+
+  function selectUnextracted() {
+    const ids = (libraryQueryResult.data?.items ?? [])
+      .filter((item) => item.source_type !== "grey" && item.pdf_path && item.pdf_available !== false && item.latest_extraction_status !== "success")
+      .map((item) => item.paper_id);
+    setSelectedBatchPaths(ids);
   }
 
   function submitExtract(event: FormEvent) {
@@ -166,6 +198,14 @@ export function ExtractionPage() {
   const libraryItems = libraryQueryResult.data?.items ?? [];
   const historyItems = historyQuery.data?.items ?? [];
   const vocabularyItems = vocabularyQuery.data?.items ?? [];
+  const hasPdfItems = libraryItems.filter((i) => i.source_type !== "grey" && i.pdf_path && i.pdf_available !== false);
+  const noPdfCount = libraryItems.filter((i) => i.source_type !== "grey" && (!i.pdf_path || i.pdf_available === false)).length;
+  const totalPdfCount = hasPdfItems.length;
+  const extractedPdfCount = hasPdfItems.filter((i) => i.latest_extraction_status === "success").length;
+  const unextractedCount = hasPdfItems.filter((i) => i.latest_extraction_status !== "success").length;
+  const batchItems: BatchJobItem[] = batchItemsQuery.data?.items ?? [];
+  const currentItem = batchItems.find((i) => i.status === "processing");
+  const runningJob = pendingJobId ? jobsQuery.data?.jobs.find((j) => j.job_id === pendingJobId) : null;
 
   return (
     <section className="page extraction-page">
@@ -176,6 +216,13 @@ export function ExtractionPage() {
             {activeProject ? `Projekt: ${activeProject} — PDFs & Webquellen` : "Alle Papers — globale Bibliothek"}
           </p>
         </div>
+        {totalPdfCount > 0 && (
+          <div className="extraction-overview-badge">
+            <strong>{extractedPdfCount}/{totalPdfCount}</strong>
+            <span>extrahiert</span>
+            {noPdfCount > 0 && <span className="muted">+{noPdfCount} ohne PDF</span>}
+          </div>
+        )}
         <div className="segmented extraction-tabs">
           <button className={activeTab === "run" ? "active" : ""} type="button" onClick={() => setActiveTab("run")}>
             <Play size={16} />
@@ -198,153 +245,222 @@ export function ExtractionPage() {
 
       {activeTab === "run" ? (
         <div className="extraction-run-stack">
-        <div className="extraction-workbench">
-          <section className="panel extraction-input-panel">
+          {/* Collapsible single-paper workbench */}
+          <div className="panel extraction-workbench-wrapper">
+            <button
+              className="extraction-workbench-toggle"
+              type="button"
+              onClick={() => setWorkbenchOpen((o) => !o)}
+            >
+              {workbenchOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <span>Einzelextraktion</span>
+              {lastResult && <Status value={lastResult.status} />}
+            </button>
+            {workbenchOpen && (
+              <div className="extraction-workbench">
+                <section className="extraction-input-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <span>Input</span>
+                      <strong>{selectedPdf?.title || selectedPdf?.filename || "Text oder PDF"}</strong>
+                    </div>
+                    <Status value={parsePdf.isPending || extract.isPending ? "running" : lastResult?.status ?? "idle"} />
+                  </div>
+                  <form className="stack" onSubmit={submitExtract}>
+                    <label>
+                      Paper ID
+                      <input value={paperId} onChange={(event) => setPaperId(event.target.value)} placeholder="paper-id" />
+                    </label>
+                    <label>
+                      {selectedPdf?.source_type === "grey" ? "Webquelle" : "PDF"}
+                      <select
+                        value={selectedPdf?.paper_id ?? ""}
+                        onChange={(event) => {
+                          const item = libraryItems.find((candidate) => candidate.paper_id === event.target.value) ?? null;
+                          setSelectedPdf(item);
+                          if (item) {
+                            setPaperId(item.paper_id);
+                            if (item.source_type === "grey" && item.text) {
+                              setText(item.text);
+                            }
+                          }
+                        }}
+                      >
+                        <option value="">Keine Quelle ausgewählt</option>
+                        {libraryItems.filter((item) => item.source_type !== "grey" && item.pdf_path).map((item) => (
+                          <option key={item.paper_id} value={item.paper_id}>
+                            {item.title || item.filename}
+                          </option>
+                        ))}
+                        {libraryItems.some((item) => item.source_type === "grey") && (
+                          <>
+                            <option disabled value="">— Webquellen —</option>
+                            {libraryItems.filter((item) => item.source_type === "grey").map((item) => (
+                              <option key={item.paper_id} value={item.paper_id}>
+                                {item.title}
+                              </option>
+                            ))}
+                          </>
+                        )}
+                      </select>
+                    </label>
+                    <div className="extraction-options-grid">
+                      <label>
+                        Parser
+                        <select value={parser} onChange={(event) => setParser(event.target.value)}>
+                          {parserOptions.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Mode
+                        <select value={extractionMode} onChange={(event) => setExtractionMode(event.target.value)}>
+                          {modeOptions.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <textarea className="extraction-textarea" value={text} onChange={(event) => setText(event.target.value)} placeholder="Paper-Text" />
+                    <div className="extraction-options-grid extraction-options-grid--wide">
+                      <label>
+                        Temperature
+                        <input type="number" min={0} max={2} step={0.05} value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} />
+                      </label>
+                      <label>
+                        Top P
+                        <input type="number" min={0} max={1} step={0.05} value={topP} onChange={(event) => setTopP(Number(event.target.value))} />
+                      </label>
+                      <label>
+                        Context
+                        <input type="number" min={1024} step={1024} value={contextSize} onChange={(event) => setContextSize(Number(event.target.value))} />
+                      </label>
+                      <label>
+                        Max Tokens
+                        <input type="number" min={256} step={256} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} />
+                      </label>
+                    </div>
+                    <label className="check-row">
+                      <input type="checkbox" checked={linkConcepts} onChange={() => setLinkConcepts((current) => !current)} />
+                      <span>Entity Linking</span>
+                    </label>
+                    <div className="button-row">
+                      <button className="button" type="button" disabled={!selectedPdf || selectedPdf.source_type === "grey" || parsePdf.isPending} onClick={() => parsePdf.mutate()}>
+                        <FileSearch size={16} />
+                        <span>Parsen</span>
+                      </button>
+                      <button className="button button-primary" type="submit" disabled={extract.isPending || (!text.trim() && !selectedPdf)}>
+                        <Play size={16} />
+                        <span>Ausführen</span>
+                      </button>
+                    </div>
+                  </form>
+                  <ErrorBox error={parsePdf.error || extract.error} />
+                </section>
+
+                <section className="extraction-result-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <span>Result</span>
+                      <strong>{lastResult?.paper_id ?? "Noch keine Extraktion"}</strong>
+                    </div>
+                    {lastResult ? <Status value={lastResult.status} /> : null}
+                  </div>
+                  {lastResult ? <ExtractionResultView response={lastResult} /> : <EmptyState title="Kein Ergebnis" />}
+                </section>
+              </div>
+            )}
+          </div>
+
+          {/* Batch panel */}
+          <section className="panel extraction-batch-panel">
             <div className="panel-heading">
               <div>
-                <span>Input</span>
-                <strong>{selectedPdf?.title || selectedPdf?.filename || "Text oder PDF"}</strong>
+                <span>Batch-Extraktion</span>
+                <strong>{extractedPdfCount}/{totalPdfCount} extrahiert · {selectedBatchPaths.length} ausgewählt</strong>
               </div>
-              <Status value={parsePdf.isPending || extract.isPending ? "running" : lastResult?.status ?? "idle"} />
-            </div>
-            <form className="stack" onSubmit={submitExtract}>
-              <label>
-                Paper ID
-                <input value={paperId} onChange={(event) => setPaperId(event.target.value)} placeholder="paper-id" />
-              </label>
-              <label>
-                {selectedPdf?.source_type === "grey" ? "Webquelle" : "PDF"}
-                <select
-                  value={selectedPdf?.paper_id ?? ""}
-                  onChange={(event) => {
-                    const item = libraryItems.find((candidate) => candidate.paper_id === event.target.value) ?? null;
-                    setSelectedPdf(item);
-                    if (item) {
-                      setPaperId(item.paper_id);
-                      if (item.source_type === "grey" && item.text) {
-                        setText(item.text);
-                      }
-                    }
-                  }}
-                >
-                  <option value="">Keine Quelle ausgewählt</option>
-                  {libraryItems.filter((item) => item.source_type !== "grey" && item.pdf_path).map((item) => (
-                    <option key={item.paper_id} value={item.paper_id}>
-                      {item.title || item.filename}
-                    </option>
-                  ))}
-                  {libraryItems.some((item) => item.source_type === "grey") && (
-                    <>
-                      <option disabled value="">— Webquellen —</option>
-                      {libraryItems.filter((item) => item.source_type === "grey").map((item) => (
-                        <option key={item.paper_id} value={item.paper_id}>
-                          {item.title}
-                        </option>
-                      ))}
-                    </>
-                  )}
-                </select>
-              </label>
-              <div className="extraction-options-grid">
-                <label>
-                  Parser
-                  <select value={parser} onChange={(event) => setParser(event.target.value)}>
-                    {parserOptions.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Mode
-                  <select value={extractionMode} onChange={(event) => setExtractionMode(event.target.value)}>
-                    {modeOptions.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <textarea className="extraction-textarea" value={text} onChange={(event) => setText(event.target.value)} placeholder="Paper-Text" />
-              <div className="extraction-options-grid extraction-options-grid--wide">
-                <label>
-                  Temperature
-                  <input type="number" min={0} max={2} step={0.05} value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} />
-                </label>
-                <label>
-                  Top P
-                  <input type="number" min={0} max={1} step={0.05} value={topP} onChange={(event) => setTopP(Number(event.target.value))} />
-                </label>
-                <label>
-                  Context
-                  <input type="number" min={1024} step={1024} value={contextSize} onChange={(event) => setContextSize(Number(event.target.value))} />
-                </label>
-                <label>
-                  Max Tokens
-                  <input type="number" min={256} step={256} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} />
-                </label>
-              </div>
-              <label className="check-row">
-                <input type="checkbox" checked={linkConcepts} onChange={() => setLinkConcepts((current) => !current)} />
-                <span>Entity Linking</span>
-              </label>
               <div className="button-row">
-                <button className="button" type="button" disabled={!selectedPdf || selectedPdf.source_type === "grey" || parsePdf.isPending} onClick={() => parsePdf.mutate()}>
-                  <FileSearch size={16} />
-                  <span>Parsen</span>
+                <button className="button" type="button" disabled={unextractedCount === 0} onClick={selectUnextracted} title="Alle noch nicht erfolgreich extrahierten PDFs auswählen">
+                  <FilterX size={16} />
+                  <span>Nicht extrahiert ({unextractedCount})</span>
                 </button>
-                <button className="button button-primary" type="submit" disabled={extract.isPending || (!text.trim() && !selectedPdf)}>
+                <button className="button" type="button" onClick={toggleAllBatch}>
+                  <ListChecks size={16} />
+                  <span>{selectedBatchPaths.length === unextractedCount && unextractedCount > 0 ? "Leeren" : "Alle"}</span>
+                </button>
+                <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending} onClick={() => batch.mutate()}>
                   <Play size={16} />
                   <span>Ausführen</span>
                 </button>
               </div>
-            </form>
-            <ErrorBox error={parsePdf.error || extract.error} />
-          </section>
+            </div>
+            <ErrorBox error={batch.error} />
 
-          <section className="panel extraction-result-panel">
-            <div className="panel-heading">
-              <div>
-                <span>Result</span>
-                <strong>{lastResult?.paper_id ?? "Noch keine Extraktion"}</strong>
+            {/* Live status during batch */}
+            {batch.isPending && pendingJobId && (
+              <div className="status-strip status-strip--active">
+                <Status value="running" />
+                {currentItem ? (
+                  <span className="current-paper" title={currentItem.paper_id}>⚙ {currentItem.paper_id}</span>
+                ) : (
+                  <span className="muted">Vorbereitung…</span>
+                )}
+                <span>
+                  {runningJob ? `${runningJob.papers_processed}/${runningJob.papers_total}` : `0/${selectedBatchPaths.length}`}
+                </span>
+                <button
+                  className="button button-compact"
+                  type="button"
+                  disabled={cancelBatch.isPending}
+                  onClick={() => cancelBatch.mutate(pendingJobId)}
+                  title="Batch-Job abbrechen"
+                >
+                  <X size={14} />
+                  <span>Abbrechen</span>
+                </button>
               </div>
-              {lastResult ? <Status value={lastResult.status} /> : null}
-            </div>
-            {lastResult ? <ExtractionResultView response={lastResult} /> : <EmptyState title="Kein Ergebnis" />}
+            )}
+
+            {/* Result after batch completes */}
+            {batch.data && !batch.isPending && (
+              <div className={`status-strip ${batch.data.job.papers_failed > 0 ? "status-strip--error" : ""}`}>
+                <Status value={batch.data.job.status} />
+                <span>{batch.data.job.papers_processed}/{batch.data.job.papers_total} verarbeitet</span>
+                {batch.data.job.papers_failed > 0 && (
+                  <span className="error-badge">{batch.data.job.papers_failed} Fehler</span>
+                )}
+              </div>
+            )}
+
+            {/* Extraction log */}
+            {batchItems.length > 0 && (
+              <details className="extraction-log" open={batchItems.some((i) => i.status === "failed")}>
+                <summary>
+                  Log · {batchItems.filter((i) => i.status === "completed").length} OK
+                  {batchItems.filter((i) => i.status === "failed").length > 0 && (
+                    <span className="error-badge"> · {batchItems.filter((i) => i.status === "failed").length} Fehler</span>
+                  )}
+                </summary>
+                <div className="extraction-log-list">
+                  {batchItems.map((item) => (
+                    <div key={item.paper_id} className={`log-row log-row--${item.status}`}>
+                      <Status value={item.status} />
+                      <span className="log-paper-id">{item.paper_id}</span>
+                      {item.error_message && <span className="log-error">{item.error_message}</span>}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.paper_id ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
+            <JobsMiniList jobs={jobsQuery.data?.jobs ?? []} />
           </section>
-        </div>
-        <section className="panel extraction-batch-panel">
-          <div className="panel-heading">
-            <div>
-              <span>Mehrere PDFs</span>
-              <strong>{selectedBatchPaths.length} ausgewählt</strong>
-            </div>
-            <div className="button-row">
-              <button className="button" type="button" onClick={toggleAllBatch}>
-                <ListChecks size={16} />
-                <span>{selectedBatchPaths.length === libraryItems.filter((i) => i.source_type !== "grey" && i.pdf_path).length && libraryItems.length ? "Leeren" : "Alle"}</span>
-              </button>
-              <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending} onClick={() => batch.mutate()}>
-                <Play size={16} />
-                <span>Auswahl ausführen</span>
-              </button>
-            </div>
-          </div>
-          <ErrorBox error={batch.error} />
-          {batch.data ? (
-            <div className="status-strip">
-              <Status value={batch.data.job.status} />
-              <span>
-                {batch.data.job.papers_processed}/{batch.data.job.papers_total}
-              </span>
-              <span>{batch.data.job.papers_failed} failed</span>
-            </div>
-          ) : null}
-          <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.paper_id ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
-          <JobsMiniList jobs={jobsQuery.data?.jobs ?? []} />
-        </section>
         </div>
       ) : null}
 
@@ -482,49 +598,91 @@ function ExtractionLibraryTable({
   onSelect: (item: ExtractionLibraryItem) => void;
   onToggleBatch: (id: string) => void;
 }) {
+  const [pdfsOpen, setPdfsOpen] = useState(true);
+  const [webOpen, setWebOpen] = useState(true);
+
   if (!items.length) {
     return <EmptyState title="Keine PDFs oder Webquellen" />;
   }
-  return (
-    <div className="data-table extraction-library-table">
-      <div className="data-row data-row--head">
-        <span>Auswahl</span>
-        <span>Quelle</span>
-        <span>Paper ID</span>
-        <span>Status</span>
-        <span>Größe</span>
-        <span>Aktion</span>
+
+  const pdfItems = items.filter((item) => item.source_type !== "grey");
+  const greyItems = items.filter((item) => item.source_type === "grey");
+
+  const renderRow = (item: ExtractionLibraryItem) => {
+    const isGrey = item.source_type === "grey";
+    const noPdf = !isGrey && item.pdf_available === false;
+    const alreadyExtracted = !isGrey && !noPdf && batchMode && item.latest_extraction_status === "success";
+    return (
+      <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""} ${noPdf ? "data-row--muted" : ""}`} key={item.paper_id}>
+        <label className="check-row extraction-row-check">
+          {isGrey || noPdf ? (
+            <Globe size={14} style={{ opacity: 0.5 }} />
+          ) : alreadyExtracted ? (
+            <span title="Bereits extrahiert" style={{ color: "var(--success, #16a34a)", fontSize: "0.9rem" }}>✓</span>
+          ) : (
+            <input type="checkbox" checked={selectedBatchPaths.includes(item.paper_id)} onChange={() => onToggleBatch(item.paper_id)} />
+          )}
+        </label>
+        <strong>
+          {isGrey && <Globe size={13} style={{ marginRight: 4, verticalAlign: "middle", opacity: 0.7 }} />}
+          {item.title || item.filename}
+        </strong>
+        <span>{item.paper_id}</span>
+        <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
+        <span>{noPdf ? <span className="muted" title="Kein PDF verfügbar — bitte hochladen">Kein PDF</span> : formatBytes(item.size_bytes)}</span>
+        {noPdf ? (
+          <span className="muted">—</span>
+        ) : (
+          <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
+            <FileSearch size={15} />
+            <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
+          </button>
+        )}
       </div>
-      {items.map((item) => {
-        const isGrey = item.source_type === "grey";
-        const noPdf = !isGrey && item.pdf_available === false;
-        return (
-          <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""} ${noPdf ? "data-row--muted" : ""}`} key={item.paper_id}>
-            <label className="check-row extraction-row-check">
-              {isGrey || noPdf ? (
-                <Globe size={14} style={{ opacity: 0.5 }} />
-              ) : (
-                <input type="checkbox" checked={selectedBatchPaths.includes(item.paper_id)} onChange={() => onToggleBatch(item.paper_id)} />
-              )}
-            </label>
-            <strong>
-              {isGrey && <Globe size={13} style={{ marginRight: 4, verticalAlign: "middle", opacity: 0.7 }} />}
-              {item.title || item.filename}
-            </strong>
-            <span>{item.paper_id}</span>
-            <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
-            <span>{noPdf ? <span className="muted" title="Kein PDF verfügbar — bitte hochladen">Kein PDF</span> : formatBytes(item.size_bytes)}</span>
-            {noPdf ? (
-              <span className="muted">—</span>
-            ) : (
-              <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
-                <FileSearch size={15} />
-                <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
-              </button>
-            )}
+    );
+  };
+
+  const tableHeader = (
+    <div className="data-row data-row--head">
+      <span>Auswahl</span>
+      <span>Quelle</span>
+      <span>Paper ID</span>
+      <span>Status</span>
+      <span>Größe</span>
+      <span>Aktion</span>
+    </div>
+  );
+
+  return (
+    <div className="extraction-library-sections">
+      <div>
+        <button className="extraction-section-toggle" type="button" onClick={() => setPdfsOpen((o) => !o)}>
+          {pdfsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <span>PDFs</span>
+          <strong>{pdfItems.length}</strong>
+        </button>
+        {pdfsOpen && (
+          <div className="data-table extraction-library-table">
+            {tableHeader}
+            {pdfItems.map(renderRow)}
           </div>
-        );
-      })}
+        )}
+      </div>
+      {greyItems.length > 0 && (
+        <div>
+          <button className="extraction-section-toggle" type="button" onClick={() => setWebOpen((o) => !o)}>
+            {webOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span>Webquellen</span>
+            <strong>{greyItems.length}</strong>
+          </button>
+          {webOpen && (
+            <div className="data-table extraction-library-table">
+              {tableHeader}
+              {greyItems.map(renderRow)}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

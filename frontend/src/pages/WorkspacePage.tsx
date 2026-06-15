@@ -11,8 +11,10 @@ import type {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Bot,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Command,
   DownloadCloud,
@@ -20,9 +22,11 @@ import {
   FileSearch,
   FileText,
   FolderPlus,
+  GitBranch,
   Globe,
   Link2,
   ListChecks,
+  Loader2,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -38,13 +42,15 @@ import {
   Send,
   Settings2,
   Sparkles,
+  Square,
   Star,
   Trash2,
   Upload,
   X
 } from "lucide-react";
 
-import { api } from "../api";
+import { api, streamResearchTree } from "../api";
+import type { ResearchTreeRequest } from "../api";
 import { colorVarsForPaperId, evidenceColorVars, isGreySourcePaperId } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { GreySourceView } from "../components/GreySourceView";
@@ -54,12 +60,14 @@ import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
 import type {
   Answer,
+  CitationLink,
   DeepResearchFinding,
   GreySource,
   NoteAiMessage,
   NoteAiThread,
   NoteCitation,
   Paper,
+  ResearchNode,
   VerificationEvidence,
   VerificationSource
 } from "../types";
@@ -250,6 +258,28 @@ export function WorkspacePage() {
   const [actionLog, setActionLog] = useState<WorkspaceActionEntry[]>([]);
   const [commandSearch, setCommandSearch] = useState<{ query: string; results: Paper[]; selected: string[] } | null>(null);
   const [webOfferDismissedFor, setWebOfferDismissedFor] = useState("");
+
+  // Research Tree (Tiefenanalyse)
+  const [deepMode, setDeepMode] = useState(false);
+  const [deepDepth, setDeepDepth] = useState(3);
+  const [deepBranches, setDeepBranches] = useState(4);
+  const [researchNodes, setResearchNodes] = useState<ResearchNode[]>([]);
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [researchLlmError, setResearchLlmError] = useState<{ kind: string; message: string; error: string } | null>(null);
+  const [autoHarvest, setAutoHarvest] = useState(() => {
+    try { return window.localStorage.getItem(`workspace.autoHarvest.${scopedProjectId}`) === "true"; } catch { return false; }
+  });
+  const [showHarvestDialog, setShowHarvestDialog] = useState(false);
+  const [showClarifyDialog, setShowClarifyDialog] = useState(false);
+  const [clarifyDirections, setClarifyDirections] = useState<string[]>([]);
+  const [clarifySelected, setClarifySelected] = useState<number[]>([]);
+  const [clarifyFreetext, setClarifyFreetext] = useState("");
+  const [clarifyLoading, setClarifyLoading] = useState(false);
+  // Pending deep-analysis question survives the async clarify roundtrip in a ref so
+  // overlapping state setters in the dialog handlers can never reset it (see bug history).
+  const pendingDeepRef = useRef<{ question: string; harvest: boolean } | null>(null);
+  const researchAbortRef = useRef<AbortController | null>(null);
+  const autoSavedTreeRef = useRef<string | null>(null);
 
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
@@ -756,6 +786,15 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", pdfCitationListHeight), [pdfCitationListHeight, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "greySourceListHeight", greySourceListHeight), [greySourceListHeight, scopedProjectId]);
 
+  // Auto-save synthesis to notes when it arrives
+  useEffect(() => {
+    const synthNode = researchNodes.find((n) => n.status === "synthesis" && n.document);
+    if (synthNode && autoSavedTreeRef.current !== synthNode.id) {
+      autoSavedTreeRef.current = synthNode.id;
+      void saveResearchTreeToNotes();
+    }
+  }, [researchNodes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (focusedNoteThreadId && !notesSnapshot.threads.some((thread) => thread.id === focusedNoteThreadId)) {
       setFocusedNoteThreadId("");
@@ -1141,6 +1180,10 @@ export function WorkspacePage() {
     if (!raw) {
       return;
     }
+    if (deepMode) {
+      submitResearchTree(raw);
+      return;
+    }
     // `/web` darf an beliebiger Stelle im Prompt stehen und wird zuerst angewendet.
     const inline = extractInlineWebToken(raw);
     if (inline.web && !inline.text) {
@@ -1164,6 +1207,242 @@ export function WorkspacePage() {
       setUseInternet(true);
     }
     ask(value, { web: inline.web || undefined });
+  }
+
+  function launchResearchTree(q: string, useHarvest: boolean, clarificationContext: string) {
+    const abort = new AbortController();
+    researchAbortRef.current = abort;
+    setResearchNodes([]);
+    setResearchLlmError(null);
+    setResearchLoading(true);
+    setQuestion("");
+
+    const info = deriveScope(paperScope);
+    const greyIds = Array.from(new Set([...info.greySourceIds]));
+
+    const enrichedQuestion = clarificationContext.trim()
+      ? `${q}\n\nFokus und Kontext für die Analyse: ${clarificationContext.trim()}`
+      : q;
+
+    const payload: ResearchTreeRequest = {
+      question: enrichedQuestion,
+      project_id: activeProject || undefined,
+      depth: deepDepth,
+      branches: deepBranches,
+      provider: provider || undefined,
+      model: model || undefined,
+      paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : info.projectOnlyScope || greyIds.length ? ["__none__"] : undefined,
+      grey_source_ids: greyIds.length ? greyIds : undefined,
+      include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
+      auto_harvest: useHarvest || undefined,
+    };
+
+    streamResearchTree(
+      payload,
+      async (node) => {
+        if (node.status === "llm_error") {
+          setResearchLlmError({
+            kind: node.error_kind ?? "unknown",
+            message: node.message ?? node.error ?? "LLM-Aufruf fehlgeschlagen.",
+            error: node.error ?? "",
+          });
+          return;
+        }
+        if (node.status === "done" && node.answer) {
+          try {
+            const sources = await verificationSourcesFor(node.answer);
+            node = { ...node, verification: sources };
+          } catch {
+            // verification optional
+          }
+        }
+        setResearchNodes((prev) => {
+          const idx = prev.findIndex((n) => n.id === node.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = node;
+            return next;
+          }
+          return [...prev, node];
+        });
+      },
+      abort.signal,
+    )
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        console.error("Research tree error:", err);
+      })
+      .finally(() => {
+        setResearchLoading(false);
+      });
+  }
+
+  /** Ask the LLM for focus directions, then open the clarify dialog. */
+  function startClarifyFlow(q: string, useHarvest: boolean) {
+    pendingDeepRef.current = { question: q, harvest: useHarvest };
+    setClarifyLoading(true);
+    api.clarifyQuestion(q, provider || null, model || null)
+      .then(({ directions }) => {
+        if (!directions.length) {
+          // Nothing to clarify — start directly.
+          finishClarify(true);
+          return;
+        }
+        setClarifyDirections(directions);
+        setClarifySelected([]);
+        setClarifyFreetext("");
+        setShowClarifyDialog(true);
+      })
+      .catch(() => {
+        // If clarify fails, start directly without focus directions.
+        finishClarify(true);
+      })
+      .finally(() => {
+        setClarifyLoading(false);
+      });
+  }
+
+  /** Launch the analysis from the clarify dialog (or skip it). */
+  function finishClarify(skip: boolean) {
+    setShowClarifyDialog(false);
+    const pending = pendingDeepRef.current;
+    pendingDeepRef.current = null;
+    if (!pending) {
+      return;
+    }
+    const context = skip
+      ? ""
+      : [
+          ...clarifySelected.map((i) => clarifyDirections[i]).filter(Boolean),
+          clarifyFreetext.trim(),
+        ]
+          .filter(Boolean)
+          .join("; ");
+    launchResearchTree(pending.question, pending.harvest, context);
+  }
+
+  /** Entry point from the composer: step 1 is the auto-harvest question. */
+  function submitResearchTree(q: string) {
+    if (researchLoading) {
+      researchAbortRef.current?.abort();
+      return;
+    }
+    pendingDeepRef.current = { question: q, harvest: autoHarvest };
+    setShowHarvestDialog(true);
+  }
+
+  /** Harvest dialog choice → continue into the clarify step. */
+  function chooseHarvest(useHarvest: boolean) {
+    setAutoHarvest(useHarvest);
+    setShowHarvestDialog(false);
+    const q = pendingDeepRef.current?.question;
+    if (q) {
+      startClarifyFlow(q, useHarvest);
+    }
+  }
+
+  /** Toggle a focus direction by index (used by click + number keys). */
+  function toggleClarifyDirection(index: number) {
+    setClarifySelected((cur) =>
+      cur.includes(index) ? cur.filter((i) => i !== index) : [...cur, index],
+    );
+  }
+
+  function stopResearchTree() {
+    researchAbortRef.current?.abort();
+    setResearchLoading(false);
+  }
+
+  function drillDeeperInTree(nodeId: string, question: string) {
+    const parentNode = researchNodes.find((n) => n.id === nodeId);
+    const childDepth = (parentNode?.depth ?? 0) + 1;
+    const abort = new AbortController();
+    researchAbortRef.current = abort;
+    setResearchLlmError(null);
+    setResearchLoading(true);
+
+    const info = deriveScope(paperScope);
+    const greyIds = Array.from(new Set([...info.greySourceIds]));
+    const payload: ResearchTreeRequest = {
+      question,
+      project_id: activeProject || undefined,
+      depth: 1,
+      branches: deepBranches,
+      provider: provider || undefined,
+      model: model || undefined,
+      paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : info.projectOnlyScope || greyIds.length ? ["__none__"] : undefined,
+      grey_source_ids: greyIds.length ? greyIds : undefined,
+      include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
+    };
+
+    streamResearchTree(
+      payload,
+      async (node) => {
+        if (node.status === "llm_error") {
+          setResearchLlmError({
+            kind: node.error_kind ?? "unknown",
+            message: node.message ?? node.error ?? "LLM-Aufruf fehlgeschlagen.",
+            error: node.error ?? "",
+          });
+          return;
+        }
+        const remapped: ResearchNode = {
+          ...node,
+          parent_id: node.parent_id === null ? nodeId : node.parent_id,
+          depth: node.depth + childDepth,
+        };
+        if (remapped.status === "done" && remapped.answer) {
+          try {
+            const sources = await verificationSourcesFor(remapped.answer);
+            remapped.verification = sources;
+          } catch { /* verification optional */ }
+        }
+        setResearchNodes((prev) => {
+          const idx = prev.findIndex((n) => n.id === remapped.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = remapped;
+            return next;
+          }
+          return [...prev, remapped];
+        });
+      },
+      abort.signal,
+    )
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        console.error("Drill deeper error:", err);
+      })
+      .finally(() => {
+        setResearchLoading(false);
+      });
+  }
+
+  async function saveResearchTreeToNotes() {
+    const synthesisNode = researchNodes.find((n) => n.status === "synthesis");
+    const treeNodes = researchNodes.filter((n) => n.status !== "synthesis");
+    const rootNodes = treeNodes.filter((n) => n.parent_id === null);
+    if (!rootNodes.length && !synthesisNode) return;
+
+    const rootQ = rootNodes[0]?.question ?? synthesisNode?.question ?? "";
+
+    let markdown: string;
+    if (synthesisNode?.document) {
+      markdown = `# Tiefenanalyse: ${rootQ}\n\n${synthesisNode.document}`;
+    } else {
+      function fmtNode(node: ResearchNode, level: number): string {
+        const heading = "#".repeat(Math.min(level, 6));
+        const parts = [`${heading} ${node.question}`];
+        if (node.answer?.answer) parts.push("", node.answer.answer);
+        const children = treeNodes.filter((n) => n.parent_id === node.id);
+        for (const child of children) parts.push("", fmtNode(child, level + 1));
+        return parts.join("\n");
+      }
+      markdown = `# Tiefenanalyse: ${rootQ}\n\n` + rootNodes.map((n) => fmtNode(n, 2)).join("\n\n---\n\n");
+    }
+
+    notesActionsRef.current?.clearInsertPreview();
+    await appendToActiveNote(markdown);
   }
 
   function openAssistantSource(source: VerificationSource | null, evidenceIndex = 0, quote = "", options: { openPdf?: boolean; syncPdfTarget?: boolean } = {}) {
@@ -1852,6 +2131,53 @@ export function WorkspacePage() {
                 <Globe size={14} />
                 <span>Web</span>
               </button>
+              <button
+                type="button"
+                className={`internet-toggle ${deepMode ? "internet-toggle--on" : ""}`}
+                onClick={() => setDeepMode((v) => !v)}
+                title="Tiefenanalyse: Frage wird in Sub-Fragen zerlegt und jede separat beantwortet"
+              >
+                <GitBranch size={14} />
+                <span>Tiefenanalyse</span>
+              </button>
+              {deepMode ? (
+                <span className="chat-tool-wrap">
+                  <select
+                    aria-label="Tiefe"
+                    value={deepDepth}
+                    onChange={(e) => setDeepDepth(Number(e.target.value))}
+                    title="Wie tief soll die Analyse gehen?"
+                    style={{ fontSize: "12px", padding: "2px 4px" }}
+                  >
+                    <option value={1}>Tiefe 1</option>
+                    <option value={2}>Tiefe 2</option>
+                    <option value={3}>Tiefe 3</option>
+                    <option value={4}>Tiefe 4</option>
+                    <option value={5}>Tiefe 5</option>
+                    <option value={6}>Tiefe 6</option>
+                  </select>
+                  <select
+                    aria-label="Verzweigungen"
+                    value={deepBranches}
+                    onChange={(e) => setDeepBranches(Number(e.target.value))}
+                    title="Anzahl Sub-Fragen pro Ebene"
+                    style={{ fontSize: "12px", padding: "2px 4px" }}
+                  >
+                    <option value={2}>2 Zweige</option>
+                    <option value={3}>3 Zweige</option>
+                    <option value={4}>4 Zweige</option>
+                    <option value={5}>5 Zweige</option>
+                    <option value={6}>6 Zweige</option>
+                    <option value={7}>7 Zweige</option>
+                    <option value={8}>8 Zweige</option>
+                  </select>
+                </span>
+              ) : null}
+              {clarifyLoading ? (
+                <span className="muted-row" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <Loader2 size={12} className="spin" /> Klärungsfragen…
+                </span>
+              ) : null}
               <span className="chat-composer-spacer" />
               <span className="chat-tool-wrap">
                 <button
@@ -2124,7 +2450,21 @@ export function WorkspacePage() {
             </section>
           ) : null}
           <section className="answer-panel workspace-answer-panel">
-            {activeTurn && latestBlock && latestAnswerNeedsWeb && isRealProject && !webMutation.isPending && webOfferDismissedFor !== latestBlock.id ? (
+            {deepMode && (researchLoading || researchNodes.length > 0 || researchLlmError) ? (
+              <ResearchTreeView
+                nodes={researchNodes}
+                loading={researchLoading}
+                llmError={researchLlmError}
+                onStop={stopResearchTree}
+                onCitationClick={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
+                onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
+                onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
+                onCitationInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
+                onDrillDeeper={(nodeId, question) => drillDeeperInTree(nodeId, question)}
+                onSaveToNotes={() => void saveResearchTreeToNotes()}
+              />
+            ) : null}
+            {!deepMode && activeTurn && latestBlock && latestAnswerNeedsWeb && isRealProject && !webMutation.isPending && webOfferDismissedFor !== latestBlock.id ? (
               <div className="web-offer-card">
                 <Globe size={15} />
                 <div>
@@ -2146,7 +2486,7 @@ export function WorkspacePage() {
                 </button>
               </div>
             ) : null}
-            {activeTurn ? (
+            {!deepMode && activeTurn ? (
               <div className="answer-blocks">
                 {activeBlocks.map((block, index) => (
                   <article className={`answer-block ${index > 0 ? "answer-block--followup" : ""}`} key={block.id}>
@@ -2183,7 +2523,7 @@ export function WorkspacePage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Keine Antwort" />
+              !deepMode ? <EmptyState title="Keine Antwort" /> : null
             )}
           </section>
           {useInternet && (webMutation.isPending || webResult || webMutation.isError) ? (
@@ -2430,6 +2770,109 @@ export function WorkspacePage() {
       ) : (
         <CollapsedPane label="Notizen" icon={<PanelRightOpen size={17} />} onOpen={() => setNotesOpen(true)} />
       )}
+      {showHarvestDialog ? (
+        <div className="harvest-dialog-overlay">
+          <div className="harvest-dialog-card">
+            <strong>Automatische Quellen-Suche</strong>
+            <p>
+              Darf der Assistent bei Teilfragen ohne lokale Quellen automatisch nach relevanten
+              Papieren und Web-Quellen suchen, diese herunterladen, extrahieren und dem Projekt hinzufügen?
+            </p>
+            <div className="harvest-dialog-actions">
+              <button
+                type="button"
+                className="button button-primary button-compact"
+                onClick={() => chooseHarvest(true)}
+              >
+                Ja, Quellen suchen
+              </button>
+              <button
+                type="button"
+                className="button button-compact"
+                onClick={() => chooseHarvest(false)}
+              >
+                Nein, ohne Suche
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showClarifyDialog ? (
+        <div className="harvest-dialog-overlay">
+          <div
+            className="harvest-dialog-card clarify-dialog-card"
+            tabIndex={-1}
+            ref={(el) => {
+              if (el && !el.contains(document.activeElement)) el.focus();
+            }}
+            onKeyDown={(e) => {
+              const inInput = (e.target as HTMLElement).tagName === "INPUT";
+              if (e.key === "Enter") {
+                e.preventDefault();
+                finishClarify(false);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                finishClarify(true);
+              } else if (!inInput && /^[1-9]$/.test(e.key)) {
+                const idx = Number(e.key) - 1;
+                if (idx < clarifyDirections.length) {
+                  e.preventDefault();
+                  toggleClarifyDirection(idx);
+                }
+              }
+            }}
+          >
+            <strong>In welche Richtung soll die Analyse gehen?</strong>
+            <p>
+              Wähle Schwerpunkte mit den Zahlentasten <kbd>1</kbd>–<kbd>9</kbd> oder per Klick,
+              ergänze optional eine eigene Richtung und starte mit <kbd>Enter</kbd>.
+            </p>
+            <div className="clarify-directions">
+              {clarifyDirections.map((dir, i) => {
+                const active = clarifySelected.includes(i);
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`clarify-direction${active ? " clarify-direction--active" : ""}`}
+                    onClick={() => toggleClarifyDirection(i)}
+                  >
+                    <span className="clarify-direction-num">{i + 1}</span>
+                    <span className="clarify-direction-label">{dir}</span>
+                    {active ? <span className="clarify-direction-check">✓</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="clarify-question-block">
+              <label className="clarify-question-label">Eigene Richtung / Anmerkungen</label>
+              <input
+                type="text"
+                className="clarify-question-input"
+                placeholder="z.B. Fokus auf klinische Anwendungen, ab 2020, ..."
+                value={clarifyFreetext}
+                onChange={(e) => setClarifyFreetext(e.target.value)}
+              />
+            </div>
+            <div className="harvest-dialog-actions">
+              <button
+                type="button"
+                className="button button-primary button-compact"
+                onClick={() => finishClarify(false)}
+              >
+                Analyse starten
+              </button>
+              <button
+                type="button"
+                className="button button-compact"
+                onClick={() => finishClarify(true)}
+              >
+                Überspringen
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 
@@ -3422,4 +3865,354 @@ function saveWorkspaceNumber(projectId: string, key: string, value: number) {
   } catch {
     // Local storage can be unavailable in private/browser test contexts.
   }
+}
+
+// ── Research Tree View ─────────────────────────────────────────────────────
+
+function ResearchTreeView({
+  nodes,
+  loading,
+  llmError,
+  onStop,
+  onCitationClick,
+  onCitationInsert,
+  onCitationInsertPreview,
+  onCitationInsertPreviewClear,
+  onDrillDeeper,
+  onSaveToNotes,
+}: {
+  nodes: ResearchNode[];
+  loading: boolean;
+  llmError: { kind: string; message: string; error: string } | null;
+  onStop: () => void;
+  onCitationClick: (source: VerificationSource, evidenceIndex: number) => void;
+  onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
+  onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
+  onCitationInsertPreviewClear: () => void;
+  onDrillDeeper: (nodeId: string, question: string) => void;
+  onSaveToNotes: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<"tree" | "synthesis">("tree");
+
+  const treeNodes = nodes.filter((n) => n.status !== "synthesis");
+  const synthesisNode = nodes.find((n) => n.status === "synthesis");
+
+  // Auto-switch to synthesis tab when it arrives
+  useEffect(() => {
+    if (synthesisNode?.document) setActiveTab("synthesis");
+  }, [synthesisNode?.document]);
+
+  const rootNodes = treeNodes.filter((n) => n.parent_id === null);
+  const childrenOf = (id: string) => treeNodes.filter((n) => n.parent_id === id);
+
+  function toggle(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function renderNode(node: ResearchNode): ReactNode {
+    const children = childrenOf(node.id);
+    const isCollapsed = collapsed.has(node.id);
+    const hasChildren = children.length > 0 || (node.status === "done" && (node.child_count ?? 0) > 0);
+    const verification = node.verification ?? [];
+    const isHarvesting = node.status === "harvesting";
+
+    return (
+      <div key={node.id} className="research-tree-node" style={{ marginLeft: node.depth > 0 ? `${node.depth * 20}px` : 0 }}>
+        <div className="research-tree-node-header">
+          {hasChildren ? (
+            <button type="button" className="icon-button research-tree-toggle" onClick={() => toggle(node.id)}>
+              {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+            </button>
+          ) : (
+            <span className="research-tree-toggle-spacer" />
+          )}
+          <span className="research-tree-node-depth">T{node.depth + 1}</span>
+          <strong className="research-tree-question">{node.question}</strong>
+          {(node.status === "running" || isHarvesting) ? <Loader2 size={13} className="spin" /> : null}
+          {isHarvesting ? <span className="muted-row" style={{ fontSize: "11px" }}>Suche Quellen… (Paper + Web)</span> : null}
+          {node.status === "error" ? <span className="warning-row" style={{ fontSize: "11px" }}>Fehler</span> : null}
+          {node.status === "done" && !loading ? (
+            <button
+              type="button"
+              className="icon-button"
+              style={{ marginLeft: "auto", fontSize: "11px", display: "flex", alignItems: "center", gap: "3px", opacity: 0.7 }}
+              onClick={() => onDrillDeeper(node.id, node.question)}
+              title="Tiefer in diese Frage einsteigen"
+            >
+              <Plus size={11} />
+              <span>Tiefer</span>
+            </button>
+          ) : null}
+        </div>
+        {!isCollapsed && node.answer ? (
+          <div className="research-tree-answer">
+            <AnswerText
+              answer={node.answer.answer}
+              getCitationMeta={(citation, context, start) =>
+                citationMetasFor(verification, citation, context, node.answer?.citation_links ?? [], start)
+              }
+              onCitationClick={() => {}}
+              onCitationMetaClick={(meta) => onCitationClick(meta.source, meta.evidenceIndex)}
+              onCitationInsert={(source, evidenceIndex, quote) => onCitationInsert(source, evidenceIndex, quote)}
+              onCitationInsertPreview={(source, evidenceIndex, quote) => onCitationInsertPreview(source, evidenceIndex, quote)}
+              onCitationInsertPreviewClear={onCitationInsertPreviewClear}
+            />
+            {verification.length > 0 ? (
+              <div className="research-tree-sources">
+                {verification.map((src) => (
+                  <button
+                    key={src.paper_id}
+                    type="button"
+                    className="citation-link citation-link--mapped"
+                    style={colorVarsForPaperId(src.paper_id, 0)}
+                    onClick={() => onCitationClick(src, 0)}
+                    title={src.title || src.paper_id}
+                  >
+                    {src.title ? src.title.slice(0, 40) + (src.title.length > 40 ? "…" : "") : src.paper_id}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {((node.harvested_papers?.length ?? 0) > 0 || (node.harvested_grey?.length ?? 0) > 0) ? (
+              <div className="research-tree-harvested">
+                <span className="research-tree-harvested-label">Neu gefunden:</span>
+                {node.harvested_papers?.map((p) => (
+                  <span key={p.id} className="research-tree-harvested-item research-tree-harvested-paper" title={p.id}>
+                    {p.title.slice(0, 50) + (p.title.length > 50 ? "…" : "")}
+                  </span>
+                ))}
+                {node.harvested_grey?.map((g) => (
+                  <a key={g.id} href={g.url} target="_blank" rel="noopener noreferrer"
+                    className="research-tree-harvested-item research-tree-harvested-web" title={g.url}>
+                    {(g.title || g.url).slice(0, 50) + ((g.title || g.url).length > 50 ? "…" : "")}
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {!isCollapsed ? children.map((child) => renderNode(child)) : null}
+      </div>
+    );
+  }
+
+  function renderSynthesis(doc: string): ReactNode {
+    // Parse markdown into sections (heading + content) for anchor-based TOC
+    type Section = { level: number; title: string; content: string };
+    const sections: Section[] = [];
+    let preamble = "";
+    let currentSection: { level: number; title: string; lines: string[] } | null = null;
+    for (const line of doc.split("\n")) {
+      const h2 = line.match(/^## (.+)/);
+      const h3 = line.match(/^### (.+)/);
+      if (h2 || h3) {
+        if (currentSection) {
+          sections.push({ level: currentSection.level, title: currentSection.title, content: currentSection.lines.join("\n").trim() });
+        }
+        currentSection = { level: h2 ? 2 : 3, title: (h2?.[1] ?? h3?.[1] ?? ""), lines: [] };
+      } else {
+        if (currentSection) currentSection.lines.push(line);
+        else preamble += line + "\n";
+      }
+    }
+    if (currentSection) sections.push({ level: currentSection.level, title: currentSection.title, content: currentSection.lines.join("\n").trim() });
+    preamble = preamble.trim();
+
+    // Strip basic markdown syntax that AnswerText renders as literals (bold, bullets).
+    // Citation brackets [arxiv:...] are preserved for chip rendering.
+    function stripMd(text: string): string {
+      return text
+        .replace(/\*\*(.+?)\*\*/g, "$1")  // **bold** → bold
+        .replace(/\*(.+?)\*/g, "$1")       // *italic* → italic
+        .replace(/^- /gm, "• ")           // - bullet → • bullet
+        .replace(/^\d+\. /gm, "");        // 1. item → item
+    }
+
+    // Aggregate verification sources and citation links from all done nodes so
+    // citations in the synthesis document resolve to real paper evidence.
+    const synthVerification: VerificationSource[] = [];
+    const synthCitationLinks: CitationLink[] = [];
+    const seenPaperIds = new Set<string>();
+    for (const node of treeNodes) {
+      if (node.verification) {
+        for (const src of node.verification) {
+          if (!seenPaperIds.has(src.paper_id)) {
+            seenPaperIds.add(src.paper_id);
+            synthVerification.push(src);
+          }
+        }
+      }
+      if (node.answer?.citation_links) {
+        synthCitationLinks.push(...node.answer.citation_links);
+      }
+    }
+
+    const sharedAnswerProps = {
+      getCitationMeta: (citation: string, context?: string, citationStart?: number) =>
+        citationMetasFor(synthVerification, citation, context, synthCitationLinks, citationStart),
+      onCitationClick: () => {},
+      onCitationMetaClick: (meta: CitationMeta) => onCitationClick(meta.source, meta.evidenceIndex),
+      onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string) => onCitationInsert(source, evidenceIndex, quote),
+      onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string) => onCitationInsertPreview(source, evidenceIndex, quote),
+      onCitationInsertPreviewClear,
+    };
+
+    return (
+      <div className="research-synthesis-panel">
+        {sections.length > 0 ? (
+          <nav className="research-synthesis-toc">
+            <strong>Inhalt</strong>
+            {sections.map((s, i) => (
+              <a
+                key={i}
+                href={`#synth-sec-${i}`}
+                className={`research-synthesis-toc-item research-synthesis-toc-level-${s.level}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.getElementById(`synth-sec-${i}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                {s.title}
+              </a>
+            ))}
+            {synthVerification.length > 0 ? (
+              <a
+                href="#synth-sec-bibliography"
+                className="research-synthesis-toc-item research-synthesis-toc-level-2"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.getElementById("synth-sec-bibliography")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                Quellenverzeichnis
+              </a>
+            ) : null}
+          </nav>
+        ) : null}
+        <div className="research-synthesis-body">
+          {preamble ? <AnswerText answer={stripMd(preamble)} {...sharedAnswerProps} /> : null}
+          {sections.map((s, i) => (
+            <div key={i} id={`synth-sec-${i}`} className="research-synthesis-section">
+              {s.level === 2 ? <h2 className="research-synthesis-h2">{s.title}</h2> : <h3 className="research-synthesis-h3">{s.title}</h3>}
+              {s.content ? <AnswerText answer={stripMd(s.content)} {...sharedAnswerProps} /> : null}
+            </div>
+          ))}
+          {synthVerification.length > 0 ? (
+            <div id="synth-sec-bibliography" className="research-synthesis-section">
+              <h2 className="research-synthesis-h2">Quellenverzeichnis</h2>
+              <ol className="research-synthesis-bibliography">
+                {synthVerification.map((src) => (
+                  <li key={src.paper_id}>
+                    <button
+                      type="button"
+                      className="citation-link citation-link--mapped"
+                      style={colorVarsForPaperId(src.paper_id, 0)}
+                      onClick={() => onCitationClick(src, 0)}
+                      title={src.paper_id}
+                    >
+                      {src.title || src.paper_id}
+                    </button>
+                    <span className="muted-row" style={{ marginLeft: 6, fontSize: "11px" }}>
+                      {src.paper_id}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  const doneCount = treeNodes.filter((n) => n.status === "done").length;
+
+  return (
+    <div className="research-tree-panel">
+      <div className="research-tree-header">
+        <GitBranch size={15} />
+        <strong>Tiefenanalyse</strong>
+        <div className="segmented research-tree-tabs" style={{ marginLeft: "8px" }}>
+          <button
+            type="button"
+            className={activeTab === "tree" ? "active" : ""}
+            onClick={() => setActiveTab("tree")}
+          >
+            Baumansicht
+          </button>
+          <button
+            type="button"
+            className={activeTab === "synthesis" ? "active" : ""}
+            disabled={!synthesisNode}
+            onClick={() => setActiveTab("synthesis")}
+          >
+            Gesamtantwort
+          </button>
+        </div>
+        <span className="muted-row" style={{ flex: 1, fontSize: "12px" }}>
+          {loading ? `${treeNodes.length} Antworten erhalten…` : `${treeNodes.length} Antworten`}
+        </span>
+        {!loading && doneCount > 0 ? (
+          <button type="button" className="icon-button" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "3px" }} onClick={onSaveToNotes} title="Gesamten Baum in aktive Notiz speichern">
+            <NotebookPen size={12} />
+            <span>In Notiz</span>
+          </button>
+        ) : null}
+        {loading && !synthesisNode ? (
+          <button type="button" className="button button-compact" onClick={onStop} title="Analyse stoppen">
+            <Square size={12} />
+            <span>Stopp</span>
+          </button>
+        ) : null}
+        {loading && synthesisNode ? (
+          <span className="muted-row" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}>
+            <Loader2 size={12} className="spin" /> Synthese…
+          </span>
+        ) : null}
+      </div>
+      {llmError ? (
+        <div className={`research-tree-llm-error research-tree-llm-error--${llmError.kind}`} role="alert">
+          <AlertTriangle size={15} />
+          <div className="research-tree-llm-error-body">
+            <strong>
+              {llmError.kind === "quota"
+                ? "KI-Kontingent erschöpft"
+                : llmError.kind === "rate_limit"
+                  ? "KI-Rate-Limit erreicht"
+                  : llmError.kind === "auth"
+                    ? "KI-Authentifizierung fehlgeschlagen"
+                    : llmError.kind === "connection"
+                      ? "Keine Verbindung zum KI-Modell"
+                      : "KI-Anfrage fehlgeschlagen"}
+            </strong>
+            <span>{llmError.message}</span>
+            <span className="research-tree-llm-error-detail">
+              Die unten gezeigten Antworten sind nur evidenzbasiert (ohne KI-Synthese) und der Baum
+              ist evtl. nicht vollständig verzweigt.
+              {llmError.error ? ` Details: ${llmError.error.slice(0, 200)}` : ""}
+            </span>
+          </div>
+        </div>
+      ) : null}
+      {activeTab === "tree" ? (
+        <div className="research-tree-body">
+          {rootNodes.length ? rootNodes.map((n) => renderNode(n)) : (
+            loading ? <div className="muted-row"><Loader2 size={14} className="spin" /> Zerlege Frage…</div> : null
+          )}
+        </div>
+      ) : (
+        synthesisNode?.document ? renderSynthesis(synthesisNode.document) : (
+          <div className="muted-row" style={{ padding: "16px" }}>
+            <Loader2 size={14} className="spin" /> Gesamtantwort wird generiert…
+          </div>
+        )
+      )}
+    </div>
+  );
 }

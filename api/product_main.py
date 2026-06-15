@@ -14,7 +14,7 @@ import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api import phase4_main
@@ -46,6 +46,7 @@ from query.discovery import analyze_paper, analyze_topic
 from query.hybrid_retriever import HybridRetriever
 from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
+from query.research_tree import ResearchTreeRunner, _extract_questions
 from query.web_research import run_deep_research
 from query.source_verifier import find_pdf_path
 from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
@@ -158,6 +159,28 @@ class DeepResearchRequest(BaseModel):
     max_queries: int = Field(default=5, ge=1, le=12)
     results_per_query: int = Field(default=6, ge=1, le=15)
     max_sources: int = Field(default=12, ge=1, le=30)
+
+
+class ResearchTreeRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    project_id: str | None = None
+    depth: int = Field(default=3, ge=1, le=6)
+    branches: int = Field(default=4, ge=2, le=8)
+    max_nodes: int = Field(default=50, ge=5, le=100)
+    provider: str | None = None
+    model: str | None = None
+    paper_ids: list[str] = Field(default_factory=list)
+    grey_source_ids: list[str] = Field(default_factory=list)
+    include_project_grey: bool = False
+    auto_harvest: bool = False
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+
+
+class ResearchClarifyRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    provider: str | None = None
+    model: str | None = None
 
 
 class GreySourcePayload(BaseModel):
@@ -1111,6 +1134,90 @@ async def research_deep(request: DeepResearchRequest) -> dict[str, Any]:
     )
 
 
+@app.post("/research/tree")
+async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
+    """Stream a Research Tree via Server-Sent Events.
+
+    Each node is sent as ``data: <json>\\n\\n`` when it completes.
+    Node payload: {id, parent_id, question, depth, status, answer, child_count?}.
+    """
+    runner = ResearchTreeRunner(llm_router)
+    return StreamingResponse(
+        runner.stream_events(
+            question=request.question,
+            depth=request.depth,
+            branches=request.branches,
+            provider=request.provider,
+            model=request.model,
+            paper_ids=request.paper_ids or None,
+            project_id=request.project_id,
+            grey_source_ids=request.grey_source_ids or None,
+            include_project_grey=request.include_project_grey,
+            auto_harvest=request.auto_harvest,
+            metadata_db_path=request.metadata_db_path,
+            pdf_base_dir=request.pdf_base_dir,
+            max_nodes=request.max_nodes,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+_CLARIFY_SYSTEM = (
+    "Du bist ein wissenschaftlicher Forschungsassistent. "
+    "Du überlegst, in welche thematischen Richtungen sich eine Tiefenanalyse einer "
+    "Forschungsfrage entwickeln könnte, damit der Nutzer den Schwerpunkt wählen kann."
+)
+
+_CLARIFY_USER = (
+    'Forschungsfrage: "{question}"\n\n'
+    "Überlege, in welche Richtungen diese Frage vertieft werden könnte, und schlage "
+    "4-6 konkrete thematische Schwerpunkte vor, aus denen der Nutzer auswählen kann.\n"
+    "Beispiele für Richtungen: 'Verhaltensweisen beim Menschen', 'Biologischer Hintergrund', "
+    "'Klinische Anwendungen', 'Methodischer Vergleich', 'Entwicklung seit 2020', "
+    "'Gesellschaftliche Auswirkungen'.\n"
+    "Jede Richtung ist ein kurzer, prägnanter Titel (max. 5 Wörter), spezifisch zur Frage.\n"
+    "Antworte NUR mit einem JSON-Objekt (kein Markdown, kein Text davor/danach):\n"
+    '{"directions": ["Richtung 1", "Richtung 2", "Richtung 3", "Richtung 4"]}'
+)
+
+
+@app.post("/research/clarify")
+async def research_clarify(request: ResearchClarifyRequest) -> dict[str, Any]:
+    """Suggest 4-6 thematic focus directions to steer a deep analysis."""
+    overrides: dict[str, Any] = {"max_tokens": 400, "temperature": 0.5}
+    if request.model:
+        overrides["model"] = request.model
+    directions: list[str] = []
+    try:
+        text = await asyncio.to_thread(
+            llm_router.chat,
+            messages=[
+                {"role": "system", "content": _CLARIFY_SYSTEM},
+                {"role": "user", "content": _CLARIFY_USER.format(question=request.question)},
+            ],
+            provider=request.provider,
+            overrides=overrides,
+        )
+        raw = (text or "").strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                ds = parsed.get("directions") or parsed.get("questions") or []
+                directions = [str(d).strip() for d in ds if str(d).strip()][:6]
+            elif isinstance(parsed, list):
+                directions = [str(d).strip() for d in parsed if str(d).strip()][:6]
+        except (json.JSONDecodeError, ValueError):
+            directions = _extract_questions(raw, 6)
+    except Exception:
+        directions = []
+    return {"directions": directions}
+
+
 @app.get("/projects/{project_id}/grey-sources")
 def list_project_grey_sources(
     project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
@@ -1451,6 +1558,27 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
         },
         "items": items,
     }
+
+
+@app.get("/extraction/batch/{job_id}/items")
+def get_extraction_batch_items(job_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        job = db.get_batch_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        items = db.get_batch_job_items(job_id)
+    return {"job_id": job_id, "items": items}
+
+
+@app.post("/extraction/batch/{job_id}/cancel")
+def cancel_extraction_batch(job_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        job = db.get_batch_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        db.cancel_batch_job(job_id)
+        updated = db.get_batch_job(job_id)
+    return {"job_id": job_id, "status": (updated or {}).get("status")}
 
 
 @app.get("/extraction/history")

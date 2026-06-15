@@ -281,6 +281,17 @@ export type Job = {
   updated_timestamp?: string;
 };
 
+export type BatchJobItem = {
+  job_id: string;
+  paper_id: string;
+  pdf_path: string | null;
+  status: string;
+  attempts: number;
+  error_message: string | null;
+  started_timestamp: string | null;
+  completed_timestamp: string | null;
+};
+
 export type ExtractionLibraryItem = {
   paper_id: string;
   title: string;
@@ -389,6 +400,23 @@ export type BenchmarkRun = {
 export type RewriteResponse = {
   text: string;
   model?: string | null;
+};
+
+export type ResearchNode = {
+  id: string;
+  parent_id: string | null;
+  question: string;
+  depth: number;
+  status: "running" | "done" | "error" | "harvesting" | "synthesis" | "llm_error";
+  answer: Answer | null;
+  child_count?: number;
+  error?: string;
+  error_kind?: string;
+  message?: string;
+  verification?: VerificationSource[];
+  document?: string;
+  harvested_papers?: Array<{ id: string; title: string }>;
+  harvested_grey?: Array<{ id: string; title: string; url: string }>;
 };
 
 export type NoteCitation = {

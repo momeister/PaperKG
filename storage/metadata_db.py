@@ -1836,6 +1836,14 @@ class MetadataDB:
             WHERE job_id = ?
         """, [superseded_by, now, job_id])
 
+    def cancel_batch_job(self, job_id: str) -> None:
+        now = datetime.now()
+        self._execute("""
+            UPDATE batch_jobs
+            SET status = 'cancelled', updated_timestamp = ?
+            WHERE job_id = ? AND status NOT IN ('completed', 'failed', 'superseded', 'cancelled')
+        """, [now, job_id])
+
     @staticmethod
     def _normalize_embedding_label(label: str) -> str:
         return " ".join(label.lower().split())
