@@ -228,6 +228,7 @@ class ResearchTreeRunner:
         auto_harvest: bool = False,
         projects_path: str = "data/projects.json",
         max_nodes: int = 25,
+        initial_nodes: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         """Yields SSE-formatted lines: ``data: <json>\\n\\n``."""
         kwargs: dict[str, Any] = dict(
@@ -245,9 +246,20 @@ class ResearchTreeRunner:
         )
         nodes_cache: list[dict[str, Any]] = []
         nodes_done: list[int] = [0]
+
+        # Pre-populate cache from a previous paused run so completed nodes are re-emitted
+        # without calling the LLM again (resume / quota-saving).
+        done_by_question: dict[str, dict[str, Any]] = {}
+        for saved in (initial_nodes or []):
+            if saved.get("status") == "done" and saved.get("answer") and saved.get("question"):
+                done_by_question[str(saved["question"])] = saved
+                nodes_cache.append(saved)
+                nodes_done[0] += 1
+
         async for event in self._node(
             question, None, 0, depth, branches, kwargs, nodes_cache,
             chapter_question=None, nodes_done=nodes_done, max_nodes=max_nodes,
+            done_by_question=done_by_question,
         ):
             yield event
         if nodes_cache:
@@ -282,12 +294,40 @@ class ResearchTreeRunner:
         chapter_question: str | None = None,
         nodes_done: list[int] | None = None,
         max_nodes: int = 50,
+        done_by_question: dict[str, dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         # Global node budget — stop spawning when exhausted
         if nodes_done is not None:
             if nodes_done[0] >= max_nodes:
                 return
             nodes_done[0] += 1
+
+        # Resume: if this question was already answered in a previous run, re-emit the
+        # cached result immediately without calling the LLM for the answer again.
+        cached = (done_by_question or {}).get(question)
+        if cached:
+            node_id = str(cached.get("id") or uuid.uuid4())
+            yield _sse({**cached, "parent_id": parent_id, "depth": current_depth})
+            if current_depth < max_depth:
+                sub_questions: list[str] = []
+                try:
+                    sub_questions = await asyncio.to_thread(
+                        self._decompose_sync,
+                        question,
+                        branches,
+                        kwargs.get("provider"),
+                        kwargs.get("model"),
+                    )
+                except Exception:
+                    sub_questions = []
+                for sub_q in sub_questions:
+                    child_chapter = sub_q if current_depth == 0 else chapter_question
+                    async for event in self._node(
+                        sub_q, node_id, current_depth + 1, max_depth, branches, kwargs,
+                        nodes_cache, child_chapter, nodes_done, max_nodes, done_by_question,
+                    ):
+                        yield event
+            return
 
         node_id = str(uuid.uuid4())
 
@@ -316,7 +356,11 @@ class ResearchTreeRunner:
 
         should_harvest = (
             bool(kwargs.get("auto_harvest"))
-            and (answer_dict.get("no_answer") or answer_dict.get("context_diagnostics", {}).get("low_relevance"))
+            and (
+                answer_dict.get("no_answer")
+                or answer_dict.get("context_diagnostics", {}).get("low_relevance")
+                or not _answer_has_citations(answer_dict)
+            )
         )
 
         harvested_paper_info: list[dict[str, Any]] = []
@@ -354,9 +398,8 @@ class ResearchTreeRunner:
 
                 if new_paper_ids or new_grey_ids:
                     original_paper_ids = kwargs.get("paper_ids")
-                    effective_paper_ids = (
-                        list(original_paper_ids) + new_paper_ids if original_paper_ids else None
-                    )
+                    existing_ids = [pid for pid in (original_paper_ids or []) if pid != "__none__"]
+                    effective_paper_ids = (existing_ids + new_paper_ids) if (existing_ids or new_paper_ids) else None
                     existing_grey = list(kwargs.get("grey_source_ids") or [])
                     effective_grey_ids = existing_grey + new_grey_ids if new_grey_ids else kwargs.get("grey_source_ids")
                     answer_dict = await asyncio.to_thread(
@@ -372,8 +415,10 @@ class ResearchTreeRunner:
                         str(kwargs.get("pdf_base_dir") or "data/pdfs"),
                         str(kwargs.get("root_question") or question),
                     )
-            except Exception:
-                pass
+            except Exception as harvest_exc:
+                yield _sse({"id": node_id, "parent_id": parent_id, "question": question,
+                            "depth": current_depth, "status": "harvest_error",
+                            "error": str(harvest_exc)})
 
         # Surface a degraded per-node answer (LLM failed → evidence-only fallback)
         # as a dedicated event so the user sees *why*, not just a fallback blob.
@@ -425,7 +470,7 @@ class ResearchTreeRunner:
             child_chapter = sub_q if current_depth == 0 else chapter_question
             async for event in self._node(
                 sub_q, node_id, current_depth + 1, max_depth, branches, kwargs,
-                nodes_cache, child_chapter, nodes_done, max_nodes,
+                nodes_cache, child_chapter, nodes_done, max_nodes, done_by_question,
             ):
                 yield event
 
@@ -436,12 +481,14 @@ def _strip_unknown_citations(text: str, known_ids: frozenset[str]) -> str:
         return text
 
     def _keep(m: re.Match) -> str:
-        cid = m.group(1).strip()
-        norm = re.sub(r"v\d+$", "", cid.lower().replace(" ", ""))
-        for kid in known_ids:
-            kid_norm = re.sub(r"v\d+$", "", kid.lower().replace(" ", ""))
-            if norm == kid_norm or kid_norm.endswith(norm) or norm.endswith(kid_norm):
-                return m.group(0)
+        # Split combined citations like [grey::abc, arxiv:123] before matching
+        parts = [p.strip() for p in re.split(r"[,;]\s*", m.group(1)) if p.strip()]
+        for part in parts:
+            norm = re.sub(r"v\d+$", "", part.lower().replace(" ", ""))
+            for kid in known_ids:
+                kid_norm = re.sub(r"v\d+$", "", kid.lower().replace(" ", ""))
+                if norm == kid_norm or kid_norm.endswith(norm) or norm.endswith(kid_norm):
+                    return m.group(0)
         return ""
 
     return re.sub(r"\[[^\]]+\]", _keep, text)
@@ -509,3 +556,8 @@ def _llm_error_event(node_id: str, question: str, depth: int, raw: str, prefix: 
 
 def _sse(data: dict[str, Any]) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _answer_has_citations(answer_dict: dict[str, Any]) -> bool:
+    text = str(answer_dict.get("answer") or "")
+    return bool(re.search(r"\[(?:arxiv:|grey::)", text))

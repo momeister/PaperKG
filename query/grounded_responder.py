@@ -1616,6 +1616,10 @@ def _is_allowed_citation_label(value: str, known_ids: frozenset[str] = frozenset
     # always valid, regardless of format (local uploads can have bare IDs like "files").
     if value in known_ids:
         return True
+    # Grey source IDs are UUIDs assigned by the DB — require exact match, never allow
+    # hallucinated short forms like grey::grey_29 through the namespace regex below.
+    if value.startswith("grey::"):
+        return False
     # Accept any source:id format (e.g. arxiv:, crossref:, openalex:, semantic_scholar:, files:, local:, doi:)
     # and legacy short p-prefixed IDs. Bare numbers or random tokens are rejected.
     return bool(re.match(r'^[a-z][a-z0-9_]*:[^\s]', value)) or value.startswith("p")

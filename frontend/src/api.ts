@@ -387,6 +387,7 @@ export interface ResearchTreeRequest {
   grey_source_ids?: string[];
   include_project_grey?: boolean;
   auto_harvest?: boolean;
+  initial_nodes?: import("./types").ResearchNode[];
 }
 
 export async function streamResearchTree(

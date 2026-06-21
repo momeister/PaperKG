@@ -35,7 +35,7 @@ import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
 import { downloadMarkdownFile } from "../download";
 import { noteProjectId } from "../projectScope";
 import { useAppState } from "../state";
-import type { Answer, CitationLink, DeepResearchFinding, Note, VerificationSource } from "../types";
+import type { Answer, CitationLink, DeepResearchFinding, Note, ResearchNode, VerificationSource } from "../types";
 
 export type AssistantAnswerBlock = {
   id: string;
@@ -52,6 +52,8 @@ export type AssistantTurn = {
   verification: VerificationSource[];
   createdAt: string;
   blocks?: AssistantAnswerBlock[];
+  type?: "chat" | "research_tree";
+  researchNodes?: ResearchNode[];
 };
 
 export type CitationMeta = {

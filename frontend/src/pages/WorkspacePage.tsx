@@ -279,6 +279,8 @@ export function WorkspacePage() {
   // overlapping state setters in the dialog handlers can never reset it (see bug history).
   const pendingDeepRef = useRef<{ question: string; harvest: boolean } | null>(null);
   const researchAbortRef = useRef<AbortController | null>(null);
+  const researchSessionIdRef = useRef<string>("");
+  const researchNodesRef = useRef<ResearchNode[]>([]);
   const autoSavedTreeRef = useRef<string | null>(null);
 
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
@@ -1209,10 +1211,11 @@ export function WorkspacePage() {
     ask(value, { web: inline.web || undefined });
   }
 
-  function launchResearchTree(q: string, useHarvest: boolean, clarificationContext: string) {
+  function launchResearchTree(q: string, useHarvest: boolean, clarificationContext: string, initialNodes?: ResearchNode[]) {
     const abort = new AbortController();
     researchAbortRef.current = abort;
-    setResearchNodes([]);
+    researchNodesRef.current = initialNodes ?? [];
+    setResearchNodes(initialNodes ?? []);
     setResearchLlmError(null);
     setResearchLoading(true);
     setQuestion("");
@@ -1223,6 +1226,28 @@ export function WorkspacePage() {
     const enrichedQuestion = clarificationContext.trim()
       ? `${q}\n\nFokus und Kontext für die Analyse: ${clarificationContext.trim()}`
       : q;
+
+    // Assign a stable session ID — fresh UUID for a new run, preserved for resume.
+    const sessionId = initialNodes?.length && researchSessionIdRef.current
+      ? researchSessionIdRef.current
+      : crypto.randomUUID();
+    researchSessionIdRef.current = sessionId;
+
+    // Create a draft session entry immediately so it appears in the list while running.
+    const draft: AssistantTurn = {
+      id: sessionId,
+      question: enrichedQuestion,
+      answer: null as unknown as AssistantTurn["answer"],
+      verification: [],
+      createdAt: new Date().toISOString(),
+      type: "research_tree",
+      researchNodes: initialNodes ?? [],
+    };
+    setHistory((prev) => {
+      const idx = prev.findIndex((t) => t.id === sessionId);
+      if (idx >= 0) { const next = [...prev]; next[idx] = draft; return next; }
+      return [draft, ...prev];
+    });
 
     const payload: ResearchTreeRequest = {
       question: enrichedQuestion,
@@ -1235,6 +1260,7 @@ export function WorkspacePage() {
       grey_source_ids: greyIds.length ? greyIds : undefined,
       include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
       auto_harvest: useHarvest || undefined,
+      initial_nodes: initialNodes?.length ? initialNodes : undefined,
     };
 
     streamResearchTree(
@@ -1258,12 +1284,15 @@ export function WorkspacePage() {
         }
         setResearchNodes((prev) => {
           const idx = prev.findIndex((n) => n.id === node.id);
+          let next: ResearchNode[];
           if (idx >= 0) {
-            const next = [...prev];
+            next = [...prev];
             next[idx] = node;
-            return next;
+          } else {
+            next = [...prev, node];
           }
-          return [...prev, node];
+          researchNodesRef.current = next;
+          return next;
         });
       },
       abort.signal,
@@ -1274,6 +1303,28 @@ export function WorkspacePage() {
       })
       .finally(() => {
         setResearchLoading(false);
+        // Save final node state to session history (covers both completed and paused runs).
+        // The useEffect at line ~775 auto-persists history changes to localStorage.
+        const finalNodes = researchNodesRef.current;
+        if (finalNodes.length > 0) {
+          const saved: AssistantTurn = {
+            id: sessionId,
+            question: enrichedQuestion,
+            answer: null as unknown as AssistantTurn["answer"],
+            verification: [],
+            createdAt: new Date().toISOString(),
+            type: "research_tree",
+            researchNodes: finalNodes,
+          };
+          setHistory((prev) => {
+            const idx = prev.findIndex((t) => t.id === sessionId);
+            if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
+            return [saved, ...prev];
+          });
+        }
+        // Invalidate paper/grey caches so auto-harvested items appear without manual refresh.
+        queryClient.invalidateQueries({ queryKey: ["papers"] });
+        queryClient.invalidateQueries({ queryKey: ["grey-sources"] });
       });
   }
 
@@ -1658,7 +1709,12 @@ export function WorkspacePage() {
   function activateAssistantTurn(turnId: string) {
     setActiveTurnId(turnId);
     const turn = history.find((item) => item.id === turnId);
-    if (!turn) {
+    if (!turn) return;
+    if (turn.type === "research_tree") {
+      researchSessionIdRef.current = turnId;
+      researchNodesRef.current = turn.researchNodes ?? [];
+      setResearchNodes(turn.researchNodes ?? []);
+      setDeepMode(true);
       return;
     }
     const sources = mergeVerification(turnBlocks(turn).flatMap((block) => block.verification));
@@ -2456,6 +2512,10 @@ export function WorkspacePage() {
                 loading={researchLoading}
                 llmError={researchLlmError}
                 onStop={stopResearchTree}
+                onResume={() => {
+                  const rootQ = researchNodes.find((n) => n.parent_id === null)?.question ?? "";
+                  if (rootQ) launchResearchTree(rootQ, false, "", researchNodes);
+                }}
                 onCitationClick={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
                 onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
                 onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
@@ -3507,32 +3567,42 @@ function WorkspaceNavigatorBody({
   return (
     <section className="workspace-nav-body">
       <div className="list workspace-nav-list">
-        {sessions.map((turn) => (
-          <div
-            className={`assistant-history-item workspace-session-item ${activeSessionId === turn.id ? "assistant-history-item--active" : ""}`}
-            key={turn.id}
-          >
-            <button
-              className="session-item__body"
-              type="button"
-              onClick={() => onActivateSession(turn.id)}
+        {sessions.map((turn) => {
+          const isTree = turn.type === "research_tree";
+          const doneNodes = isTree ? (turn.researchNodes ?? []).filter((n) => n.status === "done").length : 0;
+          const hasSynthesis = isTree && (turn.researchNodes ?? []).some((n) => n.status === "synthesis");
+          return (
+            <div
+              className={`assistant-history-item workspace-session-item ${activeSessionId === turn.id ? "assistant-history-item--active" : ""}`}
+              key={turn.id}
             >
-              <span>{turn.question}</span>
-              <small>
-                {formatTurnTime(turn.createdAt)}
-                {turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
-              </small>
-            </button>
-            <button
-              className="icon-button nav-delete-btn"
-              type="button"
-              title="Session löschen"
-              onClick={(e) => { e.stopPropagation(); onDeleteSession(turn.id); }}
-            >
-              <Trash2 size={13} />
-            </button>
-          </div>
-        ))}
+              <button
+                className="session-item__body"
+                type="button"
+                onClick={() => onActivateSession(turn.id)}
+              >
+                <span className="session-item__title">
+                  {isTree ? <GitBranch size={12} style={{ flexShrink: 0, marginRight: "3px", verticalAlign: "middle" }} /> : null}
+                  {turn.question}
+                </span>
+                <small>
+                  {formatTurnTime(turn.createdAt)}
+                  {isTree
+                    ? ` | ${doneNodes} Knoten${hasSynthesis ? " ✓" : ""}`
+                    : turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
+                </small>
+              </button>
+              <button
+                className="icon-button nav-delete-btn"
+                type="button"
+                title="Session löschen"
+                onClick={(e) => { e.stopPropagation(); onDeleteSession(turn.id); }}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          );
+        })}
         {!sessions.length ? <EmptyState title="Noch keine KI-Sessions" /> : null}
       </div>
     </section>
@@ -3874,6 +3944,7 @@ function ResearchTreeView({
   loading,
   llmError,
   onStop,
+  onResume,
   onCitationClick,
   onCitationInsert,
   onCitationInsertPreview,
@@ -3885,6 +3956,7 @@ function ResearchTreeView({
   loading: boolean;
   llmError: { kind: string; message: string; error: string } | null;
   onStop: () => void;
+  onResume: () => void;
   onCitationClick: (source: VerificationSource, evidenceIndex: number) => void;
   onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
   onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
@@ -4168,6 +4240,12 @@ function ResearchTreeView({
           <button type="button" className="button button-compact" onClick={onStop} title="Analyse stoppen">
             <Square size={12} />
             <span>Stopp</span>
+          </button>
+        ) : null}
+        {!loading && !synthesisNode && nodes.some((n) => n.status === "done") ? (
+          <button type="button" className="button button-compact" onClick={onResume} title="Analyse fortsetzen (bereits beantwortete Knoten werden übersprungen)">
+            <GitBranch size={12} />
+            <span>Fortsetzen</span>
           </button>
         ) : null}
         {loading && synthesisNode ? (

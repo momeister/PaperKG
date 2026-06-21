@@ -175,6 +175,7 @@ class ResearchTreeRequest(BaseModel):
     auto_harvest: bool = False
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+    initial_nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResearchClarifyRequest(BaseModel):
@@ -1157,6 +1158,7 @@ async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
             metadata_db_path=request.metadata_db_path,
             pdf_base_dir=request.pdf_base_dir,
             max_nodes=request.max_nodes,
+            initial_nodes=request.initial_nodes,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
