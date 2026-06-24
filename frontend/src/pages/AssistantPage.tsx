@@ -1579,8 +1579,41 @@ export function loadAssistantSession(projectId: string): AssistantSession {
 
 const serverSessionSaveTimers = new Map<string, number>();
 
+/**
+ * Research-tree turns carry the full per-node evidence, PDF excerpts and verification
+ * payloads — easily many MB for a deep run. Persisting that verbatim blows the
+ * localStorage quota (silent total loss) and bloats the server session, which is why
+ * reopened deep analyses showed "0 Knoten" and lost all progress on reload. Drop the
+ * heavy, re-derivable fields before persisting; the live in-memory copy keeps everything.
+ */
+export function slimTurnForPersist(turn: AssistantTurn): AssistantTurn {
+  if (turn.type !== "research_tree" || !turn.researchNodes?.length) {
+    return turn;
+  }
+  const nodes = turn.researchNodes.map((node) => {
+    const answer = node.answer
+      ? { ...node.answer, context_diagnostics: undefined, source_verification: undefined }
+      : node.answer;
+    const verification = node.verification?.map((src) => ({
+      ...src,
+      evidence: (src.evidence ?? []).map((ev) => ({
+        ...ev,
+        pdf_excerpt: "",
+        matched_terms: [],
+        reference_text: (ev.reference_text ?? "").slice(0, 600),
+      })),
+    }));
+    return { ...node, answer, verification };
+  });
+  return { ...turn, researchNodes: nodes };
+}
+
 export function saveAssistantSession(projectId: string, session: { history: AssistantTurn[]; activeTurnId: string }) {
-  const payload = { history: session.history.slice(-25), activeTurnId: session.activeTurnId, savedAt: Date.now() };
+  const payload = {
+    history: session.history.slice(-25).map(slimTurnForPersist),
+    activeTurnId: session.activeTurnId,
+    savedAt: Date.now(),
+  };
   try {
     // localStorage is only a fast boot cache; the payloads (verification excerpts)
     // regularly exceed its quota, which used to lose whole conversations on reload.

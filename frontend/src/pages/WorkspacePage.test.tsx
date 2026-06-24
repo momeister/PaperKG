@@ -1,12 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Answer } from "../types";
+import { saveAssistantSession, turnBlocks } from "./AssistantPage";
 import {
   answerSuggestsWebSearch,
   classifyDroppedFile,
   classifyPastedText,
   extractInlineWebToken,
-  matchWorkspaceCommands
+  matchWorkspaceCommands,
+  restoredActiveTurnFor
 } from "./WorkspacePage";
 
 function file(name: string, type: string) {
@@ -87,5 +89,61 @@ describe("web search offer heuristic", () => {
   it("stays quiet for substantive answers", () => {
     expect(answerSuggestsWebSearch({ ...baseAnswer, answer: "Die Studie zeigt einen Effekt von 12% [arxiv:1]." })).toBe(false);
     expect(answerSuggestsWebSearch(null)).toBe(false);
+  });
+});
+
+describe("restored deep-analysis session (white-screen regression)", () => {
+  const projectId = "proj-deep";
+
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, String(value)),
+      removeItem: (key: string) => void store.delete(key),
+      clear: () => store.clear(),
+      key: () => null,
+      get length() {
+        return store.size;
+      }
+    });
+  });
+
+  // A research_tree turn carries no answer (answer: null). turnBlocks fabricates a block
+  // straight from that null answer — rendering it through the normal answer-block path
+  // dereferenced block.answer.answer and white-screened the whole workspace. The fix keys
+  // off the turn type, so detection of a persisted deep-analysis session must be reliable.
+  it("recognizes a persisted research_tree turn so it never renders as an answer block", () => {
+    const treeTurn = {
+      id: "turn-1",
+      question: "Tiefenfrage?",
+      answer: null,
+      verification: [],
+      createdAt: new Date().toISOString(),
+      type: "research_tree" as const,
+      researchNodes: [{ id: "n1", parent_id: null, question: "Tiefenfrage?", depth: 0, status: "done", answer: null }]
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    saveAssistantSession(projectId, { history: [treeTurn as any], activeTurnId: "turn-1" });
+
+    const restored = restoredActiveTurnFor(projectId);
+    expect(restored?.type).toBe("research_tree");
+    // The phantom block from such a turn has a null answer — exactly the value that crashed.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(turnBlocks(treeTurn as any)[0].answer).toBeNull();
+  });
+
+  it("returns a normal turn unchanged", () => {
+    const normalTurn = {
+      id: "turn-2",
+      question: "Normale Frage?",
+      answer: { question: "Normale Frage?", answer: "Antwort", sources: [], evidence: [] },
+      verification: [],
+      createdAt: new Date().toISOString()
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    saveAssistantSession(projectId, { history: [normalTurn as any], activeTurnId: "turn-2" });
+
+    expect(restoredActiveTurnFor(projectId)?.type).toBeUndefined();
   });
 });

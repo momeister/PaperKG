@@ -49,8 +49,9 @@ import {
   X
 } from "lucide-react";
 
-import { api, streamResearchTree } from "../api";
-import type { ResearchTreeRequest } from "../api";
+import { api, streamResearchTree, exportResearchTree } from "../api";
+import type { ResearchTreeRequest, ResearchTreeExportOptions } from "../api";
+import { downloadBlob } from "../download";
 import { colorVarsForPaperId, evidenceColorVars, isGreySourcePaperId } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { GreySourceView } from "../components/GreySourceView";
@@ -166,6 +167,16 @@ export function extractInlineWebToken(value: string): { text: string; web: boole
   return { text, web };
 }
 
+/** The active turn restored from a persisted session (used to reopen the right view). */
+export function restoredActiveTurnFor(projectId: string): AssistantTurn | null {
+  const session = loadAssistantSession(projectId);
+  return (
+    session.history.find((turn) => turn.id === session.activeTurnId) ??
+    session.history[session.history.length - 1] ??
+    null
+  );
+}
+
 /** Erkennvermerk, dass eine Antwort faktisch leer ausging und das Web helfen könnte. */
 export function answerSuggestsWebSearch(answer: Answer | null | undefined): boolean {
   if (!answer) {
@@ -259,11 +270,18 @@ export function WorkspacePage() {
   const [commandSearch, setCommandSearch] = useState<{ query: string; results: Paper[]; selected: string[] } | null>(null);
   const [webOfferDismissedFor, setWebOfferDismissedFor] = useState("");
 
-  // Research Tree (Tiefenanalyse)
-  const [deepMode, setDeepMode] = useState(false);
+  // Research Tree (Tiefenanalyse) — if the restored active turn is a deep-analysis session,
+  // reopen directly in deep mode so its (answer-less) nodes never flow through the normal
+  // answer-block renderer, which would dereference a null answer and white-screen the page.
+  const [deepMode, setDeepMode] = useState(
+    () => restoredActiveTurnFor(scopedProjectId)?.type === "research_tree",
+  );
   const [deepDepth, setDeepDepth] = useState(3);
   const [deepBranches, setDeepBranches] = useState(4);
-  const [researchNodes, setResearchNodes] = useState<ResearchNode[]>([]);
+  const [researchNodes, setResearchNodes] = useState<ResearchNode[]>(() => {
+    const turn = restoredActiveTurnFor(scopedProjectId);
+    return turn?.type === "research_tree" ? (turn.researchNodes ?? []) : [];
+  });
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchLlmError, setResearchLlmError] = useState<{ kind: string; message: string; error: string } | null>(null);
   const [autoHarvest, setAutoHarvest] = useState(() => {
@@ -283,6 +301,17 @@ export function WorkspacePage() {
   const researchNodesRef = useRef<ResearchNode[]>([]);
   const autoSavedTreeRef = useRef<string | null>(null);
 
+  // On mount, restore the research-tree refs for a reopened deep-analysis session so
+  // "Fortsetzen" continues the same session instead of forking a new one.
+  useEffect(() => {
+    const turn = restoredActiveTurnFor(scopedProjectId);
+    if (turn?.type === "research_tree") {
+      researchSessionIdRef.current = turn.id;
+      researchNodesRef.current = turn.researchNodes ?? [];
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
   const [pdfOpen, setPdfOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "pdfOpen", true));
@@ -300,7 +329,13 @@ export function WorkspacePage() {
     }
     return history.find((turn) => turn.id === activeTurnId) ?? history[history.length - 1];
   }, [activeTurnId, history]);
-  const activeBlocks = useMemo(() => (activeTurn ? turnBlocks(activeTurn) : []), [activeTurn]);
+  // Deep-analysis turns carry no answer block (their content lives in researchNodes), so
+  // never build a phantom block for them — that block's null answer is what white-screened
+  // the page once a Tiefenanalyse session was the restored active turn.
+  const activeBlocks = useMemo(
+    () => (activeTurn && activeTurn.type !== "research_tree" ? turnBlocks(activeTurn) : []),
+    [activeTurn],
+  );
   const latestBlock = activeBlocks[activeBlocks.length - 1] ?? null;
   const answer = latestBlock?.answer ?? null;
   const verification = useMemo(() => mergeVerification(activeBlocks.flatMap((block) => block.verification)), [activeBlocks]);
@@ -398,7 +433,7 @@ export function WorkspacePage() {
         answer_context_mode: info.answerContextMode !== "kg" ? info.answerContextMode : undefined,
         grey_source_ids: greyIds.length ? greyIds : undefined,
         include_project_grey: vars.scope === "all" && isRealProject ? true : undefined,
-        conversation_context: conversationMode === "followup" && !vars.newTurn && activeTurn ? turnContext(activeTurn) : undefined,
+        conversation_context: conversationMode === "followup" && !vars.newTurn && activeTurn && activeTurn.type !== "research_tree" ? turnContext(activeTurn) : undefined,
         project_id: activeProject || undefined,
         llm_overrides: Object.values(llmParams).some((value) => value !== undefined) ? llmParams : undefined
       });
@@ -764,6 +799,19 @@ export function WorkspacePage() {
       if (!session.history.length || (server.savedAt ?? 0) >= (session.savedAt ?? 0)) {
         setHistory(server.history);
         setActiveTurnId(server.activeTurnId);
+        // Hydrate the deep-analysis view from the authoritative server copy: localStorage
+        // can silently drop the (large) research nodes on quota, so the live researchNodes
+        // state — initialised synchronously from localStorage — would otherwise stay empty
+        // even when the server has the full tree. This is what made reopened analyses blank.
+        const activeId = server.activeTurnId || server.history[server.history.length - 1]?.id;
+        const activeTurn = server.history.find((t) => t.id === activeId);
+        if (activeTurn?.type === "research_tree") {
+          const restoredNodes = activeTurn.researchNodes ?? [];
+          setDeepMode(true);
+          setResearchNodes(restoredNodes);
+          researchNodesRef.current = restoredNodes;
+          researchSessionIdRef.current = activeTurn.id;
+        }
       }
     });
     return () => {
@@ -2546,9 +2594,9 @@ export function WorkspacePage() {
                 </button>
               </div>
             ) : null}
-            {!deepMode && activeTurn ? (
+            {!deepMode && activeTurn && activeTurn.type !== "research_tree" ? (
               <div className="answer-blocks">
-                {activeBlocks.map((block, index) => (
+                {activeBlocks.filter((block) => block.answer).map((block, index) => (
                   <article className={`answer-block ${index > 0 ? "answer-block--followup" : ""}`} key={block.id}>
                     <div className="answer-question">{block.question}</div>
                     <div className="answer-text">
@@ -3966,6 +4014,16 @@ function ResearchTreeView({
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"tree" | "synthesis">("tree");
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"pdf" | "zip">("pdf");
+  const [exportOpts, setExportOpts] = useState<ResearchTreeExportOptions>({
+    tikz_tree: true,
+    charts: true,
+    tables: true,
+    comfyui_images: false,
+  });
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState<{ kind: "error" | "warn" | "ok"; text: string } | null>(null);
 
   const treeNodes = nodes.filter((n) => n.status !== "synthesis");
   const synthesisNode = nodes.find((n) => n.status === "synthesis");
@@ -3974,6 +4032,46 @@ function ResearchTreeView({
   useEffect(() => {
     if (synthesisNode?.document) setActiveTab("synthesis");
   }, [synthesisNode?.document]);
+
+  async function handleExport() {
+    if (!synthesisNode?.document || exporting) return;
+    setExporting(true);
+    setExportMsg(null);
+    const rootQuestion =
+      treeNodes.find((n) => n.depth === 0)?.question ?? synthesisNode.question ?? "Tiefenanalyse";
+    // De-dupe the verification sources across all nodes for the bibliography; the
+    // backend enriches year/doi/url from each node's answer.sources.
+    const seen = new Set<string>();
+    const sources: VerificationSource[] = [];
+    for (const n of treeNodes) {
+      for (const s of n.verification ?? []) {
+        if (!seen.has(s.paper_id)) {
+          seen.add(s.paper_id);
+          sources.push(s);
+        }
+      }
+    }
+    try {
+      const result = await exportResearchTree({
+        root_question: rootQuestion,
+        document: synthesisNode.document,
+        nodes,
+        sources,
+        format: exportFormat,
+        options: exportOpts,
+      });
+      downloadBlob(result.filename, result.blob);
+      if (result.warnings.length > 0) {
+        setExportMsg({ kind: "warn", text: result.warnings.join(" ") });
+      } else {
+        setExportMsg({ kind: "ok", text: `Heruntergeladen: ${result.filename}` });
+      }
+    } catch (e) {
+      setExportMsg({ kind: "error", text: e instanceof Error ? e.message : "Export fehlgeschlagen" });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const rootNodes = treeNodes.filter((n) => n.parent_id === null);
   const childrenOf = (id: string) => treeNodes.filter((n) => n.parent_id === id);
@@ -4235,6 +4333,77 @@ function ResearchTreeView({
             <NotebookPen size={12} />
             <span>In Notiz</span>
           </button>
+        ) : null}
+        {synthesisNode?.document ? (
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="icon-button"
+              style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "3px" }}
+              onClick={() => { setExportOpen((o) => !o); setExportMsg(null); }}
+              title="Gesamtantwort als LaTeX-PDF oder .tex/.zip exportieren"
+            >
+              <DownloadCloud size={12} />
+              <span>PDF/LaTeX</span>
+            </button>
+            {exportOpen ? (
+              <div
+                role="dialog"
+                style={{
+                  position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 50, width: 272,
+                  background: "var(--surface, #ffffff)", border: "1px solid var(--border, #d4d4d4)",
+                  borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,0.18)", padding: 12,
+                  display: "flex", flexDirection: "column", gap: 8, fontSize: 12,
+                  color: "var(--text, #222)", cursor: "default",
+                }}
+              >
+                <strong style={{ fontSize: 12 }}>Als Dokument exportieren</strong>
+                <div className="segmented" style={{ display: "flex" }}>
+                  <button type="button" className={exportFormat === "pdf" ? "active" : ""} style={{ flex: 1 }} onClick={() => setExportFormat("pdf")}>PDF</button>
+                  <button type="button" className={exportFormat === "zip" ? "active" : ""} style={{ flex: 1 }} onClick={() => setExportFormat("zip")}>LaTeX (.zip)</button>
+                </div>
+                {([
+                  ["tikz_tree", "Forschungsbaum (TikZ)"],
+                  ["charts", "Statistik-Diagramme"],
+                  ["tables", "Tabellen"],
+                  ["comfyui_images", "KI-Bilder (ComfyUI)"],
+                ] as [keyof ResearchTreeExportOptions, string][]).map(([key, label]) => (
+                  <label key={key} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={exportOpts[key]}
+                      onChange={(e) => setExportOpts((o) => ({ ...o, [key]: e.target.checked }))}
+                    />
+                    {label}
+                  </label>
+                ))}
+                {exportOpts.comfyui_images ? (
+                  <span className="muted-row" style={{ fontSize: 10 }}>
+                    ComfyUI muss lokal laufen (Port 8188), sonst wird dieser Schritt übersprungen.
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className="button button-compact"
+                  disabled={exporting}
+                  onClick={handleExport}
+                  style={{ justifyContent: "center" }}
+                >
+                  {exporting ? (<><Loader2 size={12} className="spin" /> Erzeuge…</>) : (<><FileText size={12} /> Erstellen</>)}
+                </button>
+                {exportMsg ? (
+                  <span style={{
+                    fontSize: 11,
+                    color: exportMsg.kind === "error" ? "var(--danger, #b00020)"
+                      : exportMsg.kind === "warn" ? "var(--warning, #a85d00)"
+                      : "var(--success, #1a7f37)",
+                  }}>
+                    {exportMsg.text}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : null}
         {loading && !synthesisNode ? (
           <button type="button" className="button button-compact" onClick={onStop} title="Analyse stoppen">

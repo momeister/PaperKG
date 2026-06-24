@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -48,6 +48,7 @@ from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
 from query.research_tree import ResearchTreeRunner, _extract_questions
 from query.web_research import run_deep_research
+from export import ExportOptions, build_export
 from query.source_verifier import find_pdf_path
 from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
 from storage.file_manager import FileManager
@@ -85,6 +86,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Let the frontend read the export filename/format/warnings off the response.
+    expose_headers=["Content-Disposition", "X-Export-Format", "X-Export-Warnings"],
 )
 
 app.include_router(phase4_main.app.router)
@@ -176,6 +179,29 @@ class ResearchTreeRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
     initial_nodes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResearchTreeExportOptions(BaseModel):
+    tikz_tree: bool = True
+    charts: bool = True
+    tables: bool = True
+    comfyui_images: bool = False
+
+
+class ResearchTreeExportRequest(BaseModel):
+    """Export the Tiefenanalyse synthesis to a LaTeX PDF / .tex / .zip.
+
+    The tree ``nodes`` and aggregated ``sources`` are sent straight from the frontend
+    state — no DB round-trip — and ``document`` is the synthesis Markdown.
+    """
+    root_question: str = Field(min_length=1, max_length=2000)
+    document: str = Field(min_length=1)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    format: str = Field(default="pdf", pattern="^(pdf|zip|tex)$")
+    options: ResearchTreeExportOptions = Field(default_factory=ResearchTreeExportOptions)
+    provider: str | None = None
+    model: str | None = None
 
 
 class ResearchClarifyRequest(BaseModel):
@@ -1162,6 +1188,51 @@ async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/research/tree/export")
+async def research_tree_export(request: ResearchTreeExportRequest) -> Response:
+    """Render the Tiefenanalyse synthesis as a LaTeX PDF (or .tex/.zip).
+
+    Builds the document (with optional TikZ tree, charts, tables, ComfyUI images and a
+    BibTeX bibliography) and compiles it via MiKTeX/latexmk. If no LaTeX engine is
+    found or compilation fails, a ZIP with the .tex/.bib sources is returned instead
+    (the actual format is reported in the ``X-Export-Format`` header).
+    """
+    try:
+        result = await asyncio.to_thread(
+            build_export,
+            root_question=request.root_question,
+            document=request.document,
+            nodes=request.nodes,
+            sources=request.sources,
+            options=ExportOptions(
+                tikz_tree=request.options.tikz_tree,
+                charts=request.options.charts,
+                tables=request.options.tables,
+                comfyui_images=request.options.comfyui_images,
+            ),
+            export_format=request.format,
+            exports_dir="data/exports",
+            llm_router=llm_router,
+            provider=request.provider,
+            model=request.model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    actual_format = result.filename.rsplit(".", 1)[-1]
+    return Response(
+        content=result.content,
+        media_type=result.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.filename}"',
+            "X-Export-Format": actual_format,
+            # HTTP headers are latin-1 only; ensure_ascii escapes umlauts/dashes,
+            # which the frontend's JSON.parse decodes back transparently.
+            "X-Export-Warnings": json.dumps(result.warnings),
+        },
     )
 
 

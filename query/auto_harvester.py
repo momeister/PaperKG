@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -17,6 +17,9 @@ from harvester.arxiv_client import ArxivClient
 from harvester.semantic_scholar_client import SemanticScholarClient
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
+
+if TYPE_CHECKING:
+    from query.llm_router import LLMRouter
 
 _PROJECTS_PATH = Path("data/projects.json")
 _USER_AGENT = "ScienceKG/auto-harvest (local)"
@@ -45,27 +48,71 @@ async def _download_pdf_if_available(
     paper: dict[str, Any],
     storage: FileManager,
     client: httpx.AsyncClient,
-) -> bool:
+) -> Path | None:
+    """Download the paper's PDF if one is linked. Returns the saved path, else None."""
     pdf_url = paper.get("pdf_url")
     if not pdf_url:
-        return False
+        return None
     canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
     title = str(paper.get("title") or canonical_id)
     try:
         response = await client.get(str(pdf_url), follow_redirects=True, timeout=20.0)
         response.raise_for_status()
         if _looks_like_pdf(response.content, response.headers.get("content-type", "")):
-            storage.save_pdf(
+            return storage.save_pdf(
                 canonical_id,
                 response.content,
                 version=int(paper.get("version") or 1),
                 display_name=title,
                 source=str(paper.get("source") or "auto-harvest"),
             )
-            return True
     except Exception:
         pass
-    return False
+    return None
+
+
+def _extract_pdf_into_db(
+    db: MetadataDB,
+    pipeline: Any,
+    parser_router: Any,
+    canonical_id: str,
+    pdf_path: str,
+    provider: str | None,
+    model: str | None,
+) -> bool:
+    """Run the full Phase-3 extraction on a downloaded PDF and persist the result.
+
+    Returns True only when extraction produced a usable (non-failed) result. Any error
+    is swallowed by the caller, which then falls back to the synthetic extraction.
+    """
+    from extraction.entity_extractor import extraction_failure_reason
+
+    parsed = parser_router.parse(pdf_path, canonical_id)
+    text = (getattr(parsed, "text", "") or "").strip()
+    if not text:
+        return False
+    overrides = {"model": model} if model else None
+    result = pipeline.process(canonical_id, text, provider=provider, overrides=overrides, link_concepts=False)
+    failure = extraction_failure_reason(result)
+    db.save_extraction_result(
+        paper_id=canonical_id,
+        llm_provider=provider or getattr(pipeline, "default_provider", "extraction") or "extraction",
+        llm_model=model or "default",
+        paper_type=getattr(result, "paper_type", None),
+        concepts=result.concepts,
+        methods=result.methods,
+        concept_candidates=getattr(result, "concept_candidates", None),
+        method_candidates=getattr(result, "method_candidates", None),
+        relations=result.relations,
+        claims=result.claims,
+        cross_domain_hints=getattr(result, "cross_domain_hints", None),
+        terminology_conflicts=getattr(result, "terminology_conflicts", None),
+        temporal_coverage=getattr(result, "temporal_coverage", None),
+        mathematical_content=getattr(result, "mathematical_content", None),
+        raw_response=result.raw_response,
+        error_message=failure,
+    )
+    return failure is None
 
 
 async def harvest_for_question(
@@ -76,8 +123,15 @@ async def harvest_for_question(
     projects_path: str = "data/projects.json",
     sources: list[str] | None = None,
     max_papers: int = 3,
+    llm_router: "LLMRouter | None" = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search for papers relevant to *question*, insert into DB, attach to project.
+
+    When an ``llm_router`` is supplied, downloaded PDFs are run through the full Phase-3
+    extraction pipeline (entities/claims), falling back to a synthetic title+abstract
+    extraction only when there is no PDF or extraction fails.
 
     Returns list of dicts with at least ``{"id": str, "title": str}`` for each inserted paper.
     """
@@ -145,6 +199,21 @@ async def harvest_for_question(
     storage = FileManager(pdf_base_dir)
     inserted: list[dict[str, Any]] = []
 
+    # Build the full extraction pipeline once. Lazy import keeps api/ out of the import
+    # graph (and the cost off module load); extraction/ + parsing/ are safe, non-circular.
+    extraction_pipeline = None
+    parser_router = None
+    if llm_router is not None:
+        try:
+            from extraction.entity_linker import ExtractionPipeline
+            from parsing.parser_router import ParserRouter
+
+            extraction_pipeline = ExtractionPipeline(llm_router)
+            parser_router = ParserRouter()
+        except Exception:
+            extraction_pipeline = None
+            parser_router = None
+
     async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=20.0) as client:
         with MetadataDB(db_path) as db:
             for paper in unique:
@@ -156,16 +225,37 @@ async def harvest_for_question(
                     inserted.append({"id": canonical_id, "title": title})
                 except Exception:
                     continue
-                has_pdf = await _download_pdf_if_available(paper, storage, client)
-                # Store a synthetic extraction so the KG retriever can find this paper
-                # immediately via entity/claim search (title as concept, abstract as claim).
-                # This is superseded once the user runs a full Phase-3 extraction.
+
+                # Skip if a successful extraction already exists for this paper.
                 try:
                     existing = db._execute(
                         "SELECT id FROM extraction_results WHERE paper_id = ? AND extraction_status = 'success' LIMIT 1",
                         [canonical_id],
                     ).fetchone()
-                    if existing is None:
+                except Exception:
+                    existing = None
+                if existing is not None:
+                    continue
+
+                pdf_path = await _download_pdf_if_available(paper, storage, client)
+
+                # Prefer a real Phase-3 extraction of the downloaded PDF so harvested papers
+                # are genuinely analysed (entities/claims), not just title+abstract.
+                extracted = False
+                if pdf_path is not None and extraction_pipeline is not None and parser_router is not None:
+                    try:
+                        extracted = await asyncio.to_thread(
+                            _extract_pdf_into_db,
+                            db, extraction_pipeline, parser_router, canonical_id,
+                            str(pdf_path), provider, model,
+                        )
+                    except Exception:
+                        extracted = False
+
+                # Fallback: synthetic extraction (title as concept, abstract as claim) so the
+                # KG retriever can still find this paper when no PDF / extraction failed.
+                if not extracted:
+                    try:
                         concepts = [{"label": title, "description": abstract[:400]}] if title else []
                         claims = [{"text": abstract[:600]}] if abstract else []
                         db.save_extraction_result(
@@ -177,17 +267,19 @@ async def harvest_for_question(
                             raw_response=None,
                             error_message=None,
                         )
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
     inserted_ids = [r["id"] for r in inserted]
-    if project_id and inserted_ids:
+    # Attach to the active project (creating its membership list if needed). Global mode
+    # (empty id / "__all_papers__") is a no-op since those papers are globally visible.
+    if project_id and project_id != "__all_papers__" and inserted_ids:
         proj_path = Path(projects_path)
         projects = _load_projects(proj_path)
-        if project_id in projects:
-            existing = set(projects[project_id])
-            projects[project_id] = list(existing | set(inserted_ids))
-            _save_projects(projects, proj_path)
+        existing_members = list(projects.get(project_id, []))
+        existing_set = set(existing_members)
+        projects[project_id] = existing_members + [pid for pid in inserted_ids if pid not in existing_set]
+        _save_projects(projects, proj_path)
 
     return inserted
 

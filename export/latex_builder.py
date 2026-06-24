@@ -1,0 +1,269 @@
+"""Markdown synthesis + sources → a LaTeX document and a BibTeX ``.bib`` file.
+
+The Tiefenanalyse synthesis is German Markdown with inline ``[arxiv:...]`` /
+``[grey::...]`` citations (see ``query/research_tree.py``). This module turns it into
+a thesis-/paper-style LaTeX source with a title page, table of contents and a
+numeric biblatex bibliography ("Quellenverzeichnis"), keeping the citations visible
+in the text (rendered as ``[1]``) and listed in the bibliography.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Iterable
+
+# LaTeX special characters that must be escaped in body text. Order is irrelevant
+# because every match is mapped in a single pass (no re-processing of replacements).
+_ESCAPE = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+
+def latex_escape(text: str) -> str:
+    """Escape LaTeX-special characters in plain text."""
+    return re.sub(r"[\\&%$#_{}~^]", lambda m: _ESCAPE[m.group()], text)
+
+
+def _citekey(paper_id: str) -> str:
+    """Stable BibTeX cite key for a paper id (``arxiv:2310.1`` → ``arxiv_2310_1``)."""
+    key = re.sub(r"[^A-Za-z0-9]+", "_", str(paper_id)).strip("_")
+    return key or "src"
+
+
+def _norm_id(value: str) -> str:
+    """Normalize an id/citation token for tolerant matching (lowercase, no spaces,
+    drop a trailing arXiv version suffix) — mirrors ``_strip_unknown_citations``."""
+    return re.sub(r"v\d+$", "", str(value).lower().replace(" ", ""))
+
+
+class CitationIndex:
+    """Maps citation tokens found in the text to BibTeX cite keys."""
+
+    def __init__(self, sources: list[dict[str, Any]]) -> None:
+        self.sources = sources
+        self.id_to_key: dict[str, str] = {}
+        self._norm_to_key: dict[str, str] = {}
+        for src in sources:
+            pid = str(src.get("paper_id") or "")
+            if not pid:
+                continue
+            key = _citekey(pid)
+            self.id_to_key[pid] = key
+            self._norm_to_key[_norm_id(pid)] = key
+
+    def lookup(self, token: str) -> str | None:
+        """Resolve a single citation token to a cite key (tolerant), or None."""
+        norm = _norm_id(token)
+        if not norm:
+            return None
+        if norm in self._norm_to_key:
+            return self._norm_to_key[norm]
+        for known, key in self._norm_to_key.items():
+            if known.endswith(norm) or norm.endswith(known):
+                return key
+        return None
+
+
+def _inline(text: str, citations: CitationIndex) -> str:
+    """Convert one run of inline Markdown to LaTeX.
+
+    Citations are extracted to placeholders *before* escaping so their cite keys
+    (which contain ``_``) are not mangled; ``**bold**``/``*italic*`` survive escaping
+    because ``*`` is not a LaTeX special char and are converted afterwards.
+    """
+    placeholders: list[str] = []
+
+    def _stash(replacement: str) -> str:
+        placeholders.append(replacement)
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _cite(m: re.Match) -> str:
+        parts = [p.strip() for p in re.split(r"[,;]\s*", m.group(1)) if p.strip()]
+        keys: list[str] = []
+        for part in parts:
+            key = citations.lookup(part)
+            if key and key not in keys:
+                keys.append(key)
+        if keys and len(keys) == len(parts):
+            return _stash(r"\autocite{" + ",".join(keys) + "}")
+        return m.group(0)  # not a (fully) resolvable citation → keep as literal text
+
+    text = re.sub(r"\[([^\]]+)\]", _cite, text)
+    text = latex_escape(text)
+    text = re.sub(r"\*\*(.+?)\*\*", lambda m: r"\textbf{" + m.group(1) + "}", text)
+    text = re.sub(r"\*(.+?)\*", lambda m: r"\textit{" + m.group(1) + "}", text)
+    text = re.sub(r"\x00(\d+)\x00", lambda m: placeholders[int(m.group(1))], text)
+    return text
+
+
+def markdown_to_latex_body(doc: str, citations: CitationIndex) -> str:
+    """Convert the synthesis Markdown (## / ### headings, paragraphs, lists) to LaTeX."""
+    out: list[str] = []
+    para: list[str] = []
+    list_items: list[str] = []
+    list_kind: str | None = None
+
+    def flush_para() -> None:
+        if para:
+            out.append(_inline(" ".join(para).strip(), citations))
+            out.append("")
+            para.clear()
+
+    def flush_list() -> None:
+        nonlocal list_kind
+        if list_items:
+            env = "enumerate" if list_kind == "ol" else "itemize"
+            out.append(f"\\begin{{{env}}}")
+            out.extend(f"  \\item {it}" for it in list_items)
+            out.append(f"\\end{{{env}}}")
+            out.append("")
+            list_items.clear()
+        list_kind = None
+
+    for raw in doc.split("\n"):
+        line = raw.rstrip()
+        h2 = re.match(r"^##\s+(.+)", line)
+        h3 = re.match(r"^###\s+(.+)", line)
+        bullet = re.match(r"^\s*(?:[-*•])\s+(.+)", line)
+        numbered = re.match(r"^\s*\d+\.\s+(.+)", line)
+        heading = h2 or h3
+        item = bullet or numbered
+        if heading is not None:
+            flush_para()
+            flush_list()
+            title = _inline(heading.group(1).strip(), citations)
+            out.append(f"\\{'section' if h2 else 'subsection'}{{{title}}}")
+            out.append("")
+        elif item is not None:
+            flush_para()
+            kind = "ol" if numbered else "ul"
+            if list_kind and list_kind != kind:
+                flush_list()
+            list_kind = kind
+            list_items.append(_inline(item.group(1).strip(), citations))
+        elif not line.strip():
+            flush_para()
+            flush_list()
+        else:
+            flush_list()
+            para.append(line.strip())
+
+    flush_para()
+    flush_list()
+    return "\n".join(out).strip()
+
+
+def build_bibfile(sources: list[dict[str, Any]]) -> str:
+    """Render a BibTeX ``.bib`` from the aggregated sources.
+
+    arXiv papers get an ``eprint`` field; everything else becomes an ``@online``
+    entry with whatever metadata (title/year/doi/url) is available.
+    """
+    entries: list[str] = []
+    seen: set[str] = set()
+    for src in sources:
+        pid = str(src.get("paper_id") or "")
+        if not pid:
+            continue
+        key = _citekey(pid)
+        if key in seen:
+            continue
+        seen.add(key)
+        title = str(src.get("title") or pid).strip()
+        fields: list[str] = [f"  title = {{{_bib_value(title)}}}"]
+        year = src.get("year")
+        if year:
+            fields.append(f"  year = {{{_bib_value(str(year))}}}")
+        doi = src.get("doi")
+        if doi:
+            fields.append(f"  doi = {{{_bib_value(str(doi))}}}")
+        url = src.get("url")
+        if url:
+            fields.append(f"  url = {{{_bib_value(str(url))}}}")
+        arxiv = _arxiv_id(pid)
+        if arxiv:
+            fields.append("  eprinttype = {arxiv}")
+            fields.append(f"  eprint = {{{arxiv}}}")
+        fields.append(f"  note = {{{_bib_value(pid)}}}")
+        entries.append("@online{" + key + ",\n" + ",\n".join(fields) + "\n}")
+    return "\n\n".join(entries) + ("\n" if entries else "")
+
+
+def _arxiv_id(paper_id: str) -> str | None:
+    m = re.match(r"^arxiv:(.+)$", str(paper_id), re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _bib_value(value: str) -> str:
+    """Make a string safe inside a brace-delimited BibTeX field."""
+    return value.replace("{", "(").replace("}", ")").replace("\\", "/").replace("%", "\\%")
+
+
+def build_latex_document(
+    *,
+    title: str,
+    body_latex: str,
+    has_bibliography: bool,
+    use_forest: bool,
+    use_graphics: bool,
+    appendix_blocks: Iterable[str] = (),
+) -> str:
+    """Assemble the full ``.tex`` source (preamble, title page, ToC, body, appendix)."""
+    packages = [
+        r"\usepackage[utf8]{inputenc}",
+        r"\usepackage[T1]{fontenc}",
+        r"\usepackage[ngerman]{babel}",
+        r"\usepackage{lmodern}",
+        r"\usepackage{microtype}",
+        r"\usepackage{booktabs}",
+        r"\usepackage{longtable}",
+        r"\usepackage[hidelinks]{hyperref}",
+    ]
+    if use_graphics:
+        packages.append(r"\usepackage{graphicx}")
+    if use_forest:
+        packages.append(r"\usepackage{forest}")
+    if has_bibliography:
+        packages.append(r"\usepackage[backend=bibtex,style=numeric,sorting=none]{biblatex}")
+        packages.append(r"\addbibresource{refs.bib}")
+
+    safe_title = _inline(title, CitationIndex([]))
+    appendix = [b for b in appendix_blocks if b and b.strip()]
+
+    parts: list[str] = [
+        r"\documentclass[11pt,a4paper]{article}",
+        *packages,
+        f"\\title{{{safe_title}}}",
+        r"\author{ScienceKG -- Automatisch generierte Tiefenanalyse}",
+        r"\date{\today}",
+        r"\begin{document}",
+        r"\begin{titlepage}",
+        r"\centering",
+        r"{\large ScienceKG \textendash{} Tiefenanalyse\par}",
+        r"\vspace{2.5cm}",
+        f"{{\\huge\\bfseries {safe_title}\\par}}",
+        r"\vspace{2cm}",
+        r"{\large Automatisch generierte wissenschaftliche Ausarbeitung\par}",
+        r"\vfill",
+        r"{\large \today\par}",
+        r"\end{titlepage}",
+        r"\tableofcontents",
+        r"\newpage",
+        body_latex,
+    ]
+    if appendix:
+        parts.append(r"\appendix")
+        parts.append(r"\section{Anhang: Forschungsstruktur, Diagramme und Tabellen}")
+        parts.extend(appendix)
+    if has_bibliography:
+        parts.append(r"\printbibliography[title={Quellenverzeichnis}]")
+    parts.append(r"\end{document}")
+    return "\n".join(parts) + "\n"

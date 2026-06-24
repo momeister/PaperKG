@@ -86,6 +86,15 @@ cd frontend; npm.cmd install; npm.cmd run dev -- --port 5173
 ```
 API → `http://127.0.0.1:8000`, frontend → `http://127.0.0.1:5173`. Use `npm.cmd` (not `npm`) on Windows.
 
+### Tiefenanalyse LaTeX/PDF export
+The deep-analysis "Gesamtantwort" can be exported to a thesis-/paper-style document via the
+**PDF/LaTeX** button (backend `POST /research/tree/export`, package `export/`). It builds LaTeX
+with title page, ToC, BibTeX `Quellenverzeichnis`, plus optional TikZ research-tree, matplotlib
+charts, auto-tables and ComfyUI images. PDF compilation needs a LaTeX engine on PATH (`latexmk`/
+`pdflatex`) — install **MiKTeX** (`winget install MiKTeX.MiKTeX`, auto-installs packages on demand).
+Without an engine the endpoint gracefully returns a ZIP of `.tex`+`.bib`+figures instead (compile on
+Overleaf). ComfyUI (port 8188) is optional and best-effort. Requires `matplotlib` in the `.venv`.
+
 ### Frontend checks
 ```powershell
 cd frontend

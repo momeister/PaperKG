@@ -432,3 +432,65 @@ export async function streamResearchTree(
     }
   }
 }
+
+export interface ResearchTreeExportOptions {
+  tikz_tree: boolean;
+  charts: boolean;
+  tables: boolean;
+  comfyui_images: boolean;
+}
+
+export interface ResearchTreeExportRequest {
+  root_question: string;
+  document: string;
+  nodes: ResearchNode[];
+  sources: import("./types").VerificationSource[];
+  format: "pdf" | "zip" | "tex";
+  options: ResearchTreeExportOptions;
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface ResearchTreeExportResult {
+  blob: Blob;
+  filename: string;
+  /** The format actually produced — may be "zip" even if "pdf" was requested (fallback). */
+  format: string;
+  warnings: string[];
+}
+
+/** Build & download the Tiefenanalyse synthesis as a LaTeX PDF / .tex / .zip. */
+export async function exportResearchTree(
+  payload: ResearchTreeExportRequest,
+  signal?: AbortSignal,
+): Promise<ResearchTreeExportResult> {
+  const target = new URL("/research/tree/export", API_BASE_URL);
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, text || `Backend error ${response.status}`);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match?.[1] ?? "tiefenanalyse";
+  const format = response.headers.get("X-Export-Format") ?? filename.split(".").pop() ?? "";
+  let warnings: string[] = [];
+  try {
+    warnings = JSON.parse(response.headers.get("X-Export-Warnings") ?? "[]") as string[];
+  } catch {
+    warnings = [];
+  }
+  return { blob, filename, format, warnings };
+}

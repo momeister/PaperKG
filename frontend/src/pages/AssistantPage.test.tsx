@@ -11,11 +11,61 @@ import {
   formatAnswerForNote,
   isSentenceBoundary,
   meaningfulQuote,
+  slimTurnForPersist,
   verificationSourcesFor
 } from "./AssistantPage";
+import type { AssistantTurn } from "./AssistantPage";
 import type { Answer, VerificationSource } from "../types";
 
 afterEach(() => cleanup());
+
+describe("slimTurnForPersist (deep-analysis persistence size)", () => {
+  it("drops heavy node fields so research turns persist instead of blowing the quota", () => {
+    const turn: AssistantTurn = {
+      id: "s1",
+      question: "Frage",
+      answer: null as unknown as AssistantTurn["answer"],
+      verification: [],
+      createdAt: "2026-06-24T00:00:00Z",
+      type: "research_tree",
+      researchNodes: [
+        {
+          id: "n1", parent_id: null, question: "Q", depth: 0, status: "done",
+          answer: {
+            question: "Q", answer: "Antwort [arxiv:1]", sources: [{ paper_id: "arxiv:1", title: "T" }],
+            evidence: [], citation_links: [],
+            context_diagnostics: { huge: "x".repeat(5000) },
+            source_verification: { blob: "y".repeat(5000) },
+          },
+          verification: [{
+            paper_id: "arxiv:1", title: "T", pdf_available: true,
+            evidence: [{
+              paper_id: "arxiv:1", kind: "quote", reference_text: "z".repeat(2000),
+              pdf_excerpt: "w".repeat(5000), matched_terms: ["a", "b"], found_in_pdf_text: true,
+            }],
+          }],
+        },
+      ],
+    };
+    const slim = slimTurnForPersist(turn);
+    const node = slim.researchNodes![0];
+    // Heavy, re-derivable fields removed; essential ones (answer text, sources) kept.
+    expect(node.answer?.context_diagnostics).toBeUndefined();
+    expect(node.answer?.source_verification).toBeUndefined();
+    expect(node.answer?.answer).toBe("Antwort [arxiv:1]");
+    expect(node.answer?.sources).toHaveLength(1);
+    expect(node.verification![0].evidence[0].pdf_excerpt).toBe("");
+    expect(node.verification![0].evidence[0].matched_terms).toEqual([]);
+    expect(node.verification![0].evidence[0].reference_text.length).toBeLessThanOrEqual(600);
+    // Serialized turn is small enough to persist reliably.
+    expect(JSON.stringify(slim).length).toBeLessThan(2000);
+  });
+
+  it("leaves non-research turns untouched", () => {
+    const turn = { id: "c1", question: "Q", answer: null, verification: [], createdAt: "x", type: "chat" } as unknown as AssistantTurn;
+    expect(slimTurnForPersist(turn)).toBe(turn);
+  });
+});
 
 describe("sentence boundaries for note quotes", () => {
   it("does not treat abbreviations or parenthetical numbers as sentence ends", () => {

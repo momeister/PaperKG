@@ -1,10 +1,14 @@
 export function downloadMarkdownFile(filenameBase: string, markdown: string) {
-  const filename = `${safeFilename(filenameBase) || "notiz"}.md`;
   const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  downloadBlob(`${safeFilename(filenameBase) || "notiz"}.md`, blob);
+}
+
+/** Trigger a browser download for an arbitrary Blob (PDF, ZIP, .tex, …). */
+export function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = filename || "download";
   document.body.appendChild(link);
   link.click();
   link.remove();

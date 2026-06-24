@@ -26,6 +26,19 @@ _DECOMPOSE_USER = (
     '["sub-question 1", "sub-question 2", ...]'
 )
 
+# Shared citation contract for every synthesis LLM call: keep the source IDs from
+# the per-node answers verbatim, never invent new ones, write in German.
+_CITE_INSTR = (
+    "Übernimm ALLE Quellenangaben ([arxiv:...], [grey::...]) "
+    "EXAKT und VOLLSTÄNDIG aus den Antworten. Erfinde KEINE neuen Zitierungen. "
+    "Zitiere jede einzelne Behauptung. Antworte auf Deutsch."
+)
+
+# Upper bound on the number of depth-2 subsection LLM calls in one synthesis, so a
+# very wide/deep tree cannot explode into hundreds of generation calls. Chapters past
+# the budget are rendered as a single expanded chapter instead of per-subsection.
+_MAX_SYNTH_SUBSECTIONS = 40
+
 
 def _extract_questions(text: str, max_n: int) -> list[str]:
     """Parse sub-questions from LLM output; falls back to newline splitting."""
@@ -43,6 +56,18 @@ def _extract_questions(text: str, max_n: int) -> list[str]:
         if line.strip()
     ]
     return [line for line in lines if len(line) > 10][:max_n]
+
+
+def _normalize_question(question: str) -> str:
+    """Normalize a question for duplicate detection.
+
+    Lowercases, collapses whitespace and strips surrounding punctuation so that
+    re-phrasings that differ only in casing/spacing/trailing '?' collapse to the
+    same key. Kept deliberately conservative to avoid merging genuinely distinct
+    sub-questions.
+    """
+    norm = re.sub(r"\s+", " ", str(question or "")).strip().lower()
+    return norm.strip(" .,;:!?“”«»'\"")
 
 
 class ResearchTreeRunner:
@@ -68,6 +93,26 @@ class ResearchTreeRunner:
             overrides=overrides,
         )
         return _extract_questions(text or "", n)
+
+    @staticmethod
+    def _dedup_subquestions(
+        sub_questions: list[str], seen_questions: set[str] | None
+    ) -> list[str]:
+        """Keep only sub-questions not already asked, recording survivors in ``seen_questions``.
+
+        Prevents the same question from being branched/searched twice — both across
+        sibling branches in one run and when resuming a previous run.
+        """
+        if seen_questions is None:
+            return sub_questions
+        unique: list[str] = []
+        for sub_q in sub_questions:
+            key = _normalize_question(sub_q)
+            if not key or key in seen_questions:
+                continue
+            seen_questions.add(key)
+            unique.append(sub_q)
+        return unique
 
     def _answer_sync(
         self,
@@ -103,6 +148,230 @@ class ResearchTreeRunner:
         )
         return answer.to_dict()
 
+    @staticmethod
+    def _synthesis_known_ids(nodes: list[dict[str, Any]]) -> frozenset[str]:
+        """Paper IDs actually cited by the node answers — the only citations the
+        synthesis is allowed to keep (see ``_strip_unknown_citations``)."""
+        return frozenset(
+            str(s.get("paper_id") or "")
+            for n in nodes
+            for s in (n["answer"].get("sources") or [])
+            if s.get("paper_id")
+        )
+
+    def _synthesis_steps(
+        self, nodes: list[dict[str, Any]], root_question: str
+    ) -> list[dict[str, Any]]:
+        """Plan the synthesis as an ordered list of LLM steps (no LLM calls here).
+
+        The document length now scales with the *depth and breadth* of the research
+        tree instead of collapsing to one chapter per top-level branch:
+
+        - Einleitung
+        - per depth-1 node → a ``## Kapitel`` lead-in, then one expanded
+          ``### Unterabschnitt`` per depth-2 child (with that child's depth-3+
+          descendants folded in as context); a chapter with no depth-2 children is
+          expanded as a single longer chapter instead.
+        - Fazit
+
+        Each step is rendered by its own LLM call (``_render_step``) so citations
+        from the individual node answers are preserved verbatim.
+        """
+        if not nodes:
+            return []
+
+        root_answer = next(
+            (n["answer"].get("answer", "") for n in nodes if n.get("depth") == 0), ""
+        )
+        depth1_nodes = [n for n in nodes if n.get("depth") == 1]
+
+        # Reconstruct parent→children topology from id/parent_id (new caches); fall
+        # back to chapter_question/depth grouping for older saved runs without ids.
+        by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        has_ids = any(n.get("id") for n in nodes)
+        for n in nodes:
+            pid = n.get("parent_id")
+            if pid:
+                by_parent[str(pid)].append(n)
+
+        def _children(node: dict[str, Any]) -> list[dict[str, Any]]:
+            depth = int(node.get("depth", 0))
+            if has_ids and node.get("id"):
+                return [
+                    c for c in by_parent.get(str(node["id"]), [])
+                    if int(c.get("depth", 0)) == depth + 1
+                ]
+            cq = node.get("question")
+            return [
+                n for n in nodes
+                if int(n.get("depth", 0)) == depth + 1
+                and (n.get("chapter_question") or n.get("question")) == cq
+            ]
+
+        def _descendants(node: dict[str, Any]) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for child in _children(node):
+                out.append(child)
+                out.extend(_descendants(child))
+            return out
+
+        def _dedup(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            seen: set[str] = set()
+            uniq: list[dict[str, Any]] = []
+            for it in items:
+                key = _normalize_question(it.get("question", ""))
+                if key and key not in seen:
+                    seen.add(key)
+                    uniq.append(it)
+            return uniq
+
+        author_sys = f"Du bist ein wissenschaftlicher Autor. {_CITE_INSTR}"
+        chapter_titles = "; ".join(d1["question"] for d1 in depth1_nodes)
+        steps: list[dict[str, Any]] = []
+
+        # Einleitung
+        steps.append({
+            "heading": "## Einleitung",
+            "system": author_sys,
+            "user": (
+                f"Hauptforschungsfrage: {root_question}\n\n"
+                f"Überblick:\n{root_answer}\n\n"
+                f"Geplante Kapitel: {chapter_titles}\n\n"
+                "Schreibe eine ausführliche wissenschaftliche Einleitung (300-450 Wörter), "
+                "die die Forschungsfrage motiviert, den wissenschaftlichen Kontext und die "
+                "Relevanz erläutert, zentrale Begriffe einordnet und den Aufbau der Arbeit "
+                "entlang der geplanten Kapitel beschreibt."
+            ),
+            "max_tokens": 1100,
+        })
+
+        # Chapters
+        budget = _MAX_SYNTH_SUBSECTIONS
+        for d1 in depth1_nodes:
+            cq = d1["question"]
+            d1_ans = d1["answer"].get("answer", "")
+            subs = _dedup(_children(d1))
+
+            if subs and budget > 0:
+                sub_titles = "; ".join(s["question"] for s in subs)
+                steps.append({
+                    "heading": f"## {cq}",
+                    "system": author_sys,
+                    "user": (
+                        f"Kapitelthema: {cq}\n\n"
+                        f"Kernbefund des Kapitels:\n{d1_ans}\n\n"
+                        f"Dieses Kapitel gliedert sich in folgende Unterabschnitte: {sub_titles}\n\n"
+                        "Schreibe eine kurze, einordnende Hinführung zu diesem Kapitel "
+                        "(150-250 Wörter), die das Thema rahmt und die folgenden Unterabschnitte "
+                        "ankündigt. Belege Aussagen mit den vorhandenen Quellenangaben."
+                    ),
+                    "max_tokens": 700,
+                })
+                for s in subs:
+                    if budget <= 0:
+                        break
+                    budget -= 1
+                    deeper = _descendants(s)
+                    deeper_block = ""
+                    if deeper:
+                        deeper_block = (
+                            "\n\nVertiefende Befunde (in diesen Unterabschnitt integrieren):\n"
+                            + "\n\n".join(
+                                f"Aspekt: {d['question']}\nBefund: {d['answer'].get('answer', '')}"
+                                for d in deeper
+                            )
+                        )
+                    steps.append({
+                        "heading": f"### {s['question']}",
+                        "system": (
+                            "Du bist ein wissenschaftlicher Autor. Schreibe einen ausführlichen "
+                            f"Unterabschnitt einer Bachelorarbeit. {_CITE_INSTR}"
+                        ),
+                        "user": (
+                            f"Übergeordnetes Kapitel: {cq}\n"
+                            f"Unterabschnittsthema: {s['question']}\n\n"
+                            f"Hauptantwort:\n{s['answer'].get('answer', '')}"
+                            f"{deeper_block}\n\n"
+                            "Schreibe einen vollständigen, detaillierten Unterabschnitt "
+                            "(600-900 Wörter) mit präziser wissenschaftlicher Sprache. Arbeite "
+                            "Mechanismen, Belege, Differenzierungen und ggf. Gegenpositionen heraus. "
+                            "Belege JEDE Aussage mit den vorhandenen Quellenangaben."
+                        ),
+                        "max_tokens": 2500,
+                    })
+            else:
+                # No depth-2 children (or budget exhausted): one longer chapter,
+                # folding any deeper findings in as context.
+                deeper = _descendants(d1)
+                deeper_block = ""
+                if deeper:
+                    deeper_block = "\n\nTiefere Analysen zu diesem Kapitel:\n" + "\n\n".join(
+                        f"Unterfrage: {d['question']}\nBefund: {d['answer'].get('answer', '')}"
+                        for d in deeper
+                    )
+                steps.append({
+                    "heading": f"## {cq}",
+                    "system": (
+                        "Du bist ein wissenschaftlicher Autor. Schreibe ein vollständiges Kapitel "
+                        f"einer Bachelorarbeit. {_CITE_INSTR}"
+                    ),
+                    "user": (
+                        f"Kapitelthema: {cq}\n\n"
+                        f"Hauptantwort:\n{d1_ans}"
+                        f"{deeper_block}\n\n"
+                        "Schreibe ein vollständiges, detailliertes Kapitel (700-1000 Wörter) "
+                        "mit ### Unterabschnitten wo sinnvoll. Belege JEDE Aussage mit "
+                        "Quellenangaben. Verwende einen wissenschaftlichen, präzisen Schreibstil."
+                    ),
+                    "max_tokens": 2600,
+                })
+
+        # Fazit
+        steps.append({
+            "heading": "## Fazit",
+            "system": author_sys,
+            "user": (
+                f"Hauptforschungsfrage: {root_question}\n\n"
+                f"Untersuchte Aspekte: {chapter_titles}\n\n"
+                "Schreibe ein ausführliches wissenschaftliches Fazit (300-450 Wörter), das die "
+                "wichtigsten Erkenntnisse über alle Kapitel hinweg zusammenführt, die "
+                "Hauptforschungsfrage explizit beantwortet, Implikationen ableitet und offene "
+                "Forschungsfragen benennt."
+            ),
+            "max_tokens": 1100,
+        })
+        return steps
+
+    def _render_step(
+        self,
+        step: dict[str, Any],
+        known_ids: frozenset[str],
+        provider: str | None,
+        model: str | None,
+    ) -> str:
+        """Run one synthesis step's LLM call and return its formatted markdown fragment."""
+        if self.llm_router is None:
+            return ""
+        ov: dict[str, Any] = {"max_tokens": int(step.get("max_tokens", 2000)), "temperature": 0.3}
+        if model:
+            ov["model"] = model
+        try:
+            body = str(self.llm_router.chat(
+                messages=[
+                    {"role": "system", "content": step["system"]},
+                    {"role": "user", "content": step["user"]},
+                ],
+                provider=provider,
+                overrides=ov,
+            ) or "").strip()
+        except Exception:
+            return ""
+        body = _strip_unknown_citations(body, known_ids)
+        if not body:
+            return ""
+        heading = step.get("heading")
+        return f"{heading}\n\n{body}" if heading else body
+
     def _synthesize_sync(
         self,
         nodes: list[dict[str, Any]],
@@ -110,106 +379,19 @@ class ResearchTreeRunner:
         provider: str | None,
         model: str | None,
     ) -> str:
-        """Generate thesis-style document via section-by-section expansion.
+        """Generate the full thesis-style document (non-streaming convenience).
 
-        One LLM call per depth-1 chapter group preserves citations from individual
-        node answers instead of compressing them in a single summarisation pass.
+        Builds the section plan and renders each section with its own LLM call. The
+        streaming path in :meth:`stream_events` renders the same steps incrementally.
         """
         if not nodes or self.llm_router is None:
             return ""
-
-        def _llm(system: str, user: str, max_tokens: int = 2500) -> str:
-            ov: dict[str, Any] = {"max_tokens": max_tokens, "temperature": 0.3}
-            if model:
-                ov["model"] = model
-            try:
-                return str(self.llm_router.chat(
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    provider=provider,
-                    overrides=ov,
-                ) or "").strip()
-            except Exception:
-                return ""
-
-        CITE_INSTR = (
-            "Übernimm ALLE Quellenangaben ([arxiv:...], [grey::...]) "
-            "EXAKT und VOLLSTÄNDIG aus den Antworten. Erfinde KEINE neuen Zitierungen. "
-            "Zitiere jede einzelne Behauptung. Antworte auf Deutsch."
-        )
-
-        known_ids: frozenset[str] = frozenset(
-            str(s.get("paper_id") or "")
-            for n in nodes
-            for s in (n["answer"].get("sources") or [])
-            if s.get("paper_id")
-        )
-
-        root_answer = next(
-            (n["answer"].get("answer", "") for n in nodes if n["depth"] == 0), ""
-        )
-        depth1_nodes = [n for n in nodes if n["depth"] == 1]
-        deeper_by_chapter: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for n in nodes:
-            if n["depth"] > 1:
-                cq = n.get("chapter_question") or n["question"]
-                deeper_by_chapter[cq].append(n)
-
-        # Introduction
-        intro = _strip_unknown_citations(_llm(
-            f"Du bist ein wissenschaftlicher Autor. {CITE_INSTR}",
-            f"Hauptforschungsfrage: {root_question}\n\n"
-            f"Überblick:\n{root_answer}\n\n"
-            "Schreibe eine wissenschaftliche Einleitung (200-300 Wörter), die die Forschungsfrage "
-            "einführt, den wissenschaftlichen Kontext erläutert und den Aufbau der Arbeit beschreibt.",
-            max_tokens=800,
-        ), known_ids)
-
-        # Chapters — one per depth-1 node; expanded, not compressed
-        chapter_texts: list[str] = []
-        for d1 in depth1_nodes:
-            cq = d1["question"]
-            d1_ans = d1["answer"].get("answer", "")
-            deeper = deeper_by_chapter.get(cq, [])
-            deeper_block = ""
-            if deeper:
-                deeper_block = "\n\nTiefere Analysen zu diesem Kapitel:\n" + "\n\n".join(
-                    f"Unterfrage: {n['question']}\nBefund: {n['answer'].get('answer', '')}"
-                    for n in deeper
-                )
-            chapter_text = _strip_unknown_citations(_llm(
-                f"Du bist ein wissenschaftlicher Autor. Schreibe ein vollständiges Kapitel "
-                f"einer Bachelorarbeit. {CITE_INSTR}",
-                f"Kapitelthema: {cq}\n\n"
-                f"Hauptantwort:\n{d1_ans}"
-                f"{deeper_block}\n\n"
-                "Schreibe ein vollständiges, detailliertes Kapitel (mindestens 400-600 Wörter) "
-                "mit ### Unterabschnitten wo sinnvoll. Belege JEDE Aussage mit Quellenangaben. "
-                "Verwende einen wissenschaftlichen, präzisen Schreibstil.",
-                max_tokens=2500,
-            ), known_ids)
-            chapter_texts.append(f"## {cq}\n\n{chapter_text}")
-
-        # Conclusion
-        chapter_titles = "; ".join(n["question"] for n in depth1_nodes)
-        conclusion = _strip_unknown_citations(_llm(
-            f"Du bist ein wissenschaftlicher Autor. {CITE_INSTR}",
-            f"Hauptforschungsfrage: {root_question}\n\n"
-            f"Untersuchte Aspekte: {chapter_titles}\n\n"
-            "Schreibe ein wissenschaftliches Fazit (200-300 Wörter), das die wichtigsten "
-            "Erkenntnisse zusammenfasst, die Hauptforschungsfrage beantwortet und Implikationen "
-            "sowie offene Fragen diskutiert.",
-            max_tokens=800,
-        ), known_ids)
-
+        known_ids = self._synthesis_known_ids(nodes)
         parts: list[str] = []
-        if intro:
-            parts.append(f"## Einleitung\n\n{intro}")
-        parts.extend(chapter_texts)
-        if conclusion:
-            parts.append(f"## Fazit\n\n{conclusion}")
+        for step in self._synthesis_steps(nodes, root_question):
+            frag = self._render_step(step, known_ids, provider, model)
+            if frag:
+                parts.append(frag)
         return "\n\n".join(parts)
 
     async def stream_events(
@@ -248,30 +430,58 @@ class ResearchTreeRunner:
         nodes_done: list[int] = [0]
 
         # Pre-populate cache from a previous paused run so completed nodes are re-emitted
-        # without calling the LLM again (resume / quota-saving).
+        # without calling the LLM again (resume / quota-saving). Also reconstruct the saved
+        # parent→child topology and the set of questions already asked, so resume replays
+        # the existing tree deterministically instead of re-decomposing (and re-searching) it.
         done_by_question: dict[str, dict[str, Any]] = {}
-        for saved in (initial_nodes or []):
-            if saved.get("status") == "done" and saved.get("answer") and saved.get("question"):
-                done_by_question[str(saved["question"])] = saved
+        seen_questions: set[str] = {_normalize_question(question)}
+        id_to_question: dict[str, str] = {}
+        children_by_parent_q: dict[str, list[str]] = defaultdict(list)
+        saved_nodes = [
+            n for n in (initial_nodes or [])
+            if n.get("question") and n.get("status") not in ("synthesis", "llm_error")
+        ]
+        for saved in saved_nodes:
+            q = str(saved["question"])
+            seen_questions.add(_normalize_question(q))
+            if saved.get("id"):
+                id_to_question[str(saved["id"])] = q
+            if saved.get("status") == "done" and saved.get("answer"):
+                done_by_question[_normalize_question(q)] = saved
                 nodes_cache.append(saved)
                 nodes_done[0] += 1
+        for saved in saved_nodes:
+            pid = saved.get("parent_id")
+            if pid and str(pid) in id_to_question:
+                parent_key = _normalize_question(id_to_question[str(pid)])
+                children_by_parent_q[parent_key].append(str(saved["question"]))
 
         async for event in self._node(
             question, None, 0, depth, branches, kwargs, nodes_cache,
             chapter_question=None, nodes_done=nodes_done, max_nodes=max_nodes,
-            done_by_question=done_by_question,
+            done_by_question=done_by_question, seen_questions=seen_questions,
+            children_by_parent_q=children_by_parent_q,
         ):
             yield event
         if nodes_cache:
             try:
-                doc = await asyncio.to_thread(
-                    self._synthesize_sync, nodes_cache, question, provider, model
-                )
-                if doc:
+                # Render the synthesis section-by-section and re-emit the synthesis
+                # node (constant id) with the growing document, so the Gesamtantwort
+                # visibly builds up instead of appearing only after a long wait.
+                steps = self._synthesis_steps(nodes_cache, question)
+                known_ids = self._synthesis_known_ids(nodes_cache)
+                rendered: list[str] = []
+                for step in steps:
+                    frag = await asyncio.to_thread(
+                        self._render_step, step, known_ids, provider, model
+                    )
+                    if not frag:
+                        continue
+                    rendered.append(frag)
                     yield _sse({"id": "synthesis", "parent_id": None, "question": question,
                                 "depth": 0, "status": "synthesis", "answer": None,
-                                "document": doc, "child_count": 0})
-                else:
+                                "document": "\n\n".join(rendered), "child_count": 0})
+                if not rendered:
                     yield _llm_error_event(
                         "synthesis", question, 0, "empty_synthesis",
                         prefix="Gesamtantwort konnte nicht erzeugt werden (LLM lieferte keine Inhalte). ",
@@ -295,6 +505,8 @@ class ResearchTreeRunner:
         nodes_done: list[int] | None = None,
         max_nodes: int = 50,
         done_by_question: dict[str, dict[str, Any]] | None = None,
+        seen_questions: set[str] | None = None,
+        children_by_parent_q: dict[str, list[str]] | None = None,
     ) -> AsyncIterator[str]:
         # Global node budget — stop spawning when exhausted
         if nodes_done is not None:
@@ -304,11 +516,15 @@ class ResearchTreeRunner:
 
         # Resume: if this question was already answered in a previous run, re-emit the
         # cached result immediately without calling the LLM for the answer again.
-        cached = (done_by_question or {}).get(question)
+        cached = (done_by_question or {}).get(_normalize_question(question))
         if cached:
             node_id = str(cached.get("id") or uuid.uuid4())
             yield _sse({**cached, "parent_id": parent_id, "depth": current_depth})
-            if current_depth < max_depth:
+            # Replay the saved subtree verbatim so resume is deterministic and never
+            # re-asks an answered branch. Only decompose afresh for nodes that were
+            # genuine leaves when the run was paused (no saved children).
+            saved_children = list((children_by_parent_q or {}).get(_normalize_question(question), []))
+            if not saved_children and current_depth < max_depth:
                 sub_questions: list[str] = []
                 try:
                     sub_questions = await asyncio.to_thread(
@@ -320,13 +536,15 @@ class ResearchTreeRunner:
                     )
                 except Exception:
                     sub_questions = []
-                for sub_q in sub_questions:
-                    child_chapter = sub_q if current_depth == 0 else chapter_question
-                    async for event in self._node(
-                        sub_q, node_id, current_depth + 1, max_depth, branches, kwargs,
-                        nodes_cache, child_chapter, nodes_done, max_nodes, done_by_question,
-                    ):
-                        yield event
+                saved_children = self._dedup_subquestions(sub_questions, seen_questions)
+            for sub_q in saved_children:
+                child_chapter = sub_q if current_depth == 0 else chapter_question
+                async for event in self._node(
+                    sub_q, node_id, current_depth + 1, max_depth, branches, kwargs,
+                    nodes_cache, child_chapter, nodes_done, max_nodes, done_by_question,
+                    seen_questions, children_by_parent_q,
+                ):
+                    yield event
             return
 
         node_id = str(uuid.uuid4())
@@ -377,6 +595,9 @@ class ResearchTreeRunner:
                     db_path=str(kwargs.get("metadata_db_path") or "data/metadata.duckdb"),
                     pdf_base_dir=str(kwargs.get("pdf_base_dir") or "data/pdfs"),
                     projects_path=str(kwargs.get("projects_path") or "data/projects.json"),
+                    llm_router=self.llm_router,
+                    provider=kwargs.get("provider"),
+                    model=kwargs.get("model"),
                 )
                 new_paper_ids = [r["id"] for r in paper_records]
                 harvested_paper_info = [
@@ -445,6 +666,10 @@ class ResearchTreeRunner:
                 )
                 sub_questions = []
 
+        # Drop sub-questions already asked elsewhere in this run (or in a resumed run)
+        # so the same question is never searched twice.
+        sub_questions = self._dedup_subquestions(sub_questions, seen_questions)
+
         yield _sse({
             "id": node_id,
             "parent_id": parent_id,
@@ -459,6 +684,8 @@ class ResearchTreeRunner:
 
         if nodes_cache is not None and not answer_dict.get("no_answer"):
             nodes_cache.append({
+                "id": node_id,
+                "parent_id": parent_id,
                 "question": question,
                 "answer": answer_dict,
                 "depth": current_depth,
@@ -471,6 +698,7 @@ class ResearchTreeRunner:
             async for event in self._node(
                 sub_q, node_id, current_depth + 1, max_depth, branches, kwargs,
                 nodes_cache, child_chapter, nodes_done, max_nodes, done_by_question,
+                seen_questions, children_by_parent_q,
             ):
                 yield event
 
@@ -491,7 +719,7 @@ def _strip_unknown_citations(text: str, known_ids: frozenset[str]) -> str:
                     return m.group(0)
         return ""
 
-    return re.sub(r"\[[^\]]+\]", _keep, text)
+    return re.sub(r"\[([^\]]+)\]", _keep, text)
 
 
 def _classify_llm_error(error: str) -> tuple[str, str]:
