@@ -1,0 +1,50 @@
+# Full-stack local run: FastAPI backend + built React frontend (nginx).
+#
+#   cp .env.example .env      # then fill in any LLM/data-source API keys you use
+#   docker compose up --build
+#
+#   Frontend -> http://localhost:5173
+#   Backend  -> http://localhost:8000  (health: /health)
+#
+# Both ports are published to 127.0.0.1 only: the API has no authentication by default,
+# so it must not be exposed to untrusted networks. To require a token, set
+# SCIENCEKG_API_TOKEN in .env and send "Authorization: Bearer <token>" from clients.
+#
+# Local LLM backends (Ollama :11434, LM Studio :1234, ...) usually run on the HOST, not
+# in these containers. Point config.yaml at them via http://host.docker.internal:<port>
+# (host-gateway is wired up below) instead of http://localhost:<port>.
+
+services:
+  backend:
+    build:
+      context: .
+      args:
+        # Set to "true" to bake a LaTeX toolchain in for compiled-PDF exports.
+        INSTALL_LATEX: "false"
+    image: sciencekg-backend
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data            # persist DuckDB, PDFs, exports, notes
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
+      - ./ontology.yaml:/app/ontology.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The browser (on the host) reaches the backend at this host-published URL.
+        VITE_API_BASE_URL: "http://localhost:8000"
+    image: sciencekg-frontend
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

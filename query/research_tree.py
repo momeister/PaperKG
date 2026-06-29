@@ -37,7 +37,7 @@ _CITE_INSTR = (
 # Upper bound on the number of depth-2 subsection LLM calls in one synthesis, so a
 # very wide/deep tree cannot explode into hundreds of generation calls. Chapters past
 # the budget are rendered as a single expanded chapter instead of per-subsection.
-_MAX_SYNTH_SUBSECTIONS = 40
+_MAX_SYNTH_SUBSECTIONS = 60
 
 
 def _extract_questions(text: str, max_n: int) -> list[str]:
@@ -68,6 +68,59 @@ def _normalize_question(question: str) -> str:
     """
     norm = re.sub(r"\s+", " ", str(question or "")).strip().lower()
     return norm.strip(" .,;:!?“”«»'\"")
+
+
+def _heading_level(line: str) -> int:
+    """Markdown heading level of a line (1-6), or 0 if the line is not a heading."""
+    m = re.match(r"^(#{1,6})\s+\S", line)
+    return len(m.group(1)) if m else 0
+
+
+# Appended to synthesis system prompts so the model does not restate the section title we
+# already inject as its own heading (the cause of the duplicate-looking ToC entries).
+_NO_HEADING_HINT = (
+    " Beginne NICHT mit einer Überschrift und füge KEINE eigenen Kapitel-/Abschnitts"
+    "überschriften (## oder ###) ein — die Abschnittsüberschrift wird automatisch gesetzt."
+)
+_SUBSECTION_HEADING_HINT = (
+    " Wiederhole NICHT den Kapiteltitel als Überschrift; nutze `###` ausschließlich für die "
+    "geforderten Unterabschnitte."
+)
+
+
+def _normalize_synthesis_body(body: str, heading: str | None, keep_subsections: bool) -> str:
+    """Tidy an LLM-generated synthesis fragment so it nests cleanly under its injected heading.
+
+    1. Drop a leading heading that merely restates the title we already inject (the cause of
+       the duplicate question/statement pairs in the ToC): the first non-empty line is removed
+       when it is a heading at the same or a higher level than ``heading``.
+    2. Demote stray in-body headings so they never collide with the chapter/section ToC nor
+       leak as literal ``####``: normal fragments cap at ``####`` (h4); the flat-chapter
+       fragment keeps ``###`` for its requested Unterabschnitte and pulls ``##``/``####+`` onto
+       that level.
+    """
+    if not body:
+        return ""
+    our_level = _heading_level(heading or "") or 2
+    lines = body.split("\n")
+    # 1) strip a leading restated heading (after any blank lines)
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and 0 < _heading_level(lines[i]) <= our_level:
+        del lines[i]
+        while i < len(lines) and not lines[i].strip():
+            del lines[i]
+    # 2) demote remaining headings to a safe level
+    target = "###" if keep_subsections else "####"
+    out: list[str] = []
+    for line in lines:
+        if _heading_level(line):
+            text = re.sub(r"^#{1,6}\s+", "", line)
+            out.append(f"{target} {text}")
+        else:
+            out.append(line)
+    return "\n".join(out).strip()
 
 
 class ResearchTreeRunner:
@@ -225,8 +278,17 @@ class ResearchTreeRunner:
                     uniq.append(it)
             return uniq
 
-        author_sys = f"Du bist ein wissenschaftlicher Autor. {_CITE_INSTR}"
+        author_sys = f"Du bist ein wissenschaftlicher Autor. {_CITE_INSTR}{_NO_HEADING_HINT}"
         chapter_titles = "; ".join(d1["question"] for d1 in depth1_nodes)
+        # Scale the write-up to the breadth/depth of the tree: a 50-answer analysis
+        # should read like a long Deep-Research report, not a one-pager. The counts are
+        # injected into every prompt so the model writes proportionally to the material.
+        total_answers = len(nodes)
+        scope_note = (
+            f"Diese Tiefenanalyse beruht auf {total_answers} untersuchten Teilfragen über "
+            f"{len(depth1_nodes)} Themenkapitel. Schöpfe das vorhandene Material voll aus "
+            "und schreibe entsprechend ausführlich und detailliert."
+        )
         steps: list[dict[str, Any]] = []
 
         # Einleitung
@@ -235,14 +297,15 @@ class ResearchTreeRunner:
             "system": author_sys,
             "user": (
                 f"Hauptforschungsfrage: {root_question}\n\n"
+                f"{scope_note}\n\n"
                 f"Überblick:\n{root_answer}\n\n"
                 f"Geplante Kapitel: {chapter_titles}\n\n"
-                "Schreibe eine ausführliche wissenschaftliche Einleitung (300-450 Wörter), "
+                "Schreibe eine ausführliche wissenschaftliche Einleitung (500-700 Wörter), "
                 "die die Forschungsfrage motiviert, den wissenschaftlichen Kontext und die "
                 "Relevanz erläutert, zentrale Begriffe einordnet und den Aufbau der Arbeit "
                 "entlang der geplanten Kapitel beschreibt."
             ),
-            "max_tokens": 1100,
+            "max_tokens": 1600,
         })
 
         # Chapters
@@ -260,12 +323,13 @@ class ResearchTreeRunner:
                     "user": (
                         f"Kapitelthema: {cq}\n\n"
                         f"Kernbefund des Kapitels:\n{d1_ans}\n\n"
-                        f"Dieses Kapitel gliedert sich in folgende Unterabschnitte: {sub_titles}\n\n"
-                        "Schreibe eine kurze, einordnende Hinführung zu diesem Kapitel "
-                        "(150-250 Wörter), die das Thema rahmt und die folgenden Unterabschnitte "
+                        f"Dieses Kapitel gliedert sich in folgende {len(subs)} Unterabschnitte: {sub_titles}\n\n"
+                        "Schreibe eine einordnende Hinführung zu diesem Kapitel "
+                        "(200-350 Wörter), die das Thema rahmt und die folgenden Unterabschnitte "
                         "ankündigt. Belege Aussagen mit den vorhandenen Quellenangaben."
                     ),
-                    "max_tokens": 700,
+                    "max_tokens": 900,
+                    "fallback": d1_ans,
                 })
                 for s in subs:
                     if budget <= 0:
@@ -275,7 +339,8 @@ class ResearchTreeRunner:
                     deeper_block = ""
                     if deeper:
                         deeper_block = (
-                            "\n\nVertiefende Befunde (in diesen Unterabschnitt integrieren):\n"
+                            f"\n\nVertiefende Befunde ({len(deeper)} Aspekte, in diesen "
+                            "Unterabschnitt integrieren):\n"
                             + "\n\n".join(
                                 f"Aspekt: {d['question']}\nBefund: {d['answer'].get('answer', '')}"
                                 for d in deeper
@@ -285,7 +350,7 @@ class ResearchTreeRunner:
                         "heading": f"### {s['question']}",
                         "system": (
                             "Du bist ein wissenschaftlicher Autor. Schreibe einen ausführlichen "
-                            f"Unterabschnitt einer Bachelorarbeit. {_CITE_INSTR}"
+                            f"Unterabschnitt einer Bachelorarbeit. {_CITE_INSTR}{_NO_HEADING_HINT}"
                         ),
                         "user": (
                             f"Übergeordnetes Kapitel: {cq}\n"
@@ -293,37 +358,51 @@ class ResearchTreeRunner:
                             f"Hauptantwort:\n{s['answer'].get('answer', '')}"
                             f"{deeper_block}\n\n"
                             "Schreibe einen vollständigen, detaillierten Unterabschnitt "
-                            "(600-900 Wörter) mit präziser wissenschaftlicher Sprache. Arbeite "
+                            "(900-1400 Wörter) mit präziser wissenschaftlicher Sprache. Arbeite "
                             "Mechanismen, Belege, Differenzierungen und ggf. Gegenpositionen heraus. "
+                            "Integriere alle vertiefenden Befunde vollständig. "
                             "Belege JEDE Aussage mit den vorhandenen Quellenangaben."
                         ),
-                        "max_tokens": 2500,
+                        "max_tokens": 3500,
+                        "fallback": s["answer"].get("answer", ""),
                     })
             else:
-                # No depth-2 children (or budget exhausted): one longer chapter,
-                # folding any deeper findings in as context.
+                # No depth-2 children (or budget exhausted): one longer chapter that
+                # spells out each deeper finding as its own ### subsection, so the ToC
+                # gains entries instead of collapsing to a single flat chapter.
                 deeper = _descendants(d1)
                 deeper_block = ""
+                sub_hint = ""
                 if deeper:
-                    deeper_block = "\n\nTiefere Analysen zu diesem Kapitel:\n" + "\n\n".join(
-                        f"Unterfrage: {d['question']}\nBefund: {d['answer'].get('answer', '')}"
-                        for d in deeper
+                    deeper_block = (
+                        f"\n\nTiefere Analysen zu diesem Kapitel ({len(deeper)} Aspekte):\n"
+                        + "\n\n".join(
+                            f"Unterfrage: {d['question']}\nBefund: {d['answer'].get('answer', '')}"
+                            for d in deeper
+                        )
+                    )
+                    sub_hint = (
+                        f" Gliedere das Kapitel in je einen `### Unterabschnitt` pro der "
+                        f"{len(deeper)} oben genannten Unterfragen und arbeite jeden Befund "
+                        "ausführlich aus."
                     )
                 steps.append({
                     "heading": f"## {cq}",
+                    "keep_subsections": True,
                     "system": (
                         "Du bist ein wissenschaftlicher Autor. Schreibe ein vollständiges Kapitel "
-                        f"einer Bachelorarbeit. {_CITE_INSTR}"
+                        f"einer Bachelorarbeit. {_CITE_INSTR}{_SUBSECTION_HEADING_HINT}"
                     ),
                     "user": (
                         f"Kapitelthema: {cq}\n\n"
                         f"Hauptantwort:\n{d1_ans}"
                         f"{deeper_block}\n\n"
-                        "Schreibe ein vollständiges, detailliertes Kapitel (700-1000 Wörter) "
-                        "mit ### Unterabschnitten wo sinnvoll. Belege JEDE Aussage mit "
+                        "Schreibe ein vollständiges, detailliertes Kapitel (1100-1600 Wörter)"
+                        f"{sub_hint or ' mit ### Unterabschnitten wo sinnvoll.'} Belege JEDE Aussage mit "
                         "Quellenangaben. Verwende einen wissenschaftlichen, präzisen Schreibstil."
                     ),
-                    "max_tokens": 2600,
+                    "max_tokens": 3800,
+                    "fallback": d1_ans,
                 })
 
         # Fazit
@@ -332,13 +411,14 @@ class ResearchTreeRunner:
             "system": author_sys,
             "user": (
                 f"Hauptforschungsfrage: {root_question}\n\n"
+                f"{scope_note}\n\n"
                 f"Untersuchte Aspekte: {chapter_titles}\n\n"
-                "Schreibe ein ausführliches wissenschaftliches Fazit (300-450 Wörter), das die "
+                "Schreibe ein ausführliches wissenschaftliches Fazit (450-650 Wörter), das die "
                 "wichtigsten Erkenntnisse über alle Kapitel hinweg zusammenführt, die "
                 "Hauptforschungsfrage explizit beantwortet, Implikationen ableitet und offene "
                 "Forschungsfragen benennt."
             ),
-            "max_tokens": 1100,
+            "max_tokens": 1500,
         })
         return steps
 
@@ -365,11 +445,17 @@ class ResearchTreeRunner:
                 overrides=ov,
             ) or "").strip()
         except Exception:
-            return ""
-        body = _strip_unknown_citations(body, known_ids)
+            body = ""
+        heading = step.get("heading")
+        keep_subs = bool(step.get("keep_subsections"))
+        body = _normalize_synthesis_body(_strip_unknown_citations(body, known_ids), heading, keep_subs)
+        if not body:
+            # The synthesis call came back empty: fall back to the node's own answer so an
+            # already-answered question never renders as a heading with no content.
+            fallback = _strip_unknown_citations(str(step.get("fallback") or "").strip(), known_ids)
+            body = _normalize_synthesis_body(fallback, heading, keep_subs)
         if not body:
             return ""
-        heading = step.get("heading")
         return f"{heading}\n\n{body}" if heading else body
 
     def _synthesize_sync(

@@ -1,0 +1,50 @@
+# Keep the build context small and free of local/runtime data and secrets.
+
+# VCS & tooling
+.git
+.gitignore
+.github
+.codex
+.claude
+.graphifyignore
+.vscode
+.idea
+
+# Python caches / envs
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Test scratch dirs
+.pytest-tmp*/
+.tmp_pytest*/
+tmp_codex*/
+tmp_fixes_run/
+tmp_*/
+.codex-pytest*/
+
+# Local runtime data — must NOT be baked into the image (mounted as a volume instead)
+data/
+logs/
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
+
+# Secrets (passed via env_file / -e at runtime, never copied in)
+.env
+.env.*
+!.env.example
+
+# Frontend build artifacts and deps (frontend has its own Dockerfile/context)
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Docs / misc that don't belong in the runtime image
+*.md

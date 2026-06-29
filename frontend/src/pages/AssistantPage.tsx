@@ -52,8 +52,12 @@ export type AssistantTurn = {
   verification: VerificationSource[];
   createdAt: string;
   blocks?: AssistantAnswerBlock[];
-  type?: "chat" | "research_tree";
+  type?: "chat" | "research_tree" | "parallel";
   researchNodes?: ResearchNode[];
+  /** For ``type === "parallel"``: the server-side parallel-research session id and a
+   * cached variant count for the session-list label. */
+  parallelSessionId?: string;
+  parallelVariantCount?: number;
 };
 
 export type CitationMeta = {

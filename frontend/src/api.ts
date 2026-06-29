@@ -20,9 +20,16 @@ import type {
   NoteAiThread,
   Paper,
   PaperMeta,
+  PaperIngestResponse,
+  ParallelSession,
+  ParallelSessionSummary,
+  ParallelVariant,
+  ParallelEntry,
   Project,
   Provider,
   ResearchNode,
+  ResearchSession,
+  ResearchSessionSummary,
   RewriteResponse,
   ReviewEntity,
   VerificationSource,
@@ -95,6 +102,8 @@ export const api = {
   listPapers: (params: Record<string, string | number | boolean | null | undefined> = {}) =>
     request<{ items: Paper[]; total: number; limit: number; offset: number }>("/papers", { query: params }),
   paperMeta: (paperId: string) => request<PaperMeta>("/paper/meta", { query: { paper_id: paperId } }),
+  paperIngest: (payload: { paper_id: string; project_id?: string | null; provider?: string; model?: string }) =>
+    request<PaperIngestResponse>("/paper/ingest", { method: "POST", body: JSON.stringify(payload) }),
   uploadPdf: (file: File, params: { paper_id?: string; title?: string; project_id?: string }) =>
     request<{ paper: Paper; pdf_path: string; project_id?: string | null; attached?: boolean }>("/papers/upload", {
       method: "POST",
@@ -373,6 +382,96 @@ export const api = {
     request<{ directions: string[] }>("/research/clarify", {
       method: "POST",
       body: JSON.stringify({ question, provider: provider ?? null, model: model ?? null })
+    }),
+
+  // --- Deep-research sessions (server-persisted trees) ---
+  listResearchSessions: (projectId: string) =>
+    request<{ sessions: ResearchSessionSummary[] }>(`/research/sessions/${encodeURIComponent(projectId)}`),
+  getResearchSession: (sessionId: string) =>
+    request<{ session: ResearchSession }>(`/research/session/${encodeURIComponent(sessionId)}`),
+  upsertResearchSession: (
+    sessionId: string,
+    payload: { project_id?: string | null; question?: string; status?: string; nodes: ResearchNode[] },
+  ) =>
+    request<{ session: ResearchSession }>(`/research/session/${encodeURIComponent(sessionId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteResearchSession: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/research/session/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
+
+  // --- Parallel Research mode ---
+  createParallelSession: (
+    projectId: string,
+    payload: { question: string; variant_count?: number; paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ session: ParallelSession }>(`/projects/${encodeURIComponent(projectId)}/parallel`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  listParallelSessions: (projectId: string) =>
+    request<{ sessions: ParallelSessionSummary[] }>(`/projects/${encodeURIComponent(projectId)}/parallel`),
+  getParallelSession: (sessionId: string) =>
+    request<{ session: ParallelSession }>(`/parallel/${encodeURIComponent(sessionId)}`),
+  deleteParallelSession: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/parallel/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
+  generateParallelVariants: (
+    sessionId: string,
+    payload: { variant_count?: number; paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ session: ParallelSession }>(`/parallel/${encodeURIComponent(sessionId)}/generate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  addParallelVariant: (
+    sessionId: string,
+    payload: { name: string; approach?: string; rationale?: string; suggested_prompt?: string },
+  ) =>
+    request<{ variant: ParallelVariant }>(`/parallel/${encodeURIComponent(sessionId)}/variants`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateParallelVariant: (
+    variantId: string,
+    payload: Partial<{ name: string; approach: string; rationale: string; suggested_prompt: string; status: string; position: number }>,
+  ) =>
+    request<{ variant: ParallelVariant }>(`/parallel/variants/${encodeURIComponent(variantId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteParallelVariant: (variantId: string) =>
+    request<{ deleted: boolean }>(`/parallel/variants/${encodeURIComponent(variantId)}`, { method: "DELETE" }),
+  addParallelEntry: (
+    variantId: string,
+    payload: { content: string; request_feedback?: boolean; paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ session: ParallelSession; user_entry: ParallelEntry; feedback_entry: ParallelEntry | null }>(
+      `/parallel/variants/${encodeURIComponent(variantId)}/entries`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  deleteParallelEntry: (entryId: string) =>
+    request<{ deleted: boolean }>(`/parallel/entries/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
+  synthesizeParallelSession: (
+    sessionId: string,
+    payload: { paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ session: ParallelSession; answer: Answer }>(`/parallel/${encodeURIComponent(sessionId)}/synthesize`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  askParallelFollowup: (
+    sessionId: string,
+    payload: {
+      question: string;
+      variant_count?: number;
+      paper_ids?: string[];
+      provider?: string | null;
+      model?: string | null;
+    },
+  ) =>
+    request<{ session: ParallelSession; answer: Answer }>(`/parallel/${encodeURIComponent(sessionId)}/ask`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     })
 };
 
@@ -388,6 +487,70 @@ export interface ResearchTreeRequest {
   include_project_grey?: boolean;
   auto_harvest?: boolean;
   initial_nodes?: import("./types").ResearchNode[];
+  session_id?: string | null;
+}
+
+export interface AutoAnswerRequest {
+  question: string;
+  /** Clean question used for paper/web search + related-topic analysis (no verbosity hint). */
+  search_question?: string;
+  project_id?: string | null;
+  provider?: string;
+  model?: string;
+  limit?: number;
+  paper_ids?: string[];
+  priority_paper_ids?: string[];
+  answer_context_mode?: "kg" | "pdf_if_fits";
+  conversation_context?: Array<{ role: string; content: string }>;
+  grey_source_ids?: string[];
+  include_project_grey?: boolean;
+  llm_overrides?: Record<string, number | undefined>;
+  force?: boolean;
+  max_related_topics?: number;
+}
+
+/** Stream POST /query/auto-answer: answer, then auto-harvest papers+web if weak, then re-answer. */
+export async function streamAutoAnswer(
+  payload: AutoAnswerRequest,
+  onEvent: (event: import("./types").AutoAnswerEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const target = new URL("/query/auto-answer", API_BASE_URL);
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, text || `Backend error ${response.status}`);
+  }
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          onEvent(JSON.parse(line.slice(6)) as import("./types").AutoAnswerEvent);
+        } catch {
+          // malformed SSE line – skip
+        }
+      }
+    }
+  }
 }
 
 export async function streamResearchTree(

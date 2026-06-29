@@ -9,6 +9,8 @@ __pycache__/
 .tmp_pytest*/
 .tmp-pytest*/
 tmp_codex*/
+tmp_fixes_run/
+tmp_*/
 .codex-pytest*/
 .mypy_cache/
 .ruff_cache/
@@ -25,6 +27,7 @@ env/
 .vscode/
 .idea/
 .codex/
+.claude/
 *.swp
 *.swo
 .DS_Store
@@ -39,6 +42,8 @@ data/pdfs/
 data/graphs/
 data/graphs/project_kgs/
 data/graphs/global_kg/
+data/eval/
+data/exports/
 data/*.jsonl
 data/*.parquet
 *.duckdb

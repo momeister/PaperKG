@@ -23,6 +23,7 @@ import {
   FileText,
   FolderPlus,
   GitBranch,
+  GitMerge,
   Globe,
   Link2,
   ListChecks,
@@ -49,7 +50,7 @@ import {
   X
 } from "lucide-react";
 
-import { api, streamResearchTree, exportResearchTree } from "../api";
+import { api, streamResearchTree, streamAutoAnswer, exportResearchTree } from "../api";
 import type { ResearchTreeRequest, ResearchTreeExportOptions } from "../api";
 import { downloadBlob } from "../download";
 import { colorVarsForPaperId, evidenceColorVars, isGreySourcePaperId } from "../citationColors";
@@ -68,10 +69,13 @@ import type {
   NoteAiThread,
   NoteCitation,
   Paper,
+  ParallelSession,
   ResearchNode,
   VerificationEvidence,
   VerificationSource
 } from "../types";
+import { ParallelResearchPanel } from "./ParallelResearchPanel";
+import { ParallelResultsTab } from "./ParallelResultsTab";
 import {
   AnswerText,
   answerLimitFor,
@@ -126,6 +130,7 @@ export type WorkspaceCommandDef = {
 export const WORKSPACE_COMMANDS: WorkspaceCommandDef[] = [
   { name: "web", description: "Web-Recherche parallel zur Frage (Treffer manuell übernehmen)", group: "frage" },
   { name: "webfrage", aliases: ["webanswer"], args: "<frage>", description: "Web-Recherche + Antwort direkt aus den Treffern (speichert Grauquellen)", group: "frage" },
+  { name: "auto", aliases: ["autorecherche"], args: "[frage]", description: "Auto-Recherche: findet lokal nichts, harvestet automatisch Paper + Web (inkl. verwandter Themen)", group: "frage" },
   { name: "new", aliases: ["neu"], args: "[frage]", description: "Neues Gespräch — mit Frage: sofort stellen; Weiterfragen bleibt an", group: "frage" },
   { name: "selected", aliases: ["auswahl"], args: "[frage]", description: "Auf ausgewählte Quellen eingrenzen", group: "frage" },
   { name: "alle", aliases: ["all"], args: "[frage]", description: "Auf alle Quellen des Projekts erweitern", group: "frage" },
@@ -248,6 +253,11 @@ export function WorkspacePage() {
   const [activeTurnId, setActiveTurnId] = useState(() => loadAssistantSession(scopedProjectId).activeTurnId);
   const [selectedSource, setSelectedSource] = useState<VerificationSource | null>(null);
   const [activeEvidenceIndex, setActiveEvidenceIndex] = useState(0);
+  // Cited sources whose PDF we downloaded on demand (so pdfProps resolves a real PDF URL even
+  // though the original answer source reported pdf_available:false), and the paper currently
+  // being downloaded so the pane shows a loading state instead of the "no PDF" abstract limbo.
+  const [ingestedPdfIds, setIngestedPdfIds] = useState<Set<string>>(new Set());
+  const [ingestingPaperId, setIngestingPaperId] = useState<string | null>(null);
   const [selectedAnswerQuote, setSelectedAnswerQuote] = useState<{ paperId: string; evidenceIndex: number; text: string } | null>(null);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
   const [evidenceMode, setEvidenceMode] = useState("auto");
@@ -263,6 +273,17 @@ export function WorkspacePage() {
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
   const [selectedGreyIds, setSelectedGreyIds] = useState<string[]>([]);
   const [useInternet, setUseInternet] = useState(() => loadWorkspaceBoolean(scopedProjectId, "useInternet", false));
+  // Auto-Recherche: ist sie an und die lokale Antwort schwach, harvestet das System
+  // automatisch Paper (inkl. Phase-3-Extraktion) + Webquellen — auch zu KI-abgeleiteten
+  // verwandten Themen — und beantwortet die Frage neu.
+  const [autoResearch, setAutoResearch] = useState(() => loadWorkspaceBoolean(scopedProjectId, "autoResearch", false));
+  const [autoProgress, setAutoProgress] = useState<{
+    phase: string;
+    relatedTopics: string[];
+    papers: { id: string; title: string }[];
+    grey: { id: string; title: string; url: string }[];
+  } | null>(null);
+  const autoAbortRef = useRef<AbortController | null>(null);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
@@ -301,6 +322,20 @@ export function WorkspacePage() {
   const researchNodesRef = useRef<ResearchNode[]>([]);
   const autoSavedTreeRef = useRef<string | null>(null);
 
+  // Parallel Research — a third assistant mode (next to chat and Tiefenanalyse). The
+  // session is server-persisted; the active turn (type "parallel") points at it by id.
+  const [parallelMode, setParallelMode] = useState(
+    () => restoredActiveTurnFor(scopedProjectId)?.type === "parallel",
+  );
+  const [parallelSession, setParallelSession] = useState<ParallelSession | null>(null);
+  const [parallelLoading, setParallelLoading] = useState(false);
+  // A follow-up question (weiterfragen) is in flight against the open session.
+  const [parallelFollowupLoading, setParallelFollowupLoading] = useState(false);
+  // One-shot "/new" in parallel mode: the next question starts a fresh parallel session
+  // instead of continuing the current one.
+  const [parallelNewArmed, setParallelNewArmed] = useState(false);
+  const parallelSessionIdRef = useRef<string>("");
+
   // On mount, restore the research-tree refs for a reopened deep-analysis session so
   // "Fortsetzen" continues the same session instead of forking a new one.
   useEffect(() => {
@@ -316,6 +351,8 @@ export function WorkspacePage() {
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
   const [pdfOpen, setPdfOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "pdfOpen", true));
   const [notesOpen, setNotesOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "notesOpen", true));
+  // Notes pane sub-view: the normal note editor, or the Parallel-Research "Ergebnisse" view.
+  const [notesTab, setNotesTab] = useState<"note" | "results">("note");
   const [navigatorWidth, setNavigatorWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", 180));
   const [assistantWidth, setAssistantWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "assistantWidth.v3", 420));
   const [pdfWidth, setPdfWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfWidth.v3", 220));
@@ -439,52 +476,154 @@ export function WorkspacePage() {
       });
     },
     onSuccess: async (payload, vars) => {
-      let sources: VerificationSource[] = [];
-      try {
-        sources = await verificationSourcesFor(payload);
-      } catch {
-        sources = [];
-      }
-      const block: AssistantAnswerBlock = {
-        id: `block_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        question: payload.question,
-        answer: payload,
-        verification: sources,
-        createdAt: new Date().toISOString()
-      };
-      if (conversationMode === "followup" && !vars.newTurn && activeTurn) {
-        const turnId = activeTurn.id;
-        setHistory((current) =>
-          current.map((turn) => {
-            if (turn.id !== turnId) {
-              return turn;
-            }
-            const blocks = [...turnBlocks(turn), block];
-            return {
-              ...turn,
-              answer: payload,
-              verification: mergeVerification(blocks.flatMap((item) => item.verification)),
-              blocks
-            };
-          })
-        );
-        setActiveTurnId(turnId);
-        openAssistantSource(sources[0] ?? verification[0] ?? null, 0);
-        return;
-      }
-      const turn: AssistantTurn = {
-        id: `turn_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        question: payload.question,
-        answer: payload,
-        verification: sources,
-        createdAt: block.createdAt,
-        blocks: [block]
-      };
-      setHistory((current) => [...current.slice(-24), turn]);
-      setActiveTurnId(turn.id);
-      openAssistantSource(sources[0] ?? null, 0);
+      await commitAnswerTurn(payload, vars.newTurn);
     }
   });
+
+  /** Commit a grounded answer as a new turn (or append it to the active turn in
+   * Weiterfragen mode). Shared by the normal answer mutation and the streaming
+   * auto-research flow so both produce identical turn/block structures. */
+  async function commitAnswerTurn(payload: Answer, newTurn: boolean) {
+    let sources: VerificationSource[] = [];
+    try {
+      sources = await verificationSourcesFor(payload);
+    } catch {
+      sources = [];
+    }
+    const block: AssistantAnswerBlock = {
+      id: `block_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      question: payload.question,
+      answer: payload,
+      verification: sources,
+      createdAt: new Date().toISOString()
+    };
+    if (conversationMode === "followup" && !newTurn && activeTurn) {
+      const turnId = activeTurn.id;
+      setHistory((current) =>
+        current.map((turn) => {
+          if (turn.id !== turnId) {
+            return turn;
+          }
+          const blocks = [...turnBlocks(turn), block];
+          return {
+            ...turn,
+            answer: payload,
+            verification: mergeVerification(blocks.flatMap((item) => item.verification)),
+            blocks
+          };
+        })
+      );
+      setActiveTurnId(turnId);
+      openAssistantSource(sources[0] ?? verification[0] ?? null, 0);
+      return;
+    }
+    const turn: AssistantTurn = {
+      id: `turn_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      question: payload.question,
+      answer: payload,
+      verification: sources,
+      createdAt: block.createdAt,
+      blocks: [block]
+    };
+    setHistory((current) => [...current.slice(-24), turn]);
+    setActiveTurnId(turn.id);
+    openAssistantSource(sources[0] ?? null, 0);
+  }
+
+  /** Stream POST /query/auto-answer: show the local answer, auto-harvest papers + web
+   * sources (plus KI-derived related topics) when it is weak, then commit the re-answer. */
+  async function runAutoResearch(value: string, opts: { scope: PaperQuestionScope; newTurn: boolean; force?: boolean }) {
+    const info = deriveScope(opts.scope);
+    if (info.blocked) {
+      logAction("Auto-Recherche", opts.scope === "selected" ? "Keine Quellen ausgewählt." : "Kein aktives Paper geöffnet.", "error");
+      return;
+    }
+    autoAbortRef.current?.abort();
+    const controller = new AbortController();
+    autoAbortRef.current = controller;
+    const greyIds = info.greySourceIds;
+    setAutoProgress({ phase: "Lokale Quellen werden geprüft…", relatedTopics: [], papers: [], grey: [] });
+    const actionId = logAction("Auto-Recherche", `Recherchiere zu „${value}" …`, "pending");
+    try {
+      await streamAutoAnswer(
+        {
+          question: value + verbosityInstruction(verbosity),
+          search_question: value,
+          project_id: activeProject || undefined,
+          provider,
+          model,
+          limit: answerLimitFor(value, evidenceMode, opts.scope === "all" ? 0 : Math.max(1, info.scopedPaperIds.length + (greyIds.length ? 1 : 0))),
+          paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : info.projectOnlyScope || greyIds.length ? ["__none__"] : undefined,
+          priority_paper_ids: primaryPaperId ? [primaryPaperId] : undefined,
+          answer_context_mode: info.answerContextMode !== "kg" ? info.answerContextMode : undefined,
+          grey_source_ids: greyIds.length ? greyIds : undefined,
+          include_project_grey: opts.scope === "all" && isRealProject ? true : undefined,
+          conversation_context:
+            conversationMode === "followup" && !opts.newTurn && activeTurn && activeTurn.type !== "research_tree" ? turnContext(activeTurn) : undefined,
+          llm_overrides: Object.values(llmParams).some((v) => v !== undefined) ? llmParams : undefined,
+          force: opts.force || undefined
+        },
+        (event) => {
+          switch (event.status) {
+            case "answer":
+              setAutoProgress((p) => (p ? { ...p, phase: "Lokale Antwort geprüft …" } : p));
+              break;
+            case "planning":
+              setAutoProgress((p) => ({
+                phase: "Verwandte Themen werden abgeleitet …",
+                relatedTopics: event.related_topics ?? [],
+                papers: p?.papers ?? [],
+                grey: p?.grey ?? []
+              }));
+              break;
+            case "harvesting":
+              setAutoProgress((p) => ({
+                phase: event.scope === "main" ? "Paper & Web zur Frage werden geladen …" : `Verwandtes Thema „${event.topic}" wird recherchiert …`,
+                relatedTopics: p?.relatedTopics ?? [],
+                papers: [...(p?.papers ?? []), ...(event.papers ?? [])],
+                grey: [...(p?.grey ?? []), ...(event.grey ?? [])]
+              }));
+              break;
+            case "reanswering":
+              setAutoProgress((p) => (p ? { ...p, phase: "Antwort wird mit den neuen Quellen erstellt …" } : p));
+              break;
+            case "harvest_error":
+              logAction("Auto-Recherche", event.error ?? "Ein Rechercheschritt ist fehlgeschlagen.", "error");
+              break;
+            case "error":
+              logAction("Auto-Recherche", event.error ?? "Recherche fehlgeschlagen.", "error");
+              break;
+            case "done": {
+              const summary = event.harvest_summary;
+              if (event.answer) {
+                void commitAnswerTurn(event.answer, opts.newTurn);
+              }
+              updateAction(actionId, {
+                status: "ok",
+                detail: summary?.harvested
+                  ? `${summary.papers.length} Paper + ${summary.grey.length} Web-Quellen ergänzt.`
+                  : "Lokale Quellen reichten aus."
+              });
+              if (summary?.harvested) {
+                queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+                queryClient.invalidateQueries({ queryKey: ["workspace-pdfs", activeProject] });
+                queryClient.invalidateQueries({ queryKey: ["projects"] });
+              }
+              break;
+            }
+          }
+        },
+        controller.signal
+      );
+    } catch (error) {
+      updateAction(actionId, { status: "error", detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setAutoProgress(null);
+      if (autoAbortRef.current === controller) {
+        autoAbortRef.current = null;
+      }
+    }
+  }
 
   const webMutation = useMutation({
     mutationFn: (value: string) => api.deepResearch({ question: value, provider }),
@@ -751,6 +890,7 @@ export function WorkspacePage() {
   }
 
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "useInternet", useInternet), [useInternet, scopedProjectId]);
+  useEffect(() => saveWorkspaceBoolean(scopedProjectId, "autoResearch", autoResearch), [autoResearch, scopedProjectId]);
 
   useEffect(() => {
     if (!chatSettingsOpen && !actionsMenuOpen) {
@@ -789,6 +929,9 @@ export function WorkspacePage() {
     setChatSettingsOpen(false);
     setActionsMenuOpen(false);
     webMutation.reset();
+    setParallelSession(null);
+    parallelSessionIdRef.current = "";
+    setParallelMode(restoredActiveTurnFor(scopedProjectId)?.type === "parallel");
     // The backend copy is authoritative: localStorage drops large sessions silently
     // (quota), so reloads must restore the conversation from the server.
     let cancelled = false;
@@ -811,6 +954,11 @@ export function WorkspacePage() {
           setResearchNodes(restoredNodes);
           researchNodesRef.current = restoredNodes;
           researchSessionIdRef.current = activeTurn.id;
+          if (!restoredNodes.length) hydrateResearchSessionFromServer(activeTurn.id);
+        } else if (activeTurn?.type === "parallel") {
+          setParallelMode(true);
+          parallelSessionIdRef.current = activeTurn.id;
+          hydrateParallelSessionFromServer(activeTurn.id);
         }
       }
     });
@@ -1116,6 +1264,19 @@ export function WorkspacePage() {
         setUseInternet((v) => !v);
         setQuestion(remainder);
         return { handled: true };
+      case "auto":
+      case "autorecherche":
+        // Mit Frage: einmalige Auto-Recherche (force). Ohne Frage: Schalter umlegen.
+        if (remainder) {
+          setQuestion("");
+          void runAutoResearch(remainder, { scope: paperScope, newTurn: nextTurnIsNew, force: true });
+          setNextTurnIsNew(false);
+          return { handled: true };
+        }
+        setAutoResearch((v) => !v);
+        setQuestion("");
+        logAction("Auto-Recherche", autoResearch ? "Auto-Recherche ausgeschaltet." : "Auto-Recherche eingeschaltet — schwache Antworten lösen automatisch eine Paper-/Web-Recherche aus.");
+        return { handled: true };
       case "webfrage":
       case "webanswer":
         if (!remainder) {
@@ -1205,7 +1366,7 @@ export function WorkspacePage() {
   }
 
   /** Dispatch a question; scope/newTurn overrides come from slash commands. */
-  function ask(value: string, options: { scope?: PaperQuestionScope; newTurn?: boolean; web?: boolean } = {}) {
+  function ask(value: string, options: { scope?: PaperQuestionScope; newTurn?: boolean; web?: boolean; auto?: boolean; force?: boolean } = {}) {
     const scope = options.scope ?? paperScope;
     const info = deriveScope(scope);
     if (info.blocked) {
@@ -1213,6 +1374,14 @@ export function WorkspacePage() {
       return;
     }
     const newTurn = options.newTurn ?? nextTurnIsNew;
+    // Auto-Recherche übernimmt Antwort + (bei schwacher Antwort) Paper-/Web-Harvest in
+    // einem gestreamten Lauf — der normale Antwort-/Web-Pfad entfällt dann.
+    if (options.auto ?? autoResearch) {
+      setNextTurnIsNew(false);
+      setQuestion("");
+      void runAutoResearch(value, { scope, newTurn, force: options.force });
+      return;
+    }
     answerMutation.mutate({ value: value + verbosityInstruction(verbosity), scope, newTurn });
     setNextTurnIsNew(false);
     setQuestion("");
@@ -1228,6 +1397,32 @@ export function WorkspacePage() {
     event.preventDefault();
     const raw = question.trim();
     if (!raw) {
+      return;
+    }
+    if (parallelMode) {
+      // "/new" (or "/neu") explicitly starts a fresh parallel session; with a question it
+      // starts immediately, bare "/new" arms the next question.
+      const newMatch = /^\/(new|neu)\b\s*([\s\S]*)$/i.exec(raw);
+      if (newMatch) {
+        const rest = newMatch[2].trim();
+        if (rest) {
+          startParallelSession(rest);
+        } else {
+          setParallelNewArmed(true);
+          setQuestion("");
+          logAction("Parallel Research", "Die nächste Frage startet eine neue Parallel-Session.");
+        }
+        return;
+      }
+      // Weiterfragen: an open session keeps the context (grounded answer + new Vorschlag),
+      // it does NOT spin up a new session. Only the very first question (or after "/new")
+      // starts a session.
+      if (parallelSession && !parallelNewArmed) {
+        askParallelFollowup(raw);
+        return;
+      }
+      setParallelNewArmed(false);
+      startParallelSession(raw);
       return;
     }
     if (deepMode) {
@@ -1257,6 +1452,123 @@ export function WorkspacePage() {
       setUseInternet(true);
     }
     ask(value, { web: inline.web || undefined });
+  }
+
+  /** Load a persisted deep-research tree from the server (used when the local/cached
+   * copy lost its nodes — e.g. localStorage quota). Keyed by the session/turn id. */
+  function hydrateResearchSessionFromServer(turnId: string) {
+    void api
+      .getResearchSession(turnId)
+      .then((res) => {
+        const nodes = res.session?.nodes ?? [];
+        if (!nodes.length || researchSessionIdRef.current !== turnId) return;
+        researchNodesRef.current = nodes;
+        setResearchNodes(nodes);
+        setDeepMode(true);
+      })
+      .catch(() => {});
+  }
+
+  /** Start a Parallel-Research session: the backend proposes grounded variants. A draft
+   * turn appears immediately; it's reconciled to the server session id on success. */
+  function startParallelSession(q: string) {
+    const question = q.trim();
+    if (!question) return;
+    setParallelMode(true);
+    setDeepMode(false);
+    setParallelSession(null);
+    setParallelLoading(true);
+    setQuestion("");
+    // The methods + result entry live in the Notes "Ergebnisse" tab — make sure it's visible.
+    setNotesOpen(true);
+    setNotesTab("results");
+
+    const draftId = crypto.randomUUID();
+    parallelSessionIdRef.current = draftId;
+    const draft: AssistantTurn = {
+      id: draftId,
+      question,
+      answer: null as unknown as AssistantTurn["answer"],
+      verification: [],
+      createdAt: new Date().toISOString(),
+      type: "parallel",
+      parallelSessionId: draftId,
+      parallelVariantCount: 0,
+    };
+    setHistory((prev) => [draft, ...prev]);
+    setActiveTurnId(draftId);
+
+    const info = deriveScope(paperScope);
+    api
+      .createParallelSession(activeProject || scopedProjectId, {
+        question,
+        variant_count: 3,
+        paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : undefined,
+        provider: provider || undefined,
+        model: model || undefined,
+      })
+      .then(({ session }) => {
+        parallelSessionIdRef.current = session.id;
+        setParallelSession(session);
+        setHistory((prev) =>
+          prev.map((t) =>
+            t.id === draftId
+              ? { ...draft, id: session.id, parallelSessionId: session.id, parallelVariantCount: session.variants.length }
+              : t,
+          ),
+        );
+        setActiveTurnId(session.id);
+      })
+      .catch((err: unknown) => {
+        logAction("Parallel Research", err instanceof Error ? err.message : "Konnte Session nicht starten.", "error");
+      })
+      .finally(() => setParallelLoading(false));
+  }
+
+  /** Weiterfragen inside an open parallel session: grounded answer (threaded under the
+   * overview) + a new structured Vorschlag appended to the Ergebnisse. No new session. */
+  function askParallelFollowup(q: string) {
+    const question = q.trim();
+    const session = parallelSession;
+    if (!question || !session || parallelFollowupLoading) return;
+    setQuestion("");
+    setParallelFollowupLoading(true);
+    const info = deriveScope(paperScope);
+    api
+      .askParallelFollowup(session.id, {
+        question,
+        paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : undefined,
+        provider: provider || undefined,
+        model: model || undefined,
+      })
+      .then(({ session: updated }) => {
+        if (parallelSessionIdRef.current !== updated.id) return;
+        onParallelChange(updated);
+      })
+      .catch((err: unknown) => {
+        logAction("Parallel Research", err instanceof Error ? err.message : "Folgefrage fehlgeschlagen.", "error");
+      })
+      .finally(() => setParallelFollowupLoading(false));
+  }
+
+  /** Load a persisted parallel-research session from the server (open/restore). */
+  function hydrateParallelSessionFromServer(sessionId: string) {
+    setParallelLoading(true);
+    api
+      .getParallelSession(sessionId)
+      .then(({ session }) => {
+        if (parallelSessionIdRef.current !== sessionId) return;
+        setParallelSession(session);
+      })
+      .catch(() => {})
+      .finally(() => setParallelLoading(false));
+  }
+
+  function onParallelChange(session: ParallelSession) {
+    setParallelSession(session);
+    setHistory((prev) =>
+      prev.map((t) => (t.id === session.id ? { ...t, parallelVariantCount: session.variants.length } : t)),
+    );
   }
 
   function launchResearchTree(q: string, useHarvest: boolean, clarificationContext: string, initialNodes?: ResearchNode[]) {
@@ -1309,6 +1621,7 @@ export function WorkspacePage() {
       include_project_grey: paperScope === "all" && isRealProject ? true : undefined,
       auto_harvest: useHarvest || undefined,
       initial_nodes: initialNodes?.length ? initialNodes : undefined,
+      session_id: sessionId,
     };
 
     streamResearchTree(
@@ -1369,6 +1682,17 @@ export function WorkspacePage() {
             if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
             return [saved, ...prev];
           });
+          // Authoritative server copy (verification-enriched), independent of the
+          // localStorage quota / debounce path — this is what makes a reopened deep
+          // analysis show its full tree instead of an empty session.
+          void api
+            .upsertResearchSession(sessionId, {
+              project_id: activeProject || scopedProjectId || null,
+              question: enrichedQuestion,
+              status: "done",
+              nodes: finalNodes,
+            })
+            .catch(() => {});
         }
         // Invalidate paper/grey caches so auto-harvested items appear without manual refresh.
         queryClient.invalidateQueries({ queryKey: ["papers"] });
@@ -1564,6 +1888,12 @@ export function WorkspacePage() {
         }
       } else {
         setPdfTarget({ kind: "assistant", source, evidenceIndex: nextIndex });
+        // A cited paper that was never downloaded would otherwise show the "Kein PDF
+        // verfügbar" abstract limbo. Instead, pull the PDF into the project on demand
+        // (→ falls back to the web/grey view when nothing is downloadable).
+        if (!source.pdf_available && !ingestedPdfIds.has(source.paper_id)) {
+          void ingestCitedSource(source);
+        }
       }
     }
     if (options.openPdf) {
@@ -1572,6 +1902,46 @@ export function WorkspacePage() {
     }
     if (quote) {
       setSelectedAnswerQuote({ paperId: source.paper_id, evidenceIndex: nextIndex, text: cleanAnswerQuote(quote) });
+    }
+  }
+
+  // Download (and extract, in the background) a cited paper that has no local PDF yet. On
+  // success the PDF shows in the canvas; when no PDF is downloadable the source opens in the
+  // grey/web view. Either way the user never lands in the "no PDF" abstract limbo.
+  async function ingestCitedSource(source: VerificationSource) {
+    if (isGreySourcePaperId(source.paper_id) || source.pdf_available || ingestedPdfIds.has(source.paper_id)) {
+      return;
+    }
+    if (ingestingPaperId) {
+      return;
+    }
+    setIngestingPaperId(source.paper_id);
+    try {
+      const res = await api.paperIngest({
+        paper_id: source.paper_id,
+        project_id: activeProject || undefined,
+        provider: provider || undefined,
+        model: model || undefined
+      });
+      if (res.has_local_pdf) {
+        setIngestedPdfIds((prev) => new Set(prev).add(source.paper_id));
+        void queryClient.invalidateQueries({ queryKey: ["papers"] });
+        if (isRealProject) {
+          void queryClient.invalidateQueries({ queryKey: ["workspace-project-paper-ids", activeProject] });
+        }
+        setSourceIngestStatus(`PDF zu "${source.title || source.paper_id}" geladen – Extraktion läuft im Hintergrund.`);
+      } else if (res.external_url) {
+        const saved = await api.addGreySourceFromUrl(activeProject as string, res.external_url);
+        await queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+        setPdfTarget({ kind: "grey", source: saved.saved });
+        setSourceIngestStatus(`Quelle "${saved.saved.title || saved.saved.url}" als Webquelle geöffnet.`);
+      } else {
+        setSourceIngestStatus("Für diese Quelle ist kein PDF verfügbar.");
+      }
+    } catch (error) {
+      setSourceIngestStatus(error instanceof Error ? error.message : "Quelle konnte nicht geladen werden.");
+    } finally {
+      setIngestingPaperId((current) => (current === source.paper_id ? null : current));
     }
   }
 
@@ -1741,6 +2111,17 @@ export function WorkspacePage() {
   }
 
   function deleteAssistantTurn(turnId: string) {
+    const removed = history.find((item) => item.id === turnId);
+    // Also drop the server-persisted session so it doesn't linger orphaned.
+    if (removed?.type === "research_tree") {
+      void api.deleteResearchSession(turnId).catch(() => {});
+    } else if (removed?.type === "parallel") {
+      void api.deleteParallelSession(turnId).catch(() => {});
+      if (parallelSessionIdRef.current === turnId) {
+        parallelSessionIdRef.current = "";
+        setParallelSession(null);
+      }
+    }
     setHistory((current) => {
       const next = current.filter((item) => item.id !== turnId);
       saveAssistantSession(scopedProjectId, { history: next, activeTurnId: activeTurnId === turnId ? (next[0]?.id ?? "") : activeTurnId });
@@ -1762,9 +2143,21 @@ export function WorkspacePage() {
       researchSessionIdRef.current = turnId;
       researchNodesRef.current = turn.researchNodes ?? [];
       setResearchNodes(turn.researchNodes ?? []);
+      setParallelMode(false);
       setDeepMode(true);
+      if (!(turn.researchNodes ?? []).length) hydrateResearchSessionFromServer(turnId);
       return;
     }
+    if (turn.type === "parallel") {
+      parallelSessionIdRef.current = turnId;
+      setDeepMode(false);
+      setParallelMode(true);
+      setParallelSession(null);
+      hydrateParallelSessionFromServer(turnId);
+      return;
+    }
+    setParallelMode(false);
+    setDeepMode(false);
     const sources = mergeVerification(turnBlocks(turn).flatMap((block) => block.verification));
     openAssistantSource(sources[0] ?? null, 0);
   }
@@ -1869,14 +2262,23 @@ export function WorkspacePage() {
   const pdfView = pdfProps(pdfTarget);
   // When no local PDF is available, resolve the cited paper id so the PDF pane can show
   // its abstract + a link to the original source. Grey sources render elsewhere.
+  // True while we are downloading a cited PDF on demand: suppress the abstract-metadata
+  // fallback and show a loading hint instead of the "Kein PDF verfügbar" abstract limbo.
+  const isIngestingCurrentPdf =
+    !!ingestingPaperId && pdfTarget?.kind === "assistant" && pdfTarget.source.paper_id === ingestingPaperId;
   const pdfMetaPaperId = (() => {
-    if (pdfView.url || !pdfTarget) return undefined;
+    if (pdfView.url || !pdfTarget || isIngestingCurrentPdf) return undefined;
     if (pdfTarget.kind === "paper") return workspacePaperId(pdfTarget.paper) || undefined;
     if (pdfTarget.kind === "assistant") return isGreySourcePaperId(pdfTarget.source.paper_id) ? undefined : pdfTarget.source.paper_id;
     if (pdfTarget.kind === "noteCitation") return isGreySourcePaperId(pdfTarget.citation.paper_id) ? undefined : pdfTarget.citation.paper_id;
     if (pdfTarget.kind === "missing") return pdfTarget.paperId || undefined;
     return undefined;
   })();
+  const pdfUnavailableMessage = isIngestingCurrentPdf
+    ? "Quelle wird heruntergeladen und extrahiert …"
+    : pdfTarget?.kind === "missing"
+      ? "Diese Quelle wurde im Antworttext zitiert, ist aber nicht als PDF im Projekt vorhanden. Sie können das Paper importieren oder als Graue Quelle hinzufügen."
+      : undefined;
   const navColumn = navigatorOpen ? `${navigatorWidth}px` : "46px";
   const assistantColumn = assistantOpen ? `${assistantWidth}px` : "46px";
   const pdfColumn = pdfOpen ? `${pdfWidth}px` : "46px";
@@ -1996,7 +2398,7 @@ export function WorkspacePage() {
             url={pdfView.url}
             title={pdfView.title}
             metaPaperId={pdfMetaPaperId}
-            unavailableMessage={pdfTarget?.kind === "missing" ? "Diese Quelle wurde im Antworttext zitiert, ist aber nicht als PDF im Projekt vorhanden. Sie können das Paper importieren oder als Graue Quelle hinzufügen." : undefined}
+            unavailableMessage={pdfUnavailableMessage}
             evidences={pdfView.evidences}
             activeEvidenceIndex={pdfView.activeEvidenceIndex}
             onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
@@ -2237,12 +2639,30 @@ export function WorkspacePage() {
               </button>
               <button
                 type="button"
+                className={`internet-toggle ${autoResearch ? "internet-toggle--on" : ""}`}
+                onClick={() => setAutoResearch((v) => !v)}
+                title="Auto-Recherche: findet die Frage lokal keine Antwort, werden automatisch Paper (mit Extraktion) und Webquellen — auch zu verwandten Themen — geladen und die Frage neu beantwortet. Auch per /auto."
+              >
+                <Sparkles size={14} />
+                <span>Auto-Recherche</span>
+              </button>
+              <button
+                type="button"
                 className={`internet-toggle ${deepMode ? "internet-toggle--on" : ""}`}
-                onClick={() => setDeepMode((v) => !v)}
+                onClick={() => setDeepMode((v) => { const next = !v; if (next) setParallelMode(false); return next; })}
                 title="Tiefenanalyse: Frage wird in Sub-Fragen zerlegt und jede separat beantwortet"
               >
                 <GitBranch size={14} />
                 <span>Tiefenanalyse</span>
+              </button>
+              <button
+                type="button"
+                className={`internet-toggle ${parallelMode ? "internet-toggle--on" : ""}`}
+                onClick={() => setParallelMode((v) => { const next = !v; if (next) setDeepMode(false); return next; })}
+                title="Parallel Research: KI schlägt Varianten vor, du probierst sie aus und sendest Ergebnisse zurück"
+              >
+                <GitMerge size={14} />
+                <span>Parallel</span>
               </button>
               {deepMode ? (
                 <span className="chat-tool-wrap">
@@ -2554,7 +2974,28 @@ export function WorkspacePage() {
             </section>
           ) : null}
           <section className="answer-panel workspace-answer-panel">
-            {deepMode && (researchLoading || researchNodes.length > 0 || researchLlmError) ? (
+            {parallelMode ? (
+              parallelSession ? (
+                <ParallelResearchPanel
+                  session={parallelSession}
+                  loading={parallelLoading}
+                  followupLoading={parallelFollowupLoading}
+                  provider={provider || undefined}
+                  model={model || undefined}
+                  paperIds={deriveScope(paperScope).scopedPaperIds}
+                  onChange={onParallelChange}
+                  onOpenCitation={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
+                />
+              ) : parallelLoading ? (
+                <div className="parallel-loading">
+                  <Loader2 size={18} className="spin" />
+                  <span>Varianten werden vorgeschlagen…</span>
+                </div>
+              ) : (
+                <EmptyState title="Parallel Research">Stelle eine Frage, zu der du Varianten ausprobieren willst.</EmptyState>
+              )
+            ) : null}
+            {!parallelMode && deepMode && (researchLoading || researchNodes.length > 0 || researchLlmError) ? (
               <ResearchTreeView
                 nodes={researchNodes}
                 loading={researchLoading}
@@ -2572,7 +3013,38 @@ export function WorkspacePage() {
                 onSaveToNotes={() => void saveResearchTreeToNotes()}
               />
             ) : null}
-            {!deepMode && activeTurn && latestBlock && latestAnswerNeedsWeb && isRealProject && !webMutation.isPending && webOfferDismissedFor !== latestBlock.id ? (
+            {!parallelMode && !deepMode && autoProgress ? (
+              <div className="web-offer-card auto-research-card">
+                <Loader2 size={15} className="spin" />
+                <div>
+                  <strong>Auto-Recherche läuft …</strong>
+                  <span>{autoProgress.phase}</span>
+                  {autoProgress.relatedTopics.length ? (
+                    <div className="web-research-topics" style={{ marginTop: "4px" }}>
+                      <span className="muted">Verwandte Themen:</span>
+                      {autoProgress.relatedTopics.slice(0, 8).map((topic) => (
+                        <span className="topic-chip" key={topic}>{topic}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {autoProgress.papers.length || autoProgress.grey.length ? (
+                    <span className="muted" style={{ marginTop: "4px" }}>
+                      Bisher: {autoProgress.papers.length} Paper · {autoProgress.grey.length} Web-Quellen
+                    </span>
+                  ) : null}
+                </div>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Auto-Recherche abbrechen"
+                  title="Auto-Recherche abbrechen"
+                  onClick={() => autoAbortRef.current?.abort()}
+                >
+                  <Square size={14} />
+                </button>
+              </div>
+            ) : null}
+            {!parallelMode && !deepMode && !autoProgress && activeTurn && latestBlock && latestAnswerNeedsWeb && isRealProject && !webMutation.isPending && webOfferDismissedFor !== latestBlock.id ? (
               <div className="web-offer-card">
                 <Globe size={15} />
                 <div>
@@ -2582,19 +3054,31 @@ export function WorkspacePage() {
                 <button
                   className="button button-compact button-primary"
                   type="button"
+                  disabled={!!autoProgress}
+                  onClick={() => {
+                    setWebOfferDismissedFor(latestBlock.id);
+                    void runAutoResearch(latestBlock.question, { scope: paperScope, newTurn: false, force: true });
+                  }}
+                  title="Automatisch Paper (mit Extraktion) und Webquellen — auch zu verwandten Themen — laden und neu beantworten"
+                >
+                  <Sparkles size={14} /> Automatisch recherchieren
+                </button>
+                <button
+                  className="button button-compact"
+                  type="button"
                   onClick={() => {
                     setUseInternet(true);
                     webMutation.mutate(latestBlock.question);
                   }}
                 >
-                  Im Web nachschlagen
+                  Nur im Web nachschlagen
                 </button>
                 <button className="icon-button" type="button" aria-label="Hinweis ausblenden" onClick={() => setWebOfferDismissedFor(latestBlock.id)}>
                   <X size={14} />
                 </button>
               </div>
             ) : null}
-            {!deepMode && activeTurn && activeTurn.type !== "research_tree" ? (
+            {!parallelMode && !deepMode && activeTurn && activeTurn.type !== "research_tree" ? (
               <div className="answer-blocks">
                 {activeBlocks.filter((block) => block.answer).map((block, index) => (
                   <article className={`answer-block ${index > 0 ? "answer-block--followup" : ""}`} key={block.id}>
@@ -2631,7 +3115,7 @@ export function WorkspacePage() {
                 ))}
               </div>
             ) : (
-              !deepMode ? <EmptyState title="Keine Antwort" /> : null
+              !deepMode && !parallelMode ? <EmptyState title="Keine Antwort" /> : null
             )}
           </section>
           {useInternet && (webMutation.isPending || webResult || webMutation.isError) ? (
@@ -2859,21 +3343,53 @@ export function WorkspacePage() {
           <div className="workspace-notes-topline">
             <div>
               <span>Notizen</span>
-              <strong>{notesSnapshot.title || "Keine Notiz gewaehlt"}</strong>
+              <strong>{notesTab === "results" ? "Ergebnisse" : (notesSnapshot.title || "Keine Notiz gewaehlt")}</strong>
             </div>
-            <button className="icon-button" type="button" aria-label="Notizen einklappen" onClick={() => setNotesOpen(false)}>
-              <PanelRightClose size={17} />
-            </button>
+            <div className="workspace-notes-topline__actions">
+              {parallelMode && parallelSession ? (
+                <div className="segmented workspace-notes-tabs">
+                  <button type="button" className={notesTab === "note" ? "active" : ""} onClick={() => setNotesTab("note")}>
+                    Notiz
+                  </button>
+                  <button type="button" className={notesTab === "results" ? "active" : ""} onClick={() => setNotesTab("results")}>
+                    Ergebnisse
+                  </button>
+                </div>
+              ) : null}
+              <button className="icon-button" type="button" aria-label="Notizen einklappen" onClick={() => setNotesOpen(false)}>
+                <PanelRightClose size={17} />
+              </button>
+            </div>
           </div>
-          <NotesSurface
-            variant="workspace"
-            controlledNoteId={controlledNoteId}
-            requestedCitationId={requestedCitationId}
-            onActiveNoteChange={handleActiveNoteChange}
-            onCitationOpen={handleNoteCitationOpen}
-            onStateChange={handleNotesStateChange}
-            actionsRef={notesActionsRef}
-          />
+          {/* The note editor stays mounted (so "In Notiz übernehmen" can insert) but is hidden
+              while the Parallel-Research "Ergebnisse" view is active. */}
+          <div
+            className="workspace-notes-body"
+            style={notesTab === "results" && parallelMode && parallelSession ? { display: "none" } : undefined}
+          >
+            <NotesSurface
+              variant="workspace"
+              controlledNoteId={controlledNoteId}
+              requestedCitationId={requestedCitationId}
+              onActiveNoteChange={handleActiveNoteChange}
+              onCitationOpen={handleNoteCitationOpen}
+              onStateChange={handleNotesStateChange}
+              actionsRef={notesActionsRef}
+            />
+          </div>
+          {notesTab === "results" && parallelMode && parallelSession ? (
+            <ParallelResultsTab
+              session={parallelSession}
+              onChange={onParallelChange}
+              scope={{
+                paperIds: deriveScope(paperScope).scopedPaperIds,
+                provider: provider || undefined,
+                model: model || undefined,
+              }}
+              onOpenCitation={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
+              onTakeIntoNote={(md) => notesActionsRef.current?.insertMarkdownAtCursor(md) ?? Promise.resolve(null)}
+            />
+          ) : null}
         </section>
       ) : (
         <CollapsedPane label="Notizen" icon={<PanelRightOpen size={17} />} onOpen={() => setNotesOpen(true)} />
@@ -3001,8 +3517,9 @@ export function WorkspacePage() {
           : verification.find((source) => source.paper_id === target.source.paper_id) ?? target.source;
       const preferredIndex = selectedSource?.paper_id === liveSource.paper_id ? activeEvidenceIndex : target.evidenceIndex;
       const liveIndex = Math.max(0, Math.min(preferredIndex, liveSource.evidence.length - 1));
+      const pdfReady = liveSource.pdf_available || ingestedPdfIds.has(liveSource.paper_id);
       return {
-        url: liveSource.pdf_available ? api.paperPdfUrl(liveSource.paper_id, liveSource.title) : null,
+        url: pdfReady ? api.paperPdfUrl(liveSource.paper_id, liveSource.title) : null,
         title: liveSource.title || liveSource.paper_id,
         evidences: liveSource.evidence,
         activeEvidenceIndex: liveIndex,
@@ -3617,6 +4134,7 @@ function WorkspaceNavigatorBody({
       <div className="list workspace-nav-list">
         {sessions.map((turn) => {
           const isTree = turn.type === "research_tree";
+          const isParallel = turn.type === "parallel";
           const doneNodes = isTree ? (turn.researchNodes ?? []).filter((n) => n.status === "done").length : 0;
           const hasSynthesis = isTree && (turn.researchNodes ?? []).some((n) => n.status === "synthesis");
           return (
@@ -3631,13 +4149,16 @@ function WorkspaceNavigatorBody({
               >
                 <span className="session-item__title">
                   {isTree ? <GitBranch size={12} style={{ flexShrink: 0, marginRight: "3px", verticalAlign: "middle" }} /> : null}
+                  {isParallel ? <GitMerge size={12} style={{ flexShrink: 0, marginRight: "3px", verticalAlign: "middle" }} /> : null}
                   {turn.question}
                 </span>
                 <small>
                   {formatTurnTime(turn.createdAt)}
                   {isTree
                     ? ` | ${doneNodes} Knoten${hasSynthesis ? " ✓" : ""}`
-                    : turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
+                    : isParallel
+                      ? ` | ${turn.parallelVariantCount ?? 0} Varianten`
+                      : turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
                 </small>
               </button>
               <button
@@ -3987,6 +4508,32 @@ function saveWorkspaceNumber(projectId: string, key: string, value: number) {
 
 // ── Research Tree View ─────────────────────────────────────────────────────
 
+/**
+ * Build the citation-resolution pool for a reloaded research tree.
+ *
+ * Citations only render as coloured/clickable chips when their token resolves to a
+ * source in the pool; otherwise they fall back to the muted "!"-chip. The heavy
+ * verification payload is trimmed when a session is persisted (localStorage/server
+ * quota), so on reload `node.verification` can be empty — which used to grey out
+ * *every* citation. `answer.sources` is small and always survives persistence, so we
+ * fold it in as a minimal fallback: verification wins (richer evidence), and any
+ * source not already covered is added so its citation still resolves and keeps its
+ * colour (real papers vivid, `grey::` sources grey by intent).
+ */
+function citationPoolFor(
+  verification: VerificationSource[] | undefined,
+  answer: ResearchNode["answer"] | null | undefined,
+): VerificationSource[] {
+  const pool: VerificationSource[] = [...(verification ?? [])];
+  const seen = new Set(pool.map((s) => s.paper_id));
+  for (const src of answer?.sources ?? []) {
+    if (!src.paper_id || seen.has(src.paper_id)) continue;
+    seen.add(src.paper_id);
+    pool.push({ paper_id: src.paper_id, title: src.title || src.paper_id, pdf_available: false, evidence: [] });
+  }
+  return pool;
+}
+
 function ResearchTreeView({
   nodes,
   loading,
@@ -4090,6 +4637,9 @@ function ResearchTreeView({
     const isCollapsed = collapsed.has(node.id);
     const hasChildren = children.length > 0 || (node.status === "done" && (node.child_count ?? 0) > 0);
     const verification = node.verification ?? [];
+    // Fall back to answer.sources so a reloaded session (trimmed verification) still
+    // resolves/colours citations instead of greying them all out.
+    const citationPool = citationPoolFor(verification, node.answer);
     const isHarvesting = node.status === "harvesting";
 
     return (
@@ -4125,7 +4675,7 @@ function ResearchTreeView({
             <AnswerText
               answer={node.answer.answer}
               getCitationMeta={(citation, context, start) =>
-                citationMetasFor(verification, citation, context, node.answer?.citation_links ?? [], start)
+                citationMetasFor(citationPool, citation, context, node.answer?.citation_links ?? [], start)
               }
               onCitationClick={() => {}}
               onCitationMetaClick={(meta) => onCitationClick(meta.source, meta.evidenceIndex)}
@@ -4205,17 +4755,17 @@ function ResearchTreeView({
     }
 
     // Aggregate verification sources and citation links from all done nodes so
-    // citations in the synthesis document resolve to real paper evidence.
+    // citations in the synthesis document resolve to real paper evidence. Falls back
+    // to answer.sources (always persisted) so a reloaded session keeps its citations
+    // coloured instead of greying every one out as unresolved "!".
     const synthVerification: VerificationSource[] = [];
     const synthCitationLinks: CitationLink[] = [];
     const seenPaperIds = new Set<string>();
     for (const node of treeNodes) {
-      if (node.verification) {
-        for (const src of node.verification) {
-          if (!seenPaperIds.has(src.paper_id)) {
-            seenPaperIds.add(src.paper_id);
-            synthVerification.push(src);
-          }
+      for (const src of citationPoolFor(node.verification, node.answer)) {
+        if (!seenPaperIds.has(src.paper_id)) {
+          seenPaperIds.add(src.paper_id);
+          synthVerification.push(src);
         }
       }
       if (node.answer?.citation_links) {
@@ -4232,6 +4782,31 @@ function ResearchTreeView({
       onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string) => onCitationInsertPreview(source, evidenceIndex, quote),
       onCitationInsertPreviewClear,
     };
+
+    // Render a section's content, turning `####` lines into <h4> subheadings instead of
+    // leaving the literal hashes in the prose (sections are split on ##/### above, so only
+    // h4+ reaches here).
+    function renderSectionContent(content: string, keyPrefix: string): ReactNode {
+      const blocks: ReactNode[] = [];
+      let buffer: string[] = [];
+      let counter = 0;
+      const flush = () => {
+        const text = buffer.join("\n").trim();
+        buffer = [];
+        if (text) blocks.push(<AnswerText key={`${keyPrefix}-t${counter++}`} answer={stripMd(text)} {...sharedAnswerProps} />);
+      };
+      for (const line of content.split("\n")) {
+        const h4 = line.match(/^#{4,6}\s+(.+)/);
+        if (h4) {
+          flush();
+          blocks.push(<h4 key={`${keyPrefix}-h${counter++}`} className="research-synthesis-h4">{stripMd(h4[1].trim())}</h4>);
+        } else {
+          buffer.push(line);
+        }
+      }
+      flush();
+      return blocks;
+    }
 
     return (
       <div className="research-synthesis-panel">
@@ -4266,11 +4841,11 @@ function ResearchTreeView({
           </nav>
         ) : null}
         <div className="research-synthesis-body">
-          {preamble ? <AnswerText answer={stripMd(preamble)} {...sharedAnswerProps} /> : null}
+          {preamble ? renderSectionContent(preamble, "synth-pre") : null}
           {sections.map((s, i) => (
             <div key={i} id={`synth-sec-${i}`} className="research-synthesis-section">
               {s.level === 2 ? <h2 className="research-synthesis-h2">{s.title}</h2> : <h3 className="research-synthesis-h3">{s.title}</h3>}
-              {s.content ? <AnswerText answer={stripMd(s.content)} {...sharedAnswerProps} /> : null}
+              {s.content ? renderSectionContent(s.content, `synth-sec-${i}`) : null}
             </div>
           ))}
           {synthVerification.length > 0 ? (
@@ -4418,8 +4993,16 @@ function ResearchTreeView({
           </button>
         ) : null}
         {loading && synthesisNode ? (
-          <span className="muted-row" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}>
-            <Loader2 size={12} className="spin" /> Synthese…
+          <span
+            className="muted-row"
+            style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}
+            title="Die Gesamtantwort wird Abschnitt für Abschnitt aus den Teilantworten geschrieben."
+          >
+            <Loader2 size={12} className="spin" />
+            {(() => {
+              const written = (synthesisNode.document?.match(/^#{2,3}\s/gm) ?? []).length;
+              return written > 0 ? `Synthese… (Abschnitt ${written})` : "Synthese…";
+            })()}
           </span>
         ) : null}
       </div>

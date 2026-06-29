@@ -4,6 +4,51 @@
 
 > Dokumentation: `README.md` ist die Hauptuebersicht. `QUICKSTART_PHASE3.md` ist die praktische Phase-3-Anleitung. `ScienceKG_Projektplan.md` beschreibt die Roadmap, `MEMORY.md` den aktuellen Implementierungsstand.
 
+## Quick start with Docker
+
+The fastest way to run the full product stack (FastAPI backend + React frontend) is Docker:
+
+```bash
+cp .env.example .env          # then fill in any LLM / data-source API keys you use
+docker compose up --build
+```
+
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8000 (health check at `/health`)
+
+Notes:
+- **Python 3.12** is used in the image on purpose: the Kuzu graph library only ships
+  wheels for Python < 3.14.
+- Your DuckDB, PDFs, exports and notes live in `./data`, which is mounted as a volume and
+  persists across restarts.
+- **Local LLM backends** (Ollama on `:11434`, LM Studio on `:1234`, ...) typically run on
+  the *host*, not inside the containers. Point `config.yaml` at them via
+  `http://host.docker.internal:<port>` instead of `http://localhost:<port>`.
+- Compiled-PDF export needs a LaTeX toolchain. It is left out of the image by default
+  (the export then returns a ZIP of `.tex`/`.bib`/figures). To bake LaTeX in, build with
+  `--build-arg INSTALL_LATEX=true` (or set it in `docker-compose.yml`).
+
+To run without Docker, see the per-phase instructions below; the product stack is started
+with `python scripts/run_product.py`.
+
+## Security & threat model
+
+This system is designed to run **locally for a single user**. Keep that in mind before
+exposing it anywhere:
+
+- **No built-in user accounts.** The API is open by default. It binds to `127.0.0.1`
+  (localhost) and the Docker ports are published to `127.0.0.1` only. **Do not expose it
+  to an untrusted network.**
+- **Optional API token.** Set `SCIENCEKG_API_TOKEN` (e.g. in `.env`) to require an
+  `Authorization: Bearer <token>` header on every request (the `/health` probe stays open).
+- **Secrets** live in `.env` (gitignored) and are referenced by env-var name in
+  `config.yaml`. Never commit real keys; `.env.example` documents the supported variables.
+- **SSRF guard.** Server-side fetches of paper PDFs and web pages are restricted to public
+  http(s) addresses; requests to loopback/private/link-local IPs (e.g. cloud metadata) are
+  refused (`harvester/url_guard.py`).
+- **Path containment.** Client-supplied path overrides (DB path, PDF dir, ...) are confined
+  to the project/data tree (`storage/path_safety.py`); traversal outside is rejected.
+
 ## Phase 1: Harvester & Storage Foundation
 
 Diese Phase implementiert das automatisierte Paper-Harvesting und strukturierte lokale Speicherung.

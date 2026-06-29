@@ -125,6 +125,14 @@ export type PaperMeta = {
   external_url?: string | null;
 };
 
+export type PaperIngestResponse = {
+  paper_id: string;
+  title?: string | null;
+  has_local_pdf: boolean;
+  attached: boolean;
+  external_url?: string | null;
+};
+
 export type HealthReport = {
   status: string;
   metadata_db?: { paper_count?: number };
@@ -194,6 +202,26 @@ export type Answer = {
   citation_links?: CitationLink[];
   context_diagnostics?: Record<string, unknown>;
   source_verification?: Record<string, unknown> | null;
+};
+
+export type AutoHarvestSummary = {
+  harvested: boolean;
+  papers: Array<{ id: string; title: string }>;
+  grey: Array<{ id: string; title: string; url: string }>;
+  related_topics: string[];
+};
+
+/** One SSE event from POST /query/auto-answer (auto-research answering). */
+export type AutoAnswerEvent = {
+  status: "answer" | "planning" | "harvesting" | "reanswering" | "harvest_error" | "done" | "error";
+  answer?: Answer;
+  related_topics?: string[];
+  scope?: "main" | "related";
+  topic?: string;
+  papers?: Array<{ id: string; title: string }>;
+  grey?: Array<{ id: string; title: string; url: string }>;
+  harvest_summary?: AutoHarvestSummary;
+  error?: string;
 };
 
 export type VerificationEvidence = {
@@ -417,6 +445,82 @@ export type ResearchNode = {
   document?: string;
   harvested_papers?: Array<{ id: string; title: string }>;
   harvested_grey?: Array<{ id: string; title: string; url: string }>;
+};
+
+export type ResearchSessionSummary = {
+  id: string;
+  project_id?: string | null;
+  question: string;
+  status: string;
+  node_count: number;
+  done_count: number;
+  has_synthesis: boolean;
+  updated_timestamp?: string | null;
+};
+
+export type ResearchSession = {
+  id: string;
+  project_id?: string | null;
+  question: string;
+  status: string;
+  nodes: ResearchNode[];
+};
+
+export type ParallelEntry = {
+  id: string;
+  variant_id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  answer_payload?: Answer | null;
+  created_timestamp?: string | null;
+};
+
+export type ParallelVariant = {
+  id: string;
+  session_id: string;
+  name: string;
+  approach: string;
+  rationale: string;
+  suggested_prompt: string;
+  origin: "ai" | "manual";
+  status: string;
+  position: number;
+  entries: ParallelEntry[];
+  created_timestamp?: string | null;
+  updated_timestamp?: string | null;
+};
+
+export type ParallelFollowup = {
+  id: string;
+  session_id: string;
+  question: string;
+  answer_payload?: Answer | null;
+  created_timestamp?: string | null;
+};
+
+export type ParallelSession = {
+  id: string;
+  project_id?: string | null;
+  question: string;
+  status: string;
+  overview_markdown?: string | null;
+  overview_payload?: Answer | null;
+  synthesis_markdown?: string | null;
+  synthesis_payload?: Answer | null;
+  variants: ParallelVariant[];
+  followups?: ParallelFollowup[];
+  created_timestamp?: string | null;
+  updated_timestamp?: string | null;
+};
+
+export type ParallelSessionSummary = {
+  id: string;
+  project_id?: string | null;
+  question: string;
+  status: string;
+  variant_count: number;
+  updated_timestamp?: string | null;
 };
 
 export type NoteCitation = {

@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frontend-only", action="store_true", help="Start only Vite.")
     parser.add_argument("--api-port", type=int, default=8000, help="FastAPI port.")
     parser.add_argument("--frontend-port", type=int, default=5173, help="Vite port.")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host for the API to bind to. Defaults to 127.0.0.1 (localhost only) because "
+        "the API has no authentication; use 0.0.0.0 only behind a trusted network/proxy.",
+    )
     return parser.parse_args()
 
 
@@ -74,6 +80,8 @@ def main() -> None:
                     "uvicorn",
                     "api.product_main:app",
                     "--reload",
+                    "--host",
+                    str(args.host),
                     "--port",
                     str(args.api_port),
                 ],

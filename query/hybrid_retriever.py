@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from extraction.embedding_engine import EmbeddingEngine
-from query.kg_retriever import Evidence, KGRetriever, SearchHit
+from query.kg_retriever import Evidence, KGRetriever, SearchHit, effective_hit_score
 from storage.metadata_db import MetadataDB
 
 
@@ -85,7 +85,10 @@ class HybridRetriever:
                         )
                     )
 
-        ordered = sorted(merged.values(), key=lambda item: item.score, reverse=True)
+        # Final ordering applies the citation/recency nudge (kept out of item.score,
+        # which feeds the context budget) so well-cited/recent papers edge ahead among
+        # comparably relevant hits without overriding a clearly better lexical match.
+        ordered = sorted(merged.values(), key=effective_hit_score, reverse=True)
         return ordered[: max(0, int(limit))]
 
     def find_embedding_matches(self, query: str) -> list[EmbeddingMatch]:

@@ -216,30 +216,32 @@ export function ExtractionPage() {
             {activeProject ? `Projekt: ${activeProject} — PDFs & Webquellen` : "Alle Papers — globale Bibliothek"}
           </p>
         </div>
-        {totalPdfCount > 0 && (
-          <div className="extraction-overview-badge">
-            <strong>{extractedPdfCount}/{totalPdfCount}</strong>
-            <span>extrahiert</span>
-            {noPdfCount > 0 && <span className="muted">+{noPdfCount} ohne PDF</span>}
+        <div className="extraction-header-actions">
+          {totalPdfCount > 0 && (
+            <div className="extraction-overview-badge">
+              <strong>{extractedPdfCount}/{totalPdfCount}</strong>
+              <span>extrahiert</span>
+              {noPdfCount > 0 && <span className="muted">+{noPdfCount} ohne PDF</span>}
+            </div>
+          )}
+          <div className="segmented extraction-tabs">
+            <button className={activeTab === "run" ? "active" : ""} type="button" onClick={() => setActiveTab("run")}>
+              <Play size={16} />
+              <span>Ausführen</span>
+            </button>
+            <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>
+              <FileSearch size={16} />
+              <span>PDFs</span>
+            </button>
+            <button className={activeTab === "vocabulary" ? "active" : ""} type="button" onClick={() => setActiveTab("vocabulary")}>
+              <BookOpenCheck size={16} />
+              <span>Vokabular</span>
+            </button>
+            <button className={activeTab === "history" ? "active" : ""} type="button" onClick={() => setActiveTab("history")}>
+              <Database size={16} />
+              <span>Historie</span>
+            </button>
           </div>
-        )}
-        <div className="segmented extraction-tabs">
-          <button className={activeTab === "run" ? "active" : ""} type="button" onClick={() => setActiveTab("run")}>
-            <Play size={16} />
-            <span>Ausführen</span>
-          </button>
-          <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>
-            <FileSearch size={16} />
-            <span>PDFs</span>
-          </button>
-          <button className={activeTab === "vocabulary" ? "active" : ""} type="button" onClick={() => setActiveTab("vocabulary")}>
-            <BookOpenCheck size={16} />
-            <span>Vokabular</span>
-          </button>
-          <button className={activeTab === "history" ? "active" : ""} type="button" onClick={() => setActiveTab("history")}>
-            <Database size={16} />
-            <span>Historie</span>
-          </button>
         </div>
       </div>
 

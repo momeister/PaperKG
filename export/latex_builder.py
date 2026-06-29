@@ -9,6 +9,7 @@ in the text (rendered as ``[1]``) and listed in the bibliography.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Iterable
 
 # LaTeX special characters that must be escaped in body text. Order is irrelevant
@@ -26,10 +27,40 @@ _ESCAPE = {
     "^": r"\textasciicircum{}",
 }
 
+# Non-ASCII symbol/format categories pdflatex (utf8/T1) cannot typeset: emoji & misc
+# symbols (So, e.g. ⏳), math symbols (Sm, e.g. ∗ U+2217, ×, −, ≤, →), modifier/currency
+# symbols (Sk/Sc), format & private/unassigned (Cf/Cs/Co/Cn). ASCII is never touched
+# here (its specials — # & $ _ ~ ^ % — are escaped by ``latex_escape``), so legitimate
+# ``+ = < > | ~`` (also category Sm) survive.
+_DROP_CATEGORIES = {"So", "Sm", "Sk", "Sc", "Cf", "Cs", "Co", "Cn"}
+
+
+def _strip_unsupported(text: str) -> str:
+    """Drop non-ASCII characters pdflatex (utf8/T1) has no glyph for — emoji, symbols.
+
+    Harvested web titles like "What Studies Say ⏳" or "…Nutzung? ∗" otherwise abort
+    compilation (``! LaTeX Error: Unicode character … ``). German umlauts/ß, accented
+    Latin letters, dashes, curly quotes and the ellipsis are kept; only pictographic and
+    math/format symbols are removed.
+    """
+    out: list[str] = []
+    for ch in text:
+        cp = ord(ch)
+        if cp < 0x80:
+            out.append(ch)  # ASCII is always safe (specials escaped downstream)
+            continue
+        # Astral-plane emoji and joiners that ride along with emoji sequences.
+        if cp >= 0x1F000 or cp == 0x200D or 0xFE00 <= cp <= 0xFE0F:
+            continue
+        if unicodedata.category(ch) in _DROP_CATEGORIES:
+            continue
+        out.append(ch)
+    return "".join(out)
+
 
 def latex_escape(text: str) -> str:
-    """Escape LaTeX-special characters in plain text."""
-    return re.sub(r"[\\&%$#_{}~^]", lambda m: _ESCAPE[m.group()], text)
+    """Escape LaTeX-special characters in plain text (after dropping emoji/symbols)."""
+    return re.sub(r"[\\&%$#_{}~^]", lambda m: _ESCAPE[m.group()], _strip_unsupported(text))
 
 
 def _citekey(paper_id: str) -> str:
@@ -132,15 +163,20 @@ def markdown_to_latex_body(doc: str, citations: CitationIndex) -> str:
         line = raw.rstrip()
         h2 = re.match(r"^##\s+(.+)", line)
         h3 = re.match(r"^###\s+(.+)", line)
+        h4 = re.match(r"^#{4,6}\s+(.+)", line)
         bullet = re.match(r"^\s*(?:[-*•])\s+(.+)", line)
         numbered = re.match(r"^\s*\d+\.\s+(.+)", line)
-        heading = h2 or h3
+        heading = h2 or h3 or h4
         item = bullet or numbered
         if heading is not None:
             flush_para()
             flush_list()
             title = _inline(heading.group(1).strip(), citations)
-            out.append(f"\\{'section' if h2 else 'subsection'}{{{title}}}")
+            # h4+ → unnumbered \subsubsection* so deeper headings render as real
+            # subheadings instead of leaking literal "####" into the body, without
+            # cluttering the numbered ToC.
+            cmd = "section" if h2 else "subsection" if h3 else "subsubsection*"
+            out.append(f"\\{cmd}{{{title}}}")
             out.append("")
         elif item is not None:
             flush_para()
@@ -203,8 +239,15 @@ def _arxiv_id(paper_id: str) -> str | None:
 
 
 def _bib_value(value: str) -> str:
-    """Make a string safe inside a brace-delimited BibTeX field."""
-    return value.replace("{", "(").replace("}", ")").replace("\\", "/").replace("%", "\\%")
+    """Make a string safe inside a brace-delimited BibTeX field.
+
+    Braces are structural in BibTeX, so they are neutralized to parentheses; the
+    remaining LaTeX specials are escaped exactly as in body text. A raw ``#`` in a
+    title (e.g. "C# …") otherwise reaches the engine via the bibliography and aborts
+    with ``! Illegal parameter number in definition of \\NewValue``.
+    """
+    value = _strip_unsupported(value).replace("{", "(").replace("}", ")")
+    return re.sub(r"[\\&%$#_~^]", lambda m: _ESCAPE[m.group()], value)
 
 
 def build_latex_document(
@@ -221,10 +264,12 @@ def build_latex_document(
         r"\usepackage[utf8]{inputenc}",
         r"\usepackage[T1]{fontenc}",
         r"\usepackage[ngerman]{babel}",
+        r"\usepackage[a4paper,margin=2.5cm]{geometry}",
         r"\usepackage{lmodern}",
         r"\usepackage{microtype}",
         r"\usepackage{booktabs}",
         r"\usepackage{longtable}",
+        r"\usepackage{float}",
         r"\usepackage[hidelinks]{hyperref}",
     ]
     if use_graphics:
@@ -255,15 +300,19 @@ def build_latex_document(
         r"\vfill",
         r"{\large \today\par}",
         r"\end{titlepage}",
+        # Ragged bottom stops LaTeX from vertically stretching short pages into large gaps.
+        r"\raggedbottom",
         r"\tableofcontents",
         r"\newpage",
         body_latex,
     ]
     if appendix:
+        parts.append(r"\clearpage")
         parts.append(r"\appendix")
         parts.append(r"\section{Anhang: Forschungsstruktur, Diagramme und Tabellen}")
         parts.extend(appendix)
     if has_bibliography:
+        parts.append(r"\clearpage")
         parts.append(r"\printbibliography[title={Quellenverzeichnis}]")
     parts.append(r"\end{document}")
     return "\n".join(parts) + "\n"

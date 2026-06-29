@@ -132,6 +132,9 @@ class BenchmarkPdfResolver:
         return _dedupe_candidates(candidates), warnings
 
     def _download_pdf(self, url: str) -> tuple[bytes, str]:
+        from harvester.url_guard import assert_safe_public_url
+
+        assert_safe_public_url(url)  # SSRF guard: candidate URLs come from external APIs
         headers = {"User-Agent": "ScienceKG-Benchmark/1.0"}
         with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=headers) as client:
             response = client.get(url)

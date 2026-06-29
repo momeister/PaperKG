@@ -5,6 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field as dataclass_field
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from graph.paper_ingestion import extract_citation_ids, paper_id
@@ -101,6 +102,7 @@ class Source:
     year: int | None = None
     doi: str | None = None
     url: str | None = None
+    citation_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +111,7 @@ class Source:
             "year": self.year,
             "doi": self.doi,
             "url": self.url,
+            "citation_count": self.citation_count,
         }
 
 
@@ -443,6 +446,7 @@ def _source_from_paper(record: dict[str, Any]) -> Source:
         year=_coerce_int(record.get("year")),
         doi=str(record.get("doi")) if record.get("doi") else None,
         url=str(record.get("landing_page_url") or record.get("pdf_url") or "") or None,
+        citation_count=max(0, _coerce_int(record.get("citation_count")) or 0),
     )
 
 
@@ -640,8 +644,76 @@ def _score_text(
     return float(score)
 
 
+_DEFAULT_RANKING_WEIGHTS = {
+    "citation_weight": 0.4,
+    "recency_weight": 0.15,
+    "recency_window_years": 5,
+    "max_bonus": 1.5,
+}
+
+
+def _ranking_weights() -> dict[str, float]:
+    """Citation/recency ranking weights from ``config.yaml`` (cached, defaults on miss).
+
+    The block is optional: ``retrieval: { ranking: { citation_weight, recency_weight,
+    recency_window_years, max_bonus } }``. Any missing key falls back to the default so
+    the nudge stays a light, relevance-preserving tie-breaker.
+    """
+    cached = getattr(_ranking_weights, "_cache", None)
+    if cached is not None:
+        return cached
+    weights = dict(_DEFAULT_RANKING_WEIGHTS)
+    try:
+        import yaml  # local import: keep PyYAML off the module-load path
+
+        with open("config.yaml", "r", encoding="utf-8") as handle:
+            cfg = yaml.safe_load(handle) or {}
+        block = ((cfg.get("retrieval") or {}).get("ranking") or {})
+        for key in weights:
+            if block.get(key) is not None:
+                weights[key] = float(block[key])
+    except Exception:  # noqa: BLE001 - config is optional; defaults are fine
+        pass
+    setattr(_ranking_weights, "_cache", weights)
+    return weights
+
+
+def _citation_recency_bonus(source: Source, *, now_year: int | None = None) -> float:
+    """Small additive nudge for well-cited and recent papers.
+
+    Light by design: citations contribute ``citation_weight * log10(count+1)`` (compressed,
+    capped via ``max_bonus``), recency adds a bounded ``recency_weight`` for papers inside
+    the window and **nothing** for older ones — never a penalty ("new ≠ better, just
+    up to date"). The bonus is far smaller than typical lexical scores, so a less-cited
+    paper that matches the question better still wins.
+    """
+    weights = _ranking_weights()
+    bonus = weights["citation_weight"] * math.log10(max(0, source.citation_count) + 1)
+    window = max(1.0, weights["recency_window_years"])
+    if source.year:
+        current = now_year or datetime.now(timezone.utc).year
+        age = current - int(source.year)
+        if age < 0:  # future-dated metadata: treat as current, no extra reward
+            age = 0
+        recency_term = max(0.0, 1.0 - (age / window))
+        bonus += weights["recency_weight"] * recency_term
+    return min(bonus, weights["max_bonus"])
+
+
+def effective_hit_score(hit: SearchHit, *, now_year: int | None = None) -> float:
+    """Relevance score plus the citation/recency nudge — used for final ordering only.
+
+    ``hit.score`` itself is left untouched (it feeds the context budget and is shown as
+    the relevance score); this combined value only decides ranking order.
+    """
+    return float(hit.score) + _citation_recency_bonus(hit.source, now_year=now_year)
+
+
 def _rank_hits(hits: Iterable[SearchHit], tokens: list[str]) -> list[SearchHit]:
-    ordered = sorted(hits, key=lambda item: item.score, reverse=True)
+    now_year = datetime.now(timezone.utc).year
+    hits = list(hits)
+    eff = {id(hit): effective_hit_score(hit, now_year=now_year) for hit in hits}
+    ordered = sorted(hits, key=lambda item: eff[id(item)], reverse=True)
     specific_tokens = [token for token in tokens if token not in LOW_SIGNAL_TERMS]
     if len(specific_tokens) < 2:
         return ordered
@@ -660,7 +732,7 @@ def _rank_hits(hits: Iterable[SearchHit], tokens: list[str]) -> list[SearchHit]:
             new_coverage = len((hit_tokens & set(specific_tokens)) - covered_tokens)
             if new_coverage <= 0:
                 continue
-            key = (new_coverage, hit.score)
+            key = (new_coverage, eff[id(hit)])
             if best_key is None or key > best_key:
                 best_key = key
                 best_hit = hit

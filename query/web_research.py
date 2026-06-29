@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from harvester.url_guard import is_safe_public_url
 from query.discovery import analyze_topic
 from query.llm_router import LLMRouter
 from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text, wrap_as_untrusted
@@ -89,6 +90,8 @@ def _summarize_source(
 
 
 async def _fetch_clean(client: httpx.AsyncClient, url: str, max_len: int) -> tuple[str, list[str], str | None]:
+    if not await asyncio.to_thread(is_safe_public_url, url):
+        return "", [], "URL verweist nicht auf eine öffentliche Adresse"
     try:
         response = await client.get(url)
         response.raise_for_status()

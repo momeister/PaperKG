@@ -328,3 +328,14 @@ embedding:
   table: "entity_embeddings"
   top_k: 10
   similarity_threshold: 0.7
+
+retrieval:
+  # Light, relevance-preserving nudge applied when ordering retrieved papers. Lexical
+  # relevance stays dominant — a less-cited paper that matches the question better still
+  # wins; these only break ties among comparably relevant hits. "New" gives a small
+  # bonus (stay up to date), never a penalty for being old.
+  ranking:
+    citation_weight: 0.4        # bonus = citation_weight * log10(citation_count + 1)
+    recency_weight: 0.15        # max bonus for a current-year paper; decays to 0 over the window
+    recency_window_years: 5     # papers older than this get no recency bonus (and no penalty)
+    max_bonus: 1.5              # hard cap so the nudge never overrides relevance

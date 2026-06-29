@@ -6,6 +6,7 @@ ZIP fallback when no LaTeX engine is present, and the graceful ComfyUI skip.
 from __future__ import annotations
 
 import io
+import unicodedata
 import zipfile
 
 import pytest
@@ -14,6 +15,8 @@ from export import ExportOptions, build_export
 from export.latex_builder import (
     CitationIndex,
     build_bibfile,
+    build_latex_document,
+    latex_escape,
     markdown_to_latex_body,
 )
 from export import pdf_render
@@ -68,6 +71,85 @@ def test_markdown_to_latex_body_sections_and_citations() -> None:
     assert r"\begin{itemize}" in body
 
 
+def test_markdown_to_latex_body_h4_becomes_subsubsection() -> None:
+    # A `####` heading must render as a real (unnumbered) subsubsection, never leak as the
+    # literal "####" into the body text.
+    body = markdown_to_latex_body("#### Die Rolle der Verstärkung\n\nText.", CitationIndex([]))
+    assert r"\subsubsection*{Die Rolle der Verstärkung}" in body
+    assert "####" not in body
+
+
+def test_build_latex_document_paginates_appendix_and_bibliography() -> None:
+    tex = build_latex_document(
+        title="T",
+        body_latex="Body",
+        has_bibliography=True,
+        use_forest=False,
+        use_graphics=True,
+        appendix_blocks=[r"\begin{figure}[H]\end{figure}"],
+    )
+    # Geometry/float/raggedbottom keep figures placed and pages from stretching into gaps.
+    assert r"\usepackage[a4paper,margin=2.5cm]{geometry}" in tex
+    assert r"\usepackage{float}" in tex
+    assert r"\raggedbottom" in tex
+    # Appendix and bibliography each start on a fresh page (no float-starvation gaps).
+    appendix_at = tex.index(r"\appendix")
+    bib_at = tex.index(r"\printbibliography")
+    assert tex.rindex(r"\clearpage", 0, appendix_at) >= 0
+    assert tex.rindex(r"\clearpage", 0, bib_at) < bib_at
+    assert tex.count(r"\clearpage") >= 2
+
+
+def test_latex_escape_strips_emoji_keeps_german() -> None:
+    # An emoji-bearing harvested title used to abort pdflatex
+    # (``! LaTeX Error: Unicode character ⏳ (U+23F3)``). Emoji/symbols must be
+    # dropped while German umlauts/ß, accented Latin and dashes survive.
+    title = "Impact Of Social Media: What Studies Say ⏳ \U0001f600 — Über Größe"
+    escaped = latex_escape(title)
+    assert "⏳" not in escaped and "\U0001f600" not in escaped
+    assert all(unicodedata.category(c) != "So" for c in escaped)
+    assert "Über Größe" in escaped and "—" in escaped
+
+
+def test_latex_escape_strips_math_symbols_keeps_ascii_operators() -> None:
+    # ∗ (U+2217, category Sm) is a footnote-marker artifact that aborts pdflatex
+    # (``! LaTeX Error: Unicode character ∗``). Non-ASCII Sm symbols are dropped,
+    # but ASCII operators (also category Sm) such as + = < > must be preserved.
+    escaped = latex_escape("…Nutzung? ∗ × − ≤ → und a + b = c < d > e")
+    assert "∗" not in escaped and "×" not in escaped and "≤" not in escaped and "→" not in escaped
+    assert "a + b = c < d > e" in escaped
+
+
+def test_build_latex_document_title_has_no_emoji() -> None:
+    tex = build_latex_document(
+        title="Studie ⏳ zur Aufmerksamkeit",
+        body_latex="x",
+        has_bibliography=False,
+        use_forest=False,
+        use_graphics=False,
+    )
+    assert "⏳" not in tex
+    assert all(unicodedata.category(c) != "So" for c in tex)
+
+
+def test_build_bibfile_strips_emoji_from_title() -> None:
+    bib = build_bibfile([{"paper_id": "grey::x", "title": "What Studies Say ⏳"}])
+    assert "⏳" not in bib
+    assert all(unicodedata.category(c) != "So" for c in bib)
+
+
+def test_build_bibfile_escapes_hash_and_underscore() -> None:
+    # A raw '#' in a title reached the engine via the bibliography and aborted with
+    # "Illegal parameter number in definition of \\NewValue"; '_' in a grey:: note
+    # field would trigger a math-mode error. Both must be escaped.
+    bib = build_bibfile([{"paper_id": "grey::grey_5d5c2", "title": "C# and A∗ Formative Analysis"}])
+    assert "∗" not in bib
+    assert "C\\#" in bib  # hash escaped in the title
+    assert "grey::grey\\_5d5c2" in bib  # underscore escaped in the note field
+    # No unescaped '#' or bare '_' survive anywhere in the .bib.
+    assert "C#" not in bib
+
+
 def test_build_bibfile_entries() -> None:
     bib = build_bibfile(SOURCES)
     assert "@online{arxiv_2310_12345," in bib
@@ -100,6 +182,48 @@ def test_compile_to_pdf_without_engine_returns_none(tmp_path, monkeypatch) -> No
     result = compile_to_pdf(tmp_path)
     assert result.pdf_bytes is None
     assert result.engine is None
+
+
+def test_find_engine_prefers_pdflatex_over_latexmk_without_perl(monkeypatch) -> None:
+    # On a MiKTeX box the backend's PATH usually has no Perl, so latexmk (a Perl script)
+    # would fail. find_engine must therefore pick the direct pdflatex engine.
+    def which(tool):
+        return {"pdflatex": r"C:\miktex\pdflatex.exe", "latexmk": r"C:\miktex\latexmk.exe"}.get(tool)
+
+    monkeypatch.setattr(pdf_render.shutil, "which", which)
+    monkeypatch.setattr(pdf_render, "_miktex_bin_dirs", lambda: [])
+    assert pdf_render.find_engine() == r"C:\miktex\pdflatex.exe"
+
+
+def test_find_engine_uses_latexmk_only_when_perl_present(monkeypatch) -> None:
+    def which(tool):
+        return {"latexmk": r"C:\tl\latexmk.exe", "perl": r"C:\tl\perl.exe"}.get(tool)
+
+    monkeypatch.setattr(pdf_render.shutil, "which", which)
+    monkeypatch.setattr(pdf_render, "_miktex_bin_dirs", lambda: [])
+    assert pdf_render.find_engine() == r"C:\tl\latexmk.exe"
+
+
+def test_latex_error_excerpt_pulls_error_lines() -> None:
+    log = "blah\n! LaTeX Error: File `forest.sty' not found.\nl.12 \\usepackage{forest}\nmore noise"
+    excerpt = pdf_render.latex_error_excerpt(log)
+    assert "! LaTeX Error" in excerpt
+    assert "forest.sty" in excerpt
+
+
+def test_build_export_pdf_failure_surfaces_log_excerpt(tmp_path, monkeypatch) -> None:
+    # An engine *is* present but compilation fails: the warning must include the reason.
+    monkeypatch.setattr(
+        "export.builder.compile_to_pdf",
+        lambda *a, **k: pdf_render.CompileResult(None, "! LaTeX Error: something broke", "pdflatex"),
+    )
+    result = build_export(
+        root_question="Hauptfrage", document=DOC, nodes=NODES,
+        export_format="pdf", exports_dir=tmp_path,
+        options=ExportOptions(charts=False, comfyui_images=False),
+    )
+    assert result.media_type == "application/zip"
+    assert any("something broke" in w for w in result.warnings)
 
 
 def test_build_export_pdf_falls_back_to_zip_without_engine(tmp_path, monkeypatch) -> None:

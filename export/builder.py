@@ -21,7 +21,7 @@ from export.latex_builder import (
     build_latex_document,
     markdown_to_latex_body,
 )
-from export.pdf_render import compile_to_pdf
+from export.pdf_render import compile_to_pdf, latex_error_excerpt
 
 
 @dataclass
@@ -165,7 +165,7 @@ def build_export(
             png = comfyui_client.generate_image(prompt, work_dir / "comfyui_cover.png")
             if png is not None:
                 appendix.append("\n".join([
-                    r"\begin{figure}[h]", r"\centering",
+                    r"\begin{figure}[H]", r"\centering",
                     r"\includegraphics[width=0.8\textwidth]{comfyui_cover.png}",
                     r"\caption{KI-generierte Illustration (ComfyUI).}", r"\end{figure}",
                 ]))
@@ -211,10 +211,12 @@ def build_export(
                 "(winget install MiKTeX.MiKTeX) und starte das Backend neu."
             )
         else:
+            reason = latex_error_excerpt(result.log)
             warnings.append(
                 f"PDF-Kompilierung mit {Path(result.engine).name} fehlgeschlagen – ZIP mit "
-                ".tex/.bib + compile.log geliefert. Bei frisch installiertem MiKTeX die "
-                "Paket-Nachinstallation einmal zulassen oder das Backend neu starten."
+                ".tex/.bib + compile.log geliefert. Beim ersten Lauf kann die MiKTeX-"
+                "Paket-Nachinstallation länger dauern; ggf. erneut exportieren."
+                + (f"\nGrund (Auszug):\n{reason}" if reason.strip() else "")
             )
 
     # zip fallback (and explicit "zip" format)

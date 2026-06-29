@@ -7,12 +7,14 @@ import json
 from types import SimpleNamespace
 
 from query import auto_harvester
-from query.auto_harvester import _extract_pdf_into_db, harvest_for_question
+from query.auto_harvester import _extract_pdf_into_db, harvest_for_question, ingest_paper_record
 from query.research_tree import (
     ResearchTreeRunner,
     _normalize_question,
+    _normalize_synthesis_body,
     _strip_unknown_citations,
 )
+from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
 
@@ -140,6 +142,54 @@ def test_synthesis_steps_promote_depth2_to_subsections() -> None:
     assert "tiefer befund 2a1" in sub_2a["user"]
 
 
+# --------------------------------------------------------------------------- #
+# Synthesis body normalization — strip the LLM's restated heading (the cause of the
+# duplicate-looking ToC entries) and demote/normalize stray ####/## headings.
+# --------------------------------------------------------------------------- #
+
+def test_normalize_strips_leading_restated_heading() -> None:
+    # The LLM restates our injected "### {Frage}" as its own ### heading → must be dropped.
+    body = "### Die Rolle des Systems\n\nText hier."
+    out = _normalize_synthesis_body(body, "### Welche Rolle spielt das System?", keep_subsections=False)
+    assert not out.startswith("#")
+    assert out.startswith("Text hier.")
+
+
+def test_normalize_demotes_stray_chapter_headings() -> None:
+    body = "Absatz.\n\n## Neues Kapitel\n\nMehr Text."
+    out_lines = _normalize_synthesis_body(body, "### Unterabschnitt", keep_subsections=False).split("\n")
+    # Exact-line check (a "## …" substring would also match the demoted "#### …" line).
+    assert "## Neues Kapitel" not in out_lines
+    assert "#### Neues Kapitel" in out_lines
+
+
+def test_normalize_keep_subsections_uses_h3_and_drops_h4_literals() -> None:
+    body = "#### Erster Unterabschnitt\n\nText.\n\n## Zweiter\n\nText2."
+    out = _normalize_synthesis_body(body, "## Kapitel", keep_subsections=True)
+    assert "### Erster Unterabschnitt" in out
+    assert "### Zweiter" in out
+    assert "####" not in out  # h4 never leaks through in the flat-chapter step
+
+
+def test_render_step_falls_back_to_node_answer_when_llm_empty() -> None:
+    class EmptyRouter:
+        def chat(self, messages, provider=None, overrides=None):
+            return ""  # synthesis call yields nothing
+
+    runner = ResearchTreeRunner(llm_router=EmptyRouter())  # type: ignore[arg-type]
+    step = {
+        "heading": "### Unterfrage",
+        "system": "s",
+        "user": "u",
+        "fallback": "Belegter Befund [arxiv:1234.5678].",
+    }
+    out = runner._render_step(step, frozenset({"arxiv:1234.5678"}), None, None)
+    # An answered question still renders content (the node's own answer), never an empty section.
+    assert "### Unterfrage" in out
+    assert "Belegter Befund" in out
+    assert "[arxiv:1234.5678]" in out
+
+
 def test_synthesize_sync_preserves_known_and_strips_unknown_citations() -> None:
     class FakeRouter:
         def chat(self, messages, provider=None, overrides=None):
@@ -258,3 +308,48 @@ async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monk
         ).fetchall()
     # No PDF + no router → synthetic title/abstract extraction.
     assert rows and rows[0][0] == "auto-harvest"
+
+
+# --------------------------------------------------------------------------- #
+# On-demand ingest — download a cited paper's PDF and record the local path so the
+# citation no longer reports pdf_available:false (the "Kein PDF verfügbar" limbo).
+# --------------------------------------------------------------------------- #
+
+class _FakePdfResponse:
+    content = b"%PDF-1.4 minimal pdf bytes"
+    headers = {"content-type": "application/pdf"}
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _FakePdfClient:
+    async def get(self, url, follow_redirects=True, timeout=30.0):
+        return _FakePdfResponse()
+
+
+async def test_ingest_paper_record_downloads_and_records_local_pdf(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    storage = FileManager(str(pdf_dir))
+
+    paper = {
+        "id": "arxiv:7", "source": "arxiv", "source_id": "7",
+        "title": "Paper Seven", "abstract": "Abstract.",
+        "pdf_url": "https://example.org/seven.pdf",  # no DOI → OA resolver is a no-op
+    }
+
+    with MetadataDB(str(db_path)) as db:
+        db.insert_paper(paper)
+        result = await ingest_paper_record(
+            paper, db, storage, _FakePdfClient(), extract=False,  # type: ignore[arg-type]
+        )
+        stored = db.get_paper("arxiv:7")
+
+    assert result["has_local_pdf"] is True
+    assert result["pdf_path"]
+    # The DB row now points at the downloaded local PDF, so has_local_pdf resolves later.
+    assert stored is not None
+    assert str(stored.get("pdf_url") or "").endswith(".pdf")
+    assert stored["pdf_url"] != paper["pdf_url"]  # local path, not the remote URL

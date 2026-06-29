@@ -5,14 +5,17 @@ import io
 import json
 import os
 import re
+import secrets
 import time
+import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -32,6 +35,8 @@ from harvester.core_client import CoreApiKeyMissing, CoreClient, CoreConfig
 from harvester.crossref_client import CrossrefClient, CrossrefConfig
 from harvester.doaj_client import DoajClient, DoajConfig
 from harvester.europepmc_client import EuropePMCClient, EuropePMCConfig
+from harvester.oa_resolver import resolve_oa_pdf_url
+from harvester.url_guard import is_safe_public_url
 from harvester.openalex_client import OpenAlexClient
 from harvester.semantic_scholar_client import SemanticScholarClient
 from harvester.unpaywall_client import UnpaywallClient, UnpaywallConfig
@@ -46,13 +51,17 @@ from query.discovery import analyze_paper, analyze_topic
 from query.hybrid_retriever import HybridRetriever
 from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
+from query.auto_harvester import ingest_paper_record
+from query.auto_answer import auto_research_answer
 from query.research_tree import ResearchTreeRunner, _extract_questions
+from query import parallel_research
 from query.web_research import run_deep_research
 from export import ExportOptions, build_export
 from query.source_verifier import find_pdf_path
 from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
+from storage.path_safety import PathSafetyError, ensure_safe_path
 
 
 PROJECTS_PATH = Path("data/projects.json")
@@ -92,6 +101,31 @@ app.add_middleware(
 
 app.include_router(phase4_main.app.router)
 
+
+@app.exception_handler(PathSafetyError)
+async def _path_safety_handler(request: Request, exc: PathSafetyError) -> Response:
+    """Turn a rejected client-supplied path into a clean 400 instead of a 500."""
+    return Response(content=str(exc), status_code=400, media_type="text/plain")
+
+
+# Optional, opt-in API token. The product API has no user accounts — it is meant to
+# run on localhost for a single user. If SCIENCEKG_API_TOKEN is set, every request
+# (except CORS preflight and the health probe) must carry a matching bearer token;
+# if it is unset (the default) the API stays open so local dev is unchanged.
+_AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+
+
+@app.middleware("http")
+async def _optional_token_auth(request: Request, call_next):
+    token = os.getenv("SCIENCEKG_API_TOKEN", "").strip()
+    if token and request.method != "OPTIONS" and request.url.path not in _AUTH_EXEMPT_PATHS:
+        header = request.headers.get("authorization", "")
+        provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
+        if not provided or not secrets.compare_digest(provided, token):
+            return Response(content="Unauthorized", status_code=401, media_type="text/plain")
+    return await call_next(request)
+
+
 llm_router = LLMRouter.from_config_file("config.yaml")
 parser_router = ParserRouter()
 embedding_engine = EmbeddingEngine()
@@ -122,6 +156,16 @@ class HarvestDownloadRequest(BaseModel):
     papers: list[dict[str, Any]]
     download_pdfs: bool = True
     project_id: str | None = None
+    projects_path: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+
+
+class PaperIngestRequest(BaseModel):
+    paper_id: str = Field(min_length=1)
+    project_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
     projects_path: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
@@ -164,6 +208,30 @@ class DeepResearchRequest(BaseModel):
     max_sources: int = Field(default=12, ge=1, le=30)
 
 
+class AutoAnswerRequest(BaseModel):
+    """Answer a workspace question, auto-harvesting papers + web sources if it is weak."""
+    question: str = Field(min_length=1, max_length=4000)
+    # Clean question for paper/web search + related-topic analysis (the answered question
+    # may carry an answer-style hint like a verbosity instruction). Falls back to question.
+    search_question: str | None = None
+    project_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    limit: int = Field(default=12, ge=1, le=25)
+    paper_ids: list[str] = Field(default_factory=list)
+    priority_paper_ids: list[str] = Field(default_factory=list)
+    answer_context_mode: str = Field(default="kg", pattern="^(kg|pdf_if_fits)$")
+    conversation_context: list[dict[str, Any]] = Field(default_factory=list)
+    grey_source_ids: list[str] = Field(default_factory=list)
+    include_project_grey: bool = False
+    llm_overrides: dict[str, Any] = Field(default_factory=dict)
+    force: bool = False
+    max_related_topics: int = Field(default=5, ge=0, le=8)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+    projects_path: str | None = None
+
+
 class ResearchTreeRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     project_id: str | None = None
@@ -179,6 +247,85 @@ class ResearchTreeRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
     initial_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    session_id: str | None = None
+
+
+class ResearchSessionUpsertRequest(BaseModel):
+    """Authoritative overwrite of a persisted deep-research tree from the frontend.
+
+    Sent on completion so the server copy carries the verification-enriched nodes the
+    client computed (the streaming persistence only has the bare answers)."""
+    project_id: str | None = None
+    question: str = ""
+    status: str = "done"
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class ParallelStartRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    variant_count: int = Field(default=3, ge=1, le=6)
+    paper_ids: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+
+
+class ParallelVariantCreateRequest(BaseModel):
+    name: str = Field(default="Variante", max_length=400)
+    approach: str = ""
+    rationale: str = ""
+    suggested_prompt: str = ""
+    origin: str = "manual"
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class ParallelVariantUpdateRequest(BaseModel):
+    name: str | None = None
+    approach: str | None = None
+    rationale: str | None = None
+    suggested_prompt: str | None = None
+    status: str | None = None
+    position: int | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class ParallelEntryRequest(BaseModel):
+    content: str = Field(min_length=1)
+    request_feedback: bool = True
+    paper_ids: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+
+
+class ParallelSynthesizeRequest(BaseModel):
+    paper_ids: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+
+
+class ParallelGenerateRequest(BaseModel):
+    variant_count: int = Field(default=3, ge=1, le=6)
+    paper_ids: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+
+
+class ParallelFollowupRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    variant_count: int = Field(default=1, ge=0, le=4)
+    paper_ids: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -663,6 +810,89 @@ def paper_meta(
     }
 
 
+def _ingest_extract_background(
+    paper_id: str,
+    pdf_path: str,
+    metadata_db_path: str,
+    provider: str | None,
+    model: str | None,
+) -> None:
+    """Run Phase-3 extraction for a freshly-ingested paper after the response is sent."""
+    try:
+        from parsing.parser_router import ParserRouter
+        from query.auto_harvester import _extract_pdf_into_db
+
+        parser_router = ParserRouter()
+        with MetadataDB(metadata_db_path) as db:
+            try:
+                existing = db._execute(
+                    "SELECT id FROM extraction_results WHERE paper_id = ? AND extraction_status = 'success' LIMIT 1",
+                    [paper_id],
+                ).fetchone()
+            except Exception:
+                existing = None
+            if existing is None:
+                _extract_pdf_into_db(
+                    db, extraction_pipeline, parser_router, paper_id, pdf_path, provider, model
+                )
+    except Exception:
+        pass
+
+
+@app.post("/paper/ingest")
+async def paper_ingest(request: PaperIngestRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """On-demand download + extract for a cited paper that has no local PDF yet.
+
+    Lets a citation click resolve to a real, project-local PDF instead of the "no PDF" limbo:
+    downloads the PDF (resolving an open-access URL by DOI if needed), attaches it to the
+    project, and kicks off Phase-3 extraction in the background so the click stays fast. When no
+    PDF is downloadable the response carries ``external_url`` so the UI can fall back to the
+    web/grey-source view.
+    """
+    with MetadataDB(request.metadata_db_path) as db:
+        paper = db.get_paper(request.paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail=f"Paper not found: {request.paper_id}")
+
+    storage = FileManager(request.pdf_base_dir)
+    headers = {"User-Agent": "ScienceKG/ingest (local-development)"}
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, headers=headers) as client:
+        with MetadataDB(request.metadata_db_path) as db:
+            result = await ingest_paper_record(
+                paper, db, storage, client,
+                provider=request.provider, model=request.model,
+                extract=False,  # extraction is scheduled as a background task below
+            )
+
+    canonical_id = str(result.get("id") or request.paper_id)
+    has_pdf = bool(result.get("has_local_pdf"))
+    pdf_path = result.get("pdf_path")
+
+    attached = False
+    if has_pdf:
+        attached = bool(_attach_papers_to_project(request.project_id, [canonical_id], request.projects_path))
+        if pdf_path:
+            background_tasks.add_task(
+                _ingest_extract_background,
+                canonical_id, str(pdf_path), request.metadata_db_path,
+                request.provider, request.model,
+            )
+
+    # Pre-download metadata still holds the remote/landing URL for the grey fallback.
+    doi = _clean_display_text(paper.get("doi"))
+    landing = _clean_display_text(paper.get("landing_page_url"))
+    remote_pdf_raw = _clean_display_text(paper.get("pdf_url"))
+    remote_pdf = remote_pdf_raw if re.match(r"^https?://", remote_pdf_raw, flags=re.IGNORECASE) else ""
+    external_url = landing or (f"https://doi.org/{doi}" if doi else "") or remote_pdf
+    return {
+        "paper_id": canonical_id,
+        "title": result.get("title"),
+        "has_local_pdf": has_pdf,
+        "attached": attached,
+        "external_url": external_url or None,
+    }
+
+
 def _clean_display_text(value: Any) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return "" if text.lower() in {"", "none", "null", "nan", "undefined"} else text
@@ -890,6 +1120,9 @@ async def _fetch_one_pdf(
         detail: str | None = None
 
         direct_url = paper.get("pdf_url")
+        if direct_url and not await asyncio.to_thread(is_safe_public_url, str(direct_url)):
+            detail = "Direkt-Link verweist nicht auf eine öffentliche Adresse"
+            direct_url = None
         if direct_url:
             try:
                 response = await client.get(str(direct_url))
@@ -1161,34 +1394,503 @@ async def research_deep(request: DeepResearchRequest) -> dict[str, Any]:
     )
 
 
-@app.post("/research/tree")
-async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
-    """Stream a Research Tree via Server-Sent Events.
+@app.post("/query/auto-answer")
+async def query_auto_answer(request: AutoAnswerRequest) -> StreamingResponse:
+    """Answer a workspace question, streaming progress while auto-harvesting.
 
-    Each node is sent as ``data: <json>\\n\\n`` when it completes.
-    Node payload: {id, parent_id, question, depth, status, answer, child_count?}.
+    When the first grounded answer cannot be supported locally (or ``force`` is set),
+    an LLM derives related topics and the system harvests papers (downloaded + Phase-3
+    extracted) and grey web sources for the question and those topics, then re-answers.
+
+    Each step is sent as ``data: <json>\\n\\n`` (SSE). Event ``status`` is one of
+    ``answer | planning | harvesting | reanswering | harvest_error | done``.
     """
-    runner = ResearchTreeRunner(llm_router)
+    overrides = phase4_main._sanitized_llm_overrides(request.llm_overrides)
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            async for event in auto_research_answer(
+                question=request.question,
+                llm_router=llm_router,
+                search_question=request.search_question,
+                project_id=request.project_id,
+                provider=request.provider,
+                model=request.model,
+                overrides=overrides,
+                conversation_context=request.conversation_context or None,
+                paper_ids=request.paper_ids or None,
+                priority_paper_ids=request.priority_paper_ids or None,
+                answer_context_mode=request.answer_context_mode,
+                limit=request.limit,
+                grey_source_ids=request.grey_source_ids or None,
+                include_project_grey=request.include_project_grey,
+                force=request.force,
+                max_related_topics=request.max_related_topics,
+                metadata_db_path=request.metadata_db_path,
+                pdf_base_dir=request.pdf_base_dir,
+                projects_path=str(_projects_path(request.projects_path)),
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - surface as a terminal SSE event
+            yield f"data: {json.dumps({'status': 'error', 'error': str(exc)}, ensure_ascii=False)}\n\n"
+
     return StreamingResponse(
-        runner.stream_events(
-            question=request.question,
-            depth=request.depth,
-            branches=request.branches,
-            provider=request.provider,
-            model=request.model,
-            paper_ids=request.paper_ids or None,
-            project_id=request.project_id,
-            grey_source_ids=request.grey_source_ids or None,
-            include_project_grey=request.include_project_grey,
-            auto_harvest=request.auto_harvest,
-            metadata_db_path=request.metadata_db_path,
-            pdf_base_dir=request.pdf_base_dir,
-            max_nodes=request.max_nodes,
-            initial_nodes=request.initial_nodes,
-        ),
+        stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _parse_sse_node(event: str) -> dict[str, Any] | None:
+    """Extract the node dict from one ``data: <json>\\n\\n`` SSE message."""
+    line = event.strip()
+    if not line.startswith("data:"):
+        return None
+    try:
+        node = json.loads(line[len("data:"):].strip())
+    except (ValueError, TypeError):
+        return None
+    return node if isinstance(node, dict) and node.get("id") else None
+
+
+@app.post("/research/tree")
+async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
+    """Stream a Research Tree via Server-Sent Events, persisting it server-side.
+
+    Each node is sent as ``data: <json>\\n\\n`` when it completes.
+    Node payload: {id, parent_id, question, depth, status, answer, child_count?}.
+
+    The tree is upserted into ``research_sessions`` *as it streams* (throttled, plus
+    immediately on important nodes), so a reload mid-run — or a closed browser — never
+    loses the progress. The frontend later overwrites with a verification-enriched copy
+    via ``PUT /research/session/{id}``.
+    """
+    runner = ResearchTreeRunner(llm_router)
+    session_id = request.session_id or uuid.uuid4().hex
+    db_path = request.metadata_db_path
+
+    async def persist_stream() -> AsyncIterator[str]:
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for seed in request.initial_nodes or []:
+            nid = str(seed.get("id") or "")
+            if nid and nid not in nodes_by_id:
+                order.append(nid)
+            if nid:
+                nodes_by_id[nid] = seed
+
+        def save(status: str) -> None:
+            try:
+                with MetadataDB(db_path) as db:
+                    db.upsert_research_session(
+                        session_id, request.project_id, request.question, status,
+                        [nodes_by_id[i] for i in order],
+                    )
+            except Exception:
+                pass  # persistence is best-effort; never break the live stream
+
+        save("running")  # show the session immediately, even before the first node
+        last_save = time.monotonic()
+        try:
+            async for event in runner.stream_events(
+                question=request.question,
+                depth=request.depth,
+                branches=request.branches,
+                provider=request.provider,
+                model=request.model,
+                paper_ids=request.paper_ids or None,
+                project_id=request.project_id,
+                grey_source_ids=request.grey_source_ids or None,
+                include_project_grey=request.include_project_grey,
+                auto_harvest=request.auto_harvest,
+                metadata_db_path=request.metadata_db_path,
+                pdf_base_dir=request.pdf_base_dir,
+                max_nodes=request.max_nodes,
+                initial_nodes=request.initial_nodes,
+            ):
+                yield event
+                node = _parse_sse_node(event)
+                if node is not None:
+                    nid = str(node["id"])
+                    if nid not in nodes_by_id:
+                        order.append(nid)
+                    nodes_by_id[nid] = node
+                    now = time.monotonic()
+                    important = node.get("status") in ("done", "synthesis", "llm_error")
+                    if important or (now - last_save) > 1.5:
+                        last_save = now
+                        await asyncio.to_thread(save, "running")
+        finally:
+            await asyncio.to_thread(save, "done")
+
+    return StreamingResponse(
+        persist_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Research-Session-Id": session_id,
+        },
+    )
+
+
+@app.get("/research/sessions/{project_id}")
+def list_research_sessions(
+    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    """List persisted deep-research sessions for a project (counts only, no payload)."""
+    with MetadataDB(metadata_db_path) as db:
+        return {"sessions": db.list_research_sessions(project_id)}
+
+
+@app.get("/research/session/{session_id}")
+def get_research_session(
+    session_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    """Fetch the full node tree of one persisted deep-research session."""
+    with MetadataDB(metadata_db_path) as db:
+        session = db.get_research_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Research session not found")
+    return {"session": session}
+
+
+@app.put("/research/session/{session_id}")
+def upsert_research_session(
+    session_id: str, request: ResearchSessionUpsertRequest
+) -> dict[str, Any]:
+    """Authoritative overwrite of a session (verification-enriched copy from the client)."""
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.upsert_research_session(
+            session_id, request.project_id, request.question, request.status, request.nodes
+        )
+    return {"session": session}
+
+
+@app.delete("/research/session/{session_id}")
+def delete_research_session(
+    session_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_research_session(session_id)
+    return {"deleted": deleted}
+
+
+# --------------------------------------------------------------------------- #
+# Parallel Research mode                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def _parallel_retriever(metadata_db_path: str, graph_db_path: str) -> HybridRetriever:
+    return HybridRetriever(KGRetriever(metadata_db_path, graph_db_path))
+
+
+def _parallel_project_filter(project_id: str | None) -> str | None:
+    """Reserved global modes don't scope retrieval to a project."""
+    if not project_id or str(project_id).strip().lower() in RESERVED_PROJECT_IDS:
+        return None
+    return project_id
+
+
+@app.post("/projects/{project_id}/parallel")
+async def create_parallel_session(project_id: str, request: ParallelStartRequest) -> dict[str, Any]:
+    """Start a Parallel-Research session: persist it, generate the grounded overview
+    (task explanation + how-to) and the initial AI variants (the methods to try)."""
+    retriever = _parallel_retriever(request.metadata_db_path, request.graph_db_path)
+    project_filter = _parallel_project_filter(project_id)
+    # Variants (the methods to try) are the core deliverable; generate them first. The overview
+    # (task explanation + how-to) is best-effort and must never block or break the variants.
+    # Run sequentially — both share the same retrieval/DuckDB state.
+    variants = await asyncio.to_thread(
+        parallel_research.propose_variants,
+        retriever,
+        llm_router,
+        request.question,
+        n=request.variant_count,
+        paper_ids=request.paper_ids or None,
+        provider=request.provider,
+        model=request.model,
+    )
+    overview: dict[str, Any] | None = None
+    try:
+        overview = await asyncio.to_thread(
+            parallel_research.propose_overview,
+            retriever,
+            llm_router,
+            request.question,
+            paper_ids=request.paper_ids or None,
+            project_id=project_filter,
+            provider=request.provider,
+            model=request.model,
+            metadata_db_path=request.metadata_db_path,
+        )
+    except Exception:
+        overview = None
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.create_parallel_session(project_id, request.question)
+        if overview is not None:
+            db.update_parallel_session(
+                session["id"],
+                overview_markdown=str(overview.get("answer") or ""),
+                overview_payload=overview,
+            )
+        for variant in variants:
+            db.add_parallel_variant(
+                session["id"],
+                name=variant["name"],
+                approach=variant["approach"],
+                rationale=variant["rationale"],
+                suggested_prompt=variant["suggested_prompt"],
+                origin="ai",
+                status="vorgeschlagen",
+            )
+        session = db.get_parallel_session(session["id"])
+    return {"session": session}
+
+
+@app.get("/projects/{project_id}/parallel")
+def list_parallel_sessions(
+    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        return {"sessions": db.list_parallel_sessions(project_id)}
+
+
+@app.get("/parallel/{session_id}")
+def get_parallel_session(
+    session_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        session = db.get_parallel_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Parallel session not found")
+    return {"session": session}
+
+
+@app.delete("/parallel/{session_id}")
+def delete_parallel_session(
+    session_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_parallel_session(session_id)
+    return {"deleted": deleted}
+
+
+@app.post("/parallel/{session_id}/generate")
+async def generate_parallel_variants(session_id: str, request: ParallelGenerateRequest) -> dict[str, Any]:
+    """Regenerate / add more AI variants for an existing session."""
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.get_parallel_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Parallel session not found")
+    retriever = _parallel_retriever(request.metadata_db_path, request.graph_db_path)
+    variants = await asyncio.to_thread(
+        parallel_research.propose_variants,
+        retriever,
+        llm_router,
+        str(session.get("question") or ""),
+        n=request.variant_count,
+        paper_ids=request.paper_ids or None,
+        provider=request.provider,
+        model=request.model,
+    )
+    with MetadataDB(request.metadata_db_path) as db:
+        for variant in variants:
+            db.add_parallel_variant(
+                session_id,
+                name=variant["name"],
+                approach=variant["approach"],
+                rationale=variant["rationale"],
+                suggested_prompt=variant["suggested_prompt"],
+                origin="ai",
+                status="vorgeschlagen",
+            )
+        session = db.get_parallel_session(session_id)
+    return {"session": session}
+
+
+@app.post("/parallel/{session_id}/variants")
+def add_parallel_variant(session_id: str, request: ParallelVariantCreateRequest) -> dict[str, Any]:
+    with MetadataDB(request.metadata_db_path) as db:
+        if db.get_parallel_session(session_id) is None:
+            raise HTTPException(status_code=404, detail="Parallel session not found")
+        variant = db.add_parallel_variant(
+            session_id,
+            name=request.name,
+            approach=request.approach,
+            rationale=request.rationale,
+            suggested_prompt=request.suggested_prompt,
+            origin=request.origin or "manual",
+            status="vorgeschlagen",
+        )
+    return {"variant": variant}
+
+
+@app.patch("/parallel/variants/{variant_id}")
+def update_parallel_variant(variant_id: str, request: ParallelVariantUpdateRequest) -> dict[str, Any]:
+    with MetadataDB(request.metadata_db_path) as db:
+        variant = db.update_parallel_variant(
+            variant_id,
+            name=request.name,
+            approach=request.approach,
+            rationale=request.rationale,
+            suggested_prompt=request.suggested_prompt,
+            status=request.status,
+            position=request.position,
+        )
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    return {"variant": variant}
+
+
+@app.delete("/parallel/variants/{variant_id}")
+def delete_parallel_variant(
+    variant_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_parallel_variant(variant_id)
+    return {"deleted": deleted}
+
+
+@app.post("/parallel/variants/{variant_id}/entries")
+async def add_parallel_entry(variant_id: str, request: ParallelEntryRequest) -> dict[str, Any]:
+    """Submit a result for a variant; optionally returns an immediate grounded assessment."""
+    with MetadataDB(request.metadata_db_path) as db:
+        variant = db.get_parallel_variant(variant_id)
+        if variant is None:
+            raise HTTPException(status_code=404, detail="Variant not found")
+        session_id = str(variant.get("session_id"))
+        session = db.get_parallel_session(session_id)
+        user_entry = db.add_parallel_entry(variant_id, session_id, "user", request.content)
+        db.update_parallel_variant(variant_id, status="ergebnis")
+
+    feedback_entry: dict[str, Any] | None = None
+    if request.request_feedback:
+        retriever = _parallel_retriever(request.metadata_db_path, request.graph_db_path)
+        project_id = _parallel_project_filter(session.get("project_id") if session else None)
+        answer = await asyncio.to_thread(
+            parallel_research.feedback_for_entry,
+            retriever,
+            llm_router,
+            question=str(session.get("question") if session else ""),
+            variant=variant,
+            user_result=request.content,
+            paper_ids=request.paper_ids or None,
+            project_id=project_id,
+            provider=request.provider,
+            model=request.model,
+            metadata_db_path=request.metadata_db_path,
+        )
+        with MetadataDB(request.metadata_db_path) as db:
+            feedback_entry = db.add_parallel_entry(
+                variant_id, session_id, "assistant",
+                str(answer.get("answer") or ""), answer_payload=answer,
+            )
+
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.get_parallel_session(session_id)
+    return {"session": session, "user_entry": user_entry, "feedback_entry": feedback_entry}
+
+
+@app.delete("/parallel/entries/{entry_id}")
+def delete_parallel_entry(
+    entry_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_parallel_entry(entry_id)
+    return {"deleted": deleted}
+
+
+@app.post("/parallel/{session_id}/synthesize")
+async def synthesize_parallel_session(session_id: str, request: ParallelSynthesizeRequest) -> dict[str, Any]:
+    """Cross-variant analysis → ranking + reshaped final answer, persisted on the session."""
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.get_parallel_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Parallel session not found")
+    retriever = _parallel_retriever(request.metadata_db_path, request.graph_db_path)
+    project_id = _parallel_project_filter(session.get("project_id"))
+    answer = await asyncio.to_thread(
+        parallel_research.synthesize,
+        retriever,
+        llm_router,
+        question=str(session.get("question") or ""),
+        variants=session.get("variants", []),
+        paper_ids=request.paper_ids or None,
+        project_id=project_id,
+        provider=request.provider,
+        model=request.model,
+        metadata_db_path=request.metadata_db_path,
+    )
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.update_parallel_session(
+            session_id,
+            status="synthesized",
+            synthesis_markdown=str(answer.get("answer") or ""),
+            synthesis_payload=answer,
+        )
+    return {"session": session, "answer": answer}
+
+
+@app.post("/parallel/{session_id}/ask")
+async def ask_parallel_followup(session_id: str, request: ParallelFollowupRequest) -> dict[str, Any]:
+    """Ask a follow-up while a parallel session is open: keep weiterfragen in the same session.
+
+    Produces a grounded chat answer (shown threaded under the overview) AND a structured
+    variant (a new "Vorschlag" appended to the Ergebnisse) — never a new session."""
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.get_parallel_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Parallel session not found")
+    retriever = _parallel_retriever(request.metadata_db_path, request.graph_db_path)
+    project_id = _parallel_project_filter(session.get("project_id"))
+    original_question = str(session.get("question") or "")
+
+    answer = await asyncio.to_thread(
+        parallel_research.followup_answer,
+        retriever,
+        llm_router,
+        question=request.question,
+        original_question=original_question,
+        paper_ids=request.paper_ids or None,
+        project_id=project_id,
+        provider=request.provider,
+        model=request.model,
+        metadata_db_path=request.metadata_db_path,
+    )
+
+    variants: list[dict[str, str]] = []
+    if request.variant_count > 0:
+        composed = (
+            f"{original_question}\n\nVertiefende Folgefrage: {request.question}"
+            if original_question
+            else request.question
+        )
+        variants = await asyncio.to_thread(
+            parallel_research.propose_variants,
+            retriever,
+            llm_router,
+            composed,
+            n=request.variant_count,
+            paper_ids=request.paper_ids or None,
+            provider=request.provider,
+            model=request.model,
+        )
+
+    with MetadataDB(request.metadata_db_path) as db:
+        db.add_parallel_followup(session_id, request.question, answer_payload=answer)
+        for variant in variants:
+            db.add_parallel_variant(
+                session_id,
+                name=variant["name"],
+                approach=variant["approach"],
+                rationale=variant["rationale"],
+                suggested_prompt=variant["suggested_prompt"],
+                origin="ai",
+                status="vorgeschlagen",
+            )
+        session = db.get_parallel_session(session_id)
+    return {"session": session, "answer": answer}
 
 
 @app.post("/research/tree/export")
@@ -1385,58 +2087,63 @@ def extraction_library(
     query: str = "",
     project_id: str | None = None,
     projects_path: str | None = None,
-    limit: int = Query(default=500, ge=1, le=5000),
+    limit: int | None = Query(default=None, ge=1, le=100000),
 ) -> dict[str, Any]:
     rows = _local_pdf_library(metadata_db_path, pdf_base_dir)
-    if project_id and not _is_reserved_project_id(project_id):
+    # "Alle Papers" / no project = global union over every project; else scope to members.
+    is_global = (not project_id) or _is_reserved_project_id(project_id)
+    member_ids: set[str] | None
+    if is_global:
+        member_ids = None
+    else:
         projects = _load_projects(_projects_path(projects_path))
-        member_ids = set(projects.get(project_id, []))
+        member_ids = set(projects.get(project_id or "", []))
         rows = [row for row in rows if str(row.get("paper_id") or "") in member_ids]
-        try:
-            with MetadataDB(metadata_db_path) as _db:
-                grey_list = _db.list_grey_sources(project_id)
-                latest_by_paper = _latest_extraction_statuses(_db)
-                found_ids = {str(row.get("paper_id") or "") for row in rows}
-                nopdf_papers = [
-                    p for p in _db.list_papers(limit=50000)
-                    if str(p.get("id") or "") in member_ids
-                    and str(p.get("id") or "") not in found_ids
-                ]
-            for grey in grey_list:
-                if grey.get("injection_flags"):
-                    continue
-                full_text = (grey.get("full_text") or "").strip()
-                if not full_text:
-                    continue
-                rows.append({
-                    "paper_id": f"grey::{grey['id']}",
-                    "title": grey.get("title") or grey.get("url") or grey["id"],
-                    "filename": "",
-                    "pdf_path": "",
-                    "pdf_available": True,
-                    "source_type": "grey",
-                    "text": full_text[:200000],
-                    "size_bytes": len(full_text.encode("utf-8")),
-                    "modified_timestamp": grey.get("created_timestamp"),
-                    "latest_extraction_status": None,
-                    "known_paper": False,
-                })
-            for paper in nopdf_papers:
-                pid = str(paper.get("id") or "")
-                rows.append({
-                    "paper_id": pid,
-                    "title": paper.get("title") or pid,
-                    "filename": "",
-                    "pdf_path": "",
-                    "pdf_available": False,
-                    "source_type": "pdf",
-                    "size_bytes": None,
-                    "modified_timestamp": None,
-                    "latest_extraction_status": latest_by_paper.get(pid),
-                    "known_paper": True,
-                })
-        except Exception:
-            pass
+    try:
+        with MetadataDB(metadata_db_path) as _db:
+            grey_list = _db.list_grey_sources(None if is_global else project_id, limit=50000)
+            latest_by_paper = _latest_extraction_statuses(_db)
+            found_ids = {str(row.get("paper_id") or "") for row in rows}
+            nopdf_papers = [
+                p for p in _db.list_papers(limit=50000)
+                if str(p.get("id") or "") not in found_ids
+                and (member_ids is None or str(p.get("id") or "") in member_ids)
+            ]
+        for grey in grey_list:
+            if grey.get("injection_flags"):
+                continue
+            full_text = (grey.get("full_text") or "").strip()
+            if not full_text:
+                continue
+            rows.append({
+                "paper_id": f"grey::{grey['id']}",
+                "title": grey.get("title") or grey.get("url") or grey["id"],
+                "filename": "",
+                "pdf_path": "",
+                "pdf_available": True,
+                "source_type": "grey",
+                "text": full_text[:200000],
+                "size_bytes": len(full_text.encode("utf-8")),
+                "modified_timestamp": grey.get("created_timestamp"),
+                "latest_extraction_status": None,
+                "known_paper": False,
+            })
+        for paper in nopdf_papers:
+            pid = str(paper.get("id") or "")
+            rows.append({
+                "paper_id": pid,
+                "title": paper.get("title") or pid,
+                "filename": "",
+                "pdf_path": "",
+                "pdf_available": False,
+                "source_type": "pdf",
+                "size_bytes": None,
+                "modified_timestamp": None,
+                "latest_extraction_status": latest_by_paper.get(pid),
+                "known_paper": True,
+            })
+    except Exception:
+        pass
     if query:
         query_lower = query.lower()
         rows = [
@@ -1445,7 +2152,8 @@ def extraction_library(
             or query_lower in str(row.get("title") or "").lower()
             or query_lower in str(row.get("filename") or "").lower()
         ]
-    return {"items": rows[:limit], "total": len(rows)}
+    items = rows if limit is None else rows[:limit]
+    return {"items": items, "total": len(rows)}
 
 
 @app.post("/extraction/parse")
@@ -2089,7 +2797,7 @@ async def upload_note_asset(
             raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
 
     filename = _safe_asset_filename(request.headers.get("x-filename") or "note-image")
-    target_dir = Path(note_asset_dir) / _slug(note_id)
+    target_dir = ensure_safe_path(note_asset_dir, what="note asset dir") / _slug(note_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{filename}"
     target_path.write_bytes(content)
@@ -2611,7 +3319,9 @@ def _safe_asset_filename(filename: str) -> str:
 
 
 def _projects_path(value: str | None = None) -> Path:
-    return Path(value) if value else PROJECTS_PATH
+    if not value:
+        return PROJECTS_PATH
+    return ensure_safe_path(value, what="projects path")
 
 
 def _load_projects(path: Path = PROJECTS_PATH) -> dict[str, list[str]]:
@@ -3011,19 +3721,12 @@ def _crossref_mailto() -> str | None:
 
 
 async def _resolve_oa_pdf_url(doi: str | None, client: httpx.AsyncClient | None = None) -> str | None:
-    """Resolve an open-access PDF URL for a DOI via Unpaywall (best-effort)."""
-    if not doi:
-        return None
-    email = _unpaywall_email()
-    if not email:
-        return None
-    unpaywall = UnpaywallClient(UnpaywallConfig(email=email))
-    try:
-        return await unpaywall.best_oa_url(str(doi).replace("https://doi.org/", "").strip())
-    except Exception:
-        return None
-    finally:
-        await unpaywall.close()
+    """Resolve an open-access PDF URL for a DOI via Unpaywall (best-effort).
+
+    Delegates to the shared ``harvester.oa_resolver`` so the same logic backs the
+    auto-harvester's on-demand PDF acquisition.
+    """
+    return await resolve_oa_pdf_url(doi)
 
 
 async def _run_harvest_search(query: str, sources: list[str], max_results: int) -> tuple[list[dict[str, Any]], list[str]]:

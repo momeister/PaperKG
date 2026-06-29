@@ -975,3 +975,38 @@ def test_note_ask_stores_whole_note_thread_without_anchor(tmp_path, monkeypatch)
     assert payload["thread"]["selected_text"] == ""
     assert payload["thread"]["anchor_quote"] == ""
     assert payload["thread"]["ui_state"]["scope"] == "note"
+
+
+def test_auto_answer_streams_sse_events(tmp_path, monkeypatch) -> None:
+    """POST /query/auto-answer streams the orchestrator's events as SSE."""
+    captured: dict[str, object] = {}
+
+    async def _fake_auto(*, question, llm_router, **kwargs):  # noqa: ANN001 - test fake
+        captured["question"] = question
+        captured["force"] = kwargs.get("force")
+        captured["max_related_topics"] = kwargs.get("max_related_topics")
+        yield {"status": "answer", "answer": {"answer": "weak", "no_answer": True}}
+        yield {"status": "planning", "related_topics": ["t1"]}
+        yield {"status": "harvesting", "scope": "main", "topic": question, "papers": [{"id": "arxiv:1", "title": "P"}], "grey": []}
+        yield {"status": "done", "answer": {"answer": "strong [arxiv:1]"},
+               "harvest_summary": {"harvested": True, "papers": [{"id": "arxiv:1", "title": "P"}], "grey": [], "related_topics": ["t1"]}}
+
+    monkeypatch.setattr(product_main, "auto_research_answer", _fake_auto)
+    client = TestClient(product_main.app)
+
+    response = client.post(
+        "/query/auto-answer",
+        json={"question": "What is X?", "force": True, "max_related_topics": 3},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    events = [json.loads(line[len("data: "):]) for line in response.text.splitlines() if line.startswith("data: ")]
+    statuses = [event["status"] for event in events]
+    assert statuses == ["answer", "planning", "harvesting", "done"]
+    assert events[-1]["harvest_summary"]["harvested"] is True
+    # The endpoint forwarded the request fields to the orchestrator.
+    assert captured["question"] == "What is X?"
+    assert captured["force"] is True
+    assert captured["max_related_topics"] == 3

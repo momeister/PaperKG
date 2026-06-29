@@ -54,7 +54,7 @@ def research_tree_forest(nodes: list[dict[str, Any]], max_depth: int = 2) -> str
 
     tree = emit(root, 0)
     return "\n".join([
-        r"\begin{figure}[h]",
+        r"\begin{figure}[H]",
         r"\centering",
         r"\begin{forest}",
         r"for tree={draw, rounded corners, font=\footnotesize, grow=east,"
@@ -150,7 +150,7 @@ def charts_latex(charts: list[tuple[str, str]]) -> str:
     blocks: list[str] = []
     for caption, filename in charts:
         blocks.append("\n".join([
-            r"\begin{figure}[h]",
+            r"\begin{figure}[H]",
             r"\centering",
             rf"\includegraphics[width=0.85\textwidth]{{{filename}}}",
             rf"\caption{{{latex_escape(caption)}}}",

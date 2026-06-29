@@ -1,0 +1,19 @@
+# Project metadata for ScienceKG / PaperKG.
+#
+# Dependencies are installed from requirements.txt (the canonical list); this file
+# mainly pins the supported Python range and records project metadata for tooling.
+#
+# Python is capped below 3.14 because the Kuzu graph library only ships wheels for
+# Python < 3.14. Everything else runs on 3.10-3.13.
+[project]
+name = "sciencekg"
+version = "5.0.0"
+description = "Fully local, privacy-preserving system for harvesting scientific papers, building a knowledge graph, and answering research questions with grounded, source-cited LLM responses."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10,<3.14"
+authors = [{ name = "Moritz Meister-Kleutsch" }]
+keywords = ["knowledge-graph", "research-assistant", "llm", "rag", "scientific-papers"]
+
+[project.urls]
+Homepage = "https://github.com/"

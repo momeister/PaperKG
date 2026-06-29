@@ -12,7 +12,9 @@ class FileManager:
     """
 
     def __init__(self, base_dir: str | Path) -> None:
-        self.base_dir = Path(base_dir)
+        from storage.path_safety import ensure_safe_path
+
+        self.base_dir = ensure_safe_path(base_dir, what="PDF base directory")
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -104,10 +106,18 @@ class FileManager:
         return False
 
     def delete_by_path(self, pdf_path: str) -> bool:
-        """Delete a PDF by its stored path. Returns True if deleted."""
+        """Delete a PDF by its stored path. Returns True if deleted.
+
+        Refuses to delete anything outside ``base_dir`` so a tampered/foreign stored
+        path can never make this unlink an arbitrary file.
+        """
         path = Path(pdf_path)
         if not path.is_absolute():
             path = self.base_dir / path
+        base = self.base_dir.resolve()
+        resolved = path.resolve()
+        if base != resolved and base not in resolved.parents:
+            return False
         if path.exists():
             path.unlink()
             try:

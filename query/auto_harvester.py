@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from harvester.arxiv_client import ArxivClient
+from harvester.oa_resolver import resolve_oa_pdf_url
 from harvester.semantic_scholar_client import SemanticScholarClient
+from harvester.url_guard import is_safe_public_url
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
@@ -49,26 +51,121 @@ async def _download_pdf_if_available(
     storage: FileManager,
     client: httpx.AsyncClient,
 ) -> Path | None:
-    """Download the paper's PDF if one is linked. Returns the saved path, else None."""
-    pdf_url = paper.get("pdf_url")
-    if not pdf_url:
-        return None
+    """Download the paper's PDF if one can be located. Returns the saved path, else None.
+
+    Tries the paper's own ``pdf_url`` first, then falls back to resolving an open-access PDF
+    by DOI via Unpaywall — so harvested papers that only expose a landing page (e.g. many
+    open-access journal articles) still end up with a real local PDF instead of metadata only.
+    """
     canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
     title = str(paper.get("title") or canonical_id)
-    try:
-        response = await client.get(str(pdf_url), follow_redirects=True, timeout=20.0)
-        response.raise_for_status()
-        if _looks_like_pdf(response.content, response.headers.get("content-type", "")):
-            return storage.save_pdf(
-                canonical_id,
-                response.content,
-                version=int(paper.get("version") or 1),
-                display_name=title,
-                source=str(paper.get("source") or "auto-harvest"),
-            )
-    except Exception:
-        pass
+
+    async def _try(url: str) -> Path | None:
+        if not await asyncio.to_thread(is_safe_public_url, str(url)):
+            return None
+        try:
+            response = await client.get(str(url), follow_redirects=True, timeout=30.0)
+            response.raise_for_status()
+        except Exception:
+            return None
+        if not _looks_like_pdf(response.content, response.headers.get("content-type", "")):
+            return None
+        return storage.save_pdf(
+            canonical_id,
+            response.content,
+            version=int(paper.get("version") or 1),
+            display_name=title,
+            source=str(paper.get("source") or "auto-harvest"),
+        )
+
+    candidates: list[str] = []
+    if paper.get("pdf_url"):
+        candidates.append(str(paper["pdf_url"]))
+    oa_url = await resolve_oa_pdf_url(paper.get("doi"))
+    if oa_url and oa_url not in candidates:
+        candidates.append(oa_url)
+
+    for url in candidates:
+        saved = await _try(url)
+        if saved is not None:
+            return saved
     return None
+
+
+async def ingest_paper_record(
+    paper: dict[str, Any],
+    db: MetadataDB,
+    storage: FileManager,
+    client: httpx.AsyncClient,
+    *,
+    extraction_pipeline: Any = None,
+    parser_router: Any = None,
+    provider: str | None = None,
+    model: str | None = None,
+    extract: bool = True,
+) -> dict[str, Any]:
+    """Download a paper's PDF, record the local path on its DB row, and run extraction.
+
+    Shared by the bulk auto-harvest loop and the on-demand ``/paper/ingest`` endpoint so a
+    cited-but-not-yet-downloaded paper can be turned into a fully local, extracted paper.
+    Returns ``{"id", "title", "has_local_pdf", "pdf_path"}``. The paper is assumed to already
+    exist in ``db`` (the caller inserts it).
+    """
+    canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+    title = str(paper.get("title") or canonical_id)
+    abstract = str(paper.get("abstract") or "")
+
+    pdf_path = await _download_pdf_if_available(paper, storage, client)
+    if pdf_path is not None:
+        # Persist the local path so has_local_pdf resolves without a directory scan.
+        try:
+            db.update_paper_metadata_if_missing(canonical_id, pdf_path=str(pdf_path))
+        except Exception:
+            pass
+
+    if extract:
+        # Skip if a successful extraction already exists for this paper.
+        try:
+            existing = db._execute(
+                "SELECT id FROM extraction_results WHERE paper_id = ? AND extraction_status = 'success' LIMIT 1",
+                [canonical_id],
+            ).fetchone()
+        except Exception:
+            existing = None
+        if existing is None:
+            # Prefer a real Phase-3 extraction of the downloaded PDF; fall back to a synthetic
+            # title+abstract extraction so the KG retriever can still find this paper.
+            extracted = False
+            if pdf_path is not None and extraction_pipeline is not None and parser_router is not None:
+                try:
+                    extracted = await asyncio.to_thread(
+                        _extract_pdf_into_db, db, extraction_pipeline, parser_router,
+                        canonical_id, str(pdf_path), provider, model,
+                    )
+                except Exception:
+                    extracted = False
+            if not extracted:
+                try:
+                    concepts = [{"label": title, "description": abstract[:400]}] if title else []
+                    claims = [{"text": abstract[:600]}] if abstract else []
+                    db.save_extraction_result(
+                        paper_id=canonical_id,
+                        llm_provider="auto-harvest",
+                        llm_model="metadata",
+                        concepts=concepts,
+                        claims=claims,
+                        raw_response=None,
+                        error_message=None,
+                    )
+                except Exception:
+                    pass
+
+    return {
+        "id": canonical_id,
+        "title": title,
+        "has_local_pdf": pdf_path is not None,
+        "pdf_path": str(pdf_path) if pdf_path else None,
+    }
 
 
 def _extract_pdf_into_db(
@@ -214,61 +311,26 @@ async def harvest_for_question(
             extraction_pipeline = None
             parser_router = None
 
-    async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=20.0) as client:
+    async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=30.0) as client:
         with MetadataDB(db_path) as db:
             for paper in unique:
                 canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
                 title = str(paper.get("title") or canonical_id)
-                abstract = str(paper.get("abstract") or "")
                 try:
                     db.insert_paper(paper)
-                    inserted.append({"id": canonical_id, "title": title})
                 except Exception:
                     continue
-
-                # Skip if a successful extraction already exists for this paper.
-                try:
-                    existing = db._execute(
-                        "SELECT id FROM extraction_results WHERE paper_id = ? AND extraction_status = 'success' LIMIT 1",
-                        [canonical_id],
-                    ).fetchone()
-                except Exception:
-                    existing = None
-                if existing is not None:
-                    continue
-
-                pdf_path = await _download_pdf_if_available(paper, storage, client)
-
-                # Prefer a real Phase-3 extraction of the downloaded PDF so harvested papers
-                # are genuinely analysed (entities/claims), not just title+abstract.
-                extracted = False
-                if pdf_path is not None and extraction_pipeline is not None and parser_router is not None:
-                    try:
-                        extracted = await asyncio.to_thread(
-                            _extract_pdf_into_db,
-                            db, extraction_pipeline, parser_router, canonical_id,
-                            str(pdf_path), provider, model,
-                        )
-                    except Exception:
-                        extracted = False
-
-                # Fallback: synthetic extraction (title as concept, abstract as claim) so the
-                # KG retriever can still find this paper when no PDF / extraction failed.
-                if not extracted:
-                    try:
-                        concepts = [{"label": title, "description": abstract[:400]}] if title else []
-                        claims = [{"text": abstract[:600]}] if abstract else []
-                        db.save_extraction_result(
-                            paper_id=canonical_id,
-                            llm_provider="auto-harvest",
-                            llm_model="metadata",
-                            concepts=concepts,
-                            claims=claims,
-                            raw_response=None,
-                            error_message=None,
-                        )
-                    except Exception:
-                        pass
+                inserted.append({"id": canonical_id, "title": title})
+                # Download the PDF (resolving an OA URL by DOI if needed), record its local
+                # path, and run Phase-3 (or synthetic) extraction — see ingest_paper_record.
+                await ingest_paper_record(
+                    paper, db, storage, client,
+                    extraction_pipeline=extraction_pipeline,
+                    parser_router=parser_router,
+                    provider=provider,
+                    model=model,
+                    extract=True,
+                )
 
     inserted_ids = [r["id"] for r in inserted]
     # Attach to the active project (creating its membership list if needed). Global mode
@@ -307,6 +369,8 @@ async def harvest_grey_sources_for_question(
     async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=20.0) as client:
         with MetadataDB(db_path) as db:
             for hit in hits[:max_sources]:
+                if not await asyncio.to_thread(is_safe_public_url, str(hit.url)):
+                    continue
                 try:
                     resp = await client.get(str(hit.url), follow_redirects=True, timeout=15.0)
                     resp.raise_for_status()
