@@ -523,6 +523,41 @@ export type ParallelSessionSummary = {
   updated_timestamp?: string | null;
 };
 
+/** A variant compiled into an actionable instruction for an external desktop agent. */
+export type TaskBrief = {
+  goal: string;
+  context: string;
+  steps: string[];
+  constraints: string[];
+  success_criteria: string[];
+  artifacts: string[];
+  raw_prompt: string;
+};
+
+export type AgentHandoffResponse = {
+  brief: TaskBrief;
+  /** Copy-/POST-ready plain-text rendering of the brief. */
+  text: string;
+  bridge: { enabled: boolean; type: string };
+};
+
+export type AgentConfig = {
+  enabled: boolean;
+  type: string;
+  has_url: boolean;
+  vlm_model: string;
+  vlm_provider: string;
+};
+
+/** One SSE event streamed back from POST /agent/dispatch while the desktop agent runs. */
+export type AgentDispatchEvent = {
+  status: "started" | "step" | "done" | "error";
+  from?: string | null;
+  value?: unknown;
+  error?: string;
+  model?: string;
+};
+
 export type NoteCitation = {
   id: string;
   note_id: string;

@@ -4048,6 +4048,34 @@ h1 {
   background: #e4e9ef;
 }
 
+/* In-app PDF viewer modal (Library "Öffnen" → reuses PdfPane). */
+.pdf-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.pdf-modal {
+  display: flex;
+  width: min(1100px, 92vw);
+  height: min(900px, 92vh);
+  overflow: hidden;
+  background: #f8fafc;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.4);
+}
+
+.pdf-modal .pdf-pane {
+  flex: 1 1 auto;
+  border-left: none;
+  border-radius: 12px;
+}
+
 .pdf-pane {
   /* Flex statt festem Grid-Raster: Fehlen Zeilen (keine Zitate, keine aktive
      Textstelle), dehnt sich die PDF-Vorschau bis ganz nach unten aus. */
@@ -6757,6 +6785,50 @@ button.data-row {
   font-size: 12px;
   line-height: 1.5;
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+.parallel-variant__handoff {
+  margin-top: 8px;
+}
+.parallel-variant__handoff-body {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+}
+.parallel-variant__handoff-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.parallel-variant__handoff-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+.parallel-variant__handoff-log {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.parallel-handoff-event__status {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  opacity: 0.7;
+}
+.parallel-handoff-event--error {
+  color: var(--danger, #e5484d);
+}
+.parallel-handoff-event--done .parallel-handoff-event__status {
+  color: var(--success, #46a758);
 }
 .parallel-variant__edit {
   display: flex;

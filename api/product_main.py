@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import yaml
@@ -55,6 +56,7 @@ from query.auto_harvester import ingest_paper_record
 from query.auto_answer import auto_research_answer
 from query.research_tree import ResearchTreeRunner, _extract_questions
 from query import parallel_research
+from query import agent_handoff
 from query.web_research import run_deep_research
 from export import ExportOptions, build_export
 from query.source_verifier import find_pdf_path
@@ -90,8 +92,15 @@ app.add_middleware(
         "http://127.0.0.1:5175",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
+        # Native (Tauri) shell: the webview serves the frontend from the Tauri
+        # asset protocol, whose origin is tauri://localhost (macOS/Linux) or
+        # http(s)://tauri.localhost (Windows WebView2). The page then calls this
+        # API on the sidecar's localhost port, so these origins must be allowed.
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
     ],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+",
+    allow_origin_regex=r"(https?://(localhost|127\.0\.0\.1):\d+|tauri://localhost)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -326,6 +335,24 @@ class ParallelFollowupRequest(BaseModel):
     model: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+
+
+class AgentHandoffRequest(BaseModel):
+    """Compile a Parallel-Research variant into a computer-use task brief."""
+    with_research_context: bool = True
+    paper_ids: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    graph_db_path: str = DEFAULT_GRAPH_DB_PATH
+
+
+class AgentDispatchRequest(BaseModel):
+    """Forward a compiled task brief to the local desktop-agent bridge (Kanal B)."""
+    task: str = Field(min_length=1, max_length=20000)
+    variant_id: str | None = None
+    bridge_url: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -1592,6 +1619,25 @@ def _parallel_project_filter(project_id: str | None) -> str | None:
     return project_id
 
 
+_AGENT_BRIDGE_CONFIG_CACHE: dict[str, Any] | None = None
+
+
+def _load_agent_bridge_config() -> dict[str, Any]:
+    """Load and cache the ``agent_bridge:`` section of config.yaml (desktop-agent hand-off)."""
+    global _AGENT_BRIDGE_CONFIG_CACHE
+    if _AGENT_BRIDGE_CONFIG_CACHE is not None:
+        return _AGENT_BRIDGE_CONFIG_CACHE
+    cfg: dict[str, Any] = {}
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as fh:
+            section = (yaml.safe_load(fh) or {}).get("agent_bridge", {}) or {}
+            cfg = section if isinstance(section, dict) else {}
+    except FileNotFoundError:
+        cfg = {}
+    _AGENT_BRIDGE_CONFIG_CACHE = cfg
+    return cfg
+
+
 @app.post("/projects/{project_id}/parallel")
 async def create_parallel_session(project_id: str, request: ParallelStartRequest) -> dict[str, Any]:
     """Start a Parallel-Research session: persist it, generate the grounded overview
@@ -1891,6 +1937,143 @@ async def ask_parallel_followup(session_id: str, request: ParallelFollowupReques
             )
         session = db.get_parallel_session(session_id)
     return {"session": session, "answer": answer}
+
+
+# --------------------------------------------------------------------------- #
+# Desktop-agent hand-off (PaperKG = brain/context, external agent = eyes/hands) #
+# --------------------------------------------------------------------------- #
+
+
+def _validate_bridge_url(url: str, *, from_config: bool) -> bool:
+    """Allow http(s) bridge URLs. A client-supplied override must be loopback (the bridge
+    is local); the config URL is trusted as set by the operator."""
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    if from_config:
+        return True
+    return parsed.hostname.lower() in {"127.0.0.1", "localhost", "::1"}
+
+
+@app.post("/parallel/variants/{variant_id}/handoff")
+async def parallel_variant_handoff(variant_id: str, request: AgentHandoffRequest) -> dict[str, Any]:
+    """Compile a variant into a computer-use task brief for an external desktop agent.
+
+    Returns ``{brief, text, bridge}``. ``text`` is the copy-/POST-ready instruction —
+    Kanal A: paste into UI-TARS-Desktop; Kanal B: POST to /agent/dispatch. Pure text-out;
+    PaperKG never drives the machine here."""
+    with MetadataDB(request.metadata_db_path) as db:
+        variant = db.get_parallel_variant(variant_id)
+        if variant is None:
+            raise HTTPException(status_code=404, detail="Variant not found")
+        session = db.get_parallel_session(str(variant.get("session_id")))
+    question = str(session.get("question") if session else "")
+    retriever = None
+    if request.with_research_context:
+        try:
+            retriever = _parallel_retriever(request.metadata_db_path, request.graph_db_path)
+        except Exception:
+            retriever = None
+    brief = await asyncio.to_thread(
+        agent_handoff.build_task_brief,
+        variant,
+        question=question,
+        retriever=retriever,
+        llm_router=llm_router,
+        paper_ids=request.paper_ids or None,
+        provider=request.provider,
+        model=request.model,
+    )
+    text = agent_handoff.render_task_brief_text(brief)
+    bridge = _load_agent_bridge_config()
+    return {
+        "brief": brief,
+        "text": text,
+        "bridge": {
+            "enabled": bool(bridge.get("enabled")),
+            "type": str(bridge.get("type") or "ui_tars_desktop"),
+        },
+    }
+
+
+@app.get("/agent/config")
+def get_agent_config() -> dict[str, Any]:
+    """Whether the desktop-agent bridge (Kanal B) is configured. Never exposes secrets."""
+    bridge = _load_agent_bridge_config()
+    return {
+        "enabled": bool(bridge.get("enabled")),
+        "type": str(bridge.get("type") or "ui_tars_desktop"),
+        "has_url": bool(bridge.get("url")),
+        "vlm_model": str(bridge.get("vlm_model") or ""),
+        "vlm_provider": str(bridge.get("vlm_provider") or ""),
+    }
+
+
+@app.post("/agent/dispatch")
+async def dispatch_agent(request: AgentDispatchRequest) -> StreamingResponse:
+    """Forward a task brief to the local desktop-agent bridge and stream progress (SSE).
+
+    Best-effort: if the bridge is disabled or unreachable a single terminal ``error``
+    event is emitted — nothing crashes, and PaperKG itself never controls the machine.
+    On completion the run transcript is appended to the variant as an assistant entry."""
+    bridge = _load_agent_bridge_config()
+    config_url = str(bridge.get("url") or "").strip()
+    url = (request.bridge_url or config_url).strip()
+    from_config = not request.bridge_url
+    enabled = bool(bridge.get("enabled")) or bool(request.bridge_url)
+    timeout = float(bridge.get("timeout_seconds") or 600)
+
+    async def stream() -> AsyncIterator[str]:
+        def emit(payload: dict[str, Any]) -> str:
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        if not enabled or not url:
+            yield emit({"status": "error", "error": "agent_bridge disabled or no url configured"})
+            return
+        if not _validate_bridge_url(url, from_config=from_config):
+            yield emit({"status": "error", "error": "bridge url rejected"})
+            return
+        transcript: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json={"task": request.task}) as resp:
+                    if resp.status_code >= 400:
+                        yield emit({"status": "error", "error": f"bridge returned {resp.status_code}"})
+                        return
+                    yield emit({"status": "started"})
+                    async for raw in resp.aiter_lines():
+                        line = raw.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        body = line[len("data:"):].strip()
+                        if body:
+                            transcript.append(body)
+                            yield f"data: {body}\n\n"
+        except Exception as exc:  # noqa: BLE001 - surface as terminal SSE event
+            yield emit({"status": "error", "error": str(exc)})
+            return
+        yield emit({"status": "done"})
+        if request.variant_id and transcript:
+            try:
+                summary = "Desktop-Agent-Lauf:\n" + "\n".join(transcript[-40:])
+                with MetadataDB(request.metadata_db_path) as db:
+                    variant = db.get_parallel_variant(request.variant_id)
+                    if variant is not None:
+                        db.add_parallel_entry(
+                            request.variant_id, str(variant.get("session_id")),
+                            "assistant", summary,
+                        )
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/research/tree/export")

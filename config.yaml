@@ -339,3 +339,19 @@ retrieval:
     recency_weight: 0.15        # max bonus for a current-year paper; decays to 0 over the window
     recency_window_years: 5     # papers older than this get no recency bonus (and no penalty)
     max_bonus: 1.5              # hard cap so the nudge never overrides relevance
+
+# Hand-off to an external, local computer-use agent (e.g. UI-TARS-Desktop). A Parallel-
+# Research variant is compiled into a task brief (query/agent_handoff.py). Kanal A
+# (Brief kopieren -> in den Agenten einfügen) works regardless of this block. Kanal B
+# below auto-POSTs the brief to a local bridge that runs @ui-tars/sdk (see bridge/uitars/).
+# Off by default — PaperKG never drives your machine itself; the external agent does.
+agent_bridge:
+  enabled: false
+  type: "ui_tars_desktop"          # bridge flavour (only ui_tars_desktop is wired today)
+  url: "http://127.0.0.1:8787/run" # local Node bridge endpoint (bridge/uitars/)
+  timeout_seconds: 600
+  # The VLM that actually sees the screen runs *inside* the external agent, served via
+  # your existing local provider (LM Studio/Ollama). These are documentation hints for
+  # configuring that agent — PaperKG does not load the VLM itself.
+  vlm_provider: "lm_studio"
+  vlm_model: "ui-tars-1.5-7b"

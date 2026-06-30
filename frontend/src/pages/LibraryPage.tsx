@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FileText, Globe, Plus, Search, Star, Trash2 } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
 import { useAppState } from "../state";
 import type { GreySource } from "../types";
@@ -16,7 +17,18 @@ export function LibraryPage() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [openGrey, setOpenGrey] = useState<string | null>(null);
+  const [pdfView, setPdfView] = useState<{ url: string; title: string } | null>(null);
   const queryClient = useQueryClient();
+
+  // Close the in-app PDF viewer with Escape.
+  useEffect(() => {
+    if (!pdfView) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPdfView(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pdfView]);
 
   const papersQuery = useQuery({
     queryKey: ["papers", query, activeProject],
@@ -125,16 +137,20 @@ export function LibraryPage() {
                   <span>{paper.year ?? "n/a"}</span>
                   <span>{paper.source}</span>
                   {paper.has_full_text ? (
-                    <a
+                    <button
                       className="button button-compact button-ghost"
-                      href={api.paperPdfUrl(paper.id, paper.title || "")}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="PDF in neuem Tab öffnen"
+                      type="button"
+                      title="PDF in der App öffnen"
+                      onClick={() =>
+                        setPdfView({
+                          url: api.paperPdfUrl(paper.id, paper.title || ""),
+                          title: paper.title || paper.id
+                        })
+                      }
                     >
                       <FileText size={14} />
                       <span>Öffnen</span>
-                    </a>
+                    </button>
                   ) : (
                     <Status value="false" />
                   )}
@@ -198,6 +214,14 @@ export function LibraryPage() {
             ))}
           </div>
         </section>
+      ) : null}
+
+      {pdfView ? (
+        <div className="pdf-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setPdfView(null)}>
+          <div className="pdf-modal" onClick={(event) => event.stopPropagation()}>
+            <PdfPane url={pdfView.url} title={pdfView.title} onCollapse={() => setPdfView(null)} />
+          </div>
+        </div>
       ) : null}
     </section>
   );

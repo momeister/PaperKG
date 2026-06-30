@@ -1,0 +1,17 @@
+{
+  "name": "paperkg-uitars-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Optional local bridge (Kanal B): receives a PaperKG task brief and executes it on this machine via @ui-tars/sdk (UI-TARS GUI agent). PaperKG is the brain/context; this process is the eyes/hands.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@ui-tars/sdk": "^1.2.0",
+    "@ui-tars/operator-nut-js": "^1.2.0"
+  }
+}

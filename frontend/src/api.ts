@@ -1,4 +1,6 @@
 import type {
+  AgentConfig,
+  AgentHandoffResponse,
   Answer,
   BenchmarkReport,
   BenchmarkRun,
@@ -36,7 +38,30 @@ import type {
   VocabularyEntry
 } from "./types";
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+declare global {
+  interface Window {
+    /** Backend origin injected by the native Tauri shell (dynamic localhost port). */
+    __API_BASE__?: string;
+  }
+}
+
+function resolveApiBaseUrl(): string {
+  // 1. Native (Tauri) shell injects the backend origin at runtime via an
+  //    initialization script, because the page is served from the Tauri asset
+  //    protocol on a different origin than the Python sidecar's dynamic port.
+  if (typeof window !== "undefined" && window.__API_BASE__) {
+    return window.__API_BASE__;
+  }
+  // 2. Explicit build-time override.
+  const fromEnv = import.meta.env.VITE_API_BASE_URL;
+  if (fromEnv) {
+    return fromEnv;
+  }
+  // 3. Web dev fallback (unchanged): Vite on :5173 talks to FastAPI on :8000.
+  return "http://127.0.0.1:8000";
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 type RequestOptions = RequestInit & {
   query?: Record<string, string | number | boolean | null | undefined>;
@@ -472,6 +497,15 @@ export const api = {
     request<{ session: ParallelSession; answer: Answer }>(`/parallel/${encodeURIComponent(sessionId)}/ask`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  getAgentConfig: () => request<AgentConfig>("/agent/config"),
+  parallelVariantHandoff: (
+    variantId: string,
+    payload: { with_research_context?: boolean; paper_ids?: string[]; provider?: string | null; model?: string | null } = {},
+  ) =>
+    request<AgentHandoffResponse>(`/parallel/variants/${encodeURIComponent(variantId)}/handoff`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     })
 };
 
@@ -588,6 +622,52 @@ export async function streamResearchTree(
       if (line.startsWith("data: ")) {
         try {
           onNode(JSON.parse(line.slice(6)) as ResearchNode);
+        } catch {
+          // malformed SSE line – skip
+        }
+      }
+    }
+  }
+}
+
+/** Stream POST /agent/dispatch: forward a task brief to the local desktop-agent bridge and
+ * receive its run progress as events. Best-effort — a disabled/unreachable bridge yields a
+ * single `{status:"error"}` event rather than throwing. */
+export async function streamAgentDispatch(
+  payload: { task: string; variant_id?: string | null; bridge_url?: string | null },
+  onEvent: (event: import("./types").AgentDispatchEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const target = new URL("/agent/dispatch", API_BASE_URL);
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, text || `Backend error ${response.status}`);
+  }
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          onEvent(JSON.parse(line.slice(6)) as import("./types").AgentDispatchEvent);
         } catch {
           // malformed SSE line – skip
         }

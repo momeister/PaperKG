@@ -4,7 +4,11 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import App from "./App";
+import { installNativeExternalLinks } from "./native";
 import "./styles.css";
+
+// In the native shell, route target=_blank / window.open to the OS browser.
+installNativeExternalLinks();
 
 const queryClient = new QueryClient({
   defaultOptions: {

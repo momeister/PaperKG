@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -7,14 +8,23 @@ import {
   Loader2,
   NotebookPen,
   Pencil,
+  Play,
   Plus,
   Send,
   Sparkles,
   Trash2,
 } from "lucide-react";
 
-import { api } from "../api";
-import type { ParallelEntry, ParallelSession, ParallelVariant, VerificationSource } from "../types";
+import { api, streamAgentDispatch } from "../api";
+import type {
+  AgentConfig,
+  AgentDispatchEvent,
+  AgentHandoffResponse,
+  ParallelEntry,
+  ParallelSession,
+  ParallelVariant,
+  VerificationSource,
+} from "../types";
 import { AnswerWithCitations, CitedInline, useParallelPool } from "./ParallelResearchPanel";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -65,6 +75,20 @@ export function ParallelResultsTab({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   // Each variant card is collapsible; default open (undefined ⇒ open).
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+  // Desktop-agent hand-off (compile a variant into a task brief for UI-TARS et al.).
+  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  const [handoff, setHandoff] = useState<Record<string, AgentHandoffResponse>>({});
+  const [handoffBusy, setHandoffBusy] = useState<string | null>(null);
+  const [handoffOpen, setHandoffOpen] = useState<Record<string, boolean>>({});
+  const [briefCopiedId, setBriefCopiedId] = useState<string | null>(null);
+  const [dispatchLog, setDispatchLog] = useState<Record<string, AgentDispatchEvent[]>>({});
+  const [dispatching, setDispatching] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.getAgentConfig().then((cfg) => { if (alive) setAgentConfig(cfg); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   function toggleOpen(variantId: string) {
     setOpenMap((prev) => ({ ...prev, [variantId]: prev[variantId] === false ? true : false }));
@@ -148,6 +172,53 @@ export function ParallelResultsTab({
       setCopiedId(variant.id);
       window.setTimeout(() => setCopiedId((id) => (id === variant.id ? null : id)), 1500);
     });
+  }
+
+  /** Toggle the desktop-agent hand-off panel; compile the task brief on first open. */
+  async function openHandoff(variant: ParallelVariant) {
+    if (handoffOpen[variant.id]) {
+      setHandoffOpen((p) => ({ ...p, [variant.id]: false }));
+      return;
+    }
+    setHandoffOpen((p) => ({ ...p, [variant.id]: true }));
+    if (handoff[variant.id] || handoffBusy) return;
+    setHandoffBusy(variant.id);
+    try {
+      const res = await api.parallelVariantHandoff(variant.id, scopeBody);
+      setHandoff((p) => ({ ...p, [variant.id]: res }));
+    } finally {
+      setHandoffBusy(null);
+    }
+  }
+
+  function copyBrief(variant: ParallelVariant) {
+    const text = handoff[variant.id]?.text;
+    if (!text) return;
+    void navigator.clipboard?.writeText(text).then(() => {
+      setBriefCopiedId(variant.id);
+      window.setTimeout(() => setBriefCopiedId((id) => (id === variant.id ? null : id)), 1500);
+    });
+  }
+
+  /** Kanal B: POST the brief to the local bridge and stream the agent's run progress. */
+  async function runOnAgent(variant: ParallelVariant) {
+    const text = handoff[variant.id]?.text;
+    if (!text || dispatching) return;
+    setDispatching(variant.id);
+    setDispatchLog((p) => ({ ...p, [variant.id]: [] }));
+    try {
+      await streamAgentDispatch({ task: text, variant_id: variant.id }, (event) => {
+        setDispatchLog((p) => ({ ...p, [variant.id]: [...(p[variant.id] ?? []), event] }));
+      });
+      await refresh();
+    } catch {
+      setDispatchLog((p) => ({
+        ...p,
+        [variant.id]: [...(p[variant.id] ?? []), { status: "error", error: "Bridge nicht erreichbar" }],
+      }));
+    } finally {
+      setDispatching(null);
+    }
   }
 
   function takeIntoNote(variant: ParallelVariant, block: ResultBlock) {
@@ -309,6 +380,60 @@ export function ParallelResultsTab({
                     </div>
                   </details>
                 ) : null}
+
+                <div className="parallel-variant__handoff">
+                  <button
+                    type="button"
+                    className="button button-compact"
+                    onClick={() => void openHandoff(variant)}
+                    disabled={handoffBusy === variant.id}
+                    title="Diese Variante als Aufgaben-Brief an einen Desktop-Agenten (z. B. UI-TARS) übergeben"
+                  >
+                    {handoffBusy === variant.id ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
+                    <span>An Desktop-Agent übergeben</span>
+                  </button>
+                  {handoffOpen[variant.id] && handoff[variant.id] ? (
+                    <div className="parallel-variant__handoff-body">
+                      <div className="parallel-variant__prompt-toolbar">
+                        <button type="button" className="button button-compact" onClick={() => copyBrief(variant)}>
+                          {briefCopiedId === variant.id ? <Check size={12} /> : <Copy size={12} />}
+                          <span>{briefCopiedId === variant.id ? "Kopiert" : "Brief kopieren"}</span>
+                        </button>
+                        {agentConfig?.enabled ? (
+                          <button
+                            type="button"
+                            className="button button-compact button-primary"
+                            onClick={() => void runOnAgent(variant)}
+                            disabled={dispatching === variant.id}
+                          >
+                            {dispatching === variant.id ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
+                            <span>Jetzt ausführen</span>
+                          </button>
+                        ) : null}
+                      </div>
+                      <pre className="parallel-variant__handoff-text">{handoff[variant.id].text}</pre>
+                      <p className="parallel-variant__handoff-hint muted">
+                        {agentConfig?.enabled
+                          ? "„Jetzt ausführen“ schickt den Brief an den lokalen Desktop-Agenten (Kanal B) — er steuert deinen Rechner, beobachte den Lauf."
+                          : "Kopiere den Brief und füge ihn in UI-TARS-Desktop ein (Kanal A). Für automatische Ausführung agent_bridge in config.yaml aktivieren (bridge/uitars)."}
+                      </p>
+                      {(dispatchLog[variant.id]?.length ?? 0) > 0 ? (
+                        <div className="parallel-variant__handoff-log">
+                          {dispatchLog[variant.id].map((ev, i) => (
+                            <div key={i} className={`parallel-handoff-event parallel-handoff-event--${ev.status}`}>
+                              <span className="parallel-handoff-event__status">{ev.status}</span>
+                              {ev.error ? (
+                                <span> {ev.error}</span>
+                              ) : ev.value != null ? (
+                                <span> {typeof ev.value === "string" ? ev.value : JSON.stringify(ev.value)}</span>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </>
             )}
 
