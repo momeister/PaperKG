@@ -109,6 +109,16 @@ heavy runtime deps installed first (torch is *not* in the `.venv` by default —
 `docs/NATIVE_APP.md`** — update its tracker when advancing a milestone. The web app
 (`scripts/run_product.py`) is unchanged.
 
+**Native-only shell features** (each gated on `isTauri()` with a web-mode hint; reuse
+`nativeInvoke`/`nativeListen` in `frontend/src/native.ts` ↔ `#[tauri::command]`s in `src-tauri/src/`):
+the **Code-Werkstatt** tab (`/werkstatt`, `WorkstationPage.tsx`) pairs a `portable-pty` terminal
+(`src-tauri/src/terminal.rs`, for `claude`/opencode/codex/git) with a Monaco editor + git diff over the
+`/workspaces*` backend (`workspace/manager.py`); the **AI-Cursor overlay** (`src-tauri/src/overlay.rs`,
+transparent always-on-top window, hotkey `Ctrl/Cmd+Shift+Space` + tray) re-fires the UI-TARS handoff; the
+**Jupyter** tab (`/jupyter`, `src-tauri/src/jupyter.rs`) runs an optional `jupyter lab` sidecar in an
+iframe. The **Linux (deb/AppImage) + macOS (dmg) bundles** are built only in CI
+(`.github/workflows/native-build.yml`, `workflow_dispatch`/tag `v*`); Windows NSIS builds locally.
+
 ### Tiefenanalyse LaTeX/PDF export
 The deep-analysis "Gesamtantwort" can be exported to a thesis-/paper-style document via the
 **PDF/LaTeX** button (backend `POST /research/tree/export`, package `export/`). It builds LaTeX
