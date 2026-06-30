@@ -82,7 +82,7 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M1.8 | Externe Web-Links → OS-Browser | ✅ | `frontend/src/native.ts`, `src-tauri/src/lib.rs` |
 | M1.9 | Library-PDF inline in der App (Reuse `PdfPane`) | ✅ | `frontend/src/pages/LibraryPage.tsx`, `styles.css` |
 | M1.V | Verifikation: `tauri dev` läuft, Fenster↔Sidecar live | ✅ | — |
-| M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Code fertig, Voll-Build offen | `packaging/`, `src-tauri/` |
+| M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Installer gebaut+getestet; Clean-Install offen | `packaging/`, `src-tauri/` |
 | M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | ⬜ | Build/CI |
 | R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ⬜ | `src-tauri/`, neues Overlay-Frontend |
 | R2   | Eingebettetes Terminal (PTY-Sidecar) | ⬜ | `src-tauri/`, Frontend-Tab |
@@ -157,9 +157,13 @@ Ausgabe: `src-tauri/target/release/bundle/nsis/`. Bundle wird wegen torch groß 
 - ✅ **Standalone-Sidecar-Smoke:** `sciencekg-backend.exe --port <p> --data-dir <leer>` aus einem leeren
   Datenverzeichnis (nur geseedete `config.yaml`/`ontology.yaml`) → `GET /health`, `/projects`,
   `/papers` (echte **duckdb**-Query) und `/models/providers` alle **200**; Prozess endet ohne Orphan.
-- ☐ **Offen (Maschinen-Schritt):** Voll-`npm run tauri:build` → **NSIS-Installer**; den Installer auf einem
-  System **ohne** Repo/.venv installieren, Kernfeatures + Export + PDF testen, Daten in
-  `%APPDATA%/com.sciencekg.desktop`, nach App-Schließen kein verwaister `sciencekg-backend`-Prozess.
+- ✅ **`npm run tauri:build`** → NSIS-Installer gebaut:
+  `src-tauri/target/release/bundle/nsis/ScienceKG_0.1.0_x64-setup.exe` (**367 MB**, LZMA-komprimiert aus
+  dem ~1,44-GB-Bundle). Pipeline: Sidecar-Rebuild → Frontend → Rust-Release → makensis, alles grün.
+- ☐ **Offen (nur noch der „Clean-Machine"-Test, Nutzer-Schritt):** Den Installer auf einem System **ohne**
+  Repo/.venv installieren und starten; Kernfeatures + Export + PDF testen; Daten landen in
+  `%APPDATA%/com.sciencekg.desktop` (config/ontology geseedet, DuckDB unter `data/`); nach App-Schließen
+  kein verwaister `sciencekg-backend`-Prozess. Erst danach M2 → ✅.
 - ☐ **Prod-Routing-Caveat** (`BrowserRouter`, Hard-Reload auf Unterroute) erst im echten Bundle prüfen;
   bei Bedarf `HashRouter` in `frontend/src/main.tsx`.
 
