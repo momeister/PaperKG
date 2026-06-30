@@ -101,7 +101,7 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 per CI gebaut (Phase F: `native-build.yml`, win/ubuntu/macos); Real-Hardware-Smoke offen | `.github/workflows/native-build.yml` |
 | R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ✅ (native; Hotkey `Ctrl/Cmd+Shift+Space` + Tray; reuse UI-TARS-Handoff) | `src-tauri/src/overlay.rs`, `src-tauri/src/lib.rs`, `frontend/src/pages/OverlayPage.tsx` |
 | R2   | Eingebettetes Terminal (PTY) | ✅ (native; portable-pty + xterm.js) | `src-tauri/src/terminal.rs`, `frontend/src/components/WerkstattTerminal.tsx` |
-| R3   | Jupyter als Sidecar + Tab | ⬜ | `src-tauri/`, Frontend-Tab |
+| R3   | Jupyter als Sidecar + Tab | ✅ (native; optionaler `jupyter lab`-Sidecar + iframe-Tab) | `src-tauri/src/jupyter.rs`, `frontend/src/pages/JupyterPage.tsx` |
 | R4   | Code-Editor (Monaco) | ✅ (Werkstatt-Tab, offline gebündelt) | `frontend/src/pages/WorkstationPage.tsx`, `frontend/src/monaco-setup.ts` |
 
 ## Verifikation M1 (Stand)
@@ -250,6 +250,31 @@ PaperKG bleibt „das Gehirn"; es wurde **keine** neue VLM-Plumbing ergänzt.
   (`frontend/src/api.ts`) und das Event-Streaming-Muster aus `ParallelResultsTab.tsx`. Ist die
   `agent_bridge:` aus, zeigt das Overlay einen Hinweis. Schließen via Header-Button oder **Escape**
   (Fenster wird nur versteckt, lebt im Hintergrund weiter).
+
+## Jupyter-Sidecar (R3)
+
+Ein eigener Tab **„Jupyter"** (`/jupyter`) startet **JupyterLab** als **optionalen, verwalteten
+Sidecar** und bettet es als iframe ein. *Optional*: Jupyter wird **nicht** ins Standalone-Bundle
+gepackt — fehlt es, zeigt der Tab einen `pip install jupyterlab`-Hinweis. **Nur nativ** (im Web-Modus
+ein Hinweis), da es einen Kindprozess braucht.
+
+- **Rust** (`src-tauri/src/jupyter.rs`): `JupyterState(Mutex<…>)` hält den einen Server. Command
+  `jupyter_start` startet (oder reused) `jupyter lab --no-browser --ServerApp.ip=127.0.0.1
+  --ServerApp.port=<frei> --IdentityProvider.token=<rand>` auf einem freien Port und gibt die
+  Token-URL `http://127.0.0.1:<port>/lab?token=…` zurück; `jupyter_stop` killt ihn, der Exit-Hook
+  (`jupyter::kill`) ebenso → kein verwaister Prozess. Der `jupyter`-Launcher kommt aus der `.venv`
+  (Dev) bzw. vom PATH. **Wiederverwendung:** `pick_free_port`/`wait_until_ready`/`hide_console`/
+  `project_root` aus `lib.rs` (jetzt `pub(crate)`), Token via `getrandom`.
+- **CSP/Framing:** Jupyters Default `frame-ancestors 'self'` würde das Einbetten im Tauri-Webview
+  (anderer Origin) blockieren. Deshalb überschreibt der Start es per
+  `--ServerApp.tornado_settings={'headers': {'Content-Security-Policy': "frame-ancestors *"}}` (ein
+  argv-Element, ohne Shell → kein Quoting-Problem; traitlets parst das Dict). Der Server ist
+  loopback-gebunden und token-geschützt; `tauri.conf.json` hat `csp: null`, `127.0.0.1` gilt als
+  secure context → kein Mixed-Content-Block. Custom-Commands brauchen **keinen** Capability-Eintrag.
+- **Frontend** (`frontend/src/pages/JupyterPage.tsx`): startet beim Mount automatisch
+  (`nativeInvoke("jupyter_start")`), rendert die Token-URL im `<iframe>`; Buttons „Neu starten"/
+  „Stoppen". Tab-Wechsel killt den Server **nicht** (Kernel überleben Navigation; Aufräumen via
+  Exit-Hook). Nav-Eintrag + Route in `App.tsx`.
 
 ## Externe Links & PDF im nativen Fenster (M1.8)
 

@@ -27,6 +27,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+mod jupyter;
 mod overlay;
 mod terminal;
 
@@ -45,7 +46,7 @@ struct Backend(Mutex<Option<Child>>);
 
 /// Repo root = parent of this `src-tauri` crate directory. Only meaningful in a
 /// dev build, where the source tree is present.
-fn project_root() -> PathBuf {
+pub(crate) fn project_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
@@ -66,7 +67,7 @@ fn python_executable(root: &Path) -> PathBuf {
 }
 
 /// Ask the OS for a free localhost TCP port.
-fn pick_free_port() -> u16 {
+pub(crate) fn pick_free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .map(|addr| addr.port())
@@ -78,7 +79,7 @@ fn to_io_err(err: impl std::fmt::Display) -> std::io::Error {
 }
 
 /// Don't pop up a separate console window for the child on Windows.
-fn hide_console(cmd: &mut Command) {
+pub(crate) fn hide_console(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -160,8 +161,9 @@ fn start_backend(app: &AppHandle, port: u16) -> std::io::Result<Child> {
     }
 }
 
-/// Wait until the backend accepts connections (uvicorn binds only once started).
-fn wait_until_ready(port: u16, timeout: Duration) -> bool {
+/// Wait until a localhost service accepts connections (the backend / Jupyter bind
+/// their port only once fully started).
+pub(crate) fn wait_until_ready(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
@@ -194,6 +196,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(terminal::TerminalState::default())
+        .manage(jupyter::JupyterState::default())
         .invoke_handler(tauri::generate_handler![
             open_external,
             terminal::terminal_spawn,
@@ -202,6 +205,8 @@ pub fn run() {
             terminal::terminal_kill,
             overlay::overlay_hide,
             overlay::overlay_toggle,
+            jupyter::jupyter_start,
+            jupyter::jupyter_stop,
         ])
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -257,6 +262,7 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
                 terminal::kill_all(app_handle);
+                jupyter::kill(app_handle);
                 kill_backend(app_handle);
             }
         });
