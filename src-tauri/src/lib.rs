@@ -27,6 +27,8 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+mod terminal;
+
 /// Open a URL in the OS default application (browser for web sources, the system
 /// PDF viewer/browser for PDF links). Called from the frontend when running in
 /// the native shell, where a webview cannot open a "new tab" itself.
@@ -190,7 +192,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![open_external])
+        .manage(terminal::TerminalState::default())
+        .invoke_handler(tauri::generate_handler![
+            open_external,
+            terminal::terminal_spawn,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_kill,
+        ])
         .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -222,6 +231,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
+                terminal::kill_all(app_handle);
                 kill_backend(app_handle);
             }
         });

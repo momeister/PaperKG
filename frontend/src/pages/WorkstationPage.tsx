@@ -10,12 +10,14 @@ import {
   RefreshCw,
   Save,
   Send,
+  TerminalSquare,
   Trash2,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { WerkstattTerminal } from "../components/WerkstattTerminal";
 import { useAppState } from "../state";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { isTauri } from "../native";
@@ -388,6 +390,7 @@ export function WorkstationPage() {
       ) : null}
 
       {projectId && activeCodeProject ? (
+        <div className="werkstatt-workspace">
         <div className="werkstatt-grid">
           {/* Left: file tree */}
           <aside className="werkstatt-sidebar panel">
@@ -534,6 +537,19 @@ export function WorkstationPage() {
               </button>
             </div>
           </aside>
+        </div>
+
+        {/* Bottom: embedded terminal (Agent half) — AI coding CLIs, git, shell */}
+        <section className="werkstatt-terminal-panel panel">
+          <div className="werkstatt-terminal-head">
+            <TerminalSquare size={15} />
+            <strong>Terminal</strong>
+            <span className="muted" title={activeCodeProject.path}>
+              {activeCodeProject.path}
+            </span>
+          </div>
+          <WerkstattTerminal key={activeCodeProject.path} cwd={activeCodeProject.path} />
+        </section>
         </div>
       ) : null}
 

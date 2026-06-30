@@ -100,9 +100,9 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Installer gebaut+getestet; Clean-Install offen | `packaging/`, `src-tauri/` |
 | M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 Cross-Platform-Fundament + Prereqs dokumentiert; CI-Build offen (Phase F) | Build/CI |
 | R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ⬜ | `src-tauri/`, neues Overlay-Frontend |
-| R2   | Eingebettetes Terminal (PTY-Sidecar) | ⬜ | `src-tauri/`, Frontend-Tab |
+| R2   | Eingebettetes Terminal (PTY) | ✅ (native; portable-pty + xterm.js) | `src-tauri/src/terminal.rs`, `frontend/src/components/WerkstattTerminal.tsx` |
 | R3   | Jupyter als Sidecar + Tab | ⬜ | `src-tauri/`, Frontend-Tab |
-| R4   | Code-Editor (Monaco) bzw. `code-server`-Sidecar | ⬜ | Frontend / Sidecar |
+| R4   | Code-Editor (Monaco) | ✅ (Werkstatt-Tab, offline gebündelt) | `frontend/src/pages/WorkstationPage.tsx`, `frontend/src/monaco-setup.ts` |
 
 ## Verifikation M1 (Stand)
 
@@ -182,6 +182,29 @@ Ausgabe: `src-tauri/target/release/bundle/nsis/`. Bundle wird wegen torch groß 
 - ✅ **Prod-Routing-Caveat gelöst:** `frontend/src/main.tsx` nutzt jetzt `HashRouter` (statt
   `BrowserRouter`). Hard-Reloads auf Unterrouten können im Asset-Protokoll-Build nicht mehr 404en, und
   Mehrfenster-Routing fürs AI-Overlay (`index.html#/overlay`) wird damit trivial.
+
+## Code-Werkstatt (R2 + R4): Doppelansicht Terminal + Editor
+
+Eigener Tab **„Werkstatt"** (`/werkstatt`). Prämisse: *die KI programmiert das meiste*. Zwei Hälften:
+
+1. **Agent/Terminal** — ein echtes eingebettetes Terminal (Rust `portable-pty`: Windows ConPTY /
+   Unix PTY) im Projektordner. Darin laufen KI-Coding-CLIs (**Claude Code** `claude`, **opencode**,
+   **codex**), `git` und die Shell. Rust-Commands `terminal_spawn/write/resize/kill`
+   (`src-tauri/src/terminal.rs`), Output je Terminal als Event `terminal://output/<id>`, Frontend
+   `@xterm/xterm` (`frontend/src/components/WerkstattTerminal.tsx`). Beim App-Exit werden alle PTYs
+   gekillt (kein verwaister Prozess). **Nur native** — im Web-Modus erscheint ein Hinweis.
+2. **Manuelle Datei-Ansicht** — Datei-Baum + **Monaco-Editor** (VS Codes Editor-Engine, vollständig
+   **offline** gebündelt, kein CDN; `frontend/src/monaco-setup.ts`). Öffnen/Bearbeiten/Speichern
+   (Ctrl+S). Plus **Ergebnis-Ansicht**: `git status`/`git diff` zeigt „was wurde gebaut".
+
+**Projekte = offene Git-Ordner** an wiederfindbarer Stelle (Default `~/Documents/PaperKG-Projekte`,
+`config.yaml → code_workspaces.base_dir`), von anderen Editoren (VS Code …) öffenbar. PaperKG
+**registriert** sie nur (DuckDB `code_projects`); **„Ordner öffnen"** lädt einen bestehenden Ordner als
+externes Projekt. Backend-Logik ist web-/native-identisch (`workspace/manager.py`, Endpoints
+`/workspaces*` in `api/product_main.py`) und **pfadgesichert** (kein Ausbruch aus dem Projekt-Root).
+
+**Integration:** Per **„In Workspace einfügen"** wandert die aktuelle Datei/Selektion bzw. der Diff als
+Notiz ins aktive PaperKG-Projekt (Workspace/Parallelmode). Der **AI-Cursor** (R1) hilft zusätzlich.
 
 ## Externe Links & PDF im nativen Fenster (M1.8)
 

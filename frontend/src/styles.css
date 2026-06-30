@@ -7103,13 +7103,67 @@ button.parallel-cite {
   font-family: inherit;
 }
 
+.werkstatt-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100vh - 200px);
+  min-height: 560px;
+  margin-top: 12px;
+}
+
 .werkstatt-grid {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 340px;
   gap: 12px;
-  height: calc(100vh - 210px);
-  min-height: 520px;
-  margin-top: 12px;
+  flex: 1 1 58%;
+  min-height: 0;
+}
+
+.werkstatt-terminal-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 42%;
+  min-height: 160px;
+  padding: 0;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+.werkstatt-terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid #2c2c2c;
+  color: #d4d4d4;
+}
+.werkstatt-terminal-head .muted {
+  margin-left: auto;
+  font-size: 11px;
+  color: #8a8a8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+.werkstatt-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 6px;
+}
+.werkstatt-terminal .xterm,
+.werkstatt-terminal .xterm-viewport {
+  height: 100% !important;
+}
+.werkstatt-terminal-hint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 18px;
+  color: #9aa0a6;
+  font-size: 13px;
 }
 
 .werkstatt-sidebar,

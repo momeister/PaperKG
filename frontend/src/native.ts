@@ -22,6 +22,24 @@ function tauriInvoke(): TauriInvoke | null {
   return w.__TAURI_INTERNALS__?.invoke ?? w.__TAURI__?.core?.invoke ?? null;
 }
 
+/**
+ * Invoke a Rust command via the official Tauri API (dynamically imported so it
+ * stays out of the pure-web bundle). Used by the Code-Werkstatt terminal.
+ */
+export async function nativeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(cmd, args);
+}
+
+/** Listen to a Rust-emitted event; resolves to an unlisten function. */
+export async function nativeListen<T>(
+  event: string,
+  handler: (payload: T) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(event, (e) => handler(e.payload));
+}
+
 /** Open a URL in the OS default application (browser / PDF viewer). */
 export async function openExternal(target: string): Promise<void> {
   const invoke = tauriInvoke();
