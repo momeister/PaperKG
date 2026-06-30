@@ -355,3 +355,11 @@ agent_bridge:
   # configuring that agent — PaperKG does not load the VLM itself.
   vlm_provider: "lm_studio"
   vlm_model: "ui-tars-1.5-7b"
+
+# Code-Werkstatt: where *managed* coding projects are created on disk. They live
+# as plain Git folders so other editors (VS Code, …) can open them too; PaperKG
+# only registers them (DuckDB `code_projects`). "Ordner öffnen" registers an
+# existing folder from anywhere as an external project. Default if unset:
+# ~/Documents/PaperKG-Projekte. `~` and $ENV are expanded.
+code_workspaces:
+  base_dir: "~/Documents/PaperKG-Projekte"

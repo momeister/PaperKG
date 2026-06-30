@@ -495,6 +495,20 @@ class MetadataDB:
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Code-Werkstatt: registered coding-project folders on disk. ``kind`` is
+        # 'managed' (created + git-init'd by us under the workspaces base dir) or
+        # 'external' (an existing folder the user opened). Only the *registration*
+        # lives here; the files stay on disk so other editors can open them too.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_projects (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                path VARCHAR NOT NULL,
+                kind VARCHAR DEFAULT 'managed',
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
         self._execute("CREATE INDEX IF NOT EXISTS idx_benchmark_runs_kind ON benchmark_runs(kind)")
 
@@ -513,6 +527,7 @@ class MetadataDB:
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_entries_variant ON parallel_entries(variant_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_entries_session ON parallel_entries(session_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_followups_session ON parallel_followups(session_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_code_projects_path ON code_projects(path)")
 
     def _add_missing_columns(
         self,
@@ -1928,6 +1943,56 @@ class MetadataDB:
             return False
         self._execute("DELETE FROM parallel_followups WHERE id = ?", [str(followup_id)])
         self._touch_parallel_session(str(row[0]))
+        return True
+
+    # ------------------------------------------------------------------ #
+    # Code-Werkstatt projects (registered coding-project folders on disk) #
+    # ------------------------------------------------------------------ #
+
+    def _code_project_row(self, row: Any) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        cols = [desc[0] for desc in self.conn.description]
+        return dict(zip(cols, row))
+
+    def add_code_project(
+        self,
+        name: str,
+        path: str,
+        kind: str = "managed",
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        pid = project_id or f"cp_{uuid.uuid4().hex}"
+        now = datetime.now()
+        self._execute("""
+            INSERT INTO code_projects (id, name, path, kind, created_timestamp, updated_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, [pid, str(name), str(path), str(kind or "managed"), now, now])
+        return self.get_code_project(pid)  # type: ignore[return-value]
+
+    def get_code_project(self, project_id: str) -> dict[str, Any] | None:
+        row = self._execute(
+            "SELECT * FROM code_projects WHERE id = ?", [str(project_id)]
+        ).fetchone()
+        return self._code_project_row(row)
+
+    def get_code_project_by_path(self, path: str) -> dict[str, Any] | None:
+        row = self._execute(
+            "SELECT * FROM code_projects WHERE path = ?", [str(path)]
+        ).fetchone()
+        return self._code_project_row(row)
+
+    def list_code_projects(self) -> list[dict[str, Any]]:
+        rows = self._execute(
+            "SELECT * FROM code_projects ORDER BY created_timestamp DESC"
+        ).fetchall()
+        cols = [desc[0] for desc in self.conn.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def delete_code_project(self, project_id: str) -> bool:
+        if self.get_code_project(project_id) is None:
+            return False
+        self._execute("DELETE FROM code_projects WHERE id = ?", [str(project_id)])
         return True
 
     def add_benchmark_run(self, run: dict[str, Any]) -> dict[str, Any]:
