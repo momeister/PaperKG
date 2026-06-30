@@ -99,7 +99,7 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M1.V | Verifikation: `tauri dev` läuft, Fenster↔Sidecar live | ✅ | — |
 | M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Installer gebaut+getestet; Clean-Install offen | `packaging/`, `src-tauri/` |
 | M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 Cross-Platform-Fundament + Prereqs dokumentiert; CI-Build offen (Phase F) | Build/CI |
-| R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ⬜ | `src-tauri/`, neues Overlay-Frontend |
+| R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ✅ (native; Hotkey `Ctrl/Cmd+Shift+Space` + Tray; reuse UI-TARS-Handoff) | `src-tauri/src/overlay.rs`, `src-tauri/src/lib.rs`, `frontend/src/pages/OverlayPage.tsx` |
 | R2   | Eingebettetes Terminal (PTY) | ✅ (native; portable-pty + xterm.js) | `src-tauri/src/terminal.rs`, `frontend/src/components/WerkstattTerminal.tsx` |
 | R3   | Jupyter als Sidecar + Tab | ⬜ | `src-tauri/`, Frontend-Tab |
 | R4   | Code-Editor (Monaco) | ✅ (Werkstatt-Tab, offline gebündelt) | `frontend/src/pages/WorkstationPage.tsx`, `frontend/src/monaco-setup.ts` |
@@ -205,6 +205,28 @@ externes Projekt. Backend-Logik ist web-/native-identisch (`workspace/manager.py
 
 **Integration:** Per **„In Workspace einfügen"** wandert die aktuelle Datei/Selektion bzw. der Diff als
 Notiz ins aktive PaperKG-Projekt (Workspace/Parallelmode). Der **AI-Cursor** (R1) hilft zusätzlich.
+
+## AI-Cursor-Overlay (R1)
+
+Ein **zweites, transparentes, immer-im-Vordergrund**-Fenster (`overlay`), das über dem Desktop
+schwebt — auch außerhalb des Hauptfensters. Zweck: den bestehenden **UI-TARS-Handoff**
+(`query/agent_handoff.py`, `POST /agent/dispatch`, `bridge/uitars/`) von überall aus auslösen.
+PaperKG bleibt „das Gehirn"; es wurde **keine** neue VLM-Plumbing ergänzt.
+
+- **Rust** (`src-tauri/src/overlay.rs`): `build_overlay` (verstecktes `WebviewWindow` „overlay":
+  `transparent` + `decorations(false)` + `always_on_top` + `skip_taskbar`, teilt das init-script des
+  Hauptfensters und hängt `window.__OVERLAY__ = true` + `#/overlay` an), `toggle_overlay`,
+  Tauri-Commands `overlay_hide`/`overlay_toggle`, `setup_tray` (Tray-Menü „AI-Cursor ein/aus"/„Beenden")
+  und `register_global_shortcut`. In `lib.rs` registriert; das Plugin `tauri-plugin-global-shortcut`
+  toggelt per **`Ctrl/Cmd+Shift+Space`**. `tauri.conf.json` setzt `app.macOSPrivateApi: true` (für
+  transparente Fenster auf macOS; Cargo-Feature `macos-private-api`). Eigene Capability
+  `src-tauri/capabilities/overlay.json` (Fenster „overlay", `core:default`).
+- **Frontend** (`frontend/src/pages/OverlayPage.tsx`): kompakte UI. `App.tsx` erkennt das Overlay
+  (`window.__OVERLAY__`/Route `#/overlay`), rendert **nur** die Overlay-Seite (ohne Sidebar/Topbar) und
+  überspringt die schweren Shell-Queries. Wiederverwendet **`getAgentConfig` + `streamAgentDispatch`**
+  (`frontend/src/api.ts`) und das Event-Streaming-Muster aus `ParallelResultsTab.tsx`. Ist die
+  `agent_bridge:` aus, zeigt das Overlay einen Hinweis. Schließen via Header-Button oder **Escape**
+  (Fenster wird nur versteckt, lebt im Hintergrund weiter).
 
 ## Externe Links & PDF im nativen Fenster (M1.8)
 

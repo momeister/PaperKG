@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -34,6 +34,7 @@ import { QualityPage } from "./pages/QualityPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { WorkstationPage } from "./pages/WorkstationPage";
+import { OverlayPage } from "./pages/OverlayPage";
 
 const navigation = [
   { to: "/projects", label: "Projekte", icon: Briefcase },
@@ -70,9 +71,14 @@ export default function App() {
   const [llmParams, setLlmParams] = useState<LlmParams>(loadStoredLlmParams);
   const [paramsOpen, setParamsOpen] = useState(false);
 
-  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
-  const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000 });
-  const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders });
+  // The AI-Cursor overlay (R1) loads the same app in a separate Tauri window; it
+  // renders only the compact overlay and skips the heavy main-shell queries.
+  const location = useLocation();
+  const isOverlay = window.__OVERLAY__ === true || location.pathname === "/overlay";
+
+  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects, enabled: !isOverlay });
+  const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000, enabled: !isOverlay });
+  const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders, enabled: !isOverlay });
   // Local providers (LM Studio, Ollama) know their loaded models best — discover them
   // live instead of relying on the static list in config.yaml.
   const activeProviderInfo = providersQuery.data?.providers.find((item) => item.name === provider);
@@ -82,7 +88,7 @@ export default function App() {
   const discoveredModelsQuery = useQuery({
     queryKey: ["models-discovered", provider],
     queryFn: () => api.discoverModels(provider as string),
-    enabled: Boolean(provider) && supportsDiscovery,
+    enabled: Boolean(provider) && supportsDiscovery && !isOverlay,
     staleTime: 60_000,
     retry: false
   });
@@ -148,6 +154,11 @@ export default function App() {
       ...llmParams,
       [key]: rawValue === "" ? undefined : Number(rawValue)
     });
+  }
+
+  // Overlay window: no sidebar/topbar — just the compact AI-Cursor.
+  if (isOverlay) {
+    return <OverlayPage />;
   }
 
   return (
@@ -288,6 +299,7 @@ export default function App() {
             <Route path="/notes" element={<Navigate to="/workspace" replace />} />
             <Route path="/workspace" element={<WorkspacePage />} />
             <Route path="/werkstatt" element={<WorkstationPage />} />
+            <Route path="/overlay" element={<OverlayPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/quality" element={<QualityPage />} />
             <Route path="/benchmarks" element={<BenchmarksPage />} />

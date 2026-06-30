@@ -27,6 +27,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+mod overlay;
 mod terminal;
 
 /// Open a URL in the OS default application (browser for web sources, the system
@@ -199,6 +200,8 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            overlay::overlay_hide,
+            overlay::overlay_toggle,
         ])
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -207,6 +210,23 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+
+            // AI-Cursor overlay (R1): a global hotkey toggles the always-on-top
+            // window. Desktop only — the plugin is unavailable on mobile.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::ShortcutState;
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(|app, _shortcut, event| {
+                            if event.state() == ShortcutState::Pressed {
+                                overlay::toggle_overlay(app);
+                            }
+                        })
+                        .build(),
+                )?;
+                overlay::register_global_shortcut(app.handle())?;
             }
 
             // Spawn the backend (release: bundled binary needs the app handle to
@@ -225,6 +245,11 @@ pub fn run() {
                 .min_inner_size(960.0, 600.0)
                 .initialization_script(&init_script)
                 .build()?;
+
+            // AI-Cursor overlay (R1): hidden second window (shares the backend
+            // origin via the same init script) + system-tray toggle.
+            overlay::build_overlay(app.handle(), &init_script)?;
+            overlay::setup_tray(app.handle())?;
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -7378,3 +7378,135 @@ button.parallel-cite {
     height: 280px;
   }
 }
+
+/* ── AI-Cursor overlay (R1): transparent, always-on-top floating window ── */
+.overlay-mode {
+  background: transparent !important;
+}
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  color: #e6e8ec;
+  background: rgba(22, 26, 33, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+.overlay-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: move;
+  user-select: none;
+  padding: 2px 2px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.overlay-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #aeb4bf;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.overlay-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.overlay-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #f0c674;
+}
+.overlay-hint code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.overlay-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.overlay-input textarea {
+  width: 100%;
+  resize: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e6e8ec;
+  padding: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.overlay-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.overlay-input .button {
+  align-self: flex-end;
+}
+.overlay-muted {
+  margin: 0;
+  font-size: 11.5px;
+  color: #8a909b;
+}
+.overlay-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.overlay-log-line {
+  display: flex;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.overlay-log-tag {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: #8ab4f8;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.overlay-log-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.overlay-log-line--error {
+  background: rgba(186, 52, 52, 0.18);
+}
+.overlay-log-line--error .overlay-log-tag {
+  color: #ff8a8a;
+}
+.overlay-log-line--done .overlay-log-tag {
+  color: #6fcf97;
+}
+.overlay-spin {
+  animation: overlay-spin 1s linear infinite;
+}
+@keyframes overlay-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

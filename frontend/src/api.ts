@@ -48,6 +48,8 @@ declare global {
   interface Window {
     /** Backend origin injected by the native Tauri shell (dynamic localhost port). */
     __API_BASE__?: string;
+    /** Set by the Tauri shell on the overlay window so the app renders the AI-Cursor (R1). */
+    __OVERLAY__?: boolean;
   }
 }
 
