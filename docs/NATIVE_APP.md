@@ -42,6 +42,21 @@ src-tauri/src/lib.rs (Rust)
 - **Tauri-CLI** — als Dev-Dependency im Root-`package.json` (`@tauri-apps/cli`); einmal `npm install` im Repo-Root.
 - Python-Umgebung (`.venv`) wie bisher (für den Backend-Sidecar in M1).
 
+## Voraussetzungen (Linux / macOS)
+
+Diese werden für M3 gebraucht — lokal gebaut wird auf der Windows-Maschine nicht, die echten Linux-/Mac-
+Artefakte entstehen in der CI (siehe „M3 — Linux/Mac via CI"). Wer es nativ auf einer Linux-/Mac-Box
+selbst baut, braucht:
+
+- **Linux (Debian/Ubuntu):** `libwebkit2gtk-4.1-dev`, `libappindicator3-dev` (Tray-Icon),
+  `librsvg2-dev`, `patchelf`, `build-essential`, plus `curl`/`wget`/`file`. WebView = **WebKitGTK**
+  (nicht WebView2). Rust-Toolchain via `rustup`, Node/npm, Python 3.10+ für den Backend-Sidecar.
+- **macOS:** **Xcode Command Line Tools** (`xcode-select --install`), Rust-Toolchain, Node/npm,
+  Python 3.10+. WebView = WKWebView (system). Transparente Fenster fürs AI-Overlay brauchen
+  `macOSPrivateApi: true` in `tauri.conf.json` (ist in der Overlay-Ausbaustufe gesetzt).
+- **Bundle-Targets je OS:** Windows `nsis`, Linux `deb` + `appimage`, macOS `dmg`. Die CI-Matrix setzt
+  das passende Target je Runner; das Resource-Globbing (`defaults/*`, `sidecar/**`) ist OS-neutral.
+
 ## Befehle
 
 ```powershell
@@ -83,7 +98,7 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M1.9 | Library-PDF inline in der App (Reuse `PdfPane`) | ✅ | `frontend/src/pages/LibraryPage.tsx`, `styles.css` |
 | M1.V | Verifikation: `tauri dev` läuft, Fenster↔Sidecar live | ✅ | — |
 | M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Installer gebaut+getestet; Clean-Install offen | `packaging/`, `src-tauri/` |
-| M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | ⬜ | Build/CI |
+| M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 Cross-Platform-Fundament + Prereqs dokumentiert; CI-Build offen (Phase F) | Build/CI |
 | R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ⬜ | `src-tauri/`, neues Overlay-Frontend |
 | R2   | Eingebettetes Terminal (PTY-Sidecar) | ⬜ | `src-tauri/`, Frontend-Tab |
 | R3   | Jupyter als Sidecar + Tab | ⬜ | `src-tauri/`, Frontend-Tab |
@@ -164,8 +179,9 @@ Ausgabe: `src-tauri/target/release/bundle/nsis/`. Bundle wird wegen torch groß 
   Repo/.venv installieren und starten; Kernfeatures + Export + PDF testen; Daten landen in
   `%APPDATA%/com.sciencekg.desktop` (config/ontology geseedet, DuckDB unter `data/`); nach App-Schließen
   kein verwaister `sciencekg-backend`-Prozess. Erst danach M2 → ✅.
-- ☐ **Prod-Routing-Caveat** (`BrowserRouter`, Hard-Reload auf Unterroute) erst im echten Bundle prüfen;
-  bei Bedarf `HashRouter` in `frontend/src/main.tsx`.
+- ✅ **Prod-Routing-Caveat gelöst:** `frontend/src/main.tsx` nutzt jetzt `HashRouter` (statt
+  `BrowserRouter`). Hard-Reloads auf Unterrouten können im Asset-Protokoll-Build nicht mehr 404en, und
+  Mehrfenster-Routing fürs AI-Overlay (`index.html#/overlay`) wird damit trivial.
 
 ## Externe Links & PDF im nativen Fenster (M1.8)
 
@@ -195,9 +211,9 @@ Evidenz-/Übersetzungs-UI. Schließen via Backdrop-Klick, Einklappen-Button oder
   reuse't die M1-Spawn/Kill-Logik. Verbleibend: torch (CPU) installieren und den eigentlichen
   `npm run tauri:build` + Clean-Machine-Install verifizieren. Bundle wird wegen torch groß (~1–2 GB) →
   ggf. Embeddings später lazy/optional (`SCIENCEKG_BUNDLE_LEAN=1` baut schon heute schlank).
-- **Prod-Routing-Caveat:** Das Frontend nutzt `BrowserRouter` (`frontend/src/main.tsx`). Im Asset-
-  Protokoll-Build kann ein **Hard-Reload auf einer Unterroute** 404en. Lösung bei Bedarf in M2:
-  `HashRouter` oder ein Asset-Fallback auf `index.html`. In M1 (Vite-Dev) irrelevant.
+- **Prod-Routing-Caveat — gelöst:** Das Frontend nutzt seit der Werkstatt-Ausbaustufe `HashRouter`
+  (`frontend/src/main.tsx`). Damit kann ein Hard-Reload auf einer Unterroute im Asset-Protokoll-Build
+  nicht mehr 404en; zusätzlich macht es das Mehrfenster-Routing fürs AI-Overlay (`#/overlay`) einfach.
 - **Downloads auf Linux** beim WebKitGTK-Webview erneut prüfen (M3).
 - **Tauri-IPC auf der Seite** erst ab R1 nötig → dann Capabilities/CSP in `src-tauri/capabilities/`
   erweitern. In M1 ruft das Frontend ausschließlich per HTTP den Sidecar; keine Tauri-Permissions nötig.
