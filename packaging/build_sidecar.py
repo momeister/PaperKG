@@ -22,10 +22,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SPEC = PROJECT_ROOT / "packaging" / "sidecar.spec"
 DIST = PROJECT_ROOT / "src-tauri" / "sidecar"
 
-# Deps that must be importable to produce the FULL bundle (embeddings work out of
-# the box). The spec guards collect_all() in a try/except, so a missing heavy dep
-# would otherwise silently yield a LEAN bundle — we'd rather fail loudly here.
-# Set SCIENCEKG_BUNDLE_LEAN=1 to intentionally skip this and ship the hash-fallback.
+# Core runtime deps the backend imports at module load. PyInstaller can only
+# bundle what is installed in THIS interpreter, so a missing one yields a bundle
+# that ImportErrors at runtime (e.g. "No module named 'duckdb'"). Always checked,
+# even for a lean build. Names are import names, not PyPI names.
+CORE_RUNTIME_DEPS = [
+    "duckdb", "httpx", "yaml", "fastapi", "uvicorn", "pydantic",
+    "numpy", "pandas", "feedparser", "pypdf", "networkx", "aiofiles",
+]
+
+# Extra deps needed for the FULL bundle (embeddings work out of the box). The spec
+# guards collect_all() in a try/except, so a missing heavy dep would otherwise
+# silently yield a LEAN bundle — we'd rather fail loudly here. Set
+# SCIENCEKG_BUNDLE_LEAN=1 to intentionally skip these and ship the hash-fallback.
 FULL_BUNDLE_DEPS = ["torch", "sentence_transformers", "transformers", "pdfplumber"]
 
 
@@ -42,6 +51,18 @@ def _missing(mods: list[str]) -> list[str]:
 
 
 def _preflight() -> int:
+    core_missing = _missing(CORE_RUNTIME_DEPS)
+    if core_missing:
+        print(
+            "[build_sidecar] ERROR: core runtime deps missing from the active "
+            f"environment ({sys.executable}): {', '.join(core_missing)}\n"
+            "PyInstaller bundles only what is installed here, so the bundle would "
+            "ImportError at runtime. Install the full runtime first:\n"
+            "    pip install -r requirements.txt",
+            file=sys.stderr,
+        )
+        return 1
+
     if os.environ.get("SCIENCEKG_BUNDLE_LEAN"):
         print("[build_sidecar] SCIENCEKG_BUNDLE_LEAN set -> lean bundle (hash-fallback embeddings).")
         return 0

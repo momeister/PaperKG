@@ -12,7 +12,7 @@ and let ``collect_all`` pull their data files + dynamic submodules.
 
 import os
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 # SPECPATH is injected by PyInstaller and points at this file's directory
 # (``packaging/``); the repo root is its parent.
@@ -48,6 +48,23 @@ for _pkg in (
         hiddenimports += _h
     except Exception as exc:  # noqa: BLE001 - optional/absent package
         print(f"[sidecar.spec] skip collect_all({_pkg!r}): {exc}")
+
+# Several packages read their own version at import time via
+# importlib.metadata.version(), which needs the .dist-info metadata in the bundle
+# (collect_all does NOT copy it). duckdb._version hard-fails without it; many
+# torch/transformers deps do version checks too. Copy metadata generously (dist
+# names, not import names) to avoid runtime PackageNotFoundError whack-a-mole.
+for _dist in (
+    "duckdb", "kuzu", "numpy", "scipy", "scikit-learn", "torch",
+    "sentence-transformers", "transformers", "tokenizers", "safetensors",
+    "huggingface-hub", "tqdm", "regex", "filelock", "pyyaml", "packaging",
+    "pandas", "networkx", "matplotlib", "pdfplumber", "pdfminer.six",
+    "fastapi", "uvicorn", "pillow", "charset-normalizer", "requests",
+):
+    try:
+        datas += copy_metadata(_dist)
+    except Exception as exc:  # noqa: BLE001 - absent/renamed dist
+        print(f"[sidecar.spec] skip copy_metadata({_dist!r}): {exc}")
 
 # Our own packages: collect every submodule so lazily/dynamically imported ones
 # (e.g. parser selection in parsing.parser_router, harvester clients) are frozen.
@@ -105,6 +122,17 @@ excludes = [
     "ruff",
     "IPython",
     "notebook",
+    # Unused ML frameworks pulled in transitively by transformers' optional
+    # backends. We use the torch path only; excluding these trims ~1 GB+ and
+    # silences the Keras-3 incompatibility warnings. transformers guards these
+    # behind availability checks, so they are never imported at runtime.
+    "tensorflow",
+    "tensorflow_intel",
+    "keras",
+    "tf_keras",
+    "jax",
+    "jaxlib",
+    "flax",
 ]
 
 
