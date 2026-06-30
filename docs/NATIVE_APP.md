@@ -137,17 +137,29 @@ npm.cmd run tauri:build   # baut Sidecar (beforeBuildCommand) + Frontend + NSIS-
 ```
 Ausgabe: `src-tauri/target/release/bundle/nsis/`. Bundle wird wegen torch groß (~1–2 GB).
 
+**Build-Stolpersteine (gelöst, im Bau verifiziert):**
+- **Metadaten:** duckdb (u. a.) liest beim Import seine Version via `importlib.metadata`; `collect_all`
+  kopiert die `.dist-info` **nicht** → `PackageNotFoundError`. Gelöst per `copy_metadata(...)` in der Spec.
+- **Build-Env unvollständig:** Das Build-`python` muss **alle** Runtime-Deps haben (PyInstaller bündelt
+  nur Installiertes). Der `CORE_RUNTIME_DEPS`-Preflight fängt das jetzt vor dem Bau ab. Hinweis: das
+  globale Python 3.10 hier hatte torch, aber nicht duckdb/sentence-transformers — beide nachinstalliert.
+- **matplotlib-Pin:** `requirements.txt` pinnt `matplotlib==3.11.0` (braucht Py ≥ 3.11), Build-`python`
+  ist 3.10 → für 3.10 eine kompatible matplotlib (3.10.x) nutzen, oder Build auf Py 3.11+ stellen.
+- **Größe:** `transformers` zieht transitiv tensorflow/keras (~1 GB) — via `excludes` raus → Bundle
+  **~2,4 GB → ~1,44 GB**.
+
 **Verifikation M2 (Stand):**
 - ✅ `cargo check --manifest-path src-tauri/Cargo.toml` — neue Rust-Shell (Bundle-Branch inkl.
   `app_data_dir`/`resolve`/`BaseDirectory`) kompiliert; `tauri dev` bleibt resource-frei lauffähig.
 - ✅ `python -m pytest tests/test_product_api.py -q` — 21 passed (Backend-Logik unverändert).
 - ✅ `npm --prefix frontend run build` — Frontend baut.
-- ✅ `sidecar.spec` parst, `sidecar_entry.py --help` ok, `build_sidecar.py`-Preflight bricht korrekt
-  ab, wenn torch fehlt.
-- ☐ **Offen (Maschinen-Schritt):** Voll-`npm run tauri:build` nach torch-Install; Standalone-Sidecar-
-  Smoke (`sciencekg-backend.exe --port 8123` aus leerem CWD → `/health` 200); NSIS-Installer auf einem
+- ✅ `python packaging/build_sidecar.py` — PyInstaller one-dir baut sauber (~1,44 GB).
+- ✅ **Standalone-Sidecar-Smoke:** `sciencekg-backend.exe --port <p> --data-dir <leer>` aus einem leeren
+  Datenverzeichnis (nur geseedete `config.yaml`/`ontology.yaml`) → `GET /health`, `/projects`,
+  `/papers` (echte **duckdb**-Query) und `/models/providers` alle **200**; Prozess endet ohne Orphan.
+- ☐ **Offen (Maschinen-Schritt):** Voll-`npm run tauri:build` → **NSIS-Installer**; den Installer auf einem
   System **ohne** Repo/.venv installieren, Kernfeatures + Export + PDF testen, Daten in
-  `%APPDATA%/com.sciencekg.desktop`, nach Schließen kein verwaister `sciencekg-backend`-Prozess.
+  `%APPDATA%/com.sciencekg.desktop`, nach App-Schließen kein verwaister `sciencekg-backend`-Prozess.
 - ☐ **Prod-Routing-Caveat** (`BrowserRouter`, Hard-Reload auf Unterroute) erst im echten Bundle prüfen;
   bei Bedarf `HashRouter` in `frontend/src/main.tsx`.
 
