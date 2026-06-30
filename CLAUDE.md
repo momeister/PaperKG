@@ -86,6 +86,29 @@ cd frontend; npm.cmd install; npm.cmd run dev -- --port 5173
 ```
 API → `http://127.0.0.1:8000`, frontend → `http://127.0.0.1:5173`. Use `npm.cmd` (not `npm`) on Windows.
 
+### Run as a native desktop app (Tauri)
+The same frontend+backend also ship as a **native desktop program** via a Tauri 2 (Rust) shell in
+`src-tauri/`. The shell opens an OS window, starts `api.product_main:app` as a **managed sidecar** on a
+free localhost port, and injects that origin into the page as `window.__API_BASE__` (read in
+`frontend/src/api.ts → resolveApiBaseUrl()`). Tooling lives in the **root** `package.json` (Tauri CLI
+only — the web frontend stays in `frontend/package.json`).
+```powershell
+npm.cmd install            # once: installs @tauri-apps/cli (root)
+npm.cmd run tauri dev      # native window + Vite + backend sidecar (self-contained; no run_product.py needed)
+npm.cmd run tauri:build    # M2 standalone NSIS installer: builds the PyInstaller sidecar + frontend + bundle
+```
+`tauri dev` (debug) runs the backend from the `.venv`. `npm run tauri:build` (note the colon; it passes
+`--config src-tauri/tauri.bundle.conf.json`) produces a **standalone NSIS installer** that needs no
+pre-installed Python: `beforeBuildCommand` runs `python packaging/build_sidecar.py` (PyInstaller one-dir
+→ `src-tauri/sidecar/`), which is shipped as a Tauri resource and spawned in release builds. The
+installed app stores data in **`%APPDATA%/com.sciencekg.desktop`** (config.yaml/ontology.yaml seeded from
+`src-tauri/defaults/` on first run); dev is unchanged (repo-root `data/`). The **full** bundle needs the
+heavy runtime deps installed first (torch is *not* in the `.venv` by default — `embedding.backend` is
+`hash-fallback`): `pip install -r requirements.txt -r requirements-build.txt` + CPU torch; or set
+`SCIENCEKG_BUNDLE_LEAN=1` for a small hash-fallback bundle. **Full build details + status:
+`docs/NATIVE_APP.md`** — update its tracker when advancing a milestone. The web app
+(`scripts/run_product.py`) is unchanged.
+
 ### Tiefenanalyse LaTeX/PDF export
 The deep-analysis "Gesamtantwort" can be exported to a thesis-/paper-style document via the
 **PDF/LaTeX** button (backend `POST /research/tree/export`, package `export/`). It builds LaTeX
@@ -94,6 +117,19 @@ charts, auto-tables and ComfyUI images. PDF compilation needs a LaTeX engine on 
 `pdflatex`) — install **MiKTeX** (`winget install MiKTeX.MiKTeX`, auto-installs packages on demand).
 Without an engine the endpoint gracefully returns a ZIP of `.tex`+`.bib`+figures instead (compile on
 Overleaf). ComfyUI (port 8188) is optional and best-effort. Requires `matplotlib` in the `.venv`.
+
+### Desktop-agent hand-off (Parallelmodus)
+In the Workspace Parallel mode, each *Variante* in the Notes "Ergebnisse" tab has an
+**„An Desktop-Agent übergeben"** button. The backend (`query/agent_handoff.py`,
+`POST /parallel/variants/{id}/handoff`) compiles the variant + grounded context into a
+**task brief** (goal/steps/constraints/success criteria) and renders it as one copy-/POST-
+ready instruction. PaperKG stays the *brain*; it never drives the machine itself. Two
+channels: **Kanal A** (copy the brief into [UI-TARS-Desktop](https://github.com/bytedance/UI-TARS-desktop)
+manually — always available) and **Kanal B** (`POST /agent/dispatch` SSE → the optional
+local bridge in `bridge/uitars/`, which runs `@ui-tars/sdk` against a local VLM and streams
+progress back as a variant entry). Off by default; enable via the `agent_bridge:` block in
+`config.yaml`. The VLM (e.g. `ui-tars-1.5-7b`) is served by your existing LM Studio/Ollama
+provider — `LLMRouter` itself stays text-only, no vision plumbing was added.
 
 ### Frontend checks
 ```powershell

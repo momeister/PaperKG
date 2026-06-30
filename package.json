@@ -1,0 +1,13 @@
+{
+  "name": "sciencekg-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Native Tauri desktop shell for ScienceKG/PaperKG. Wraps the React frontend (frontend/) and runs the FastAPI backend as a managed sidecar. The web frontend itself lives in frontend/package.json.",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:build": "tauri build --config src-tauri/tauri.bundle.conf.json"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

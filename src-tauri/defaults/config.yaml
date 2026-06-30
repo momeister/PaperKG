@@ -1,0 +1,357 @@
+# ScienceKG Phase 1 Configuration
+# Harvester, Storage, and Deduplication Setup
+
+harvester:
+  # ArXiv API
+  arxiv:
+    base_url: "https://export.arxiv.org/api/query"
+    requests_per_second: 0.333  # 3 second pause between requests (arXiv recommendation)
+    timeout_seconds: 30
+    max_papers_per_search: 100
+
+  # Semantic Scholar API
+  semantic_scholar:
+    api_key: null  # Prefer SEMANTIC_SCHOLAR_API_KEY or S2_API_KEY in .env
+    base_url_graph: "https://api.semanticscholar.org/graph/v1"
+    base_url_recommendations: "https://api.semanticscholar.org/recommendations/v1"
+    requests_per_second: 1.0
+    timeout_seconds: 30
+    max_retries: 3
+    initial_retry_delay_seconds: 2.0
+    bubble_extension: true  # Enable automatic recommended papers discovery
+    bubble_extension_count: 30  # How many recommended papers to fetch
+
+  # OpenAlex API
+  openalex:
+    api_key: null  # Free tier; set for higher limits
+    base_url: "https://api.openalex.org"
+    requests_per_second: 10.0
+    timeout_seconds: 30
+
+  # Unpaywall API
+  unpaywall:
+    email: "your-email@example.com"  # Required for Unpaywall API
+    base_url: "https://api.unpaywall.org/v2"
+    timeout_seconds: 30
+
+  # Papers with Code
+  papers_with_code:
+    # This API may have limited availability; kept for reference
+    timeout_seconds: 30
+    token: null
+
+  # Crossref API (no key; supplying a contact mail joins the "polite pool")
+  crossref:
+    base_url: "https://api.crossref.org"
+    mailto_env: "CROSSREF_MAILTO"  # falls back to the Unpaywall email
+    requests_per_second: 5.0
+    timeout_seconds: 30
+
+  # Europe PMC (biomedical; no key). Also backs bioRxiv/medRxiv preprint search.
+  europepmc:
+    base_url: "https://www.ebi.ac.uk/europepmc/webservices/rest"
+    requests_per_second: 5.0
+    timeout_seconds: 30
+
+  # CORE v3 (260M+ open-access full texts; requires a free API key)
+  core:
+    base_url: "https://api.core.ac.uk/v3"
+    api_key_env: "CORE_API_KEY"
+    requests_per_second: 1.0
+    timeout_seconds: 45
+
+  # DOAJ (open-access journals across all disciplines; no key)
+  doaj:
+    base_url: "https://doaj.org/api/v2"
+    requests_per_second: 2.0
+    timeout_seconds: 30
+
+  # bioRxiv/medRxiv native API (DOI/recent-preprint resolution; no key)
+  biorxiv:
+    base_url: "https://api.biorxiv.org"
+    requests_per_second: 2.0
+    timeout_seconds: 30
+
+# Deep research / grey (web) sources. Used only on explicit request; results are
+# project-scoped supplementary context and are never written to the knowledge graph.
+research:
+  default_provider: "duckduckgo"  # duckduckgo | searxng | tavily | brave
+  timeout_seconds: 30
+  # Optional domain allow/block lists applied to every web result.
+  allowed_domains: []
+  blocked_domains: []
+  providers:
+    duckduckgo: {}
+    searxng:
+      # Self-hosted metasearch (max privacy). Set base_url or env SEARXNG_BASE_URL.
+      base_url: null
+    tavily:
+      api_key_env: "TAVILY_API_KEY"
+    brave:
+      api_key_env: "BRAVE_API_KEY"
+
+storage:
+  # PDF Storage
+  pdf_base_dir: "data/pdfs"
+  
+  # Metadata Database
+  duckdb_path: "data/metadata.duckdb"
+  vocabulary_path: "data/vocabulary.json"
+
+deduplication:
+  # Deduplication strategy
+  by_doi: true  # Exact DOI match
+  by_normalized_title: true  # Normalized title matching
+  keep_highest_version: true  # When duplicates exist, keep the one with highest version
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/sciencekg.log"
+
+# Rate Limiting & Throttling
+rate_limits:
+  # Global concurrency limit for API requests
+  max_concurrent_requests: 5
+  # Respect API rate limits per service
+  respect_rate_limits: true
+
+# ScienceKG Phase 3 Configuration
+# LLM Configuration for Entity Extraction and Analysis
+
+llm:
+  # Default provider for all LLM operations
+  default_provider: "lm_studio"
+
+  # Supported providers: ollama, lm_studio, openai, openai_compatible, gemini, nvidia
+  providers:
+    # Ollama - Local open-source models
+    ollama:
+      provider_type: "ollama"
+      base_url: "http://localhost:11434"
+      api_key: null  # Ollama doesn't require API key
+      timeout_seconds: 1800
+      models:
+        - "qwen3.6:35b"
+        - "llama3.1:8b"
+        - "mistral-small:latest"
+      
+      # Model and Generation Settings
+      model: "qwen3.6:35b"
+      temperature: 0.2          # Lower = more deterministic
+      top_p: 0.95               # Nucleus sampling
+      max_tokens: 16384         # Max output tokens for structured extraction
+      context_size: 32768       # Max input context
+      repeat_penalty: 1.05      # Penalize repeated tokens
+      seed: null                # null = random, or specify for reproducibility
+      extra_options:
+        keep_alive: "0s"        # unload local model after each request
+
+    # LM Studio - Alternative local inference
+    lm_studio:
+      provider_type: "openai_compatible"
+      base_url: "http://localhost:1234/v1"
+      api_key: null  # LM Studio doesn't require API key
+      timeout_seconds: 1800
+      models:
+        - "qwen3.6-35b"
+        - "llama-3.1-8b-instruct"
+        - "mistral-small-3.1"
+      
+      model: "qwen3.6-35b"      # Model name in LM Studio
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 8192
+      context_size: 32768
+      repeat_penalty: 1.05
+      seed: null
+      extra_options:
+        force_response_format: true
+        chat_template_kwargs:
+          enable_thinking: false
+
+    # OpenAI API - Cloud-based GPT models
+    openai:
+      provider_type: "openai_compatible"
+      base_url: "https://api.openai.com/v1"
+      api_key_env: "OPENAI_API_KEY"  # Load from environment variable
+      timeout_seconds: 60
+      models:
+        - "gpt-4.1-mini"
+        - "gpt-4.1"
+        - "gpt-4o"
+      
+      model: "gpt-4o"
+      temperature: 0.3
+      top_p: 0.95
+      max_tokens: 16384
+      context_size: 128000
+      repeat_penalty: null  # OpenAI doesn't support repeat_penalty
+
+    # Google Gemini API - OpenAI-compatible Gemini Developer API endpoint
+    # Keep the real key in GEMINI_API_KEY (shell env or local .env), never in config.yaml.
+    gemini:
+      provider_type: "openai_compatible"
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+      api_key_env: "GEMINI_API_KEY"
+      timeout_seconds: 900
+      models:
+        - "gemini-3.1-flash-lite"
+        - "gemini-3.1-flash-lite-preview"
+        - "gemini-3-flash-preview"
+
+      model: "gemini-3.1-flash-lite"
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 16384
+      context_size: 1048576
+      repeat_penalty: null
+      extra_options:
+        force_response_format: true
+        omit_extra_body: true
+
+    # NVIDIA NIM / build.nvidia.com - OpenAI-compatible hosted models
+    # Keep the real key in NVIDIA_API_KEY (shell env or local .env), never in config.yaml.
+    nvidia:
+      provider_type: "nvidia"
+      base_url: "https://integrate.api.nvidia.com/v1"
+      api_key_env: "NVIDIA_API_KEY"
+      timeout_seconds: 900
+      models:
+        - "moonshotai/kimi-k2.6"
+        - "moonshotai/kimi-k2-thinking"
+        - "qwen/qwen3.5-397b-a17b"
+        - "minimaxai/minimax-m2.7"
+        - "nvidia/nemotron-3-nano-30b-a3b"
+
+      model: "moonshotai/kimi-k2.6"
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 16384
+      context_size: 256000
+      repeat_penalty: null
+      extra_options:
+        omit_extra_body: true
+        include_reasoning: false
+        chat_template_kwargs:
+          thinking: false
+
+    # NVIDIA self-hosted NIM - run the model locally, then point PaperKG here.
+    # The NGC/NVIDIA key is used by Docker/NIM to pull and cache the model, not sent to localhost.
+    nvidia_local_nim:
+      provider_type: "nvidia"
+      base_url: "http://localhost:8000/v1"
+      api_key: null
+      timeout_seconds: 1800
+      models:
+        - "moonshotai/kimi-k2.6"
+
+      model: "moonshotai/kimi-k2.6"
+      temperature: 0.05
+      top_p: 0.8
+      max_tokens: 16384
+      context_size: 256000
+      repeat_penalty: null
+      extra_options:
+        omit_extra_body: true
+        include_reasoning: false
+        chat_template_kwargs:
+          thinking: false
+
+    # Generic OpenAI-compatible API (e.g., Ollama exposed via proxy, DeepSeek, etc.)
+    custom_api:
+      provider_type: "openai_compatible"
+      base_url: "https://custom-api.example.com/v1"
+      api_key_env: "CUSTOM_API_KEY"
+      timeout_seconds: 120
+      models:
+        - "custom-model"
+      
+      model: "custom-model"
+      temperature: 0.2
+      top_p: 0.95
+      max_tokens: 8192
+      context_size: 16384
+      repeat_penalty: 1.05
+
+  # Local Docker controls for the self-hosted NVIDIA NIM provider.
+  nim_container:
+    container_name: "sciencekg-kimi-k2-6-nim"
+    image: "nvcr.io/nim/moonshotai/kimi-k2.6:1.7.0-variant"
+    host: "localhost"
+    host_port: 8000
+    container_port: 8000
+    cache_dir: "~/.cache/nim"
+    shm_size: "32GB"
+    gpus: "all"
+    runtime: "nvidia"
+    env_key_name: "NGC_API_KEY"
+
+  # Entity Extraction
+  entity_extraction:
+    # Use detailed prompts for better concept extraction
+    detailed_prompts: true
+    # Link concepts to OpenAlex by default
+    link_to_knowledge_base: true
+    # Generate embeddings for extracted concepts
+    embed_concepts: true
+
+  # Conflict Detection
+  conflict_detection:
+    enabled: false
+    confidence_threshold: 0.7  # Only report conflicts with >= 0.7 confidence
+    max_pairs: 20
+    max_tokens: 800
+
+  # Batch Processing
+  batch_processing:
+    # Process papers in batches to optimize API calls
+    batch_size: 10
+    # Number of parallel jobs (for Celery integration)
+    parallel_jobs: 4
+    # Retry failed extractions
+    max_retries: 2
+    retry_delay_seconds: 10
+    # Durable job handling
+    resume_by_default: true
+    job_state_backend: "duckdb"
+    broker_url: "redis://localhost:6379/0"
+    result_backend: "redis://localhost:6379/1"
+    task_queue: "sciencekg.extraction"
+
+embedding:
+  backend: "hash-fallback"
+  model: "BAAI/bge-m3"
+  version: 1
+  store: "duckdb"
+  table: "entity_embeddings"
+  top_k: 10
+  similarity_threshold: 0.7
+
+retrieval:
+  # Light, relevance-preserving nudge applied when ordering retrieved papers. Lexical
+  # relevance stays dominant — a less-cited paper that matches the question better still
+  # wins; these only break ties among comparably relevant hits. "New" gives a small
+  # bonus (stay up to date), never a penalty for being old.
+  ranking:
+    citation_weight: 0.4        # bonus = citation_weight * log10(citation_count + 1)
+    recency_weight: 0.15        # max bonus for a current-year paper; decays to 0 over the window
+    recency_window_years: 5     # papers older than this get no recency bonus (and no penalty)
+    max_bonus: 1.5              # hard cap so the nudge never overrides relevance
+
+# Hand-off to an external, local computer-use agent (e.g. UI-TARS-Desktop). A Parallel-
+# Research variant is compiled into a task brief (query/agent_handoff.py). Kanal A
+# (Brief kopieren -> in den Agenten einfügen) works regardless of this block. Kanal B
+# below auto-POSTs the brief to a local bridge that runs @ui-tars/sdk (see bridge/uitars/).
+# Off by default — PaperKG never drives your machine itself; the external agent does.
+agent_bridge:
+  enabled: false
+  type: "ui_tars_desktop"          # bridge flavour (only ui_tars_desktop is wired today)
+  url: "http://127.0.0.1:8787/run" # local Node bridge endpoint (bridge/uitars/)
+  timeout_seconds: 600
+  # The VLM that actually sees the screen runs *inside* the external agent, served via
+  # your existing local provider (LM Studio/Ollama). These are documentation hints for
+  # configuring that agent — PaperKG does not load the VLM itself.
+  vlm_provider: "lm_studio"
+  vlm_model: "ui-tars-1.5-7b"

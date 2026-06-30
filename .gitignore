@@ -68,6 +68,15 @@ frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 
+# Native desktop (Tauri) — root node_modules holds only the Tauri CLI
+/node_modules/
+/src-tauri/target/
+/src-tauri/gen/
+# Bundled PyInstaller backend sidecar (build artifact, ~1-2 GB) — built by
+# packaging/build_sidecar.py into src-tauri/sidecar/. The seed configs in
+# src-tauri/defaults/ ARE tracked (source).
+/src-tauri/sidecar/
+
 # Generated knowledge/UI artifacts
 .streamlit/
 graphify-out/

@@ -1,0 +1,7 @@
+# Build-only dependencies for packaging the native desktop app (M2).
+# Not needed at runtime — install alongside requirements.txt only when building
+# the standalone backend sidecar:  pip install -r requirements-build.txt
+#
+# Usage:  python packaging/build_sidecar.py  -> dist/sciencekg-backend/
+pyinstaller==6.11.1
+pyinstaller-hooks-contrib==2024.10

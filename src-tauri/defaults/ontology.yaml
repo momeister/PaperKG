@@ -1,0 +1,843 @@
+version: 1
+policy:
+  auto_accept_min_confidence: 0.85
+  candidate_similarity_threshold: 0.78
+  auto_merge_similarity_threshold: 0.92
+  require_real_embeddings_for_auto_merge: true
+
+entity_types:
+  - Algorithm
+  - Theory
+  - MethodFamily
+  - Metric
+  - Dataset
+  - Benchmark
+  - DomainConcept
+  - ApplicationSetting
+  - ModelArchitecture
+  - System
+  - Phenomenon
+  - Task
+
+relation_types:
+  - IS_A
+  - USES
+  - USED_IN
+  - USED_FOR
+  - AFFECTS
+  - CAUSES
+  - LEADS_TO
+  - MITIGATES
+  - PREVENTS
+  - GROUPED_WITH_IN_SURVEY
+  - MAPPED_TO_IN_TAXONOMY
+  - IMPLEMENTS
+  - ELICITS
+  - PART_OF
+  - EXTENDS
+  - MODULATED_BY
+  - CORRESPONDS_TO
+  - EVALUATED_ON
+  - OUTPERFORMS
+  - DERIVED_FROM
+  - IMPLIES
+  - BUILT_ON
+  - PROVIDES
+  - SUPPORTS
+  - REPRODUCES
+  - MORE_ROBUST_THAN
+  - MEASURES
+  - PROPOSED_BY
+  - ALIAS_OF
+  - RELATED_TO
+  - CONTRADICTS
+
+seed_concepts:
+  - label: Machine Learning
+    entity_type: MethodFamily
+    aliases: [ML]
+    domain: Artificial Intelligence
+  - label: Reinforcement Learning
+    entity_type: MethodFamily
+    aliases: [RL]
+    domain: Machine Learning
+  - label: Q-learning
+    entity_type: Algorithm
+    aliases: [Q learning]
+    domain: Reinforcement Learning
+  - label: SARSA
+    entity_type: Algorithm
+    aliases: [State-Action-Reward-State-Action]
+    domain: Reinforcement Learning
+  - label: TD(lambda)
+    entity_type: Algorithm
+    aliases: [TD(λ), TD(lambda), TD learning with eligibility traces]
+    domain: Reinforcement Learning
+  - label: TD learning
+    entity_type: MethodFamily
+    aliases: [Temporal difference learning, Temporal-difference learning]
+    domain: Reinforcement Learning
+  - label: Temporal difference error
+    entity_type: Metric
+    aliases: [TD error]
+    domain: Reinforcement Learning
+  - label: Markov Decision Process
+    entity_type: DomainConcept
+    aliases: [MDP]
+    domain: Reinforcement Learning
+  - label: Dynamic Programming
+    entity_type: Algorithm
+    aliases: [DP]
+    domain: Reinforcement Learning
+  - label: Policy gradient
+    entity_type: Algorithm
+    aliases: [Policy gradients]
+    domain: Reinforcement Learning
+  - label: Actor-Critic
+    entity_type: Algorithm
+    aliases: [Actor Critic, Actor-Critic architecture]
+    domain: Reinforcement Learning
+  - label: Value function
+    entity_type: DomainConcept
+    aliases: [Value functions]
+    domain: Reinforcement Learning
+  - label: Transition model
+    entity_type: DomainConcept
+    aliases: [Transition function, Transition function approximation]
+    domain: Reinforcement Learning
+  - label: Reward function
+    entity_type: DomainConcept
+    aliases: [Reward functions]
+    domain: Reinforcement Learning
+  - label: State-action value
+    entity_type: Metric
+    aliases: [Q-value, Q value]
+    domain: Reinforcement Learning
+  - label: Appraisal theory
+    entity_type: Theory
+    aliases: [Cognitive appraisal theory, Componential emotion theory]
+    domain: Affective Computing
+  - label: Appraisal dimensions
+    entity_type: DomainConcept
+    aliases: [Appraisal variables]
+    domain: Affective Computing
+  - label: OCC model
+    entity_type: Theory
+    aliases: [Ortony Clore Collins model]
+    domain: Computational Psychology
+  - label: Component process theory of emotions
+    entity_type: Theory
+    aliases: [CPT]
+    domain: Computational Psychology
+  - label: Belief-desire theory of emotions
+    entity_type: Theory
+    aliases: []
+    domain: Computational Psychology
+  - label: PAD model
+    entity_type: Theory
+    aliases: [Pleasure-Arousal-Dominance model]
+    domain: Affective Computing
+  - label: Categorical emotion theory
+    entity_type: Theory
+    aliases: [Basic emotion theory]
+    domain: Psychology
+  - label: Dimensional emotion theory
+    entity_type: Theory
+    aliases: [Valence-arousal space]
+    domain: Psychology
+  - label: Categorical emotion
+    entity_type: DomainConcept
+    aliases: [Categorical emotions, Discrete emotion]
+    domain: Affective Computing
+  - label: Dimensional emotion
+    entity_type: DomainConcept
+    aliases: [Dimensional emotions, Dimensional affect]
+    domain: Affective Computing
+  - label: Homeostasis
+    entity_type: DomainConcept
+    aliases: [Homeostatic regulation]
+    domain: Computational Neuroscience
+  - label: Drive Reduction Theory
+    entity_type: Theory
+    aliases: [Drive reduction]
+    domain: Psychology
+  - label: Intrinsic motivation
+    entity_type: DomainConcept
+    aliases: [Intrinsic rewards, Intrinsic reward]
+    domain: Reinforcement Learning
+  - label: Extrinsic motivation
+    entity_type: DomainConcept
+    aliases: [Extrinsic rewards, Extrinsic reward]
+    domain: Reinforcement Learning
+  - label: Motivated reinforcement learning
+    entity_type: MethodFamily
+    aliases: [Motivated RL]
+    domain: Reinforcement Learning
+  - label: Reward shaping
+    entity_type: MethodFamily
+    aliases: [Reward modulation, Reward modification]
+    domain: Reinforcement Learning
+  - label: Homeostatic reward modification
+    entity_type: MethodFamily
+    aliases: [Homeostasis-based reward modification]
+    domain: Reinforcement Learning
+  - label: Appraisal-based reward modification
+    entity_type: MethodFamily
+    aliases: [Appraisal-based reward modulation]
+    domain: Reinforcement Learning
+  - label: Model-based RL
+    entity_type: MethodFamily
+    aliases: [Model-based reinforcement learning, Model based RL, Model-based Reinforcement Learning]
+    domain: Reinforcement Learning
+  - label: Policy search
+    entity_type: MethodFamily
+    aliases: []
+    domain: Reinforcement Learning
+  - label: Boltzmann action selection
+    entity_type: Algorithm
+    aliases: [Boltzmann exploration]
+    domain: Reinforcement Learning
+  - label: Genetic programming
+    entity_type: Algorithm
+    aliases: []
+    domain: Machine Learning
+  - label: KL-divergence
+    entity_type: Metric
+    aliases: [Kullback-Leibler divergence, KL divergence]
+    domain: Information Theory
+  - label: L1 norm
+    entity_type: Metric
+    aliases: [L1 distance, Manhattan distance]
+    domain: Mathematics
+  - label: Euclidean distance
+    entity_type: Metric
+    aliases: [L2 distance]
+    domain: Mathematics
+  - label: Model uncertainty
+    entity_type: Metric
+    aliases: [Uncertainty]
+    domain: Machine Learning
+  - label: Learning rate
+    entity_type: Metric
+    aliases: []
+    domain: Reinforcement Learning
+  - label: Discount factor
+    entity_type: Metric
+    aliases: [Gamma discount]
+    domain: Reinforcement Learning
+  - label: Learning efficiency
+    entity_type: Metric
+    aliases: []
+    domain: Machine Learning
+  - label: Novelty
+    entity_type: DomainConcept
+    aliases: []
+    domain: Affective Computing
+  - label: Recency
+    entity_type: Metric
+    aliases: [Inverse recency]
+    domain: Reinforcement Learning
+  - label: Valence
+    entity_type: DomainConcept
+    aliases: []
+    domain: Psychology
+  - label: Arousal
+    entity_type: DomainConcept
+    aliases: []
+    domain: Psychology
+  - label: Control
+    entity_type: DomainConcept
+    aliases: [Control appraisal]
+    domain: Affective Computing
+  - label: Well-being
+    entity_type: DomainConcept
+    aliases: [Wellbeing]
+    domain: Affective Computing
+  - label: Dopamine
+    entity_type: Phenomenon
+    aliases: []
+    domain: Neuroscience
+  - label: Serotonin
+    entity_type: Phenomenon
+    aliases: []
+    domain: Neuroscience
+  - label: Noradrenaline
+    entity_type: Phenomenon
+    aliases: [Norepinephrine]
+    domain: Neuroscience
+  - label: Acetylcholine
+    entity_type: Phenomenon
+    aliases: []
+    domain: Neuroscience
+  - label: Surprise
+    entity_type: Phenomenon
+    aliases: [Curiosity]
+    domain: Affective Computing
+  - label: Frustration
+    entity_type: Phenomenon
+    aliases: []
+    domain: Affective Computing
+  - label: Emotion elicitation
+    entity_type: DomainConcept
+    aliases: []
+    domain: Affective Computing
+  - label: Emotion dynamics
+    entity_type: Phenomenon
+    aliases: []
+    domain: Affective Computing
+  - label: State modification
+    entity_type: MethodFamily
+    aliases: []
+    domain: Reinforcement Learning
+  - label: Meta-learning
+    entity_type: MethodFamily
+    aliases: [Metalearning]
+    domain: Machine Learning
+  - label: POMDP
+    entity_type: ModelArchitecture
+    aliases: [Partially Observable Markov Decision Process]
+    domain: Reinforcement Learning
+  - label: Bayesian Affect Control Theory
+    entity_type: ModelArchitecture
+    aliases: [Bayesian Affective Control Theory]
+    domain: Affective Computing
+  - label: Human-robot interaction
+    entity_type: ApplicationSetting
+    aliases: [HRI]
+    domain: Robotics
+  - label: Affective Computing
+    entity_type: MethodFamily
+    aliases: [Affective modelling, Affective modeling]
+    domain: Computer Science
+  - label: Deep reinforcement learning
+    entity_type: MethodFamily
+    aliases: [Deep RL]
+    domain: Machine Learning
+  - label: Exploration/exploitation trade-off
+    entity_type: DomainConcept
+    aliases: [Exploration-exploitation trade-off, Exploration exploitation trade-off]
+    domain: Reinforcement Learning
+  - label: Primary reinforcers
+    entity_type: DomainConcept
+    aliases: [Primary reinforcer]
+    domain: Psychology
+  - label: Boltzmann action selection temperature
+    entity_type: Metric
+    aliases: [Boltzmann temperature, Temperature parameter]
+    domain: Reinforcement Learning
+  - label: Deep neural networks
+    entity_type: ModelArchitecture
+    aliases: [Deep neural network, DNN]
+    domain: Machine Learning
+  - label: Auto-encoders
+    entity_type: ModelArchitecture
+    aliases: [Auto-encoder, Autoencoders, Autoencoder]
+    domain: Machine Learning
+  - label: Gridworld
+    entity_type: ApplicationSetting
+    aliases: [Grid-world]
+    domain: Reinforcement Learning
+  - label: Concept Drift
+    entity_type: Phenomenon
+    aliases: [Data drift]
+    domain: Machine Learning
+  - label: Official Statistics
+    entity_type: ApplicationSetting
+    aliases: []
+    domain: Statistics
+  - label: External Data Sources
+    entity_type: DomainConcept
+    aliases: [External data source, Non-traditional data sources]
+    domain: Data Governance
+  - label: Data Source Changes
+    entity_type: Phenomenon
+    aliases: [Changing data sources, Data source change, Source changes]
+    domain: Data Governance
+  - label: Selection Bias
+    entity_type: Phenomenon
+    aliases: [Selection bias]
+    domain: Statistics
+  - label: Operationalization Bias
+    entity_type: Phenomenon
+    aliases: [Operationalization bias]
+    domain: Data Governance
+  - label: Feature Mismatch
+    entity_type: Phenomenon
+    aliases: [Feature mismatches, Feature distribution mismatch]
+    domain: Machine Learning
+  - label: Model staleness
+    entity_type: Phenomenon
+    aliases: [Model Staleness, Stale model]
+    domain: Machine Learning
+  - label: Quality metrics
+    entity_type: Metric
+    aliases: [Data quality metrics]
+    domain: Data Quality
+  - label: Data distribution
+    entity_type: DomainConcept
+    aliases: [Feature distribution]
+    domain: Machine Learning
+  - label: Data Pipeline
+    entity_type: System
+    aliases: [Data pipeline, Data pipelines]
+    domain: Data Engineering
+  - label: Data validation
+    entity_type: MethodFamily
+    aliases: [Data Validation, Data type validation]
+    domain: Data Engineering
+  - label: Data Frequency
+    entity_type: DomainConcept
+    aliases: [Data frequency]
+    domain: Data Engineering
+  - label: Data Source Discontinuation
+    entity_type: Phenomenon
+    aliases: [Source discontinuation, Data discontinuation]
+    domain: Data Governance
+  - label: Legal robustness
+    entity_type: DomainConcept
+    aliases: [Legal Robustness]
+    domain: Data Governance
+  - label: Data Availability
+    entity_type: DomainConcept
+    aliases: [Availability]
+    domain: Data Quality
+  - label: Data Validity
+    entity_type: DomainConcept
+    aliases: [Validity]
+    domain: Data Quality
+  - label: Data Accuracy
+    entity_type: Metric
+    aliases: [Accuracy]
+    domain: Data Quality
+  - label: Accuracy
+    entity_type: Metric
+    aliases: [Classification accuracy]
+    domain: Machine Learning
+  - label: Precision
+    entity_type: Metric
+    aliases: [Positive predictive value]
+    domain: Machine Learning
+  - label: Recall
+    entity_type: Metric
+    aliases: [Sensitivity]
+    domain: Machine Learning
+  - label: F1-score
+    entity_type: Metric
+    aliases: [F1 score, F1]
+    domain: Machine Learning
+  - label: Data Completeness
+    entity_type: Metric
+    aliases: [Completeness]
+    domain: Data Quality
+  - label: Bias
+    entity_type: Phenomenon
+    aliases: [Data bias]
+    domain: Machine Learning
+  - label: Privacy
+    entity_type: DomainConcept
+    aliases: []
+    domain: Data Governance
+  - label: Regulation
+    entity_type: DomainConcept
+    aliases: [Regulatory constraints]
+    domain: Data Governance
+  - label: Quantum Machine Learning
+    entity_type: MethodFamily
+    aliases: [QML]
+    domain: Quantum Computing
+  - label: Photonic Quantum Machine Learning
+    entity_type: MethodFamily
+    aliases: [Photonic QML, Photonic and Hybrid Quantum Machine Learning]
+    domain: Quantum Computing
+  - label: MerLin
+    entity_type: System
+    aliases: [MerLin framework, MerLin discovery engine]
+    domain: Quantum Machine Learning
+  - label: Variational Quantum Circuit
+    entity_type: ModelArchitecture
+    aliases: [VQC, VQCs, Variational quantum circuits]
+    domain: Quantum Machine Learning
+  - label: Quantum Convolutional Neural Network
+    entity_type: ModelArchitecture
+    aliases: [QCNN, QCNNs, Quantum convolutional neural networks, Subspace Preserving Quantum Convolutional Neural Network]
+    domain: Quantum Machine Learning
+  - label: Quantum Generative Adversarial Network
+    entity_type: ModelArchitecture
+    aliases: [QGAN, QGANs, Quantum generative adversarial networks]
+    domain: Quantum Machine Learning
+  - label: Quantum Relational Knowledge Distillation
+    entity_type: Algorithm
+    aliases: [QRKD]
+    domain: Quantum Machine Learning
+  - label: Quantum Self-Supervised Learning
+    entity_type: MethodFamily
+    aliases: [qSSL, Quantum SSL]
+    domain: Quantum Machine Learning
+  - label: Quantum Long Short-Term Memory
+    entity_type: ModelArchitecture
+    aliases: [QLSTM, Quantum LSTM]
+    domain: Quantum Machine Learning
+  - label: Quantum Recurrent Neural Network
+    entity_type: ModelArchitecture
+    aliases: [QRNN]
+    domain: Quantum Machine Learning
+  - label: Distributed Quantum Neural Network
+    entity_type: ModelArchitecture
+    aliases: [Distributed QNN]
+    domain: Quantum Machine Learning
+  - label: Strong Linear Optical Simulation
+    entity_type: Algorithm
+    aliases: [SLOS]
+    domain: Photonic Quantum Computing
+  - label: QLOQ
+    entity_type: Algorithm
+    aliases: [QLOQ scheme, QLOQ qubit encodings]
+    domain: Quantum Computing
+  - label: DeepQuantum
+    entity_type: System
+    aliases: [Deep Quantum]
+    domain: Quantum Machine Learning
+  - label: DQNN
+    entity_type: ModelArchitecture
+    aliases: [Deep Quantum Neural Network, Deep Quantum Neural Networks]
+    domain: Quantum Machine Learning
+  - label: Fock space
+    entity_type: DomainConcept
+    aliases: [Fock-space, Photonic Fock space]
+    domain: Photonic Quantum Computing
+  - label: Linear-optical circuits
+    entity_type: ModelArchitecture
+    aliases: [Linear optical circuits, Parametrized linear-optical circuits, Linear optical circuit]
+    domain: Photonic Quantum Computing
+  - label: QuantumLayer
+    entity_type: ModelArchitecture
+    aliases: [Quantum Layer]
+    domain: Quantum Machine Learning
+  - label: Angle encoding
+    entity_type: MethodFamily
+    aliases: [Phase encoding]
+    domain: Quantum Machine Learning
+  - label: Amplitude encoding
+    entity_type: MethodFamily
+    aliases: [Amplitude embedding]
+    domain: Quantum Machine Learning
+  - label: Quantum Memristor
+    entity_type: System
+    aliases: [Quantum memristors, Photonic quantum memristor, Photonic quantum memristors]
+    domain: Photonic Quantum Computing
+  - label: Fidelity Kernel
+    entity_type: Metric
+    aliases: [Fidelity-based kernel, Quantum fidelity kernel]
+    domain: Quantum Machine Learning
+  - label: Reservoir Computing
+    entity_type: MethodFamily
+    aliases: [Quantum Reservoir Computing]
+    domain: Machine Learning
+  - label: Adaptive state injection
+    entity_type: MethodFamily
+    aliases: [adaptive state injection pooling]
+    domain: Quantum Machine Learning
+  - label: MNIST
+    entity_type: Dataset
+    aliases: [MNIST dataset]
+    domain: Machine Learning
+  - label: CIFAR-10
+    entity_type: Dataset
+    aliases: [CIFAR10, CIFAR-10 dataset]
+    domain: Machine Learning
+  - label: SST2
+    entity_type: Dataset
+    aliases: [SST-2, SST2 sentiment analysis, Stanford Sentiment Treebank 2]
+    domain: Natural Language Processing
+  - label: Fake News Detection
+    entity_type: Task
+    aliases: [Online fake news detection, Fake-news detection]
+    domain: Natural Language Processing
+  - label: Dataset Bias
+    entity_type: Phenomenon
+    aliases: [dataset-bias]
+    domain: Machine Learning
+  - label: Pre-trained Language Models
+    entity_type: MethodFamily
+    aliases: [Pretrained Language Models, PLMs, advanced pre-trained language models]
+    domain: Natural Language Processing
+  - label: LIAR
+    entity_type: Dataset
+    aliases: [Liar, LIAR dataset]
+    domain: Natural Language Processing
+  - label: Fake or Real News
+    entity_type: Dataset
+    aliases: [Fake-or-Real News, Fake and Real News]
+    domain: Natural Language Processing
+  - label: Combined Corpus
+    entity_type: Dataset
+    aliases: [Combined fake news corpus]
+    domain: Natural Language Processing
+  - label: BERT
+    entity_type: ModelArchitecture
+    aliases: [Bidirectional Encoder Representations from Transformers]
+    domain: Natural Language Processing
+  - label: RoBERTa
+    entity_type: ModelArchitecture
+    aliases: [Robustly optimized BERT approach, Robustly Optimized BERT Pretraining Approach]
+    domain: Natural Language Processing
+  - label: DistilBERT
+    entity_type: ModelArchitecture
+    aliases: [Distilled BERT]
+    domain: Natural Language Processing
+  - label: ELECTRA
+    entity_type: ModelArchitecture
+    aliases: [Efficiently Learning an Encoder that Classifies Token Replacements Accurately]
+    domain: Natural Language Processing
+  - label: ELMo
+    entity_type: ModelArchitecture
+    aliases: [Embeddings from Language Models]
+    domain: Natural Language Processing
+  - label: LSTM
+    entity_type: ModelArchitecture
+    aliases: [Long Short-Term Memory]
+    domain: Deep Learning
+  - label: Bi-LSTM
+    entity_type: ModelArchitecture
+    aliases: [Bidirectional LSTM, Bidirectional Long Short-Term Memory]
+    domain: Deep Learning
+  - label: C-LSTM
+    entity_type: ModelArchitecture
+    aliases: [Convolutional LSTM]
+    domain: Deep Learning
+  - label: CNN
+    entity_type: ModelArchitecture
+    aliases: [Convolutional Neural Network, Convolutional Neural Networks]
+    domain: Deep Learning
+  - label: HAN
+    entity_type: ModelArchitecture
+    aliases: [Hierarchical Attention Network]
+    domain: Deep Learning
+  - label: Conv-HAN
+    entity_type: ModelArchitecture
+    aliases: [Convolutional Hierarchical Attention Network]
+    domain: Deep Learning
+  - label: Hierarchical Attention Network
+    entity_type: ModelArchitecture
+    aliases: [three-level hierarchical attention network]
+    domain: Natural Language Processing
+  - label: SVM
+    entity_type: Algorithm
+    aliases: [Support Vector Machine]
+    domain: Machine Learning
+  - label: Naive Bayes
+    entity_type: Algorithm
+    aliases: [Naïve Bayes]
+    domain: Machine Learning
+  - label: Multinomial Naive Bayes
+    entity_type: Algorithm
+    aliases: [Multinomial Naïve Bayes]
+    domain: Machine Learning
+  - label: AdaBoost
+    entity_type: Algorithm
+    aliases: [Adaptive Boosting]
+    domain: Machine Learning
+  - label: k-NN
+    entity_type: Algorithm
+    aliases: [kNN, k-Nearest Neighbors, k Nearest Neighbors]
+    domain: Machine Learning
+  - label: Logistic Regression
+    entity_type: Algorithm
+    aliases: [LR]
+    domain: Machine Learning
+  - label: Decision Tree
+    entity_type: Algorithm
+    aliases: [Decision Trees]
+    domain: Machine Learning
+  - label: GloVe
+    entity_type: Algorithm
+    aliases: [Global Vectors, Global Vectors for Word Representation]
+    domain: Natural Language Processing
+  - label: Latent Dirichlet Allocation
+    entity_type: Algorithm
+    aliases: [LDA]
+    domain: Topic Modeling
+  - label: Multidimensional Scaling
+    entity_type: Algorithm
+    aliases: [MDS]
+    domain: Statistics
+  - label: Jensen-Shannon divergence
+    entity_type: Metric
+    aliases: [JS divergence, Jensen Shannon divergence]
+    domain: Statistics
+  - label: Empath
+    entity_type: MethodFamily
+    aliases: [Empath Generated Features]
+    domain: Natural Language Processing
+  - label: Knowledge Distillation
+    entity_type: MethodFamily
+    aliases: [knowledge distillation]
+    domain: Machine Learning
+  - label: Overfitting
+    entity_type: Phenomenon
+    aliases: []
+    domain: Machine Learning
+  - label: Thalamocortical system
+    entity_type: System
+    aliases: [thalamocortical system]
+    domain: Neuroscience
+  - label: Mirror neurons
+    entity_type: Phenomenon
+    aliases: [mirror neuron]
+    domain: Neuroscience
+  - label: Mirror neuron system
+    entity_type: DomainConcept
+    aliases: [mirror-neuron system]
+    domain: Neuroscience
+  - label: von Neumann entropy
+    entity_type: Theory
+    aliases: [Von Neumann entropy]
+    domain: Quantum Information Theory
+  - label: Quantum mutual information
+    entity_type: Metric
+    aliases: [QMI]
+    domain: Quantum Information Theory
+  - label: Envariance
+    entity_type: Theory
+    aliases: [environment-assisted invariance]
+    domain: Quantum Information Theory
+  - label: Einselection
+    entity_type: Phenomenon
+    aliases: [environment-induced superselection]
+    domain: Quantum Mechanics
+  - label: Pointer states
+    entity_type: DomainConcept
+    aliases: [pointer state]
+    domain: Quantum Mechanics
+  - label: Schmidt decomposition
+    entity_type: MethodFamily
+    aliases: []
+    domain: Quantum Mechanics
+  - label: Temporal entanglement
+    entity_type: Phenomenon
+    aliases: [temporal quantum entanglement]
+    domain: Quantum Optics
+  - label: Quantum temporal imaging
+    entity_type: MethodFamily
+    aliases: []
+    domain: Quantum Optics
+  - label: Two-photon vector soliton
+    entity_type: Phenomenon
+    aliases: [two photon vector soliton]
+    domain: Quantum Optics
+  - label: Cross-phase modulation
+    entity_type: Algorithm
+    aliases: [cross phase modulation]
+    domain: Quantum Optics
+  - label: Wigner function
+    entity_type: Theory
+    aliases: []
+    domain: Quantum Mechanics
+  - label: Feature binding hypothesis
+    entity_type: Theory
+    aliases: [feature binding]
+    domain: Neuroscience
+  - label: Body schema
+    entity_type: DomainConcept
+    aliases: []
+    domain: Neuroscience
+  - label: Population vector
+    entity_type: MethodFamily
+    aliases: [population vectors]
+    domain: Neuroscience
+  - label: Gain fields
+    entity_type: DomainConcept
+    aliases: [gain field]
+    domain: Neuroscience
+  - label: Reference picture selection
+    entity_type: MethodFamily
+    aliases: [RPS]
+    domain: Video Processing
+  - label: Directed Acyclic Graph
+    entity_type: Algorithm
+    aliases: [DAG, directed acyclic graph]
+    domain: Graph Theory
+  - label: Inverse kinematic algorithm
+    entity_type: Algorithm
+    aliases: [inverse kinematics, inverse kinematic]
+    domain: Robotics
+  - label: Tensorial scheme
+    entity_type: MethodFamily
+    aliases: [3-step tensorial scheme]
+    domain: Neuroscience
+  - label: Neuroimaging
+    entity_type: MethodFamily
+    aliases: [neuroimaging methods]
+    domain: Neuroscience
+  - label: Schrödinger picture
+    entity_type: MethodFamily
+    aliases: [Schrodinger picture]
+    domain: Quantum Mechanics
+  - label: Parallel distributed processing
+    entity_type: DomainConcept
+    aliases: [PDP, paralell distributed processing]
+    domain: Cognitive Science
+  - label: Synesthesia
+    entity_type: Phenomenon
+    aliases: [Synaesthesia]
+    domain: Neuroscience
+  - label: Cross-domain mapping
+    entity_type: DomainConcept
+    aliases: [cross domain mapping, cross-modal mapping, cross modal mapping]
+    domain: Cognitive Science
+  - label: Cartesian Theater
+    entity_type: Phenomenon
+    aliases: [Carthesian Theater]
+    domain: Philosophy of Mind
+  - label: Unruptured Intracranial Aneurysm
+    entity_type: Phenomenon
+    aliases: [Unruptured intracranial aneurysms, UIA, UIAs]
+    domain: Neuroradiology
+  - label: TOF-MRA
+    entity_type: MethodFamily
+    aliases: [Time-of-Flight Magnetic Resonance Angiography, Time of Flight MRA, TOF MRA, TOF-MRA scans]
+    domain: Medical Imaging
+  - label: ADAM dataset
+    entity_type: Dataset
+    aliases: [Aneurysm Detection And segMentation Challenge dataset]
+    domain: Medical Imaging
+  - label: ADAM challenge
+    entity_type: Benchmark
+    aliases: [Aneurysm Detection And segMentation Challenge, ADAM challenge results]
+    domain: Medical Imaging
+  - label: PHASES score
+    entity_type: Metric
+    aliases: [PHASES]
+    domain: Clinical Risk Prediction
+  - label: Computer-aided detection
+    entity_type: System
+    aliases: [CAD, CAD system, CAD tool, computer-aided detection system]
+    domain: Medical Imaging
+  - label: 3D U-Net
+    entity_type: ModelArchitecture
+    aliases: [3D UNET, 3D U-Net, 3D UNet, three-dimensional U-Net]
+    domain: Medical Imaging
+  - label: Satisfaction of Search
+    entity_type: Phenomenon
+    aliases: [Satisfaction-of-search effect, satisfaction of search effect]
+    domain: Radiology
+  - label: McNemar's test
+    entity_type: Algorithm
+    aliases: [McNemar test, McNemar’s test]
+    domain: Statistics
+  - label: Wilcoxon signed-rank test
+    entity_type: Algorithm
+    aliases: [Wilcoxon signed rank test, Wilcoxon signed-rank tests]
+    domain: Statistics
+  - label: Skull-stripping
+    entity_type: Algorithm
+    aliases: [Skull stripping]
+    domain: Neuroimaging
+  - label: N4 bias field correction
+    entity_type: Algorithm
+    aliases: [N4 bias correction]
+    domain: Medical Imaging
+  - label: False Positive Rate
+    entity_type: Metric
+    aliases: [FP rate, false positive rate]
+    domain: Machine Learning
