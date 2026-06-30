@@ -629,3 +629,61 @@ export type NoteAiEditResponse = {
   user_message?: NoteAiMessage;
   assistant_message?: NoteAiMessage;
 };
+
+// --- Code-Werkstatt (coding projects, file tree, editor, git) ---
+
+export type CodeProject = {
+  id: string;
+  name: string;
+  path: string;
+  kind: "managed" | "external" | string;
+  created_timestamp?: string;
+  updated_timestamp?: string;
+  exists?: boolean;
+};
+
+export type WorkspaceList = {
+  projects: CodeProject[];
+  base_dir: string;
+  git_available: boolean;
+};
+
+export type FileTreeNode = {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  size?: number | null;
+  children?: FileTreeNode[];
+  truncated?: boolean;
+};
+
+export type FileContent = {
+  path: string;
+  content: string | null;
+  size: number;
+  too_large: boolean;
+  binary: boolean;
+};
+
+export type GitStatusFile = {
+  x: string;
+  y: string;
+  path: string;
+  staged: boolean;
+  untracked: boolean;
+  code: string;
+};
+
+export type GitStatus = {
+  available: boolean;
+  is_repo: boolean;
+  files: GitStatusFile[];
+  error?: string;
+};
+
+export type GitDiff = {
+  available: boolean;
+  is_repo: boolean;
+  diff: string;
+  error?: string | null;
+};

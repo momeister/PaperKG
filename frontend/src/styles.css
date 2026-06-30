@@ -7063,3 +7063,264 @@ button.parallel-cite {
   border-radius: 6px;
   font-family: inherit;
 }
+
+/* ----------------------------------------------------------------------- */
+/* Code-Werkstatt (coding projects, file tree, Monaco editor, git diff)    */
+/* ----------------------------------------------------------------------- */
+
+.werkstatt-page {
+  position: relative;
+}
+
+.werkstatt-project-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.werkstatt-project-bar select {
+  min-width: 200px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.werkstatt-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  flex-wrap: wrap;
+}
+.werkstatt-inline-form input {
+  flex: 1 1 320px;
+  min-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+.werkstatt-grid {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  gap: 12px;
+  height: calc(100vh - 210px);
+  min-height: 520px;
+  margin-top: 12px;
+}
+
+.werkstatt-sidebar,
+.werkstatt-editor,
+.werkstatt-results {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.werkstatt-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.werkstatt-newfile {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.werkstatt-newfile input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.werkstatt-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 4px;
+}
+.werkstatt-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.werkstatt-tree-row:hover {
+  background: var(--surface-2);
+}
+.werkstatt-tree-row--active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.werkstatt-tree-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.werkstatt-path {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.werkstatt-editor-head,
+.werkstatt-results-tabs,
+.werkstatt-results-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.werkstatt-results-foot {
+  border-bottom: none;
+  border-top: 1px solid var(--line);
+}
+.werkstatt-editor-head {
+  justify-content: space-between;
+}
+.werkstatt-editor-path {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.werkstatt-dirty {
+  color: var(--amber);
+  font-style: normal;
+}
+.werkstatt-editor-actions {
+  display: flex;
+  gap: 6px;
+}
+.werkstatt-editor > section,
+.werkstatt-editor > div {
+  flex: 1;
+  min-height: 0;
+}
+
+.werkstatt-results-tabs button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.werkstatt-results-tabs button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.werkstatt-results-tabs .icon-button {
+  margin-left: auto;
+}
+
+.werkstatt-changes,
+.werkstatt-diff-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+}
+.werkstatt-change-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--text);
+}
+.werkstatt-change-row:hover {
+  background: var(--surface-2);
+}
+.werkstatt-change-code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  min-width: 22px;
+  text-align: center;
+  border-radius: 4px;
+  padding: 1px 3px;
+}
+.werkstatt-change-code--new { color: var(--green); background: rgba(22, 134, 90, 0.1); }
+.werkstatt-change-code--mod { color: var(--amber); background: rgba(167, 101, 0, 0.1); }
+.werkstatt-change-code--staged { color: var(--accent); background: var(--accent-soft); }
+
+.werkstatt-diff {
+  margin: 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+}
+.werkstatt-diff span { display: block; }
+.werkstatt-diff--add { background: rgba(22, 134, 90, 0.12); color: #0c5c3d; }
+.werkstatt-diff--del { background: rgba(186, 52, 52, 0.12); color: #8c2020; }
+.werkstatt-diff--hunk { color: var(--accent); }
+.werkstatt-diff--meta { color: var(--muted); }
+
+.werkstatt-hint {
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+
+.werkstatt-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: var(--shadow-pop);
+  z-index: 50;
+}
+
+@media (max-width: 1100px) {
+  .werkstatt-grid {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .werkstatt-results {
+    grid-column: 1 / -1;
+    height: 280px;
+  }
+}

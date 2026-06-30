@@ -5,6 +5,7 @@ import {
   BarChart3,
   BrainCircuit,
   Briefcase,
+  Code2,
   Columns3,
   FileSearch,
   FileText,
@@ -32,6 +33,7 @@ import { ProjectsPage } from "./pages/ProjectsPage";
 import { QualityPage } from "./pages/QualityPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
+import { WorkstationPage } from "./pages/WorkstationPage";
 
 const navigation = [
   { to: "/projects", label: "Projekte", icon: Briefcase },
@@ -39,6 +41,7 @@ const navigation = [
   { to: "/extraction", label: "Extraktion", icon: FileSearch },
   { to: "/library", label: "Library", icon: Library },
   { to: "/workspace", label: "Arbeitsplatz", icon: Columns3 },
+  { to: "/werkstatt", label: "Werkstatt", icon: Code2 },
   { to: "/graph", label: "Graph", icon: GitBranch },
   { to: "/quality", label: "Quality", icon: BarChart3 },
   { to: "/benchmarks", label: "Benchmarks", icon: FlaskConical },
@@ -284,6 +287,7 @@ export default function App() {
             <Route path="/assistant" element={<Navigate to="/workspace" replace />} />
             <Route path="/notes" element={<Navigate to="/workspace" replace />} />
             <Route path="/workspace" element={<WorkspacePage />} />
+            <Route path="/werkstatt" element={<WorkstationPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/quality" element={<QualityPage />} />
             <Route path="/benchmarks" element={<BenchmarksPage />} />

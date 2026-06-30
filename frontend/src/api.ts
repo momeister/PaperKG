@@ -2,6 +2,12 @@ import type {
   AgentConfig,
   AgentHandoffResponse,
   Answer,
+  CodeProject,
+  WorkspaceList,
+  FileTreeNode,
+  FileContent,
+  GitStatus,
+  GitDiff,
   BenchmarkReport,
   BenchmarkRun,
   Dashboard,
@@ -506,7 +512,46 @@ export const api = {
     request<AgentHandoffResponse>(`/parallel/variants/${encodeURIComponent(variantId)}/handoff`, {
       method: "POST",
       body: JSON.stringify(payload),
-    })
+    }),
+
+  // --- Code-Werkstatt (coding projects, file tree, editor, git) ---
+  werkstatt: {
+    list: () => request<WorkspaceList>("/workspaces"),
+    create: (name: string) =>
+      request<CodeProject>("/workspaces", { method: "POST", body: JSON.stringify({ name }) }),
+    open: (path: string, name?: string) =>
+      request<CodeProject>("/workspaces/open", { method: "POST", body: JSON.stringify({ path, name }) }),
+    remove: (projectId: string) =>
+      request<{ deleted: boolean; id: string }>(`/workspaces/${encodeURIComponent(projectId)}`, { method: "DELETE" }),
+    tree: (projectId: string) =>
+      request<FileTreeNode>(`/workspaces/${encodeURIComponent(projectId)}/tree`),
+    readFile: (projectId: string, path: string) =>
+      request<FileContent>(`/workspaces/${encodeURIComponent(projectId)}/file`, { query: { path } }),
+    writeFile: (projectId: string, path: string, content: string) =>
+      request<{ path: string; size: number }>(`/workspaces/${encodeURIComponent(projectId)}/file`, {
+        method: "PUT",
+        body: JSON.stringify({ path, content }),
+      }),
+    createFile: (projectId: string, path: string) =>
+      request<{ path: string; type: string }>(`/workspaces/${encodeURIComponent(projectId)}/file`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      }),
+    createDir: (projectId: string, path: string) =>
+      request<{ path: string; type: string }>(`/workspaces/${encodeURIComponent(projectId)}/dir`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      }),
+    deleteFile: (projectId: string, path: string) =>
+      request<{ path: string; deleted: boolean }>(`/workspaces/${encodeURIComponent(projectId)}/file`, {
+        method: "DELETE",
+        query: { path },
+      }),
+    gitStatus: (projectId: string) =>
+      request<GitStatus>(`/workspaces/${encodeURIComponent(projectId)}/git/status`),
+    gitDiff: (projectId: string, path?: string) =>
+      request<GitDiff>(`/workspaces/${encodeURIComponent(projectId)}/git/diff`, { query: { path } }),
+  }
 };
 
 export interface ResearchTreeRequest {
