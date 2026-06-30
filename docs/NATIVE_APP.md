@@ -98,7 +98,7 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M1.9 | Library-PDF inline in der App (Reuse `PdfPane`) | ✅ | `frontend/src/pages/LibraryPage.tsx`, `styles.css` |
 | M1.V | Verifikation: `tauri dev` läuft, Fenster↔Sidecar live | ✅ | — |
 | M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Installer gebaut+getestet; Clean-Install offen | `packaging/`, `src-tauri/` |
-| M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 Cross-Platform-Fundament + Prereqs dokumentiert; CI-Build offen (Phase F) | Build/CI |
+| M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 per CI gebaut (Phase F: `native-build.yml`, win/ubuntu/macos); Real-Hardware-Smoke offen | `.github/workflows/native-build.yml` |
 | R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ✅ (native; Hotkey `Ctrl/Cmd+Shift+Space` + Tray; reuse UI-TARS-Handoff) | `src-tauri/src/overlay.rs`, `src-tauri/src/lib.rs`, `frontend/src/pages/OverlayPage.tsx` |
 | R2   | Eingebettetes Terminal (PTY) | ✅ (native; portable-pty + xterm.js) | `src-tauri/src/terminal.rs`, `frontend/src/components/WerkstattTerminal.tsx` |
 | R3   | Jupyter als Sidecar + Tab | ⬜ | `src-tauri/`, Frontend-Tab |
@@ -182,6 +182,29 @@ Ausgabe: `src-tauri/target/release/bundle/nsis/`. Bundle wird wegen torch groß 
 - ✅ **Prod-Routing-Caveat gelöst:** `frontend/src/main.tsx` nutzt jetzt `HashRouter` (statt
   `BrowserRouter`). Hard-Reloads auf Unterrouten können im Asset-Protokoll-Build nicht mehr 404en, und
   Mehrfenster-Routing fürs AI-Overlay (`index.html#/overlay`) wird damit trivial.
+
+## M3 — Linux/Mac via GitHub-Actions-CI (Phase F)
+
+Die Windows-NSIS wird lokal gebaut (siehe M2). Die **Linux- (deb/AppImage) und macOS-Artefakte
+(dmg)** lassen sich auf der Windows-Maschine *nicht* cross-bauen → sie entstehen ausschließlich in
+der CI: **`.github/workflows/native-build.yml`**.
+
+- **Matrix:** `windows-latest` → `nsis`, `ubuntu-latest` → `deb,appimage`, `macos-latest` → `dmg`
+  (`fail-fast: false`). Trigger: `workflow_dispatch` + Tags `v*`.
+- **Schritte je OS:** checkout · (nur Linux) `apt-get` WebKitGTK/Tray/AppImage-Deps
+  (`libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`, `build-essential`,
+  `file`, `libssl-dev`) · `setup-python` **3.11** (Pflicht wegen `matplotlib==3.11.0`-Pin; 3.11 hat
+  noch ein `kuzu`-Wheel) · `pip install -r requirements.txt -r requirements-build.txt` · **CPU-torch**
+  (Windows/Linux via `--index-url …/whl/cpu`, macOS Default-Wheel) · `setup-node` 20 · Rust-Toolchain
+  + `rust-cache` · `npm install` (Root) + `npm install --prefix frontend` ·
+  `npm run tauri:build -- --bundles <targets>` · Artefakt-Upload (`src-tauri/target/release/bundle/**`).
+- **Full-Bundle:** `SCIENCEKG_BUNDLE_LEAN` wird **nicht** gesetzt → der `beforeBuildCommand`-Sidecar
+  enthält torch/sentence-transformers (Embeddings out-of-the-box; Bundles ~1–2 GB). `--bundles`
+  überschreibt das harte `targets:["nsis"]` aus `tauri.bundle.conf.json` je OS.
+- **Offene Punkte (bewusst):** Real-Hardware-Smoke (Installer auf echtem Linux/Mac starten,
+  Kernfeatures testen, keine verwaisten Sidecar-Prozesse) und das **Download-Verhalten im
+  WebKitGTK-WebView** (Linux) bleiben unverifiziert, bis die Artefakte auf echter Hardware getestet
+  werden.
 
 ## Code-Werkstatt (R2 + R4): Doppelansicht Terminal + Editor
 

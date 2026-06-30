@@ -1,0 +1,108 @@
+# Native desktop bundles for Windows, Linux and macOS (roadmap M3 / Phase F).
+#
+# The Windows installer is built locally on the dev machine; this workflow is the
+# only way the project produces the Linux (deb/AppImage) and macOS (dmg) artifacts,
+# since neither can be cross-built from Windows. It builds the FULL bundle (CPU
+# torch) so embeddings work out of the box in the shipped app — large (~1-2 GB
+# before compression), as chosen.
+#
+# Real-hardware smoke (install + run on each OS) is intentionally left open and
+# tracked in docs/NATIVE_APP.md.
+
+name: native-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  bundle:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+          - os: ubuntu-latest
+            bundles: deb,appimage
+          - os: macos-latest
+            bundles: dmg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # WebKitGTK (Linux WebView) + tray + AppImage tooling. WebView2 ships with
+      # Windows 11; macOS uses the system WKWebView — nothing to install there.
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            file \
+            libssl-dev
+
+      # 3.11 is required: requirements.txt pins matplotlib==3.11.0 (needs Py >= 3.11),
+      # and 3.11 still has a kuzu wheel (kuzu is gated python_version < "3.14").
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend + build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      # CPU torch satisfies build_sidecar.py's FULL_BUNDLE_DEPS preflight without
+      # pulling the large CUDA wheels. On macOS the default PyPI wheel is already
+      # CPU-only; on Windows/Linux use the dedicated CPU index.
+      - name: Install CPU torch (Windows/Linux)
+        if: matrix.os != 'macos-latest'
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install CPU torch (macOS)
+        if: matrix.os == 'macos-latest'
+        run: pip install torch
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Root package.json => Tauri CLI; frontend/package.json => the React app that
+      # beforeBuildCommand (`npm --prefix frontend run build`) compiles.
+      - name: Install npm dependencies
+        run: |
+          npm install
+          npm install --prefix frontend
+
+      # `tauri:build` runs `tauri build --config src-tauri/tauri.bundle.conf.json`;
+      # `--bundles` overrides that config's hard-coded targets:["nsis"] per OS.
+      # beforeBuildCommand builds the PyInstaller sidecar (full) + the frontend.
+      - name: Build native bundle
+        run: npm run tauri:build -- --bundles ${{ matrix.bundles }}
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sciencekg-${{ matrix.os }}
+          path: src-tauri/target/release/bundle/**/*
+          if-no-files-found: error
