@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { api, streamAgentDispatch } from "../api";
+import { isTauri, nativeInvoke } from "../native";
 import type {
   AgentConfig,
   AgentDispatchEvent,
@@ -174,7 +175,17 @@ export function ParallelResultsTab({
     });
   }
 
-  /** Toggle the desktop-agent hand-off panel; compile the task brief on first open. */
+  /** Compile (or reuse the cached) task brief for a variant. */
+  async function ensureHandoff(variant: ParallelVariant): Promise<AgentHandoffResponse> {
+    const cached = handoff[variant.id];
+    if (cached) return cached;
+    const res = await api.parallelVariantHandoff(variant.id, scopeBody);
+    setHandoff((p) => ({ ...p, [variant.id]: res }));
+    return res;
+  }
+
+  /** Web fallback: toggle the inline hand-off panel (Kanal A/B), compiling the brief
+   * on first open. Native builds skip this — see `sendToOverlay` below. */
   async function openHandoff(variant: ParallelVariant) {
     if (handoffOpen[variant.id]) {
       setHandoffOpen((p) => ({ ...p, [variant.id]: false }));
@@ -184,15 +195,32 @@ export function ParallelResultsTab({
     if (handoff[variant.id] || handoffBusy) return;
     setHandoffBusy(variant.id);
     try {
-      const res = await api.parallelVariantHandoff(variant.id, scopeBody);
-      setHandoff((p) => ({ ...p, [variant.id]: res }));
+      await ensureHandoff(variant);
     } finally {
       setHandoffBusy(null);
     }
   }
 
-  function copyBrief(variant: ParallelVariant) {
-    const text = handoff[variant.id]?.text;
+  /** Native: spawn the AI-Cursor overlay pre-loaded with this variant's brief — the
+   * overlay itself requires an explicit "Starten" before anything runs. */
+  async function sendToOverlay(variant: ParallelVariant) {
+    if (handoffBusy) return;
+    setHandoffBusy(variant.id);
+    try {
+      const res = await ensureHandoff(variant);
+      await nativeInvoke("overlay_dispatch_task", {
+        task: res.text,
+        goal: res.brief.goal,
+        mode: "self_managing",
+        variantId: variant.id,
+      });
+    } finally {
+      setHandoffBusy(null);
+    }
+  }
+
+  async function copyBrief(variant: ParallelVariant) {
+    const text = (await ensureHandoff(variant)).text;
     if (!text) return;
     void navigator.clipboard?.writeText(text).then(() => {
       setBriefCopiedId(variant.id);
@@ -382,57 +410,83 @@ export function ParallelResultsTab({
                 ) : null}
 
                 <div className="parallel-variant__handoff">
-                  <button
-                    type="button"
-                    className="button button-compact"
-                    onClick={() => void openHandoff(variant)}
-                    disabled={handoffBusy === variant.id}
-                    title="Diese Variante als Aufgaben-Brief an einen Desktop-Agenten (z. B. UI-TARS) übergeben"
-                  >
-                    {handoffBusy === variant.id ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
-                    <span>An Desktop-Agent übergeben</span>
-                  </button>
-                  {handoffOpen[variant.id] && handoff[variant.id] ? (
-                    <div className="parallel-variant__handoff-body">
-                      <div className="parallel-variant__prompt-toolbar">
-                        <button type="button" className="button button-compact" onClick={() => copyBrief(variant)}>
-                          {briefCopiedId === variant.id ? <Check size={12} /> : <Copy size={12} />}
-                          <span>{briefCopiedId === variant.id ? "Kopiert" : "Brief kopieren"}</span>
-                        </button>
-                        {agentConfig?.enabled ? (
-                          <button
-                            type="button"
-                            className="button button-compact button-primary"
-                            onClick={() => void runOnAgent(variant)}
-                            disabled={dispatching === variant.id}
-                          >
-                            {dispatching === variant.id ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
-                            <span>Jetzt ausführen</span>
-                          </button>
-                        ) : null}
-                      </div>
-                      <pre className="parallel-variant__handoff-text">{handoff[variant.id].text}</pre>
-                      <p className="parallel-variant__handoff-hint muted">
-                        {agentConfig?.enabled
-                          ? "„Jetzt ausführen“ schickt den Brief an den lokalen Desktop-Agenten (Kanal B) — er steuert deinen Rechner, beobachte den Lauf."
-                          : "Kopiere den Brief und füge ihn in UI-TARS-Desktop ein (Kanal A). Für automatische Ausführung agent_bridge in config.yaml aktivieren (bridge/uitars)."}
-                      </p>
-                      {(dispatchLog[variant.id]?.length ?? 0) > 0 ? (
-                        <div className="parallel-variant__handoff-log">
-                          {dispatchLog[variant.id].map((ev, i) => (
-                            <div key={i} className={`parallel-handoff-event parallel-handoff-event--${ev.status}`}>
-                              <span className="parallel-handoff-event__status">{ev.status}</span>
-                              {ev.error ? (
-                                <span> {ev.error}</span>
-                              ) : ev.value != null ? (
-                                <span> {typeof ev.value === "string" ? ev.value : JSON.stringify(ev.value)}</span>
-                              ) : null}
+                  {isTauri() ? (
+                    <div className="parallel-variant__handoff-toolbar">
+                      <button
+                        type="button"
+                        className="button button-compact button-primary"
+                        onClick={() => void sendToOverlay(variant)}
+                        disabled={handoffBusy === variant.id}
+                        title="Diese Variante als Aufgaben-Brief an den AI-Cursor übergeben (Selbst-Steuerung oder Assistent — nichts läuft, bis du im Overlay „Starten“ klickst)"
+                      >
+                        {handoffBusy === variant.id ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
+                        <span>An AI-Cursor übergeben</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-compact"
+                        onClick={() => void copyBrief(variant)}
+                        disabled={handoffBusy === variant.id}
+                      >
+                        {briefCopiedId === variant.id ? <Check size={13} /> : <Copy size={13} />}
+                        <span>{briefCopiedId === variant.id ? "Kopiert" : "Brief kopieren"}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="button button-compact"
+                        onClick={() => void openHandoff(variant)}
+                        disabled={handoffBusy === variant.id}
+                        title="Diese Variante als Aufgaben-Brief an einen Desktop-Agenten (z. B. UI-TARS) übergeben"
+                      >
+                        {handoffBusy === variant.id ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
+                        <span>An Desktop-Agent übergeben</span>
+                      </button>
+                      {handoffOpen[variant.id] && handoff[variant.id] ? (
+                        <div className="parallel-variant__handoff-body">
+                          <div className="parallel-variant__prompt-toolbar">
+                            <button type="button" className="button button-compact" onClick={() => void copyBrief(variant)}>
+                              {briefCopiedId === variant.id ? <Check size={12} /> : <Copy size={12} />}
+                              <span>{briefCopiedId === variant.id ? "Kopiert" : "Brief kopieren"}</span>
+                            </button>
+                            {agentConfig?.enabled ? (
+                              <button
+                                type="button"
+                                className="button button-compact button-primary"
+                                onClick={() => void runOnAgent(variant)}
+                                disabled={dispatching === variant.id}
+                              >
+                                {dispatching === variant.id ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
+                                <span>Jetzt ausführen</span>
+                              </button>
+                            ) : null}
+                          </div>
+                          <pre className="parallel-variant__handoff-text">{handoff[variant.id].text}</pre>
+                          <p className="parallel-variant__handoff-hint muted">
+                            {agentConfig?.enabled
+                              ? "„Jetzt ausführen“ schickt den Brief an den lokalen Desktop-Agenten (Kanal B) — er steuert deinen Rechner, beobachte den Lauf."
+                              : "Kopiere den Brief und füge ihn in UI-TARS-Desktop ein (Kanal A). Für automatische Ausführung agent_bridge in config.yaml aktivieren (bridge/uitars)."}
+                          </p>
+                          {(dispatchLog[variant.id]?.length ?? 0) > 0 ? (
+                            <div className="parallel-variant__handoff-log">
+                              {dispatchLog[variant.id].map((ev, i) => (
+                                <div key={i} className={`parallel-handoff-event parallel-handoff-event--${ev.status}`}>
+                                  <span className="parallel-handoff-event__status">{ev.status}</span>
+                                  {ev.error ? (
+                                    <span> {ev.error}</span>
+                                  ) : ev.value != null ? (
+                                    <span> {typeof ev.value === "string" ? ev.value : JSON.stringify(ev.value)}</span>
+                                  ) : null}
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          ) : null}
                         </div>
                       ) : null}
-                    </div>
-                  ) : null}
+                    </>
+                  )}
                 </div>
               </>
             )}

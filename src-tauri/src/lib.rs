@@ -27,6 +27,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+mod agent_bridge;
 mod jupyter;
 mod overlay;
 mod terminal;
@@ -54,7 +55,7 @@ pub(crate) fn project_root() -> PathBuf {
 }
 
 /// Prefer the project's local virtualenv interpreter; fall back to PATH `python`.
-fn python_executable(root: &Path) -> PathBuf {
+pub(crate) fn python_executable(root: &Path) -> PathBuf {
     #[cfg(windows)]
     let venv = root.join(".venv").join("Scripts").join("python.exe");
     #[cfg(not(windows))]
@@ -197,6 +198,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(terminal::TerminalState::default())
         .manage(jupyter::JupyterState::default())
+        .manage(agent_bridge::AgentBridgeState::default())
         .invoke_handler(tauri::generate_handler![
             open_external,
             terminal::terminal_spawn,
@@ -205,8 +207,11 @@ pub fn run() {
             terminal::terminal_kill,
             overlay::overlay_hide,
             overlay::overlay_toggle,
+            overlay::overlay_dispatch_task,
             jupyter::jupyter_start,
             jupyter::jupyter_stop,
+            agent_bridge::agent_bridge_ensure,
+            agent_bridge::agent_bridge_stop,
         ])
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -263,6 +268,7 @@ pub fn run() {
             if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
                 terminal::kill_all(app_handle);
                 jupyter::kill(app_handle);
+                agent_bridge::kill(app_handle);
                 kill_backend(app_handle);
             }
         });

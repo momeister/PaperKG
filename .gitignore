@@ -67,6 +67,7 @@ dist/
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
+bridge/uitars/node_modules/
 
 # Native desktop (Tauri) — root node_modules holds only the Tauri CLI
 /node_modules/

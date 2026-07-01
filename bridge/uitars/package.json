@@ -11,7 +11,8 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@ui-tars/operator-nut-js": "^1.2.0",
     "@ui-tars/sdk": "^1.2.0",
-    "@ui-tars/operator-nut-js": "^1.2.0"
+    "uuid": "^14.0.1"
   }
 }

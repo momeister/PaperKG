@@ -99,10 +99,11 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | M1.V | Verifikation: `tauri dev` läuft, Fenster↔Sidecar live | ✅ | — |
 | M2   | Standalone-Installer (PyInstaller-Sidecar + Tauri-Bundle) | 🟡 Installer gebaut+getestet; Clean-Install offen | `packaging/`, `src-tauri/` |
 | M3   | Linux (WebKitGTK) + optional Mac bauen/verifizieren | 🟡 per CI gebaut (Phase F: `native-build.yml`, win/ubuntu/macos); Real-Hardware-Smoke offen | `.github/workflows/native-build.yml` |
-| R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ✅ (native; Hotkey `Ctrl/Cmd+Shift+Space` + Tray; reuse UI-TARS-Handoff) | `src-tauri/src/overlay.rs`, `src-tauri/src/lib.rs`, `frontend/src/pages/OverlayPage.tsx` |
+| R1   | Desktop-AI-Overlay (transparent/always-on-top, Hotkey, Tray) | ✅ (native; Hotkey `Ctrl/Cmd+Shift+Space` + Tray; jetzt die echte Live-Agent-Oberfläche mit Task-Injection-IPC statt eines leeren Dispatch-Textfelds, siehe R5) | `src-tauri/src/overlay.rs`, `src-tauri/src/lib.rs`, `frontend/src/pages/OverlayPage.tsx` |
 | R2   | Eingebettetes Terminal (PTY) | ✅ (native; portable-pty + xterm.js) | `src-tauri/src/terminal.rs`, `frontend/src/components/WerkstattTerminal.tsx` |
 | R3   | Jupyter als Sidecar + Tab | ✅ (native; optionaler `jupyter lab`-Sidecar + iframe-Tab) | `src-tauri/src/jupyter.rs`, `frontend/src/pages/JupyterPage.tsx` |
 | R4   | Code-Editor (Monaco) | ✅ (Werkstatt-Tab, offline gebündelt) | `frontend/src/pages/WorkstationPage.tsx`, `frontend/src/monaco-setup.ts` |
+| R5   | Desktop-Agent v2 (Selbst-Steuerung + Assistent; verwalteter Bridge-Sidecar; jederzeit abbrechbar) | ✅ (native; Tauri spawnt/killt `bridge/uitars`, Overlay bekommt vorgeladene Aufgaben per Event, Assistent beobachtet den Bildschirm periodisch) | `bridge/uitars/server.mjs`, `src-tauri/src/agent_bridge.rs`, `frontend/src/pages/OverlayPage.tsx`, `api/product_main.py` |
 
 ## Verifikation M1 (Stand)
 
@@ -229,6 +230,19 @@ externes Projekt. Backend-Logik ist web-/native-identisch (`workspace/manager.py
 **Integration:** Per **„In Workspace einfügen"** wandert die aktuelle Datei/Selektion bzw. der Diff als
 Notiz ins aktive PaperKG-Projekt (Workspace/Parallelmode). Der **AI-Cursor** (R1) hilft zusätzlich.
 
+**UI-Ausbau (dunkles IDE-Redesign):** Die Werkstatt-Seite ist ein **dunkles IDE-Theme** (gescoped auf
+`.werkstatt-page`, Rest der App bleibt hell), füllt **genau einen Screen** (`height: calc(100vh - 64px)`
++ `overflow:hidden` — kein Body-Scroll mehr) und hat eine **kompakte horizontale Toolbar**
+(Projekt-Picker · Segmented-Control · Aktions-Buttons). Zwei **Modi** (persistiert in
+`localStorage["sciencekg.werkstatt.mode"]`): **Manuell** (Datei-Baum + Monaco + Diff oben, Terminal
+unten) und **Agent · Vorschau** (Terminal links, **Live-Vorschau-iframe** mittig, Diff rechts). Alle
+Panels sind per **`react-resizable-panels`** frei verschieb-/einklappbar (Layout via `autoSaveId`
+gemerkt). **Mehrere Terminals** in einer Tab-Leiste (`frontend/src/components/TerminalTabs.tsx`; das
+Rust-Backend war bereits multi-session). Die **Vorschau** (`PreviewPane.tsx`) hat eine Adressleiste
+(Reload/extern) und **erkennt die Dev-Server-URL automatisch** aus der Terminal-Ausgabe
+(`http://localhost:<port>`). Geänderte Dateien: `frontend/src/pages/WorkstationPage.tsx`,
+`components/{TerminalTabs,PreviewPane,WerkstattTerminal}.tsx`, `styles.css`.
+
 ## AI-Cursor-Overlay (R1)
 
 Ein **zweites, transparentes, immer-im-Vordergrund**-Fenster (`overlay`), das über dem Desktop
@@ -243,13 +257,71 @@ PaperKG bleibt „das Gehirn"; es wurde **keine** neue VLM-Plumbing ergänzt.
   und `register_global_shortcut`. In `lib.rs` registriert; das Plugin `tauri-plugin-global-shortcut`
   toggelt per **`Ctrl/Cmd+Shift+Space`**. `tauri.conf.json` setzt `app.macOSPrivateApi: true` (für
   transparente Fenster auf macOS; Cargo-Feature `macos-private-api`). Eigene Capability
-  `src-tauri/capabilities/overlay.json` (Fenster „overlay", `core:default`).
+  `src-tauri/capabilities/overlay.json` (Fenster „overlay", `core:default` +
+  `core:window:allow-start-dragging` — ohne letzteres ignoriert das randlose Fenster den
+  `data-tauri-drag-region`-Header lautlos und lässt sich nicht per Maus verschieben).
 - **Frontend** (`frontend/src/pages/OverlayPage.tsx`): kompakte UI. `App.tsx` erkennt das Overlay
   (`window.__OVERLAY__`/Route `#/overlay`), rendert **nur** die Overlay-Seite (ohne Sidebar/Topbar) und
   überspringt die schweren Shell-Queries. Wiederverwendet **`getAgentConfig` + `streamAgentDispatch`**
-  (`frontend/src/api.ts`) und das Event-Streaming-Muster aus `ParallelResultsTab.tsx`. Ist die
-  `agent_bridge:` aus, zeigt das Overlay einen Hinweis. Schließen via Header-Button oder **Escape**
-  (Fenster wird nur versteckt, lebt im Hintergrund weiter).
+  (`frontend/src/api.ts`) und das Event-Streaming-Muster aus `ParallelResultsTab.tsx`. Schließen via
+  Header-Button oder **Escape** (Fenster wird nur versteckt, lebt im Hintergrund weiter). Siehe R5
+  unten für die aktuelle Gate-Logik (nicht mehr an `agent_bridge.enabled` gekoppelt).
+
+## Desktop-Agent v2: Selbst-Steuerung + Assistent, verwalteter Bridge-Sidecar (R5)
+
+Vorher öffnete „An Desktop-Agent übergeben" nur ein Inline-Panel mit „Brief kopieren" — das
+AI-Cursor-Overlay (R1) war davon komplett abgekoppelt (öffnete immer leer). R5 schließt diese
+Lücke: der Handoff-Button **spawnt** im nativen Modus das Overlay tatsächlich, vorgeladen mit
+dem Aufgaben-Brief, und lässt zwischen zwei Modi wählen. Nichts läuft automatisch los — der
+Nutzer muss im Overlay explizit „Starten" klicken (Sicherheits-/Datenschutz-Gate für einen
+Agenten, der die Maus/Tastatur steuert bzw. den Bildschirm beobachtet).
+
+- **Selbst-Steuerung**: autonomer Lauf wie zuvor (Kanal B), jetzt aber richtig gespawnt statt nur
+  copy-paste, und mit echtem Abbruch: die Bridge (`bridge/uitars/server.mjs`) hält pro Lauf einen
+  `AbortController` (`runId`), `POST /cancel` bricht ihn graceful ab; `agent_bridge_stop` (Rust)
+  killt den Sidecar-Prozess hart als garantierten Fallback, falls ein einzelner Schritt den Abort
+  nicht rechtzeitig honoriert.
+- **Assistent**: neue Fähigkeit — beobachtet den Bildschirm periodisch (Screenshot →
+  lokales VLM → 1-2-Satz-Beschreibung, rollierender Kontext) und beantwortet live Fragen dazu,
+  steuert aber nie Maus/Tastatur. Läuft komplett im Node-Bridge-Prozess (`POST /observe/start|
+  ask|stop`) — Screenshots verlassen den Prozess nie und werden nicht persistiert; nur kurze
+  Text-Beschreibungen. Explizites Opt-in („Beobachtung starten") und ein durchgehend sichtbarer
+  „Ich sehe deinen Bildschirm"-Indikator solange aktiv; Escape kollabiert das Overlay während einer
+  aktiven Beobachtung nur zu einer minimalen Pille statt es zu verstecken — vollständiges Beenden
+  braucht den expliziten „Stoppen"-Klick.
+- **Rust** (`src-tauri/src/agent_bridge.rs`, neu, nach dem Muster von `jupyter.rs`):
+  `AgentBridgeState(Mutex<…>)` hält den einen Bridge-Prozess. `agent_bridge_ensure` startet (oder
+  reused) `node server.mjs` aus `bridge/uitars/` auf einem freien Port (`pick_free_port` +
+  `wait_until_ready`, stdout/stderr gedraint wie bei Jupyter) und gibt den Port zurück; fehlt
+  Node.js oder `node_modules`, kommt ein klarer, actionable Fehler (kein automatisches
+  `npm install`). `agent_bridge_stop` killt hart — der garantierte Abbruch-Fallback für beide
+  Modi. `overlay.rs` bekommt `overlay_dispatch_task` (zeigt+fokussiert das Overlay-Fenster, dann
+  `app.emit_to("overlay", "overlay://task", …)`) — die fehlende Verbindung zwischen dem
+  Handoff-Button und dem Overlay. Alle drei Commands + der Exit-Hook (`agent_bridge::kill`) sind
+  in `lib.rs` registriert.
+- **Backend** (`api/product_main.py`): neue Relay-Endpunkte `POST /agent/cancel`,
+  `/agent/observe/start` (SSE), `/agent/observe/ask`, `/agent/observe/stop` — gleiches
+  Loopback-Vertrauensmodell wie das bestehende `/agent/dispatch` (`_validate_bridge_url`), über
+  einen neuen `_resolve_bridge_origin`-Helper, der entweder den vom Tauri-Sidecar zurückgegebenen
+  Port (`bridge_base`) oder die konfigurierte Kanal-B-`url` (Web-Modus-Fallback) auflöst.
+  `GET /agent/config` liefert zusätzlich `manage_sidecar`/`helper_enabled`/
+  `observe_interval_seconds` aus dem erweiterten `agent_bridge:`-Block in `config.yaml`.
+- **Frontend**: `OverlayPage.tsx` (deutlicher Umbau) — Modus-Umschalter, `nativeListen(
+  "overlay://task")` befüllt Aufgabe + Modus vor, `agent_bridge_ensure` vor jedem „Starten",
+  durchgehend sichtbarer „Stoppen"-Button, Selbst-Steuerung-Log (wiederverwendet `EventLine`),
+  Assistent-Ansicht (Beobachtungs-Indikator + Chat). `ParallelResultsTab.tsx`: „An AI-Cursor
+  übergeben" ersetzt im nativen Modus das alte Inline-Panel; Web-Modus (kein Tauri) bleibt
+  unverändert beim bisherigen Kanal-A/B-Panel.
+- **Gate-Logik:** der Klick auf „Starten" im Overlay ist selbst die Zustimmung —
+  `agent_bridge.enabled` wird dort **nicht** mehr geprüft (das gate't nur noch den
+  Web-Modus-Fallback in `ParallelResultsTab.tsx`, der keinen On-Demand-Sidecar hat). Einzig
+  `agent_bridge.helper_enabled` bleibt als eigener Schalter, um gezielt nur Assistent zu
+  deaktivieren. Schlägt `agent_bridge_ensure` fehl (z. B. fehlendes Node.js), zeigt das Overlay
+  die konkrete Fehlermeldung **und** einen „Brief kopieren"-Button (Kanal-A-Fallback).
+- **Bekannter offener Punkt:** der Node-Sidecar wird (anders als der Python-Backend-Sidecar)
+  **nicht** ins Standalone-Bundle gepackt — `agent_bridge_ensure` setzt Node.js auf PATH und
+  bereits ausgeführtes `npm install` in `bridge/uitars` voraus. Vollständiges Node-Vendoring ist
+  Folgearbeit.
 
 ## Jupyter-Sidecar (R3)
 
@@ -259,12 +331,17 @@ gepackt — fehlt es, zeigt der Tab einen `pip install jupyterlab`-Hinweis. **Nu
 ein Hinweis), da es einen Kindprozess braucht.
 
 - **Rust** (`src-tauri/src/jupyter.rs`): `JupyterState(Mutex<…>)` hält den einen Server. Command
-  `jupyter_start` startet (oder reused) `jupyter lab --no-browser --ServerApp.ip=127.0.0.1
-  --ServerApp.port=<frei> --IdentityProvider.token=<rand>` auf einem freien Port und gibt die
-  Token-URL `http://127.0.0.1:<port>/lab?token=…` zurück; `jupyter_stop` killt ihn, der Exit-Hook
-  (`jupyter::kill`) ebenso → kein verwaister Prozess. Der `jupyter`-Launcher kommt aus der `.venv`
-  (Dev) bzw. vom PATH. **Wiederverwendung:** `pick_free_port`/`wait_until_ready`/`hide_console`/
-  `project_root` aus `lib.rs` (jetzt `pub(crate)`), Token via `getrandom`.
+  `jupyter_start` startet (oder reused) den Server über das **venv-Python** (`python -m jupyter lab
+  --no-browser --ServerApp.ip=127.0.0.1 --ServerApp.port=<frei> --IdentityProvider.token=<rand>`) —
+  dieselbe `.venv`-Auflösung wie der Backend-Sidecar (`crate::python_executable`, jetzt `pub(crate)`).
+  stdout/stderr werden in einen gekappten Puffer **mitgelesen** (Drain-Threads); danach wartet der
+  Command auf `wait_until_ready` und **wertet das Ergebnis aus**: bindet der Server nicht, wird das Kind
+  gekillt und der **echte stderr** als Fehler zurückgegeben (statt einer URL für einen toten Server).
+  Gibt sonst die Token-URL `http://127.0.0.1:<port>/lab?token=…` zurück; `jupyter_stop` killt ihn, der
+  Exit-Hook (`jupyter::kill`) ebenso → kein verwaister Prozess. **Wiederverwendung:** `python_executable`/
+  `pick_free_port`/`wait_until_ready`/`hide_console`/`project_root` aus `lib.rs`, Token via `getrandom`.
+  *Hinweis:* JupyterLab muss im `.venv` installiert sein (`pip install jupyterlab`) — das Meta-Paket
+  `jupyter` allein reicht für `jupyter lab` nicht.
 - **CSP/Framing:** Jupyters Default `frame-ancestors 'self'` würde das Einbetten im Tauri-Webview
   (anderer Origin) blockieren. Deshalb überschreibt der Start es per
   `--ServerApp.tornado_settings={'headers': {'Content-Security-Policy': "frame-ancestors *"}}` (ein

@@ -723,6 +723,78 @@ export async function streamAgentDispatch(
   }
 }
 
+/** Stream POST /agent/observe/start: begin an Assistent (helper) session — periodic
+ * screen descriptions from the bridge, relayed as SSE. Screenshots never leave the
+ * bridge process; only short text descriptions arrive here. */
+export async function streamObserve(
+  payload: {
+    session_id?: string | null;
+    interval_ms?: number | null;
+    primer?: string;
+    bridge_base?: string | null;
+  },
+  onEvent: (event: import("./types").ObserveEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const target = new URL("/agent/observe/start", API_BASE_URL);
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, text || `Backend error ${response.status}`);
+  }
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          onEvent(JSON.parse(line.slice(6)) as import("./types").ObserveEvent);
+        } catch {
+          // malformed SSE line – skip
+        }
+      }
+    }
+  }
+}
+
+/** POST /agent/observe/ask: ask a live question against an active Assistent session. */
+export const askObserve = (payload: { session_id: string; question: string; bridge_base?: string | null }) =>
+  request<{ answer?: string; error?: string }>("/agent/observe/ask", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+/** POST /agent/observe/stop: stop an active Assistent observation session. */
+export const stopObserve = (payload: { session_id: string; bridge_base?: string | null }) =>
+  request<{ ok: boolean; error?: string }>("/agent/observe/stop", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+/** POST /agent/cancel: gracefully abort an in-flight Selbst-Steuerung run. */
+export const cancelAgent = (payload: { run_id: string; bridge_base?: string | null }) =>
+  request<{ ok: boolean; error?: string }>("/agent/cancel", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
 export interface ResearchTreeExportOptions {
   tikz_tree: boolean;
   charts: boolean;

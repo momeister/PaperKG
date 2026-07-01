@@ -13,16 +13,18 @@ import {
   GitBranch,
   Import,
   Library,
+  Moon,
   Notebook,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Sun
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "./api";
 import { AppStateContext } from "./state";
-import type { LlmParams } from "./state";
+import type { LlmParams, Theme } from "./state";
 import { Status } from "./components/Status";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { ExtractionPage } from "./pages/ExtractionPage";
@@ -66,6 +68,17 @@ function loadStoredLlmParams(): LlmParams {
   }
 }
 
+function loadStoredTheme(): Theme {
+  const stored = localStorage.getItem("sciencekg.theme");
+  if (stored === "light" || stored === "dark") {
+    return stored;
+  }
+  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+    return "dark";
+  }
+  return "light";
+}
+
 export default function App() {
   const [activeProject, setActiveProject] = useState<string | undefined>(() => localStorage.getItem("sciencekg.project") ?? undefined);
   const [provider, setProvider] = useState<string | undefined>(() => localStorage.getItem("sciencekg.provider") ?? undefined);
@@ -73,6 +86,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("sciencekg.sidebar.open") !== "false");
   const [llmParams, setLlmParams] = useState<LlmParams>(loadStoredLlmParams);
   const [paramsOpen, setParamsOpen] = useState(false);
+  const [theme, setTheme] = useState<Theme>(loadStoredTheme);
 
   // The AI-Cursor overlay (R1) loads the same app in a separate Tauri window; it
   // renders only the compact overlay and skips the heavy main-shell queries.
@@ -136,6 +150,13 @@ export default function App() {
     }
   }, [llmParams]);
 
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("sciencekg.theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
+
   const selectedProvider = providersQuery.data?.providers.find((item) => item.name === provider);
   const modelOptions = useMemo(() => {
     const merged = [...(discoveredModelsQuery.data?.models ?? []), ...(selectedProvider?.models ?? [])];
@@ -148,8 +169,8 @@ export default function App() {
     return Array.from(new Set(merged.filter(Boolean)));
   }, [discoveredModelsQuery.data?.models, selectedProvider, model]);
   const state = useMemo(
-    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams }),
-    [activeProject, provider, model, llmParams]
+    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, toggleTheme }),
+    [activeProject, provider, model, llmParams, theme]
   );
 
   function updateLlmParam(key: keyof LlmParams, rawValue: string) {
@@ -228,6 +249,15 @@ export default function App() {
               <Status value={healthQuery.data?.status ?? "loading"} />
               <span>{healthQuery.data?.warnings?.length ?? 0} Warnungen</span>
               <span>{API_BASE_URL}</span>
+              <button
+                className="icon-button theme-toggle"
+                type="button"
+                aria-label={theme === "dark" ? "Zum Tag-Modus wechseln" : "Zum Nacht-Modus wechseln"}
+                title={theme === "dark" ? "Tag-Modus" : "Nacht-Modus"}
+                onClick={toggleTheme}
+              >
+                {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
               <span className="llm-params-wrap">
                 <button
                   className={`icon-button ${paramsOpen || Object.values(llmParams).some((value) => value !== undefined) ? "icon-button--active" : ""}`}

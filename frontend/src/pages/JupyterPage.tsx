@@ -114,8 +114,7 @@ export function JupyterPage() {
         </div>
       ) : status === "error" ? (
         <EmptyState title="JupyterLab konnte nicht gestartet werden">
-          {error}
-          <br />
+          {error ? <pre className="jupyter-error">{error}</pre> : null}
           Installiere es im Backend-venv: <code>pip install jupyterlab</code>, dann „JupyterLab starten".
         </EmptyState>
       ) : (

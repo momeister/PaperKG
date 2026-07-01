@@ -141,3 +141,76 @@ def test_dispatch_disabled_emits_error_event(tmp_path, monkeypatch) -> None:
     assert res.status_code == 200
     assert "data:" in res.text
     assert "error" in res.text
+
+
+# --------------------------------------------------------------------------- #
+# Desktop-Agent v2: Selbst-Steuerung cancel + Assistent (helper) relays          #
+# --------------------------------------------------------------------------- #
+
+def test_agent_config_exposes_sidecar_and_helper_flags(monkeypatch) -> None:
+    monkeypatch.setattr(
+        product_main,
+        "_AGENT_BRIDGE_CONFIG_CACHE",
+        {"enabled": True, "manage_sidecar": False, "helper_enabled": False, "observe_interval_seconds": 7},
+    )
+    client = TestClient(product_main.app)
+    cfg = client.get("/agent/config").json()
+    assert cfg["manage_sidecar"] is False
+    assert cfg["helper_enabled"] is False
+    assert cfg["observe_interval_seconds"] == 7
+
+
+def test_agent_config_defaults_sidecar_and_helper_flags_when_unset(monkeypatch) -> None:
+    """Unset keys default to "on" so the native app works once a bridge is enabled."""
+    monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
+    client = TestClient(product_main.app)
+    cfg = client.get("/agent/config").json()
+    assert cfg["manage_sidecar"] is True
+    assert cfg["helper_enabled"] is True
+    assert cfg["observe_interval_seconds"] == 4
+
+
+def test_cancel_agent_without_bridge_configured(monkeypatch) -> None:
+    monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
+    client = TestClient(product_main.app)
+    res = client.post("/agent/cancel", json={"run_id": "abc"})
+    assert res.status_code == 200
+    assert res.json()["ok"] is False
+
+
+def test_cancel_agent_rejects_non_loopback_bridge_base(monkeypatch) -> None:
+    """A client-supplied bridge_base (the Tauri-managed sidecar port) must stay loopback-only."""
+    monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
+    client = TestClient(product_main.app)
+    res = client.post("/agent/cancel", json={"run_id": "abc", "bridge_base": "http://example.com:8787"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert "rejected" in body["error"]
+
+
+def test_observe_start_emits_error_without_bridge(monkeypatch) -> None:
+    monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
+    client = TestClient(product_main.app)
+    res = client.post("/agent/observe/start", json={"primer": "Kontext zur Aufgabe"})
+    assert res.status_code == 200
+    assert "data:" in res.text
+    assert "error" in res.text
+
+
+def test_observe_ask_without_bridge(monkeypatch) -> None:
+    monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
+    client = TestClient(product_main.app)
+    res = client.post("/agent/observe/ask", json={"session_id": "s1", "question": "Was siehst du?"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["answer"] == ""
+    assert "error" in body
+
+
+def test_observe_stop_without_bridge(monkeypatch) -> None:
+    monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
+    client = TestClient(product_main.app)
+    res = client.post("/agent/observe/stop", json={"session_id": "s1"})
+    assert res.status_code == 200
+    assert res.json()["ok"] is False

@@ -363,6 +363,33 @@ class AgentDispatchRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
+class AgentCancelRequest(BaseModel):
+    """Gracefully abort an in-flight Selbst-Steuerung run on the bridge."""
+    run_id: str = Field(min_length=1, max_length=200)
+    bridge_base: str | None = None
+
+
+class AgentObserveStartRequest(BaseModel):
+    """Start an Assistent (helper) live screen-observation session on the bridge."""
+    session_id: str | None = None
+    interval_ms: int | None = None
+    primer: str = Field(default="", max_length=20000)
+    bridge_base: str | None = None
+
+
+class AgentObserveAskRequest(BaseModel):
+    """Ask a live question against an active Assistent observation session."""
+    session_id: str = Field(min_length=1, max_length=200)
+    question: str = Field(min_length=1, max_length=4000)
+    bridge_base: str | None = None
+
+
+class AgentObserveStopRequest(BaseModel):
+    """Stop an active Assistent observation session."""
+    session_id: str = Field(min_length=1, max_length=200)
+    bridge_base: str | None = None
+
+
 class ResearchTreeExportOptions(BaseModel):
     tikz_tree: bool = True
     charts: bool = True
@@ -1646,6 +1673,48 @@ def _load_agent_bridge_config() -> dict[str, Any]:
     return cfg
 
 
+_AGENT_BRIDGE_VLM_BASE_URL_CACHE: str | None = None
+
+
+def _resolve_agent_bridge_vlm_base_url() -> str:
+    """Resolve ``agent_bridge.vlm_provider`` to that provider's ``base_url`` under
+    ``llm.providers`` in config.yaml, so it isn't duplicated in the agent_bridge block.
+    Only ``base_url`` is read here, never ``api_key``/``api_key_env`` — the bridge
+    screenshots the user's desktop, so only local providers (ollama/lm_studio, both
+    keyless) are a sane choice; a keyed cloud provider isn't supported by this wiring."""
+    global _AGENT_BRIDGE_VLM_BASE_URL_CACHE
+    if _AGENT_BRIDGE_VLM_BASE_URL_CACHE is not None:
+        return _AGENT_BRIDGE_VLM_BASE_URL_CACHE
+    provider = str(_load_agent_bridge_config().get("vlm_provider") or "").strip()
+    base_url = ""
+    if provider:
+        try:
+            with open("config.yaml", "r", encoding="utf-8") as fh:
+                providers = ((yaml.safe_load(fh) or {}).get("llm", {}) or {}).get("providers", {}) or {}
+            base_url = str((providers.get(provider) or {}).get("base_url") or "")
+        except FileNotFoundError:
+            base_url = ""
+    _AGENT_BRIDGE_VLM_BASE_URL_CACHE = base_url
+    return base_url
+
+
+def _resolve_bridge_origin(bridge_base: str | None) -> tuple[str, bool]:
+    """Resolve the bridge's origin (``scheme://host:port``) for the cancel/observe
+    relays. A client-supplied ``bridge_base`` (the port Tauri's sidecar just spawned
+    on) takes precedence and is treated as untrusted (loopback-only, like
+    ``bridge_url`` on /agent/dispatch); otherwise falls back to the origin of the
+    configured Kanal-B ``url`` (the web-mode manual-bridge case). Returns
+    ``(origin, from_config)`` for `_validate_bridge_url`."""
+    base = (bridge_base or "").strip()
+    if base:
+        return base.rstrip("/"), False
+    config_url = str(_load_agent_bridge_config().get("url") or "").strip()
+    parsed = urlparse(config_url)
+    if parsed.scheme and parsed.hostname:
+        return f"{parsed.scheme}://{parsed.netloc}", True
+    return "", True
+
+
 @app.post("/projects/{project_id}/parallel")
 async def create_parallel_session(project_id: str, request: ParallelStartRequest) -> dict[str, Any]:
     """Start a Parallel-Research session: persist it, generate the grounded overview
@@ -2017,6 +2086,17 @@ def get_agent_config() -> dict[str, Any]:
         "has_url": bool(bridge.get("url")),
         "vlm_model": str(bridge.get("vlm_model") or ""),
         "vlm_provider": str(bridge.get("vlm_provider") or ""),
+        "vlm_base_url": _resolve_agent_bridge_vlm_base_url(),
+        # Assistent-only override (Selbst-Steuerung always uses vlm_model — it needs a
+        # UI-TARS-family model for action grounding). Falls back to vlm_model if unset.
+        "helper_vlm_model": str(bridge.get("helper_vlm_model") or bridge.get("vlm_model") or ""),
+        # Native shell only: whether Tauri should spawn/manage the bridge sidecar
+        # itself (agent_bridge_ensure/_stop) instead of relying on a manually
+        # started one. Ignored in the web app (no sidecar manager there).
+        "manage_sidecar": bool(bridge.get("manage_sidecar", True)),
+        "helper_enabled": bool(bridge.get("helper_enabled", True)),
+        "observe_interval_seconds": int(bridge.get("observe_interval_seconds") or 4),
+        "observe_context_size": int(bridge.get("observe_context_size") or 8),
     }
 
 
@@ -2082,6 +2162,99 @@ async def dispatch_agent(request: AgentDispatchRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/agent/cancel")
+async def cancel_agent(request: AgentCancelRequest) -> dict[str, Any]:
+    """Gracefully abort an in-flight Selbst-Steuerung run (the bridge's own
+    ``AbortSignal``). Tauri hard-killing the bridge sidecar is the guaranteed
+    fallback if a single step doesn't honor this in time."""
+    origin, from_config = _resolve_bridge_origin(request.bridge_base)
+    if not origin or not _validate_bridge_url(origin, from_config=from_config):
+        return {"ok": False, "error": "bridge url rejected or not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{origin}/cancel", json={"runId": request.run_id})
+            return resp.json()
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/agent/observe/start")
+async def observe_agent_start(request: AgentObserveStartRequest) -> StreamingResponse:
+    """Start an Assistent (helper) session: relay the bridge's periodic screen
+    observations as SSE. Screenshots never leave the bridge process — only short
+    text descriptions are forwarded, and nothing is persisted here."""
+    bridge = _load_agent_bridge_config()
+    origin, from_config = _resolve_bridge_origin(request.bridge_base)
+    timeout = float(bridge.get("timeout_seconds") or 600)
+
+    async def stream() -> AsyncIterator[str]:
+        def emit(payload: dict[str, Any]) -> str:
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        if not origin or not _validate_bridge_url(origin, from_config=from_config):
+            yield emit({"status": "error", "error": "bridge url rejected or not configured"})
+            return
+        body = {
+            "sessionId": request.session_id,
+            "intervalMs": request.interval_ms,
+            "primer": request.primer,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", f"{origin}/observe/start", json=body) as resp:
+                    if resp.status_code >= 400:
+                        yield emit({"status": "error", "error": f"bridge returned {resp.status_code}"})
+                        return
+                    async for raw in resp.aiter_lines():
+                        line = raw.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        chunk = line[len("data:"):].strip()
+                        if chunk:
+                            yield f"data: {chunk}\n\n"
+        except Exception as exc:  # noqa: BLE001 - surface as terminal SSE event
+            yield emit({"status": "error", "error": str(exc)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/agent/observe/ask")
+async def observe_agent_ask(request: AgentObserveAskRequest) -> dict[str, Any]:
+    """Ask a live question against an active Assistent observation session,
+    answered against a fresh screenshot plus the session's rolling context."""
+    origin, from_config = _resolve_bridge_origin(request.bridge_base)
+    if not origin or not _validate_bridge_url(origin, from_config=from_config):
+        return {"answer": "", "error": "bridge url rejected or not configured"}
+    timeout = float(_load_agent_bridge_config().get("timeout_seconds") or 600)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{origin}/observe/ask",
+                json={"sessionId": request.session_id, "question": request.question},
+            )
+            return resp.json()
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"answer": "", "error": str(exc)}
+
+
+@app.post("/agent/observe/stop")
+async def observe_agent_stop(request: AgentObserveStopRequest) -> dict[str, Any]:
+    """Stop an active Assistent observation session."""
+    origin, from_config = _resolve_bridge_origin(request.bridge_base)
+    if not origin or not _validate_bridge_url(origin, from_config=from_config):
+        return {"ok": False, "error": "bridge url rejected or not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{origin}/observe/stop", json={"sessionId": request.session_id})
+            return resp.json()
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"ok": False, "error": str(exc)}
 
 
 @app.post("/research/tree/export")
@@ -3069,7 +3242,7 @@ def graph_explorer(
     project_id: str | None = None,
     query: str = "",
     edge_types: list[str] | None = Query(default=None),
-    limit: int = Query(default=80, ge=5, le=500),
+    limit: int = Query(default=1200, ge=5, le=5000),
 ) -> GraphExplorerResponse:
     projects = _load_projects(_projects_path(projects_path))
     selected_ids = set(projects.get(project_id, [])) if project_id else None
@@ -3083,8 +3256,19 @@ def graph_explorer(
         papers = [paper for paper in papers if str(paper.get("id")) in selected_ids]
     if query:
         papers = [paper for paper in papers if _paper_matches_query(paper, query)]
-    papers = papers[:limit]
+    total_matching = len(papers)
+
+    # Papers with a successful extraction are the actual knowledge graph content
+    # and must never be pushed out by `limit` — `limit` only bounds how many
+    # additional non-extracted papers are pulled in for citation/similarity context.
+    extraction_by_paper = _latest_successful_extractions(extractions)
+    extracted_papers = [paper for paper in papers if str(paper.get("id")) in extraction_by_paper]
+    other_papers = [paper for paper in papers if str(paper.get("id")) not in extraction_by_paper]
+    extracted_count = len(extracted_papers)
+    effective_limit = max(limit, extracted_count)
+    papers = (extracted_papers + other_papers)[:effective_limit]
     paper_ids = {str(paper.get("id")) for paper in papers}
+    truncated = len(papers) < total_matching
 
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[str, dict[str, Any]] = {}
@@ -3116,7 +3300,6 @@ def graph_explorer(
                         if score >= 0.1:
                             _add_edge(edges, source_id, target_id, "similar", "SIMILAR", score=round(score, 4))
 
-    extraction_by_paper = _latest_successful_extractions(extractions)
     for pid in paper_ids:
         extraction = extraction_by_paper.get(pid)
         if not extraction:
@@ -3146,6 +3329,9 @@ def graph_explorer(
             "node_count": len(nodes),
             "edge_count": len(edges),
             "edge_types": sorted({edge["type"] for edge in edges.values()}),
+            "total_paper_count": total_matching,
+            "extracted_paper_count": extracted_count,
+            "truncated": truncated,
         },
     )
 

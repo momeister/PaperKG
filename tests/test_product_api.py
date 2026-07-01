@@ -138,6 +138,55 @@ def test_product_projects_papers_dashboard_review_and_graph(tmp_path) -> None:
     assert projects_after_delete.json()["projects"] == []
 
 
+def test_graph_explorer_never_truncates_extracted_papers(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    with MetadataDB(str(db_path)) as db:
+        db.insert_paper(
+            {
+                "id": "extracted",
+                "source": "fixture",
+                "source_id": "extracted",
+                "title": "Extracted Paper",
+                "abstract": "Has a successful extraction.",
+                "year": 2024,
+                "has_full_text": True,
+            }
+        )
+        db.save_extraction_result(
+            paper_id="extracted",
+            llm_provider="fake",
+            llm_model="fake-model",
+            concepts=[{"label": "Concept", "confidence": 0.9, "canonical_id": "concept:c"}],
+        )
+        for index in range(10):
+            pid = f"recent{index}"
+            db.insert_paper(
+                {
+                    "id": pid,
+                    "source": "fixture",
+                    "source_id": pid,
+                    "title": f"Unextracted Paper {pid}",
+                    "abstract": "No extraction yet.",
+                    "year": 2025,
+                    "has_full_text": True,
+                }
+            )
+
+    client = TestClient(product_main.app)
+    graph = client.get(
+        "/graph/explorer",
+        params={"metadata_db_path": str(db_path), "limit": 5},
+    )
+    assert graph.status_code == 200
+    body = graph.json()
+    assert body["stats"]["extracted_paper_count"] == 1
+    assert body["stats"]["total_paper_count"] == 11
+    assert body["stats"]["truncated"] is True
+    paper_nodes = [node for node in body["nodes"] if node["type"] == "paper"]
+    assert len(paper_nodes) == 5
+    assert "extracted" in {node["id"] for node in paper_nodes}
+
+
 def test_harvest_download_attaches_papers_to_project(tmp_path) -> None:
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"

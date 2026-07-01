@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import {
   ChevronDown,
   ChevronRight,
+  Eye,
   File as FileIcon,
   FilePlus,
   FolderGit2,
   FolderPlus,
+  PanelsTopLeft,
   RefreshCw,
   Save,
   Send,
@@ -17,7 +20,8 @@ import Editor from "@monaco-editor/react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
-import { WerkstattTerminal } from "../components/WerkstattTerminal";
+import { TerminalTabs } from "../components/TerminalTabs";
+import { PreviewPane, normalizePreviewUrl } from "../components/PreviewPane";
 import { useAppState } from "../state";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { isTauri } from "../native";
@@ -25,6 +29,13 @@ import { languageForPath } from "../monaco-setup";
 import type { CodeProject, FileTreeNode, GitStatus } from "../types";
 
 const SELECTED_KEY = "sciencekg.werkstatt.project";
+const MODE_KEY = "sciencekg.werkstatt.mode";
+type WerkstattMode = "manual" | "agent";
+
+// Match the origin of a local dev server printed into the terminal
+// (e.g. Vite's "Local:   http://localhost:5173/"). Stops at the first control
+// char / whitespace so surrounding ANSI colour codes are not swallowed.
+const DEV_URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?/i;
 
 /** One node in the project file tree (recursive). */
 function TreeNode({
@@ -108,6 +119,9 @@ export function WorkstationPage() {
   const queryClient = useQueryClient();
 
   const [projectId, setProjectId] = useState<string | null>(() => localStorage.getItem(SELECTED_KEY));
+  const [mode, setMode] = useState<WerkstattMode>(
+    () => (localStorage.getItem(MODE_KEY) === "agent" ? "agent" : "manual"),
+  );
   const [openPath, setOpenPath] = useState<string | null>(null);
   const [editorValue, setEditorValue] = useState<string>("");
   const [savedValue, setSavedValue] = useState<string>("");
@@ -118,8 +132,13 @@ export function WorkstationPage() {
   const [newProjectName, setNewProjectName] = useState("");
   const [openFolderPath, setOpenFolderPath] = useState("");
   const [newFilePath, setNewFilePath] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const editorRef = useRef<unknown>(null);
+  // URL auto-detection: rolling buffer of recent terminal output + a flag that
+  // disables auto-fill once the user edits the address bar by hand.
+  const urlBufferRef = useRef("");
+  const userTouchedPreviewRef = useRef(false);
 
   const workspacesQuery = useQuery({ queryKey: ["werkstatt", "list"], queryFn: api.werkstatt.list });
   const projects = workspacesQuery.data?.projects ?? [];
@@ -134,6 +153,9 @@ export function WorkstationPage() {
   useEffect(() => {
     if (projectId) localStorage.setItem(SELECTED_KEY, projectId);
   }, [projectId]);
+  useEffect(() => {
+    localStorage.setItem(MODE_KEY, mode);
+  }, [mode]);
 
   const activeCodeProject: CodeProject | undefined = projects.find((p) => p.id === projectId);
 
@@ -164,6 +186,23 @@ export function WorkstationPage() {
     queryClient.invalidateQueries({ queryKey: ["werkstatt", "tree", projectId] });
     queryClient.invalidateQueries({ queryKey: ["werkstatt", "git-status", projectId] });
     queryClient.invalidateQueries({ queryKey: ["werkstatt", "git-diff", projectId] });
+  }
+
+  // Auto-detect the dev-server URL from terminal output, unless the user took
+  // manual control of the address bar.
+  function handleTerminalOutput(text: string) {
+    if (userTouchedPreviewRef.current) return;
+    const buffer = (urlBufferRef.current + text).slice(-1000);
+    urlBufferRef.current = buffer;
+    const match = buffer.match(DEV_URL_RE);
+    if (!match) return;
+    const found = normalizePreviewUrl(match[0]);
+    setPreviewUrl((current) => (current === found ? current : found));
+  }
+
+  function handlePreviewUrlChange(next: string) {
+    userTouchedPreviewRef.current = true;
+    setPreviewUrl(next);
   }
 
   async function openFile(path: string) {
@@ -305,17 +344,189 @@ export function WorkstationPage() {
   }, [openPath, dirty, saveMutation]);
 
   const gitStatus: GitStatus | undefined = gitStatusQuery.data;
+  const path = activeCodeProject?.path ?? "";
+
+  // ---- Panel renderers (shared between the two layouts) ----
+
+  function renderTreePane() {
+    return (
+      <div className="wk-pane">
+        <div className="wk-pane-head">
+          <strong className="wk-pane-title">Dateien</strong>
+          <button className="wk-iconbtn" title="Aktualisieren" onClick={() => refreshProject()}>
+            <RefreshCw size={14} />
+          </button>
+        </div>
+        <div className="werkstatt-newfile">
+          <input
+            placeholder="neue/datei.py"
+            value={newFilePath}
+            onChange={(event) => setNewFilePath(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && newFilePath.trim() && createFileMutation.mutate(newFilePath.trim())}
+          />
+          <button className="wk-iconbtn" title="Datei anlegen" disabled={!newFilePath.trim()} onClick={() => newFilePath.trim() && createFileMutation.mutate(newFilePath.trim())}>
+            <FilePlus size={15} />
+          </button>
+        </div>
+        <div className="werkstatt-tree">
+          {treeQuery.data?.children?.length ? (
+            treeQuery.data.children.map((node) => (
+              <TreeNode
+                key={node.path}
+                node={node}
+                depth={0}
+                activePath={openPath}
+                expanded={expanded}
+                onToggle={toggleFolder}
+                onOpenFile={openFile}
+              />
+            ))
+          ) : (
+            <p className="muted" style={{ padding: "8px 10px" }}>
+              {treeQuery.isLoading ? "lädt…" : "Leeres Projekt."}
+            </p>
+          )}
+        </div>
+        <p className="werkstatt-path muted" title={path}>
+          {path}
+        </p>
+      </div>
+    );
+  }
+
+  function renderEditorPane() {
+    return (
+      <div className="wk-pane">
+        <div className="wk-pane-head wk-pane-head--split">
+          <span className="werkstatt-editor-path">
+            {openPath ? openPath : "Keine Datei geöffnet"}
+            {dirty ? <em className="werkstatt-dirty"> ●</em> : null}
+          </span>
+          <div className="werkstatt-editor-actions">
+            <button
+              className="wk-btn wk-btn--primary"
+              disabled={!openPath || !dirty || saveMutation.isPending}
+              onClick={() => saveMutation.mutate()}
+            >
+              <Save size={15} /> Speichern
+            </button>
+            <button
+              className="wk-btn"
+              disabled={!openPath || insertMutation.isPending}
+              title="Aktuelle Datei/Selektion als Notiz in den Workspace einfügen"
+              onClick={insertCodeIntoWorkspace}
+            >
+              <Send size={15} /> In Workspace
+            </button>
+          </div>
+        </div>
+        <div className="wk-editor-body">
+          {openPath ? (
+            <Editor
+              height="100%"
+              theme="vs-dark"
+              path={openPath}
+              language={languageForPath(openPath)}
+              value={editorValue}
+              onChange={(value) => setEditorValue(value ?? "")}
+              onMount={(editor) => {
+                editorRef.current = editor;
+              }}
+              options={{
+                fontSize: 13,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                tabSize: 2,
+              }}
+            />
+          ) : (
+            <EmptyState title="Datei wählen">Öffne links eine Datei zum Bearbeiten.</EmptyState>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderResultsPane() {
+    return (
+      <div className="wk-pane">
+        <div className="werkstatt-results-tabs">
+          <button className={resultTab === "changes" ? "active" : ""} onClick={() => setResultTab("changes")}>
+            Änderungen
+          </button>
+          <button className={resultTab === "diff" ? "active" : ""} onClick={() => setResultTab("diff")}>
+            Diff
+          </button>
+          <button className="wk-iconbtn" title="Aktualisieren" onClick={() => refreshProject()}>
+            <RefreshCw size={14} />
+          </button>
+        </div>
+        {resultTab === "changes" ? (
+          <div className="werkstatt-changes">
+            {!gitStatus?.available ? (
+              <p className="muted">Git nicht verfügbar.</p>
+            ) : !gitStatus.is_repo ? (
+              <p className="muted">Kein Git-Repository.</p>
+            ) : gitStatus.files.length ? (
+              gitStatus.files.map((file) => (
+                <button
+                  key={file.path}
+                  className="werkstatt-change-row"
+                  title={file.untracked ? "neu" : file.staged ? "staged" : "geändert"}
+                  onClick={() => (mode === "agent" ? setResultTab("diff") : openFile(file.path))}
+                >
+                  <span className={`werkstatt-change-code werkstatt-change-code--${file.untracked ? "new" : file.staged ? "staged" : "mod"}`}>
+                    {file.code || "??"}
+                  </span>
+                  <span>{file.path}</span>
+                </button>
+              ))
+            ) : (
+              <p className="muted">Keine Änderungen.</p>
+            )}
+          </div>
+        ) : (
+          <div className="werkstatt-diff-wrap">
+            <DiffView diff={diffQuery.data?.diff ?? ""} />
+          </div>
+        )}
+        <div className="werkstatt-results-foot">
+          <button
+            className="wk-btn"
+            disabled={insertMutation.isPending}
+            title="Diff als Notiz in den Workspace einfügen"
+            onClick={insertDiffIntoWorkspace}
+          >
+            <Send size={15} /> Diff in Workspace
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderTerminalPane() {
+    return (
+      <div className="wk-pane wk-term-pane">
+        <div className="wk-pane-head">
+          <TerminalSquare size={14} />
+          <strong className="wk-pane-title">Terminal</strong>
+          <span className="wk-pane-sub" title={path}>
+            {path}
+          </span>
+        </div>
+        <TerminalTabs key={path} cwd={path} onOutput={handleTerminalOutput} />
+      </div>
+    );
+  }
 
   return (
     <section className="page werkstatt-page">
-      <div className="page-title">
-        <div>
-          <span>Code-Werkstatt</span>
-          <h1>Werkstatt</h1>
-        </div>
-        <div className="werkstatt-project-bar">
-          <FolderGit2 size={16} />
+      <header className="wk-toolbar">
+        <div className="wk-toolbar-left">
+          <FolderGit2 size={15} className="wk-toolbar-icon" />
           <select
+            className="wk-project-select"
             value={projectId ?? ""}
             onChange={(event) => {
               setProjectId(event.target.value || null);
@@ -330,15 +541,55 @@ export function WorkstationPage() {
               </option>
             ))}
           </select>
-          <button className="button button-compact" type="button" onClick={() => { setShowNewProject((v) => !v); setShowOpenFolder(false); }}>
-            <FolderPlus size={15} /> Neu
+        </div>
+
+        <div className="wk-segmented" role="tablist" aria-label="Modus">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "manual"}
+            className={mode === "manual" ? "active" : ""}
+            onClick={() => setMode("manual")}
+          >
+            <PanelsTopLeft size={14} /> Manuell
           </button>
-          <button className="button button-compact" type="button" onClick={() => { setShowOpenFolder((v) => !v); setShowNewProject(false); }}>
-            <FolderGit2 size={15} /> Ordner öffnen
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "agent"}
+            className={mode === "agent" ? "active" : ""}
+            onClick={() => setMode("agent")}
+          >
+            <Eye size={14} /> Agent · Vorschau
+          </button>
+        </div>
+
+        <div className="wk-toolbar-right">
+          <button
+            className="wk-iconbtn wk-iconbtn--label"
+            type="button"
+            title="Neues Projekt anlegen"
+            onClick={() => {
+              setShowNewProject((v) => !v);
+              setShowOpenFolder(false);
+            }}
+          >
+            <FolderPlus size={15} /> <span>Neu</span>
+          </button>
+          <button
+            className="wk-iconbtn wk-iconbtn--label"
+            type="button"
+            title="Bestehenden Ordner öffnen"
+            onClick={() => {
+              setShowOpenFolder((v) => !v);
+              setShowNewProject(false);
+            }}
+          >
+            <FolderGit2 size={15} /> <span>Ordner</span>
           </button>
           {activeCodeProject ? (
             <button
-              className="button button-compact"
+              className="wk-iconbtn wk-iconbtn--danger"
               type="button"
               title="Projekt aus PaperKG entfernen (Ordner bleibt erhalten)"
               onClick={() => removeProjectMutation.mutate(activeCodeProject.id)}
@@ -347,10 +598,10 @@ export function WorkstationPage() {
             </button>
           ) : null}
         </div>
-      </div>
+      </header>
 
       {showNewProject ? (
-        <div className="werkstatt-inline-form">
+        <div className="wk-inline-form">
           <input
             autoFocus
             placeholder="Projektname (z. B. mein-experiment)"
@@ -358,14 +609,14 @@ export function WorkstationPage() {
             onChange={(event) => setNewProjectName(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && newProjectName.trim() && createProjectMutation.mutate(newProjectName.trim())}
           />
-          <button className="button button-primary button-compact" disabled={!newProjectName.trim() || createProjectMutation.isPending} onClick={() => createProjectMutation.mutate(newProjectName.trim())}>
+          <button className="wk-btn wk-btn--primary" disabled={!newProjectName.trim() || createProjectMutation.isPending} onClick={() => createProjectMutation.mutate(newProjectName.trim())}>
             Anlegen
           </button>
           <span className="muted">→ {workspacesQuery.data?.base_dir}</span>
         </div>
       ) : null}
       {showOpenFolder ? (
-        <div className="werkstatt-inline-form">
+        <div className="wk-inline-form">
           <input
             autoFocus
             placeholder="Absoluter Ordnerpfad (z. B. C:\\Users\\…\\mein-repo)"
@@ -373,7 +624,7 @@ export function WorkstationPage() {
             onChange={(event) => setOpenFolderPath(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && openFolderPath.trim() && openFolderMutation.mutate(openFolderPath.trim())}
           />
-          <button className="button button-primary button-compact" disabled={!openFolderPath.trim() || openFolderMutation.isPending} onClick={() => openFolderMutation.mutate(openFolderPath.trim())}>
+          <button className="wk-btn wk-btn--primary" disabled={!openFolderPath.trim() || openFolderMutation.isPending} onClick={() => openFolderMutation.mutate(openFolderPath.trim())}>
             Öffnen
           </button>
           <span className="muted">Registriert einen bestehenden Ordner als externes Projekt.</span>
@@ -381,182 +632,61 @@ export function WorkstationPage() {
       ) : null}
 
       {!projects.length && !workspacesQuery.isLoading ? (
-        <section className="panel">
+        <div className="wk-body wk-body--empty">
           <EmptyState title="Noch kein Code-Projekt">
             Lege ein neues Projekt an oder öffne einen bestehenden Ordner. Projekte sind echte Git-Ordner
             unter <code>{workspacesQuery.data?.base_dir}</code> — auch von VS Code &amp; Co. zu öffnen.
           </EmptyState>
-        </section>
+        </div>
       ) : null}
 
       {projectId && activeCodeProject ? (
-        <div className="werkstatt-workspace">
-        <div className="werkstatt-grid">
-          {/* Left: file tree */}
-          <aside className="werkstatt-sidebar panel">
-            <div className="werkstatt-sidebar-head">
-              <strong>Dateien</strong>
-              <button className="icon-button" title="Aktualisieren" onClick={() => refreshProject()}>
-                <RefreshCw size={14} />
-              </button>
-            </div>
-            <div className="werkstatt-newfile">
-              <input
-                placeholder="neue/datei.py"
-                value={newFilePath}
-                onChange={(event) => setNewFilePath(event.target.value)}
-                onKeyDown={(event) => event.key === "Enter" && newFilePath.trim() && createFileMutation.mutate(newFilePath.trim())}
-              />
-              <button className="icon-button" title="Datei anlegen" disabled={!newFilePath.trim()} onClick={() => newFilePath.trim() && createFileMutation.mutate(newFilePath.trim())}>
-                <FilePlus size={15} />
-              </button>
-            </div>
-            <div className="werkstatt-tree">
-              {treeQuery.data?.children?.length ? (
-                treeQuery.data.children.map((node) => (
-                  <TreeNode
-                    key={node.path}
-                    node={node}
-                    depth={0}
-                    activePath={openPath}
-                    expanded={expanded}
-                    onToggle={toggleFolder}
-                    onOpenFile={openFile}
-                  />
-                ))
-              ) : (
-                <p className="muted" style={{ padding: "8px 10px" }}>
-                  {treeQuery.isLoading ? "lädt…" : "Leeres Projekt."}
-                </p>
-              )}
-            </div>
-            <p className="werkstatt-path muted" title={activeCodeProject.path}>
-              {activeCodeProject.path}
-            </p>
-          </aside>
-
-          {/* Center: editor */}
-          <main className="werkstatt-editor panel">
-            <div className="werkstatt-editor-head">
-              <span className="werkstatt-editor-path">
-                {openPath ? openPath : "Keine Datei geöffnet"}
-                {dirty ? <em className="werkstatt-dirty"> ●</em> : null}
-              </span>
-              <div className="werkstatt-editor-actions">
-                <button
-                  className="button button-compact button-primary"
-                  disabled={!openPath || !dirty || saveMutation.isPending}
-                  onClick={() => saveMutation.mutate()}
-                >
-                  <Save size={15} /> Speichern
-                </button>
-                <button
-                  className="button button-compact"
-                  disabled={!openPath || insertMutation.isPending}
-                  title="Aktuelle Datei/Selektion als Notiz in den Workspace einfügen"
-                  onClick={insertCodeIntoWorkspace}
-                >
-                  <Send size={15} /> In Workspace
-                </button>
-              </div>
-            </div>
-            {openPath ? (
-              <Editor
-                height="100%"
-                theme="vs-dark"
-                path={openPath}
-                language={languageForPath(openPath)}
-                value={editorValue}
-                onChange={(value) => setEditorValue(value ?? "")}
-                onMount={(editor) => {
-                  editorRef.current = editor;
-                }}
-                options={{
-                  fontSize: 13,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  tabSize: 2,
-                }}
-              />
-            ) : (
-              <EmptyState title="Datei wählen">Öffne links eine Datei zum Bearbeiten.</EmptyState>
-            )}
-          </main>
-
-          {/* Right: results / git */}
-          <aside className="werkstatt-results panel">
-            <div className="werkstatt-results-tabs">
-              <button className={resultTab === "changes" ? "active" : ""} onClick={() => setResultTab("changes")}>
-                Änderungen
-              </button>
-              <button className={resultTab === "diff" ? "active" : ""} onClick={() => setResultTab("diff")}>
-                Diff
-              </button>
-              <button className="icon-button" title="Aktualisieren" onClick={() => refreshProject()}>
-                <RefreshCw size={14} />
-              </button>
-            </div>
-            {resultTab === "changes" ? (
-              <div className="werkstatt-changes">
-                {!gitStatus?.available ? (
-                  <p className="muted">Git nicht verfügbar.</p>
-                ) : !gitStatus.is_repo ? (
-                  <p className="muted">Kein Git-Repository.</p>
-                ) : gitStatus.files.length ? (
-                  gitStatus.files.map((file) => (
-                    <button
-                      key={file.path}
-                      className="werkstatt-change-row"
-                      title={file.untracked ? "neu" : file.staged ? "staged" : "geändert"}
-                      onClick={() => openFile(file.path)}
-                    >
-                      <span className={`werkstatt-change-code werkstatt-change-code--${file.untracked ? "new" : file.staged ? "staged" : "mod"}`}>
-                        {file.code || "??"}
-                      </span>
-                      <span>{file.path}</span>
-                    </button>
-                  ))
-                ) : (
-                  <p className="muted">Keine Änderungen.</p>
-                )}
-              </div>
-            ) : (
-              <div className="werkstatt-diff-wrap">
-                <DiffView diff={diffQuery.data?.diff ?? ""} />
-              </div>
-            )}
-            <div className="werkstatt-results-foot">
-              <button
-                className="button button-compact"
-                disabled={insertMutation.isPending}
-                title="Diff als Notiz in den Workspace einfügen"
-                onClick={insertDiffIntoWorkspace}
-              >
-                <Send size={15} /> Diff in Workspace
-              </button>
-            </div>
-          </aside>
-        </div>
-
-        {/* Bottom: embedded terminal (Agent half) — AI coding CLIs, git, shell */}
-        <section className="werkstatt-terminal-panel panel">
-          <div className="werkstatt-terminal-head">
-            <TerminalSquare size={15} />
-            <strong>Terminal</strong>
-            <span className="muted" title={activeCodeProject.path}>
-              {activeCodeProject.path}
-            </span>
-          </div>
-          <WerkstattTerminal key={activeCodeProject.path} cwd={activeCodeProject.path} />
-        </section>
+        <div className="wk-body">
+          {mode === "manual" ? (
+            <PanelGroup direction="vertical" autoSaveId="wk-manual-v" className="wk-group">
+              <Panel minSize={20} order={1} id="wk-m-main" className="wk-pane-slot">
+                <PanelGroup direction="horizontal" autoSaveId="wk-manual-h" className="wk-group">
+                  <Panel defaultSize={22} minSize={12} collapsible order={1} id="wk-m-tree" className="wk-pane-slot">
+                    {renderTreePane()}
+                  </Panel>
+                  <PanelResizeHandle className="wk-resize wk-resize--v" />
+                  <Panel minSize={25} order={2} id="wk-m-editor" className="wk-pane-slot">
+                    {renderEditorPane()}
+                  </Panel>
+                  <PanelResizeHandle className="wk-resize wk-resize--v" />
+                  <Panel defaultSize={26} minSize={12} collapsible order={3} id="wk-m-results" className="wk-pane-slot">
+                    {renderResultsPane()}
+                  </Panel>
+                </PanelGroup>
+              </Panel>
+              <PanelResizeHandle className="wk-resize wk-resize--h" />
+              <Panel defaultSize={34} minSize={10} collapsible order={2} id="wk-m-term" className="wk-pane-slot">
+                {renderTerminalPane()}
+              </Panel>
+            </PanelGroup>
+          ) : (
+            <PanelGroup direction="horizontal" autoSaveId="wk-agent-h" className="wk-group">
+              <Panel defaultSize={30} minSize={12} collapsible order={1} id="wk-a-term" className="wk-pane-slot">
+                {renderTerminalPane()}
+              </Panel>
+              <PanelResizeHandle className="wk-resize wk-resize--v" />
+              <Panel minSize={25} order={2} id="wk-a-preview" className="wk-pane-slot">
+                <PreviewPane url={previewUrl} onUrlChange={handlePreviewUrlChange} />
+              </Panel>
+              <PanelResizeHandle className="wk-resize wk-resize--v" />
+              <Panel defaultSize={26} minSize={12} collapsible order={3} id="wk-a-results" className="wk-pane-slot">
+                {renderResultsPane()}
+              </Panel>
+            </PanelGroup>
+          )}
         </div>
       ) : null}
 
       {!isTauri() ? (
         <p className="muted werkstatt-hint">
-          Hinweis: Das eingebettete Terminal für KI-Coding-CLIs (Claude Code, opencode, codex …) ist nur in
-          der Desktop-App aktiv. Datei-Ansicht, Editor und Diff funktionieren auch im Browser.
+          Hinweis: Das eingebettete Terminal und die Live-Vorschau (für KI-Coding-CLIs wie Claude Code,
+          opencode, codex …) sind nur in der Desktop-App aktiv. Datei-Ansicht, Editor und Diff funktionieren
+          auch im Browser.
         </p>
       ) : null}
 

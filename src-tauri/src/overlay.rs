@@ -12,11 +12,21 @@
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 type SetupResult = Result<(), Box<dyn std::error::Error>>;
 
 const OVERLAY_LABEL: &str = "overlay";
+
+/// A compiled task brief pushed into the overlay so it shows up pre-loaded — the
+/// overlay only acts on it once the user clicks "Starten" inside the window.
+#[derive(Clone, serde::Serialize)]
+pub struct OverlayTaskPayload {
+    pub task: String,
+    pub goal: String,
+    pub mode: String,
+    pub variant_id: Option<String>,
+}
 
 /// Build the hidden overlay window. Shares the main window's init script (so it
 /// knows `window.__API_BASE__`) and appends the two lines that switch the React
@@ -64,6 +74,30 @@ pub fn overlay_hide(app: AppHandle) {
 #[tauri::command]
 pub fn overlay_toggle(app: AppHandle) {
     toggle_overlay(&app);
+}
+
+/// Show + focus the overlay and push a pre-compiled task brief into it — the missing
+/// link between "An AI-Cursor übergeben" and the overlay actually doing something.
+/// Nothing executes until the user clicks "Starten" inside the overlay itself.
+#[tauri::command]
+pub fn overlay_dispatch_task(
+    app: AppHandle,
+    task: String,
+    goal: String,
+    mode: String,
+    variant_id: Option<String>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(OVERLAY_LABEL)
+        .ok_or("Overlay-Fenster nicht verfügbar")?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    app.emit_to(
+        OVERLAY_LABEL,
+        "overlay://task",
+        OverlayTaskPayload { task, goal, mode, variant_id },
+    )
+    .map_err(|err| err.to_string())
 }
 
 /// System-tray icon with a menu to toggle the overlay or quit the app.

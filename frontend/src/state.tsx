@@ -7,6 +7,8 @@ export type LlmParams = {
   context_size?: number;
 };
 
+export type Theme = "light" | "dark";
+
 export type AppState = {
   activeProject?: string;
   setActiveProject: (project?: string) => void;
@@ -16,6 +18,8 @@ export type AppState = {
   setModel: (model?: string) => void;
   llmParams: LlmParams;
   setLlmParams: (params: LlmParams) => void;
+  theme: Theme;
+  toggleTheme: () => void;
 };
 
 export const AppStateContext = createContext<AppState | null>(null);

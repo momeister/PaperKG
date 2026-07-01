@@ -9,9 +9,30 @@ import { isTauri, nativeInvoke, nativeListen } from "../native";
 // shell in the project folder via the Rust portable-pty backend, so AI coding
 // CLIs (claude / Claude Code, opencode, codex), git and the shell run inside
 // PaperKG. Native-only; in the web app the parent shows a hint instead.
+//
+// Props:
+//  - `active`   : the tab is visible (TerminalTabs renders inactive tabs with
+//                 display:none). When it becomes active we re-fit + focus, since
+//                 a hidden xterm cannot measure itself.
+//  - `onOutput` : raw terminal text, used by the parent to auto-detect a dev
+//                 server URL for the preview pane.
 
-export function WerkstattTerminal({ cwd }: { cwd: string }) {
+export function WerkstattTerminal({
+  cwd,
+  active = true,
+  onOutput,
+}: {
+  cwd: string;
+  active?: boolean;
+  onOutput?: (text: string) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const termIdRef = useRef<string | null>(null);
+  // Keep the latest callback without re-running the spawn effect.
+  const onOutputRef = useRef(onOutput);
+  onOutputRef.current = onOutput;
 
   useEffect(() => {
     if (!isTauri() || !containerRef.current) return;
@@ -26,7 +47,10 @@ export function WerkstattTerminal({ cwd }: { cwd: string }) {
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
+    termRef.current = term;
+    fitRef.current = fit;
 
+    const decoder = new TextDecoder();
     let disposed = false;
     let termId: string | null = null;
     const unlisteners: Array<() => void> = [];
@@ -43,10 +67,13 @@ export function WerkstattTerminal({ cwd }: { cwd: string }) {
           return;
         }
         termId = id;
+        termIdRef.current = id;
 
         unlisteners.push(
           await nativeListen<number[]>(`terminal://output/${id}`, (bytes) => {
-            term.write(new Uint8Array(bytes));
+            const chunk = new Uint8Array(bytes);
+            term.write(chunk);
+            onOutputRef.current?.(decoder.decode(chunk, { stream: true }));
           }),
         );
         unlisteners.push(
@@ -83,8 +110,30 @@ export function WerkstattTerminal({ cwd }: { cwd: string }) {
       unlisteners.forEach((un) => un());
       if (termId) void nativeInvoke("terminal_kill", { id: termId });
       term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+      termIdRef.current = null;
     };
   }, [cwd]);
+
+  // When this tab becomes visible again, re-fit (a hidden xterm has zero size)
+  // and focus it.
+  useEffect(() => {
+    if (!active) return;
+    const handle = window.setTimeout(() => {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        return;
+      }
+      const term = termRef.current;
+      if (term && termIdRef.current) {
+        void nativeInvoke("terminal_resize", { id: termIdRef.current, cols: term.cols, rows: term.rows });
+        term.focus();
+      }
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [active]);
 
   if (!isTauri()) {
     return (

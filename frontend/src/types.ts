@@ -276,6 +276,8 @@ export type ReviewEntity = {
   source_field?: string | null;
 };
 
+export type Point = { x: number; y: number };
+
 export type GraphNode = {
   id: string;
   label: string;
@@ -547,15 +549,49 @@ export type AgentConfig = {
   has_url: boolean;
   vlm_model: string;
   vlm_provider: string;
+  /** Resolved from llm.providers[vlm_provider].base_url — empty if unresolvable. */
+  vlm_base_url: string;
+  /** Assistent-only model override; falls back to vlm_model if unset. */
+  helper_vlm_model: string;
+  /** Native shell only: whether Tauri spawns/kills the bridge sidecar itself. */
+  manage_sidecar: boolean;
+  helper_enabled: boolean;
+  observe_interval_seconds: number;
+  observe_context_size: number;
 };
+
+/** Which AI-Cursor overlay mode is active: autonomous vs. live-assist. */
+export type AgentMode = "self_managing" | "helper";
 
 /** One SSE event streamed back from POST /agent/dispatch while the desktop agent runs. */
 export type AgentDispatchEvent = {
-  status: "started" | "step" | "done" | "error";
+  status: "started" | "step" | "done" | "error" | "aborted";
+  runId?: string | null;
   from?: string | null;
   value?: unknown;
   error?: string;
   model?: string;
+};
+
+/** One SSE event streamed back from POST /agent/observe/start (Assistent mode). */
+export type ObserveEvent = {
+  status: "started" | "observation" | "error";
+  sessionId?: string | null;
+  value?: string | null;
+  t?: number | null;
+  error?: string;
+};
+
+/** One turn in the Assistent chat log (question asked or answer received). */
+export type ObserveChatEntry = { role: "user" | "assistant"; text: string };
+
+/** Payload pushed into the overlay window via the `overlay://task` event, prefilling
+ * it with a compiled variant brief — nothing runs until the user clicks "Starten". */
+export type OverlayTaskPayload = {
+  task: string;
+  goal: string;
+  mode: AgentMode;
+  variantId?: string | null;
 };
 
 export type NoteCitation = {

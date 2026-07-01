@@ -340,21 +340,45 @@ retrieval:
     recency_window_years: 5     # papers older than this get no recency bonus (and no penalty)
     max_bonus: 1.5              # hard cap so the nudge never overrides relevance
 
-# Hand-off to an external, local computer-use agent (e.g. UI-TARS-Desktop). A Parallel-
-# Research variant is compiled into a task brief (query/agent_handoff.py). Kanal A
-# (Brief kopieren -> in den Agenten einfügen) works regardless of this block. Kanal B
-# below auto-POSTs the brief to a local bridge that runs @ui-tars/sdk (see bridge/uitars/).
-# Off by default — PaperKG never drives your machine itself; the external agent does.
+# Hand-off to an external, local computer-use agent (e.g. UI-TARS-Desktop), surfaced as the
+# AI-Cursor overlay's two modes: Selbst-Steuerung (autonomous, drives mouse/keyboard) and
+# Assistent (periodic screen description + live Q&A, never touches mouse/keyboard). A
+# Parallel-Research variant is compiled into a task brief (query/agent_handoff.py). Kanal A
+# (Brief kopieren -> in den Agenten einfügen) works regardless of this block.
+# `enabled` only gates the **web-mode** fallback (no native overlay, no on-demand sidecar):
+# there, Kanal B ("Jetzt ausführen") stays off until you flip this to true. The native
+# AI-Cursor overlay does NOT read `enabled` — clicking "Starten" there is itself the
+# consent gesture, and Tauri spawns/kills the bridge/uitars sidecar on demand regardless
+# of this flag (see `helper_enabled` below to disable just the Assistent sub-mode).
 agent_bridge:
   enabled: false
   type: "ui_tars_desktop"          # bridge flavour (only ui_tars_desktop is wired today)
-  url: "http://127.0.0.1:8787/run" # local Node bridge endpoint (bridge/uitars/)
+  url: "http://127.0.0.1:8787/run" # web-mode fallback: a manually-started bridge (bridge/uitars/)
   timeout_seconds: 600
-  # The VLM that actually sees the screen runs *inside* the external agent, served via
-  # your existing local provider (LM Studio/Ollama). These are documentation hints for
-  # configuring that agent — PaperKG does not load the VLM itself.
+  # The VLM that actually sees the screen runs *inside* the bridge (bridge/uitars/), served
+  # via one of your existing local providers below (base_url is resolved from
+  # llm.providers[vlm_provider] — no need to repeat it here). Native mode forwards these to
+  # the bridge process as env vars (VLM_BASE_URL/VLM_MODEL/HELPER_VLM_MODEL); web mode still
+  # needs them set by hand when starting `bridge/uitars` manually. There's a hard asymmetry
+  # between the two overlay modes: Selbst-Steuerung's `vlm_model` MUST be a UI-TARS-family
+  # model — @ui-tars/action-parser only parses the specific click/type action grammar those
+  # models are trained to emit, so a general chat/vision model just produces unparseable
+  # prose there. Assistent has no such constraint — `helper_vlm_model` (defaults to
+  # `vlm_model` if unset) can be any vision-capable local model (e.g. a vision Gemma variant),
+  # and often answers better since it isn't specialized for GUI grounding.
   vlm_provider: "lm_studio"
   vlm_model: "ui-tars-1.5-7b"
+  # helper_vlm_model: "gemma-3-27b-it"   # uncomment + set to use a different model for Assistent
+  # Native desktop app only: let Tauri spawn/kill bridge/uitars itself (agent_bridge_ensure/
+  # _stop in src-tauri/src/agent_bridge.rs) on a fresh per-launch port instead of requiring
+  # you to run `npm start` by hand. Needs Node.js >= 18 on PATH + `npm install` already run
+  # in bridge/uitars. Falls back to the manual/`url` flow above if unavailable.
+  manage_sidecar: true
+  # Assistent (helper) mode: periodic screenshot -> local VLM description, kept as a rolling
+  # context for live Q&A. Screenshots never leave the bridge process or get persisted.
+  helper_enabled: true
+  observe_interval_seconds: 4      # screenshot cadence
+  observe_context_size: 8          # rolling descriptions kept per session
 
 # Code-Werkstatt: where *managed* coding projects are created on disk. They live
 # as plain Git folders so other editors (VS Code, …) can open them too; PaperKG
