@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FlaskConical,
@@ -10,7 +10,11 @@ import {
   ClipboardCopy,
   AlertTriangle,
   CheckCircle2,
-  Clock
+  Clock,
+  SquareDashedMousePointer,
+  ShieldCheck,
+  Check,
+  X
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
@@ -107,17 +111,147 @@ function TablePreview({ artifact }: { artifact: AnalysisArtifact }) {
   );
 }
 
-function ArtifactView({ artifact }: { artifact: AnalysisArtifact }) {
+/**
+ * Drag a rectangle over a figure + comment → produce a natural-language annotation
+ * that tells the planner exactly which region to fix. Coordinates are normalized to
+ * percent of the figure so they are resolution-independent.
+ */
+function FigureAnnotator({
+  src,
+  filename,
+  busy,
+  onSubmit,
+  onCancel
+}: {
+  src: string;
+  filename: string;
+  busy: boolean;
+  onSubmit: (annotation: string) => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [start, setStart] = useState<{ x: number; y: number } | null>(null);
+  const [comment, setComment] = useState("");
+
+  const norm = (e: React.PointerEvent) => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return { x: 0, y: 0 };
+    return {
+      x: Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - box.top) / box.height))
+    };
+  };
+
+  const pct = (n: number) => Math.round(n * 100);
+
+  const submit = () => {
+    if (!comment.trim()) return;
+    const region = rect
+      ? `Markierter Bereich (in % der Figur): links=${pct(rect.x)}%, oben=${pct(rect.y)}%, Breite=${pct(rect.w)}%, Höhe=${pct(rect.h)}%. `
+      : "";
+    onSubmit(`${region}Anmerkung/Problem: ${comment.trim()}`);
+  };
+
+  return (
+    <div className="analysis-annotator">
+      <div
+        className="analysis-annotator-canvas"
+        ref={ref}
+        onPointerDown={(e) => {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+          const p = norm(e);
+          setStart(p);
+          setRect({ x: p.x, y: p.y, w: 0, h: 0 });
+        }}
+        onPointerMove={(e) => {
+          if (!start) return;
+          const p = norm(e);
+          setRect({
+            x: Math.min(start.x, p.x),
+            y: Math.min(start.y, p.y),
+            w: Math.abs(p.x - start.x),
+            h: Math.abs(p.y - start.y)
+          });
+        }}
+        onPointerUp={() => setStart(null)}
+      >
+        <img src={src} alt={filename} draggable={false} />
+        {rect && rect.w > 0.01 && rect.h > 0.01 ? (
+          <div
+            className="analysis-annotator-rect"
+            style={{
+              left: `${rect.x * 100}%`,
+              top: `${rect.y * 100}%`,
+              width: `${rect.w * 100}%`,
+              height: `${rect.h * 100}%`
+            }}
+          />
+        ) : null}
+      </div>
+      <div className="analysis-annotator-controls">
+        <input
+          type="text"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Was stimmt hier nicht? z.B. „Ausreißer entfernen, Achse in mmol/l"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+        />
+        <button type="button" className="button button-primary" onClick={submit} disabled={busy || !comment.trim()}>
+          <Check size={14} /> Verbessern
+        </button>
+        <button type="button" className="icon-button" title="Abbrechen" onClick={onCancel}>
+          <X size={15} />
+        </button>
+      </div>
+      <p className="analysis-hint">Ziehe ein Rechteck über die Stelle (optional) und beschreibe das Problem.</p>
+    </div>
+  );
+}
+
+function ArtifactView({
+  artifact,
+  busy,
+  onAnnotate
+}: {
+  artifact: AnalysisArtifact;
+  busy?: boolean;
+  onAnnotate?: (annotation: string) => void;
+}) {
   const href = artifact.url ? `${API_BASE_URL.replace(/\/$/, "")}${artifact.url}` : "#";
+  const [annotating, setAnnotating] = useState(false);
   if (artifact.kind === "figure") {
+    if (annotating && onAnnotate) {
+      return (
+        <FigureAnnotator
+          src={href}
+          filename={artifact.filename}
+          busy={!!busy}
+          onSubmit={(a) => {
+            setAnnotating(false);
+            onAnnotate(a);
+          }}
+          onCancel={() => setAnnotating(false)}
+        />
+      );
+    }
     return (
       <figure className="analysis-figure">
         <img src={href} alt={artifact.filename} loading="lazy" />
         <figcaption>
           {artifact.filename}
-          <a href={href} download={artifact.filename} className="analysis-inline-link">
-            <Download size={12} /> Original
-          </a>
+          <span className="analysis-figure-actions">
+            {onAnnotate ? (
+              <button type="button" className="analysis-inline-link" onClick={() => setAnnotating(true)}>
+                <SquareDashedMousePointer size={12} /> annotieren
+              </button>
+            ) : null}
+            <a href={href} download={artifact.filename} className="analysis-inline-link">
+              <Download size={12} /> Original
+            </a>
+          </span>
         </figcaption>
       </figure>
     );
@@ -159,6 +293,8 @@ export function AnalysisPanel({ projectId, provider, model, paperIds, onCollapse
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verification, setVerification] = useState<{ reproducible: boolean; actual: string } | null>(null);
 
   const scopedProjectId = projectId || undefined;
 
@@ -200,6 +336,7 @@ export function AnalysisPanel({ projectId, provider, model, paperIds, onCollapse
 
   const openRun = useCallback(async (runId: string) => {
     setError(null);
+    setVerification(null);
     try {
       const res = await api.analysis.get(runId);
       setActive(res.run);
@@ -208,27 +345,48 @@ export function AnalysisPanel({ projectId, provider, model, paperIds, onCollapse
     }
   }, []);
 
-  const revise = useCallback(async () => {
-    if (!active || busy) return;
+  const doRevise = useCallback(
+    async (payload: { request?: string; annotation?: string }) => {
+      if (!active || busy) return;
+      setBusy(true);
+      setError(null);
+      setVerification(null);
+      try {
+        const res = await api.analysis.revise(active.id, {
+          ...payload,
+          provider: provider ?? null,
+          model: model ?? null
+        });
+        setActive(res.run);
+        setReviseText("");
+        await refreshList();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Revision fehlgeschlagen.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [active, busy, provider, model, refreshList]
+  );
+
+  const revise = useCallback(() => {
     const instruction = reviseText.trim();
-    if (!instruction) return;
-    setBusy(true);
+    if (instruction) void doRevise({ request: instruction });
+  }, [reviseText, doRevise]);
+
+  const verify = useCallback(async () => {
+    if (!active || verifying) return;
+    setVerifying(true);
     setError(null);
     try {
-      const res = await api.analysis.revise(active.id, {
-        request: instruction,
-        provider: provider ?? null,
-        model: model ?? null
-      });
-      setActive(res.run);
-      setReviseText("");
-      await refreshList();
+      const res = await api.analysis.verify(active.id);
+      setVerification({ reproducible: res.verification.reproducible, actual: res.verification.actual });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Revision fehlgeschlagen.");
+      setError(e instanceof Error ? e.message : "Verifikation fehlgeschlagen.");
     } finally {
-      setBusy(false);
+      setVerifying(false);
     }
-  }, [active, busy, reviseText, provider, model, refreshList]);
+  }, [active, verifying]);
 
   const copyMarkdown = useCallback(() => {
     if (!active) return;
@@ -340,10 +498,34 @@ export function AnalysisPanel({ projectId, provider, model, paperIds, onCollapse
                   <button type="button" className="analysis-chip analysis-chip--action" onClick={copyMarkdown}>
                     <ClipboardCopy size={12} /> {copied ? "kopiert!" : "Markdown"}
                   </button>
+                  <button
+                    type="button"
+                    className="analysis-chip analysis-chip--action"
+                    onClick={() => void verify()}
+                    disabled={verifying || active.status !== "ok"}
+                    title="Skript erneut ausführen und Ausgaben vergleichen"
+                  >
+                    {verifying ? <RefreshCw size={12} className="spin" /> : <ShieldCheck size={12} />} Reproduzieren
+                  </button>
+                  {verification ? (
+                    <span
+                      className={`analysis-badge ${verification.reproducible ? "analysis-badge--ok" : "analysis-badge--err"}`}
+                    >
+                      {verification.reproducible ? (
+                        <>
+                          <ShieldCheck size={13} /> reproduzierbar
+                        </>
+                      ) : (
+                        <>
+                          <AlertTriangle size={13} /> abweichend
+                        </>
+                      )}
+                    </span>
+                  ) : null}
                 </div>
 
                 {figures.map((a) => (
-                  <ArtifactView key={a.id} artifact={a} />
+                  <ArtifactView key={a.id} artifact={a} busy={busy} onAnnotate={(text) => void doRevise({ annotation: text })} />
                 ))}
                 {tables.map((a) => (
                   <ArtifactView key={a.id} artifact={a} />

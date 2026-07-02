@@ -583,6 +583,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    verify: (runId: string) =>
+      request<{ verification: { reproducible: boolean; expected: string; actual: string; ok: boolean; stderr: string } }>(
+        `/analysis/runs/${encodeURIComponent(runId)}/verify`,
+        { method: "POST" }
+      ),
     remove: (runId: string) =>
       request<{ deleted: boolean; id: string }>(`/analysis/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
     /** Absolute URL of one generated artifact file (figure/table/data/log). */

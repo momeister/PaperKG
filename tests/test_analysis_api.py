@@ -149,3 +149,30 @@ def test_analysis_artifact_not_found(analysis_client):
     db_path = tmp_path / "metadata.duckdb"
     resp = client.get("/analysis/artifacts/does-not-exist", params={"metadata_db_path": str(db_path)})
     assert resp.status_code == 404
+
+
+def test_analysis_verify_reproducible(analysis_client):
+    client, tmp_path, _ = analysis_client
+    common = {"metadata_db_path": str(tmp_path / "metadata.duckdb")}
+    created = client.post("/analysis/runs", json={"request": "Demo", **common})
+    run = created.json()["run"]
+    verified = client.post(f"/analysis/runs/{run['id']}/verify", params=common)
+    assert verified.status_code == 200, verified.text
+    v = verified.json()["verification"]
+    # Deterministic script (fixed seed) → re-run yields the identical output hash.
+    assert v["reproducible"] is True
+    assert v["actual"] == run["output_hash"]
+
+
+def test_analysis_revise_with_annotation(analysis_client):
+    client, tmp_path, calls = analysis_client
+    common = {"metadata_db_path": str(tmp_path / "metadata.duckdb")}
+    created = client.post("/analysis/runs", json={"request": "Demo", **common})
+    run = created.json()["run"]
+    calls["code"] = "import matplotlib.pyplot as plt\nplt.figure(); plt.plot([1],[1]); plt.savefig('outputs/chart.png')\n"
+    revised = client.post(
+        f"/analysis/runs/{run['id']}/revise",
+        json={"annotation": "Bereich links=10%, oben=20%: Achse logarithmisch", **common},
+    )
+    assert revised.status_code == 200, revised.text
+    assert revised.json()["run"]["status"] == "ok"

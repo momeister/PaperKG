@@ -143,7 +143,9 @@ output-hashes, `README.md` = plain-language). Output is deterministic — same s
 `analysis_artifacts` in `storage/metadata_db.py`); artifacts are served via
 `GET /analysis/artifacts/{id}` (`FileResponse` + `path_safety`, **no** `StaticFiles`). Routes:
 `POST /analysis/runs`, `GET /analysis/runs[/{id}]`, `POST /analysis/runs/{id}/revise` (NL edit or
-figure annotation → new script version + git commit), `DELETE`. UI: the **Analyse** tab in the
+figure annotation → new script version + git commit), `POST /analysis/runs/{id}/verify`
+(`analysis/verify.py` re-runs the committed script in a temp copy → reproducibility badge),
+`DELETE`. UI: the **Analyse** tab in the
 Workspace center column (`frontend/src/pages/AnalysisPanel.tsx`, swapped in via `WorkspacePage`'s
 `centerView`) renders figures/tables inline with provenance chips (open in Werkstatt, download
 data, revise, copy Markdown). Config: the `analysis:` block in `config.yaml` (`timeout_seconds`,

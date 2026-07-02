@@ -235,11 +235,32 @@ def run_script(
     if not run_path.is_dir():
         raise ValueError(f"Lauf-Ordner existiert nicht: {run_path}")
 
-    outputs_dir = run_path / OUTPUTS_DIRNAME
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-
     script_path = run_path / SCRIPT_FILENAME
     script_path.write_text(build_script(code, seed), encoding="utf-8", newline="\n")
+    return run_existing_script(
+        run_path, python_executable=python_executable, seed=seed, timeout=timeout
+    )
+
+
+def run_existing_script(
+    run_dir: str | os.PathLike[str],
+    *,
+    python_executable: str | None = None,
+    seed: int = DEFAULT_SEED,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> RunResult:
+    """Execute an already-written ``script.py`` in ``run_dir`` (used by verify/re-run).
+
+    Same contract as :func:`run_script` but it does **not** (re)write the script — it
+    runs whatever ``script.py`` is on disk, so a reproducibility check re-executes the
+    exact committed code.
+    """
+    run_path = Path(run_dir).resolve()
+    if not (run_path / SCRIPT_FILENAME).is_file():
+        raise ValueError(f"{SCRIPT_FILENAME} fehlt in {run_path}")
+
+    outputs_dir = run_path / OUTPUTS_DIRNAME
+    outputs_dir.mkdir(parents=True, exist_ok=True)
 
     python = python_executable or sys.executable or "python"
     env = _sanitized_env(seed)

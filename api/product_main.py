@@ -68,7 +68,7 @@ from storage.metadata_db import MetadataDB
 from storage.path_safety import PathSafetyError, ensure_safe_path
 from workspace import manager as workspace_manager
 from workspace.manager import WorkspaceError
-from analysis import runner as analysis_runner, service as analysis_service
+from analysis import runner as analysis_runner, service as analysis_service, verify as analysis_verify
 
 
 PROJECTS_PATH = Path("data/projects.json")
@@ -4094,6 +4094,18 @@ def revise_analysis_run(run_id: str, request: AnalysisReviseRequest) -> dict[str
     if run is None:
         raise HTTPException(status_code=404, detail="Analyse-Lauf nicht gefunden")
     return {"run": _analysis_run_response(run)}
+
+
+@app.post("/analysis/runs/{run_id}/verify")
+def verify_analysis_run(
+    run_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    """Reproduzierbarkeits-Check: re-run the committed script and compare output hash."""
+    with MetadataDB(metadata_db_path) as db:
+        result = analysis_verify.verify_run(db, run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Analyse-Lauf nicht gefunden")
+    return {"verification": result}
 
 
 @app.delete("/analysis/runs/{run_id}")
