@@ -150,6 +150,16 @@ data, revise, copy Markdown). Config: the `analysis:` block in `config.yaml` (`t
 `seed`). **No sandbox** — the subprocess runs with backend rights (like the Werkstatt terminal /
 Jupyter); a Docker `--network none` mode is a later option.
 
+### Datensätze (dataset registries)
+Alongside papers, the app harvests **dataset references** from free registries via
+`harvester/dataset_clients.py` (`search_datasets` aggregates Zenodo, Figshare, Dryad,
+ClinicalTrials.gov, PapersWithCode — **fail-soft per source**, DOI-based landing URLs so the
+user can inspect the raw data/licence). Only metadata + link/DOI/licence are stored (no bulk
+downloads — privacy); table `datasets` in `storage/metadata_db.py`, routes `/datasets/search`,
+`/datasets/import`, `GET /datasets[/{id}]`, `DELETE`. UI: the **Daten** tab in the Workspace
+center column (`frontend/src/pages/DatasetsPanel.tsx`). Collected datasets can be passed to the
+Analyse-Werkstatt as `dataset_ids` → their metadata becomes planner context.
+
 ### Tiefenanalyse LaTeX/PDF export
 The deep-analysis "Gesamtantwort" can be exported to a thesis-/paper-style document via the
 **PDF/LaTeX** button (backend `POST /research/tree/export`, package `export/`). It builds LaTeX

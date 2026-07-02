@@ -875,6 +875,29 @@ export type AnalysisArtifact = {
   url?: string;
 };
 
+// --- Datensätze (freie Forschungs-Registries) ---
+export type DatasetSource = { id: string; label: string; domain: string };
+
+export type DatasetHit = {
+  source: string;
+  external_id: string;
+  title: string;
+  description?: string;
+  url?: string;
+  doi?: string | null;
+  license?: string | null;
+  size?: string | null;
+  year?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type Dataset = DatasetHit & {
+  id: string;
+  project_id?: string | null;
+  linked_paper_id?: string | null;
+  created_timestamp?: string;
+};
+
 export type AnalysisRun = {
   id: string;
   project_id?: string | null;

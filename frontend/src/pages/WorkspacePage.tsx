@@ -27,6 +27,7 @@ import {
   Globe,
   Link2,
   ListChecks,
+  Database,
   FlaskConical,
   Loader2,
   Maximize2,
@@ -102,6 +103,7 @@ import type { CitationMeta } from "./AssistantPage";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
 import { AnalysisPanel } from "./AnalysisPanel";
+import { DatasetsPanel } from "./DatasetsPanel";
 
 export type WorkspaceNavigatorTab = "notes" | "pdfs" | "assistantSessions";
 
@@ -352,8 +354,8 @@ export function WorkspacePage() {
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
   const [pdfOpen, setPdfOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "pdfOpen", true));
-  // Center column can swap between the PDF viewer and the Analyse-Werkstatt panel.
-  const [centerView, setCenterView] = useState<"pdf" | "analysis">("pdf");
+  // Center column can swap between the PDF viewer, the Analyse-Werkstatt and Datensätze.
+  const [centerView, setCenterView] = useState<"pdf" | "analysis" | "datasets">("pdf");
   const [notesOpen, setNotesOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "notesOpen", true));
   // Notes pane sub-view: the normal note editor, or the Parallel-Research "Ergebnisse" view.
   const [notesTab, setNotesTab] = useState<"note" | "results">("note");
@@ -2285,7 +2287,7 @@ export function WorkspacePage() {
       : undefined;
   const navColumn = navigatorOpen ? `${navigatorWidth}px` : "46px";
   const assistantColumn = assistantOpen ? `${assistantWidth}px` : "46px";
-  const pdfColumn = centerView === "analysis" || pdfOpen ? `${pdfWidth}px` : "46px";
+  const pdfColumn = centerView !== "pdf" || pdfOpen ? `${pdfWidth}px` : "46px";
   const notesColumn = notesOpen ? "minmax(80px, 1fr)" : "46px";
 
   return (
@@ -2317,6 +2319,10 @@ export function WorkspacePage() {
             <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
               <FlaskConical size={15} />
               <span>Analyse</span>
+            </button>
+            <button type="button" className={centerView === "datasets" ? "active" : ""} title="Datensätze aus freien Registries suchen und sammeln" onClick={() => setCenterView("datasets")}>
+              <Database size={15} />
+              <span>Daten</span>
             </button>
           </div>
           <WorkspaceNavigatorBody
@@ -2400,6 +2406,8 @@ export function WorkspacePage() {
           paperIds={selectedPaperIds}
           onCollapse={() => setCenterView("pdf")}
         />
+      ) : centerView === "datasets" ? (
+        <DatasetsPanel projectId={scopedProjectId} onCollapse={() => setCenterView("pdf")} />
       ) : pdfOpen ? (
         pdfTarget?.kind === "grey" ? (
           <GreySourceView

@@ -8932,3 +8932,104 @@ button.parallel-cite {
     transform: rotate(360deg);
   }
 }
+
+/* --------------------------------------------------------------------------- */
+/* Datensätze (WP2)                                                            */
+/* --------------------------------------------------------------------------- */
+.dataset-search-row {
+  display: flex;
+  gap: 8px;
+}
+.dataset-search-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 8px 11px;
+  font: inherit;
+}
+.dataset-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dataset-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.dataset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dataset-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dataset-section-title {
+  margin: 6px 0 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.dataset-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  background: var(--surface);
+}
+.dataset-card-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dataset-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.dataset-source-tag {
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  padding: 1px 7px;
+}
+.dataset-license {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+.dataset-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.dataset-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}

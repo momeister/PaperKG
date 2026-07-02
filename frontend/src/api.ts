@@ -14,6 +14,9 @@ import type {
   GitStatus,
   GitDiff,
   AnalysisRun,
+  Dataset,
+  DatasetHit,
+  DatasetSource,
   BenchmarkReport,
   BenchmarkRun,
   Dashboard,
@@ -584,6 +587,25 @@ export const api = {
       request<{ deleted: boolean; id: string }>(`/analysis/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
     /** Absolute URL of one generated artifact file (figure/table/data/log). */
     artifactUrl: (artifactId: string) => url(`/analysis/artifacts/${encodeURIComponent(artifactId)}`),
+  },
+
+  // --- Datensätze (freie Registries: Zenodo/Figshare/Dryad/ClinicalTrials/PWC) ---
+  datasets: {
+    sources: () => request<{ sources: DatasetSource[]; default: string[] }>("/datasets/sources"),
+    search: (payload: { query: string; sources?: string[]; per_source?: number }) =>
+      request<{ results: DatasetHit[]; warnings: string[] }>("/datasets/search", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    import: (datasets: DatasetHit[], projectId?: string | null, linkedPaperId?: string | null) =>
+      request<{ imported: Dataset[]; count: number }>("/datasets/import", {
+        method: "POST",
+        body: JSON.stringify({ datasets, project_id: projectId ?? null, linked_paper_id: linkedPaperId ?? null }),
+      }),
+    list: (projectId?: string | null) =>
+      request<{ datasets: Dataset[] }>("/datasets", { query: { project_id: projectId ?? undefined } }),
+    remove: (id: string) =>
+      request<{ deleted: boolean; id: string }>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
   }
 };
 
