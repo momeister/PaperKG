@@ -665,6 +665,37 @@ export type CompanionGuideResult = {
 /** Result of POST /companion/ask (free-form screen Q&A, no pointing). */
 export type CompanionAskResult = { answer: string; sources?: CompanionSource[]; error?: string };
 
+/** One planned Selbst-Steuerung action (R7). Coordinates are original-screenshot
+ * pixels; the overlay converts them to physical desktop pixels via the capture's
+ * monitor origin before calling the control.rs command. */
+export type SelfDriveAction = {
+  type: "click" | "double_click" | "type" | "key" | "scroll" | "move" | "wait" | "done" | "fail";
+  x?: number;
+  y?: number;
+  text?: string;
+  keys?: string;
+  dx?: number;
+  dy?: number;
+};
+
+/** POST /selfdrive/start result. */
+export type SelfDriveStartResult = {
+  session_id?: string;
+  goal?: string;
+  max_steps?: number;
+  error?: string;
+};
+
+/** POST /selfdrive/step result: the next action to confirm + execute. */
+export type SelfDriveStepResult = {
+  thought?: string;
+  action?: SelfDriveAction;
+  done?: boolean;
+  step?: number;
+  max_steps?: number;
+  error?: string;
+};
+
 /** GET /companion/config: defaults + selectable vision providers for the picker. */
 export type CompanionConfigInfo = {
   provider: string;

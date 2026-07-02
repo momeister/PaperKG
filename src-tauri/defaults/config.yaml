@@ -424,6 +424,14 @@ companion:
   # data/companion_debug/ — so sieht man sofort, ob das Modell falsch zeigt oder die
   # Rueckskalierung. Im Normalbetrieb aus lassen (Screenshots landen sonst auf Platte).
   debug_capture: false
+  # Native Selbst-Steuerung (R7, experimentell): die KI plant pro Screenshot EINE
+  # Aktion, die nativ (enigo, control.rs) echte Maus/Tastatur bedient. Standardmaessig
+  # AUS. enabled gilt nur als Freigabe des Backend-Planers; im Overlay muss zusaetzlich
+  # pro Sitzung "aktiviert" werden und jede Aktion einzeln bestaetigt (Bestaetigungs-
+  # modus). Not-Aus jederzeit per Ctrl+Shift+Q. max_steps begrenzt das Schrittbudget.
+  self_drive:
+    enabled: false
+    max_steps: 15
 
 # Code-Werkstatt: where *managed* coding projects are created on disk. They live
 # as plain Git folders so other editors (VS Code, …) can open them too; PaperKG

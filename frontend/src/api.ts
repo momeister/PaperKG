@@ -5,6 +5,8 @@ import type {
   CompanionAskResult,
   CompanionConfigInfo,
   CompanionGuideResult,
+  SelfDriveStartResult,
+  SelfDriveStepResult,
   CodeProject,
   WorkspaceList,
   FileTreeNode,
@@ -849,6 +851,25 @@ export const askCompanion = (payload: {
 
 /** GET /companion/config: companion defaults + selectable vision providers/models. */
 export const getCompanionConfig = () => request<CompanionConfigInfo>("/companion/config");
+
+/** POST /selfdrive/start: open a native Selbst-Steuerung session (R7). Gated on
+ * companion.self_drive.enabled; the shell still needs an explicit arm + per-action
+ * confirmation. */
+export const startSelfDrive = (payload: {
+  goal: string;
+  monitor?: number | null;
+  provider?: string | null;
+  model?: string | null;
+}) =>
+  request<SelfDriveStartResult>("/selfdrive/start", { method: "POST", body: JSON.stringify(payload) });
+
+/** POST /selfdrive/step: plan the next action from the current screenshot. */
+export const stepSelfDrive = (payload: { session_id: string; image_base64: string }) =>
+  request<SelfDriveStepResult>("/selfdrive/step", { method: "POST", body: JSON.stringify(payload) });
+
+/** POST /selfdrive/stop: drop a session (idempotent). */
+export const stopSelfDrive = (payload: { session_id: string }) =>
+  request<{ stopped: boolean }>("/selfdrive/stop", { method: "POST", body: JSON.stringify(payload) });
 
 export interface ResearchTreeExportOptions {
   tikz_tree: boolean;

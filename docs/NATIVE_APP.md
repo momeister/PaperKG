@@ -108,6 +108,51 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | R5.2 | Assistent-Pointer ("zeig mir, wo ich klicken kann"): Grounding-Aufruf + eigenes Zeiger-Overlay-Fenster, klickt nie | ✅ | `bridge/uitars/server.mjs`, `api/product_main.py`, `src-tauri/src/overlay.rs`, `frontend/src/pages/{OverlayPage,PointerOverlayPage}.tsx` |
 | R5.3 | Pointer-Reparatur: Assistent-Umbau (ein Frage-Feld, "Zeigen & Antworten" liefert Text **und** Ring; stateless `/observe/point`) + **Koordinaten-Bugfix** (Screenshot vor dem Grounding client-seitig auf ein bekanntes Budget herunterskalieren und daran normalisieren — sonst staucht LM Studios stiller Downscale die Klick-Koordinaten um ~0,6×) | ✅ | `bridge/uitars/server.mjs`, `frontend/src/pages/OverlayPage.tsx`, `src-tauri/src/overlay.rs` |
 | R6   | **Desktop Companion** (UI-TARS-frei): screen-aware Chat mit freier Modellwahl (LM Studio Qwen3-VL / Claude via `anthropic`-Provider), gleitender + ausweichender AI-Pointer, „Bereich erklären"-Snip (Freeze-Frame); Rust-Capture (`xcap`, WDA-Exclusion) → `/companion/*` → LLMRouter-Vision. Selbst-Steuerung/UI-TARS bleibt als Legacy-Modus | ✅ (Code; manuelle End-to-End-Verifikation am Gerät offen) | `src-tauri/src/capture.rs`, `src-tauri/src/overlay.rs`, `query/screen_companion.py`, `query/llm_router.py`, `api/product_main.py`, `frontend/src/pages/{OverlayPage,PointerOverlayPage,SnipOverlayPage}.tsx`, `frontend/src/pointerMath.ts` |
+| R6.1 | Companion-Nachbesserung: Live-Modell-Discovery + lesbares Dropdown (`color-scheme:dark` + `option{}`); Thinking-Modelle (`max_tokens`-Headroom, `/no_think` für Qwen, Budget-erschöpft→klarer Fehler statt Denkprotokoll); **0-1000-Grounding-Kontrakt** statt Sent-Frame-Pixel (Ursache des konstant falschen Rings) + Zeig-Entscheidungsregel (nur bei Wo/Wie-Fragen) + Debug-Dumps (`companion.debug_capture`) | ✅ (Code; Geräte-Verifikation offen) | `frontend/src/pages/OverlayPage.tsx`, `frontend/src/styles.css`, `query/screen_companion.py`, `query/llm_router.py`, `api/product_main.py`, `tests/test_companion_api.py` |
+| R6.2 | Multi-Monitor: `list_monitors` + `target_monitor` (Default Monitor unter Cursor, sonst Picker-Id), `CaptureResult`/`SnipBegin` tragen Monitor-Origin/-Name, Pointer-/Snip-Fenster werden auf den Zielmonitor gesetzt, DPR-unabhängige Skalierung (`monitor_width/innerWidth`), Overlay-Picker + Anzeige des aktiven Bildschirms | ✅ (Code; Geräte-Verifikation offen) | `src-tauri/src/capture.rs`, `src-tauri/src/overlay.rs`, `frontend/src/pages/{OverlayPage,PointerOverlayPage,SnipOverlayPage}.tsx`, `frontend/src/pointerMath.ts` |
+| R6.3 | Quellen-Modus: Companion-Antworten optional mit lokalen Papern (`HybridRetriever`, `[arxiv:...]`-Zitate) und/oder Websuche (`run_web_search`, sanitisiert, Untrusted-Data-Regel) belegen; Toggle-Chips + Quellenliste im Overlay; best-effort (Ausfall bricht Antwort nicht) | ✅ (Code; Geräte-Verifikation offen) | `query/screen_companion.py`, `api/product_main.py`, `frontend/src/pages/OverlayPage.tsx` |
+| R7   | **Native Selbst-Steuerung** (enigo statt UI-TARS-Bridge): Backend-Planer (`query/self_drive.py`, 1 Aktion/Screenshot, 0-1000-Koordinaten), native Aktions-Commands (`control.rs`, armed-gated), `/selfdrive/*`-Endpoints, Overlay-**Bestätigungsmodus** (jede Aktion einzeln), Not-Aus `Ctrl+Shift+Q`. Design + Skeleton — noch kein autonomer Loop | 🟡 Skeleton (Design + Gerüst; autonomer Loop + Maus-Ruck-Not-Aus offen) | `src-tauri/src/control.rs`, `query/self_drive.py`, `api/product_main.py`, `frontend/src/pages/OverlayPage.tsx`, dieses Dokument (Abschnitt „R7") |
+
+## R7 — Native Selbst-Steuerung: Design + Skeleton
+
+**Ziel.** Der Nutzer gibt ein Ziel vor; die KI setzt es mit echten Maus-/Tastatur­eingaben um.
+Bewusst getrennte Rollen (wie beim Companion): **Backend = Gehirn** (plant), **Rust = dumme Hände**
+(`enigo` führt aus), **Frontend = Sequenzer + Consent**. Kein UI-TARS mehr auf diesem Pfad — der
+Legacy-Bridge-Modus bleibt daneben bestehen.
+
+**Loop-Protokoll.**
+1. `POST /selfdrive/start {goal, monitor, provider, model}` → `session_id` (gated auf
+   `companion.self_drive.enabled`).
+2. Frontend: `capture_screen` (Zielmonitor) → `POST /selfdrive/step {session_id, image_base64}`
+   → VLM liefert `{"thought", "action": {"type","x","y","text","keys","dx","dy"}, "done"}`.
+   `action.type ∈ {click, double_click, type, key, scroll, move, wait, done, fail}`;
+   `x/y` auf 0-1000-Raster, backend-seitig in Original-Screenshot-Pixel skaliert.
+3. Frontend führt die Aktion via `control.rs`-Command aus (Original-Pixel + Monitor-Origin →
+   physische Desktop-Koordinaten) und ruft das nächste `step` — bis `done`/`fail`/Schrittbudget
+   (`max_steps`, Default 15)/Abbruch.
+
+**Sicherheitsmodell (in dieser Reihenfolge).**
+- `companion.self_drive.enabled` (Default **false**) gibt überhaupt erst den Backend-Planer frei.
+- Nichts synthetisiert Eingaben, solange die Sitzung nicht **armed** ist (`self_drive_arm`); das
+  Armen blendet zugleich den „KI hat Kontrolle"-Bildschirmrand ein. Der Arm-Zustand ist rein
+  im Speicher und stirbt mit der App.
+- **Bestätigungsmodus (dieser Stand):** jede geplante Aktion wird angezeigt und einzeln per
+  „Ausführen" bestätigt (oder „Überspringen"). Ein autonomer Loop ist bewusst noch nicht drin.
+- **Not-Aus** `Ctrl+Shift+Q` (global, wirkt auch während einer Aktion): disarmt, blendet den Rand
+  aus, sendet `selfdrive://emergency-stop` ans Overlay (bricht die Schleife ab und verwirft die
+  Sitzung). Zusätzlicher Overlay-Stopp-Button.
+
+**Skeleton-Umfang (umgesetzt).** `enigo`-Dependency; `control.rs` mit armed-gated Commands
+(`self_drive_arm/disarm`, `control_move/click/type/key/scroll`, `emergency_stop` + Hotkey-Registrierung);
+`query/self_drive.py` (Planer + Action-Grammar + In-Memory-`SelfDriveStore`); `/selfdrive/{start,step,stop}`;
+Overlay-Tab-Umschalter „Nativ (experimentell)" ↔ „UI-TARS-Bridge (Legacy)" mit Bestätigungspanel;
+`companion.self_drive`-Config; Tests `tests/test_self_drive.py` (Action-Parsing, Koord-Skalierung,
+Schrittbudget, Endpoint-Stubs).
+
+**Offene Folgearbeit (bewusst später).** Autonomer Loop (Aktionen ohne Einzelbestätigung, mit
+Sicherheits-Heuristiken); **Maus-Ruck-Not-Aus** (User bewegt Maus >150 px während einer Aktion → Abbruch);
+Aktions-Timeouts + Wiederholungserkennung; Absicherung sensibler Ziele (Passwortfelder, „Kaufen"-Buttons);
+Geräte-Verifikation über mehrere Monitore/DPI.
 
 ## Verifikation M1 (Stand)
 

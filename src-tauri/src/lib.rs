@@ -29,6 +29,7 @@ use tauri_plugin_opener::OpenerExt;
 
 mod agent_bridge;
 mod capture;
+mod control;
 mod jupyter;
 mod overlay;
 mod terminal;
@@ -202,6 +203,7 @@ pub fn run() {
         .manage(agent_bridge::AgentBridgeState::default())
         .manage(overlay::PointerState::default())
         .manage(capture::CaptureState::default())
+        .manage(control::ControlState::default())
         .invoke_handler(tauri::generate_handler![
             open_external,
             terminal::terminal_spawn,
@@ -221,6 +223,13 @@ pub fn run() {
             capture::snip_finish,
             capture::snip_cancel,
             capture::cursor_position,
+            control::self_drive_arm,
+            control::self_drive_disarm,
+            control::control_move,
+            control::control_click,
+            control::control_type,
+            control::control_key,
+            control::control_scroll,
             jupyter::jupyter_start,
             jupyter::jupyter_stop,
             agent_bridge::agent_bridge_ensure,
@@ -236,20 +245,26 @@ pub fn run() {
             }
 
             // AI-Cursor overlay (R1): a global hotkey toggles the always-on-top
-            // window. Desktop only — the plugin is unavailable on mobile.
+            // window; Ctrl+Shift+Q is the Selbst-Steuerung emergency stop (R7).
+            // Desktop only — the plugin is unavailable on mobile.
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::ShortcutState;
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(|app, _shortcut, event| {
+                        .with_handler(|app, shortcut, event| {
                             if event.state() == ShortcutState::Pressed {
-                                overlay::toggle_overlay(app);
+                                if shortcut == &control::kill_shortcut() {
+                                    control::emergency_stop(app);
+                                } else {
+                                    overlay::toggle_overlay(app);
+                                }
                             }
                         })
                         .build(),
                 )?;
                 overlay::register_global_shortcut(app.handle())?;
+                control::register_kill_shortcut(app.handle())?;
             }
 
             // Spawn the backend (release: bundled binary needs the app handle to

@@ -57,7 +57,7 @@ from query.auto_answer import auto_research_answer
 from query.research_tree import ResearchTreeRunner, _extract_questions
 from query import parallel_research
 from query import agent_handoff
-from query import screen_companion
+from query import screen_companion, self_drive
 from query.web_research import run_deep_research
 from export import ExportOptions, build_export
 from query.source_verifier import find_pdf_path
@@ -428,6 +428,24 @@ class CompanionGuideRequest(BaseModel):
     # Quellen-Modus: ground the answer in local paper hits and/or a web search.
     use_papers: bool = False
     use_web: bool = False
+
+
+class SelfDriveStartRequest(BaseModel):
+    """Begin a native Selbst-Steuerung session (R7 skeleton)."""
+    goal: str = Field(min_length=1, max_length=2000)
+    monitor: int | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
+class SelfDriveStepRequest(BaseModel):
+    """One planning round: current screenshot → next action."""
+    session_id: str = Field(min_length=1, max_length=64)
+    image_base64: str = Field(min_length=1)
+
+
+class SelfDriveStopRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -2462,6 +2480,68 @@ def companion_config() -> dict[str, Any]:
             for name in llm_router.available_providers()
         ],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Native Selbst-Steuerung (R7 skeleton) — the brain; enigo (control.rs) = hands  #
+# --------------------------------------------------------------------------- #
+
+_SELF_DRIVE_STORE = self_drive.SelfDriveStore()
+
+
+def _self_drive_config() -> dict[str, Any]:
+    """The ``companion.self_drive`` sub-block (enabled gate + step budget)."""
+    section = _load_companion_config().get("self_drive")
+    return section if isinstance(section, dict) else {}
+
+
+@app.post("/selfdrive/start")
+def self_drive_start(request: SelfDriveStartRequest) -> dict[str, Any]:
+    """Open a Selbst-Steuerung session. Gated on ``companion.self_drive.enabled``;
+    the native shell still requires an explicit arm + per-action confirmation."""
+    cfg = _self_drive_config()
+    if not bool(cfg.get("enabled", False)):
+        return {"error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."}
+    params = _companion_llm_params(request.provider, request.model)
+    session = _SELF_DRIVE_STORE.create(
+        goal=request.goal,
+        provider=params["provider"],
+        model=params["model"],
+        monitor=request.monitor,
+        max_steps=int(cfg.get("max_steps") or self_drive.DEFAULT_MAX_STEPS),
+    )
+    return {"session_id": session.session_id, "goal": session.goal, "max_steps": session.max_steps}
+
+
+@app.post("/selfdrive/step")
+async def self_drive_step(request: SelfDriveStepRequest) -> dict[str, Any]:
+    """Plan the next action for a session from the current screenshot. The frontend
+    executes the returned action (control.rs) and calls back with the next frame."""
+    if not bool(_self_drive_config().get("enabled", False)):
+        return {"error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."}
+    session = _SELF_DRIVE_STORE.get(request.session_id)
+    if session is None:
+        return {"error": "Unbekannte Sitzung."}
+    params = _companion_llm_params(session.provider, session.model)
+    try:
+        return await asyncio.to_thread(
+            self_drive.plan_step,
+            llm_router,
+            session,
+            request.image_base64,
+            max_pixels=params["max_pixels"],
+            history_turns=params["history_turns"],
+            max_tokens=params["max_tokens"] or self_drive.DEFAULT_MAX_TOKENS,
+            disable_thinking=params["disable_thinking"],
+        )
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"error": str(exc)}
+
+
+@app.post("/selfdrive/stop")
+def self_drive_stop(request: SelfDriveStopRequest) -> dict[str, Any]:
+    """Drop a session (idempotent)."""
+    return {"stopped": _SELF_DRIVE_STORE.drop(request.session_id)}
 
 
 @app.post("/research/tree/export")

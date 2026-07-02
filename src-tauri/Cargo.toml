@@ -35,6 +35,10 @@ getrandom = "0.2"
 xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
+# Native Selbst-Steuerung (R7 skeleton): synthesize real mouse/keyboard input.
+# Every command is gated on an explicit "armed" state + config flag; the control
+# border is visible whenever input synthesis is possible.
+enigo = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 # Hide the companion overlay windows from screen captures (WDA_EXCLUDEFROMCAPTURE).

@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, Copy, Crop, EyeOff, Loader2, MapPin, Play, Sparkles, Square, X } from "lucide-react";
 
-import { api, askCompanion, cancelAgent, getCompanionConfig, guideCompanion, streamAgentDispatch } from "../api";
+import {
+  api,
+  askCompanion,
+  cancelAgent,
+  getCompanionConfig,
+  guideCompanion,
+  startSelfDrive,
+  stepSelfDrive,
+  stopSelfDrive,
+  streamAgentDispatch,
+} from "../api";
 import { isTauri, nativeInvoke, nativeListen } from "../native";
 import type {
   AgentConfig,
@@ -13,6 +23,8 @@ import type {
   MonitorInfo,
   ObserveChatEntry,
   OverlayTaskPayload,
+  SelfDriveAction,
+  SelfDriveStepResult,
   SnipResultPayload,
 } from "../types";
 
@@ -45,6 +57,28 @@ function EventLine({ event }: { event: AgentDispatchEvent }) {
       {text ? <span className="overlay-log-text">{text}</span> : null}
     </li>
   );
+}
+
+/** Human-readable one-liner for a planned Selbst-Steuerung action. */
+function describeAction(action: SelfDriveAction): string {
+  switch (action.type) {
+    case "click":
+      return `Klick auf (${Math.round(action.x ?? 0)}, ${Math.round(action.y ?? 0)})`;
+    case "double_click":
+      return `Doppelklick auf (${Math.round(action.x ?? 0)}, ${Math.round(action.y ?? 0)})`;
+    case "move":
+      return `Maus bewegen nach (${Math.round(action.x ?? 0)}, ${Math.round(action.y ?? 0)})`;
+    case "type":
+      return `Tippen: „${action.text ?? ""}“`;
+    case "key":
+      return `Taste: ${action.keys ?? ""}`;
+    case "scroll":
+      return `Scrollen (dx ${action.dx ?? 0}, dy ${action.dy ?? 0})`;
+    case "wait":
+      return "Warten / erneut beobachten";
+    default:
+      return action.type;
+  }
 }
 
 function ChatBubble({ entry }: { entry: ObserveChatEntry }) {
@@ -83,6 +117,19 @@ export function OverlayPage() {
   const [runActive, setRunActive] = useState(false);
   const [events, setEvents] = useState<AgentDispatchEvent[]>([]);
   const runIdRef = useRef<string | null>(null);
+
+  // Native Selbst-Steuerung (R7 skeleton): a per-action confirmation loop that drives
+  // real mouse/keyboard through control.rs (enigo). Off by default; "native" toggles
+  // between it and the legacy UI-TARS bridge inside the Selbst-Steuerung tab.
+  const [selfDriveNative, setSelfDriveNative] = useState(
+    () => localStorage.getItem("sciencekg.selfdrive.native") === "1",
+  );
+  const [sdSessionId, setSdSessionId] = useState<string | null>(null);
+  const [sdArmed, setSdArmed] = useState(false);
+  const [sdBusy, setSdBusy] = useState(false);
+  const [sdThought, setSdThought] = useState("");
+  const [sdAction, setSdAction] = useState<SelfDriveAction | null>(null);
+  const [sdStep, setSdStep] = useState<{ step: number; max: number } | null>(null);
 
   // Companion state.
   const [companionCfg, setCompanionCfg] = useState<CompanionConfigInfo | null>(null);
@@ -260,6 +307,30 @@ export function OverlayPage() {
     logEndRef.current?.scrollIntoView({ block: "end" });
   }, [events, chat]);
 
+  useEffect(() => {
+    selfDriveNative
+      ? localStorage.setItem("sciencekg.selfdrive.native", "1")
+      : localStorage.removeItem("sciencekg.selfdrive.native");
+  }, [selfDriveNative]);
+
+  // Emergency stop (Ctrl+Shift+Q, emitted from Rust): disarm + drop the session so no
+  // further action can run even if the user hit the global hotkey mid-loop.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    nativeListen("selfdrive://emergency-stop", () => {
+      setSdArmed(false);
+      setSdAction(null);
+      setSdBusy(false);
+      setError("Not-Aus ausgelöst — Selbst-Steuerung gestoppt.");
+      if (sdSessionId) void stopSelfDrive({ session_id: sdSessionId }).catch(() => {});
+      setSdSessionId(null);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [sdSessionId]);
+
   async function hide() {
     if (isTauri()) await nativeInvoke("overlay_hide").catch(() => {});
   }
@@ -340,6 +411,121 @@ export function OverlayPage() {
       await nativeInvoke("agent_bridge_stop").catch(() => {});
       await nativeInvoke("pointer_hide").catch(() => {});
     }
+  }
+
+  /** Apply one planning result: show the thought + action, or finish the session. */
+  function sdApplyStep(res: SelfDriveStepResult) {
+    if (res.error) {
+      setError(res.error);
+      setSdAction(null);
+      return;
+    }
+    setSdThought(res.thought ?? "");
+    setSdStep(res.step != null ? { step: res.step, max: res.max_steps ?? 0 } : null);
+    if (res.done || !res.action || res.action.type === "done" || res.action.type === "fail") {
+      setSdAction(null);
+      setChat((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: `Selbst-Steuerung beendet (${res.action?.type ?? "done"}). ${res.thought ?? ""}`.trim(),
+        },
+      ]);
+      void sdStop();
+      return;
+    }
+    setSdAction(res.action);
+  }
+
+  /** Capture the target monitor and ask the backend for the next action. */
+  async function sdPlan(sessionId: string) {
+    setSdBusy(true);
+    setError(null);
+    try {
+      const capture = await nativeInvoke<CaptureResult>("capture_screen", {
+        monitor: companionMonitor ? Number(companionMonitor) : null,
+      });
+      captureInfoRef.current = capture;
+      sdApplyStep(await stepSelfDrive({ session_id: sessionId, image_base64: capture.image_base64 }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSdBusy(false);
+    }
+  }
+
+  /** Native Selbst-Steuerung: open a session, arm the shell (shows the control border),
+   * plan the first action. Nothing runs until the user confirms each action. */
+  async function sdStart() {
+    const goal = taskText.trim();
+    if (!goal || sdBusy || !isTauri()) return;
+    setError(null);
+    const res = await startSelfDrive({
+      goal,
+      monitor: companionMonitor ? Number(companionMonitor) : null,
+      provider: companionProvider || undefined,
+      model: companionModel || undefined,
+    });
+    if (res.error || !res.session_id) {
+      setError(res.error ?? "Selbst-Steuerung konnte nicht gestartet werden.");
+      return;
+    }
+    setSdSessionId(res.session_id);
+    await nativeInvoke("self_drive_arm").catch(() => {});
+    setSdArmed(true);
+    await sdPlan(res.session_id);
+  }
+
+  /** Convert one planned action (original-screenshot px) to physical desktop pixels and
+   * run it through control.rs, then plan the next step. */
+  async function sdExecute() {
+    if (!sdAction || !sdSessionId || sdBusy) return;
+    const capture = captureInfoRef.current;
+    const toPhysical = (value: number, axis: "x" | "y") =>
+      (axis === "x" ? capture?.origin_x ?? 0 : capture?.origin_y ?? 0) + value;
+    setSdBusy(true);
+    try {
+      const a = sdAction;
+      if ((a.type === "click" || a.type === "double_click") && a.x != null && a.y != null) {
+        await nativeInvoke("control_click", {
+          x: toPhysical(a.x, "x"),
+          y: toPhysical(a.y, "y"),
+          button: "left",
+          double: a.type === "double_click",
+        });
+      } else if (a.type === "move" && a.x != null && a.y != null) {
+        await nativeInvoke("control_move", { x: toPhysical(a.x, "x"), y: toPhysical(a.y, "y") });
+      } else if (a.type === "type") {
+        await nativeInvoke("control_type", { text: a.text ?? "" });
+      } else if (a.type === "key") {
+        await nativeInvoke("control_key", { combo: a.keys ?? "" });
+      } else if (a.type === "scroll") {
+        await nativeInvoke("control_scroll", { dx: a.dx ?? 0, dy: a.dy ?? 0 });
+      }
+      // "wait" falls through — just observe again.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSdBusy(false);
+      return;
+    }
+    setSdBusy(false);
+    await sdPlan(sdSessionId);
+  }
+
+  /** Skip the current action without executing it (re-observe and re-plan). */
+  async function sdSkip() {
+    if (!sdSessionId || sdBusy) return;
+    await sdPlan(sdSessionId);
+  }
+
+  /** Stop native Selbst-Steuerung: disarm the shell (hides the border), drop the session. */
+  async function sdStop() {
+    const sessionId = sdSessionId;
+    setSdArmed(false);
+    setSdAction(null);
+    setSdSessionId(null);
+    if (isTauri()) await nativeInvoke("self_drive_disarm").catch(() => {});
+    if (sessionId) await stopSelfDrive({ session_id: sessionId }).catch(() => {});
   }
 
   /** Kanal-A fallback: if the bridge sidecar can't start (e.g. Node.js missing), let the
@@ -603,48 +789,153 @@ export function OverlayPage() {
 
       {mode === "self_managing" ? (
         <>
-          <div className="overlay-input">
-            {goalLabel && !runActive ? <p className="overlay-goal">Ziel: {goalLabel}</p> : null}
-            <textarea
-              autoFocus
-              rows={3}
-              placeholder="Was soll der Desktop-Agent tun? (Strg+Enter)"
-              value={taskText}
-              disabled={runActive}
-              onChange={(event) => setTaskText(event.target.value)}
-              onKeyDown={(event) => {
-                if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                  event.preventDefault();
-                  void handleStart();
-                }
-              }}
-            />
-            {!runActive ? (
-              <button
-                className="button button-primary button-compact"
-                type="button"
-                disabled={!taskText.trim() || starting}
-                onClick={() => void handleStart()}
-              >
-                {starting ? <Loader2 size={15} className="overlay-spin" /> : <Play size={15} />}
-                {starting ? "Startet…" : "Starten"}
-              </button>
-            ) : (
-              <button className="button button-compact overlay-stop" type="button" onClick={() => void handleStop()}>
-                <Square size={15} />
-                Stoppen
-              </button>
-            )}
+          <div className="overlay-mode-toggle overlay-mode-toggle--sub" role="tablist" aria-label="Selbst-Steuerung-Variante">
+            <button
+              type="button"
+              className={`overlay-mode-toggle__item ${selfDriveNative ? "overlay-mode-toggle__item--active" : ""}`}
+              disabled={runActive || !!sdSessionId}
+              onClick={() => setSelfDriveNative(true)}
+            >
+              Nativ (experimentell)
+            </button>
+            <button
+              type="button"
+              className={`overlay-mode-toggle__item ${!selfDriveNative ? "overlay-mode-toggle__item--active" : ""}`}
+              disabled={runActive || !!sdSessionId}
+              onClick={() => setSelfDriveNative(false)}
+            >
+              UI-TARS-Bridge (Legacy)
+            </button>
           </div>
-          {events.length ? (
-            <ul className="overlay-log">
-              {events.map((event, index) => (
-                <EventLine key={index} event={event} />
-              ))}
-              <div ref={logEndRef} />
-            </ul>
+
+          {selfDriveNative ? (
+            <>
+              <div className="overlay-input">
+                {sdArmed ? (
+                  <p className="overlay-model-hint overlay-selfdrive-armed">
+                    ● Aktiv — jede Aktion wird einzeln bestätigt. Not-Aus: Strg+Shift+Q
+                  </p>
+                ) : (
+                  <p className="overlay-model-hint">
+                    Die KI plant Aktionen; du bestätigst jede einzeln. Sie bewegt deine echte Maus/Tastatur.
+                  </p>
+                )}
+                <textarea
+                  autoFocus
+                  rows={3}
+                  placeholder="Was soll die KI auf deinem Rechner tun? (Strg+Enter)"
+                  value={taskText}
+                  disabled={!!sdSessionId}
+                  onChange={(event) => setTaskText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                      event.preventDefault();
+                      void sdStart();
+                    }
+                  }}
+                />
+                {!sdSessionId ? (
+                  <button
+                    className="button button-primary button-compact"
+                    type="button"
+                    disabled={!taskText.trim() || sdBusy || !isTauri()}
+                    onClick={() => void sdStart()}
+                  >
+                    {sdBusy ? <Loader2 size={15} className="overlay-spin" /> : <Play size={15} />}
+                    {sdBusy ? "Startet…" : "Starten"}
+                  </button>
+                ) : (
+                  <button className="button button-compact overlay-stop" type="button" onClick={() => void sdStop()}>
+                    <Square size={15} />
+                    Stoppen
+                  </button>
+                )}
+              </div>
+
+              {sdSessionId ? (
+                <div className="overlay-selfdrive-plan">
+                  {sdStep ? (
+                    <p className="overlay-muted">
+                      Schritt {sdStep.step}/{sdStep.max}
+                    </p>
+                  ) : null}
+                  {sdThought ? <p className="overlay-selfdrive-thought">{sdThought}</p> : null}
+                  {sdBusy ? (
+                    <p className="overlay-muted">
+                      <Loader2 size={13} className="overlay-spin" /> Beobachte & plane…
+                    </p>
+                  ) : sdAction ? (
+                    <>
+                      <p className="overlay-selfdrive-action">
+                        Nächste Aktion: <strong>{describeAction(sdAction)}</strong>
+                      </p>
+                      <div className="overlay-companion-actions">
+                        <button className="button button-primary button-compact" type="button" onClick={() => void sdExecute()}>
+                          <Play size={13} />
+                          Ausführen
+                        </button>
+                        <button className="button button-compact" type="button" onClick={() => void sdSkip()}>
+                          <ArrowRight size={13} />
+                          Überspringen
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="overlay-muted">Keine Aktion geplant.</p>
+                  )}
+                </div>
+              ) : (
+                <p className="overlay-muted">
+                  Beschreibe eine Aufgabe. Muss in config.yaml unter companion.self_drive aktiviert sein.
+                </p>
+              )}
+            </>
           ) : (
-            <p className="overlay-muted">Beschreibe eine Aufgabe und starte den Desktop-Agenten.</p>
+            <>
+              <div className="overlay-input">
+                {goalLabel && !runActive ? <p className="overlay-goal">Ziel: {goalLabel}</p> : null}
+                <textarea
+                  autoFocus
+                  rows={3}
+                  placeholder="Was soll der Desktop-Agent tun? (Strg+Enter)"
+                  value={taskText}
+                  disabled={runActive}
+                  onChange={(event) => setTaskText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                      event.preventDefault();
+                      void handleStart();
+                    }
+                  }}
+                />
+                {!runActive ? (
+                  <button
+                    className="button button-primary button-compact"
+                    type="button"
+                    disabled={!taskText.trim() || starting}
+                    onClick={() => void handleStart()}
+                  >
+                    {starting ? <Loader2 size={15} className="overlay-spin" /> : <Play size={15} />}
+                    {starting ? "Startet…" : "Starten"}
+                  </button>
+                ) : (
+                  <button className="button button-compact overlay-stop" type="button" onClick={() => void handleStop()}>
+                    <Square size={15} />
+                    Stoppen
+                  </button>
+                )}
+              </div>
+              {events.length ? (
+                <ul className="overlay-log">
+                  {events.map((event, index) => (
+                    <EventLine key={index} event={event} />
+                  ))}
+                  <div ref={logEndRef} />
+                </ul>
+              ) : (
+                <p className="overlay-muted">Beschreibe eine Aufgabe und starte den Desktop-Agenten.</p>
+              )}
+            </>
           )}
         </>
       ) : (
