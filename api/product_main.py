@@ -4131,9 +4131,12 @@ def get_analysis_artifact(
     if run is None:
         raise HTTPException(status_code=404, detail="Analyse-Lauf nicht gefunden")
     run_dir = Path(str(run.get("run_dir")))
-    target = ensure_safe_path(run_dir / str(art.get("rel_path")), what="analysis artifact")
-    # Containment: the artifact must live inside its run folder.
-    if run_dir.resolve() not in target.resolve().parents and run_dir.resolve() != target.resolve():
+    # Containment against the run folder (the security boundary) — same model as the
+    # Werkstatt file routes. NOT ensure_safe_path: run folders live under the managed
+    # workspace base dir (~/Documents/PaperKG-Projekte), outside the project/data tree.
+    try:
+        target = workspace_manager.resolve_within(run_dir, str(art.get("rel_path")), must_exist=True)
+    except WorkspaceError:
         raise HTTPException(status_code=400, detail="Ungültiger Artefakt-Pfad")
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Artefakt-Datei fehlt auf der Platte")

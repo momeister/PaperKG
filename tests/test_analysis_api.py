@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import uuid
 from pathlib import Path
 
 import pytest
@@ -149,6 +151,30 @@ def test_analysis_artifact_not_found(analysis_client):
     db_path = tmp_path / "metadata.duckdb"
     resp = client.get("/analysis/artifacts/does-not-exist", params={"metadata_db_path": str(db_path)})
     assert resp.status_code == 404
+
+
+def test_artifact_served_from_non_allowed_root(tmp_path, monkeypatch):
+    # Regression: run folders live under the managed workspace base dir
+    # (~/Documents/PaperKG-Projekte), which is OUTSIDE the path_safety allowed roots.
+    # Artifact serving must contain against the run folder (resolve_within), not the
+    # global allowed-roots guard — otherwise every real artifact 400s.
+    outside = Path.home() / f".pkg_test_ws_{uuid.uuid4().hex[:8]}"
+    monkeypatch.setattr(product_main.workspace_manager, "base_dir", lambda *a, **k: outside)
+    monkeypatch.setattr(
+        product_main.llm_router, "chat",
+        lambda messages, provider=None, overrides=None: _plan_response(_FIG_TABLE_CODE),
+    )
+    client = TestClient(product_main.app)
+    db_path = tmp_path / "metadata.duckdb"
+    try:
+        created = client.post("/analysis/runs", json={"request": "Demo", "metadata_db_path": str(db_path)})
+        run = created.json()["run"]
+        fig = [a for a in run["artifacts"] if a["kind"] == "figure"][0]
+        served = client.get(fig["url"], params={"metadata_db_path": str(db_path)})
+        assert served.status_code == 200, served.text
+        assert served.content[:8] == b"\x89PNG\r\n\x1a\n"
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
 
 
 def test_analysis_verify_reproducible(analysis_client):
