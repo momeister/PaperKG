@@ -413,6 +413,9 @@ class CompanionAskRequest(BaseModel):
     region: bool = False
     provider: str | None = None
     model: str | None = None
+    # Quellen-Modus: ground the answer in local paper hits and/or a web search.
+    use_papers: bool = False
+    use_web: bool = False
 
 
 class CompanionGuideRequest(BaseModel):
@@ -422,6 +425,9 @@ class CompanionGuideRequest(BaseModel):
     history: list[CompanionTurn] = Field(default_factory=list)
     provider: str | None = None
     model: str | None = None
+    # Quellen-Modus: ground the answer in local paper hits and/or a web search.
+    use_papers: bool = False
+    use_web: bool = False
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -2344,6 +2350,47 @@ async def observe_agent_stop(request: AgentObserveStopRequest) -> dict[str, Any]
         return {"ok": False, "error": str(exc)}
 
 
+async def _companion_context(
+    question: str, use_papers: bool, use_web: bool
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Optional grounding for companion answers (Quellen-Modus): local paper hits
+    (KG + embeddings via HybridRetriever) and/or web-search results (titles +
+    snippets only — no page fetches, latency-friendly). Best-effort on both paths:
+    any failure yields an empty context so the screen answer still happens."""
+    blocks: list[str] = []
+    sources: list[dict[str, Any]] = []
+    if use_papers:
+        try:
+            def _paper_hits():
+                retriever = _parallel_retriever(DEFAULT_METADATA_DB_PATH, DEFAULT_GRAPH_DB_PATH)
+                return retriever.search(question, limit=5)
+
+            for hit in await asyncio.to_thread(_paper_hits):
+                source = hit.source
+                snippet = ""
+                if hit.evidence:
+                    snippet = max(hit.evidence, key=lambda item: item.score).text
+                snippet = " ".join(str(snippet).split())[:400]
+                blocks.append(
+                    f"[{source.paper_id}] {source.title}" + (f" — {snippet}" if snippet else "")
+                )
+                sources.append({"type": "paper", "id": source.paper_id, "title": source.title})
+        except Exception:  # noqa: BLE001 - grounding is best-effort
+            pass
+    if use_web:
+        try:
+            from research.sanitize import sanitize_web_text
+            from research.search_provider import load_research_config, run_web_search
+
+            for hit in await run_web_search(question, load_research_config(), max_results=5):
+                clean_snippet, _flags = sanitize_web_text(hit.snippet or hit.title, max_len=400)
+                blocks.append(f"(Web: {hit.url}) {hit.title} — {clean_snippet}")
+                sources.append({"type": "web", "url": hit.url, "title": hit.title})
+        except Exception:  # noqa: BLE001 - grounding is best-effort
+            pass
+    return blocks, sources
+
+
 @app.post("/companion/guide")
 async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
     """Desktop-Companion: answer a question about the screenshot and optionally return
@@ -2354,17 +2401,23 @@ async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
     if cfg.get("debug_capture"):
         params["debug_dir"] = str(cfg.get("debug_dir") or "data/companion_debug")
     history = [turn.model_dump() for turn in request.history]
+    context_blocks, sources = await _companion_context(
+        request.question, request.use_papers, request.use_web
+    )
     try:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             screen_companion.guide,
             llm_router,
             request.question,
             request.image_base64,
             history=history,
+            context_blocks=context_blocks or None,
             **params,
         )
+        result["sources"] = sources
+        return result
     except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
-        return {"answer": "", "found": False, "steps": [], "error": str(exc)}
+        return {"answer": "", "found": False, "steps": [], "sources": [], "error": str(exc)}
 
 
 @app.post("/companion/ask")
@@ -2373,6 +2426,9 @@ async def companion_ask(request: CompanionAskRequest) -> dict[str, Any]:
     Bereich-erklären snips (``region=true``) and text-only follow-up questions."""
     params = _companion_llm_params(request.provider, request.model)
     history = [turn.model_dump() for turn in request.history]
+    context_blocks, sources = await _companion_context(
+        request.question, request.use_papers, request.use_web
+    )
     try:
         answer = await asyncio.to_thread(
             screen_companion.ask,
@@ -2381,11 +2437,12 @@ async def companion_ask(request: CompanionAskRequest) -> dict[str, Any]:
             image_base64=request.image_base64,
             history=history,
             region=request.region,
+            context_blocks=context_blocks or None,
             **params,
         )
-        return {"answer": answer}
+        return {"answer": answer, "sources": sources}
     except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
-        return {"answer": "", "error": str(exc)}
+        return {"answer": "", "sources": [], "error": str(exc)}
 
 
 @app.get("/companion/config")

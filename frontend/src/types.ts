@@ -582,8 +582,13 @@ export type ObserveEvent = {
   error?: string;
 };
 
-/** One turn in the Assistent chat log (question asked or answer received). */
-export type ObserveChatEntry = { role: "user" | "assistant"; text: string };
+/** One turn in the Assistent chat log (question asked or answer received).
+ * `sources` is companion-only: grounding sources shown under the answer bubble. */
+export type ObserveChatEntry = {
+  role: "user" | "assistant";
+  text: string;
+  sources?: CompanionSource[];
+};
 
 /** Payload pushed into the overlay window via the `overlay://task` event, prefilling
  * it with a compiled variant brief — nothing runs until the user clicks "Starten". */
@@ -639,16 +644,26 @@ export type MonitorInfo = {
  * original screenshot pixels (= physical monitor pixels for full captures). */
 export type CompanionStep = { x: number; y: number; label: string };
 
+/** One grounding source used for a companion answer (Quellen-Modus):
+ * a local paper (id = e.g. "arxiv:2401.12345") or a web search hit (url). */
+export type CompanionSource = {
+  type: "paper" | "web";
+  title: string;
+  id?: string;
+  url?: string;
+};
+
 /** Result of POST /companion/guide: German answer + optional pointing steps. */
 export type CompanionGuideResult = {
   answer: string;
   found: boolean;
   steps: CompanionStep[];
+  sources?: CompanionSource[];
   error?: string;
 };
 
 /** Result of POST /companion/ask (free-form screen Q&A, no pointing). */
-export type CompanionAskResult = { answer: string; error?: string };
+export type CompanionAskResult = { answer: string; sources?: CompanionSource[]; error?: string };
 
 /** GET /companion/config: defaults + selectable vision providers for the picker. */
 export type CompanionConfigInfo = {

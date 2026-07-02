@@ -48,7 +48,26 @@ function EventLine({ event }: { event: AgentDispatchEvent }) {
 }
 
 function ChatBubble({ entry }: { entry: ObserveChatEntry }) {
-  return <div className={`overlay-chat-bubble overlay-chat-bubble--${entry.role}`}>{entry.text}</div>;
+  return (
+    <div className={`overlay-chat-bubble overlay-chat-bubble--${entry.role}`}>
+      {entry.text}
+      {entry.sources?.length ? (
+        <ul className="overlay-chat-sources">
+          {entry.sources.map((source, index) => (
+            <li key={index}>
+              {source.type === "paper" ? (
+                <span>📄 [{source.id}] {source.title}</span>
+              ) : (
+                <a href={source.url} target="_blank" rel="noreferrer">
+                  🌐 {source.title || source.url}
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
 }
 
 export function OverlayPage() {
@@ -89,6 +108,12 @@ export function OverlayPage() {
   // The capture a pointing answer belongs to — its monitor origin/size place the ring
   // window on the right screen (steps stay monitor-relative physical pixels).
   const captureInfoRef = useRef<CaptureResult | null>(null);
+  // Quellen-Modus: ground answers in local papers and/or a web search (off = privacy
+  // default; the web toggle sends the question text to the configured search engine).
+  const [usePapers, setUsePapers] = useState(
+    () => localStorage.getItem("sciencekg.companion.papers") === "1",
+  );
+  const [useWeb, setUseWeb] = useState(() => localStorage.getItem("sciencekg.companion.web") === "1");
 
   const abortRef = useRef<AbortController | null>(null);
   const bridgeBaseRef = useRef<string | null>(null);
@@ -170,6 +195,18 @@ export function OverlayPage() {
       ? localStorage.setItem("sciencekg.companion.monitor", companionMonitor)
       : localStorage.removeItem("sciencekg.companion.monitor");
   }, [companionMonitor]);
+
+  useEffect(() => {
+    usePapers
+      ? localStorage.setItem("sciencekg.companion.papers", "1")
+      : localStorage.removeItem("sciencekg.companion.papers");
+  }, [usePapers]);
+
+  useEffect(() => {
+    useWeb
+      ? localStorage.setItem("sciencekg.companion.web", "1")
+      : localStorage.removeItem("sciencekg.companion.web");
+  }, [useWeb]);
 
   // Monitor list for the picker — loaded per mount; xcap ids are only stable for the
   // current session, so a persisted pick that no longer exists falls back to Auto.
@@ -386,10 +423,23 @@ export function OverlayPage() {
         // wouldn't be meaningful on the live screen).
         const image = snip.image_base64;
         setSnip(null);
-        const res = await askCompanion({ question: text, image_base64: image, history, region: true, provider, model });
+        const res = await askCompanion({
+          question: text,
+          image_base64: image,
+          history,
+          region: true,
+          provider,
+          model,
+          use_papers: usePapers,
+          use_web: useWeb,
+        });
         setChat((prev) => [
           ...prev,
-          { role: "assistant", text: res.error ? `Fehler: ${res.error}` : res.answer || "Dazu kann ich nichts sagen." },
+          {
+            role: "assistant",
+            text: res.error ? `Fehler: ${res.error}` : res.answer || "Dazu kann ich nichts sagen.",
+            sources: res.sources,
+          },
         ]);
         return;
       }
@@ -405,12 +455,23 @@ export function OverlayPage() {
       });
       captureInfoRef.current = capture;
       setActiveMonitorName(capture.monitor_name || "");
-      const res = await guideCompanion({ question: text, image_base64: capture.image_base64, history, provider, model });
+      const res = await guideCompanion({
+        question: text,
+        image_base64: capture.image_base64,
+        history,
+        provider,
+        model,
+        use_papers: usePapers,
+        use_web: useWeb,
+      });
       if (res.error) {
         setChat((prev) => [...prev, { role: "assistant", text: `Fehler: ${res.error}` }]);
         return;
       }
-      setChat((prev) => [...prev, { role: "assistant", text: res.answer || "Dazu kann ich nichts sagen." }]);
+      setChat((prev) => [
+        ...prev,
+        { role: "assistant", text: res.answer || "Dazu kann ich nichts sagen.", sources: res.sources },
+      ]);
       if (res.steps?.length) {
         setSteps(res.steps);
         setStepIndex(0);
@@ -637,6 +698,26 @@ export function OverlayPage() {
             </button>
           </div>
           <div className="overlay-companion-actions">
+            <button
+              className={`button button-compact overlay-source-toggle ${usePapers ? "overlay-source-toggle--active" : ""}`}
+              type="button"
+              disabled={pointing}
+              aria-pressed={usePapers}
+              title="Antworten mit deiner lokalen Paper-Bibliothek belegen ([arxiv:...]-Zitate)"
+              onClick={() => setUsePapers((prev) => !prev)}
+            >
+              📄 Paper
+            </button>
+            <button
+              className={`button button-compact overlay-source-toggle ${useWeb ? "overlay-source-toggle--active" : ""}`}
+              type="button"
+              disabled={pointing}
+              aria-pressed={useWeb}
+              title="Websuche einbeziehen — die Frage (nicht der Screenshot) geht an die konfigurierte Suchmaschine"
+              onClick={() => setUseWeb((prev) => !prev)}
+            >
+              🌐 Web
+            </button>
             <button className="button button-compact" type="button" disabled={pointing} onClick={() => void startSnip()}>
               <Crop size={13} />
               Bereich erklären

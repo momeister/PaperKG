@@ -822,6 +822,8 @@ export const guideCompanion = (payload: {
   history?: { role: string; content: string }[];
   provider?: string | null;
   model?: string | null;
+  use_papers?: boolean;
+  use_web?: boolean;
 }) =>
   request<CompanionGuideResult>("/companion/guide", {
     method: "POST",
@@ -837,6 +839,8 @@ export const askCompanion = (payload: {
   region?: boolean;
   provider?: string | null;
   model?: string | null;
+  use_papers?: boolean;
+  use_web?: boolean;
 }) =>
   request<CompanionAskResult>("/companion/ask", {
     method: "POST",

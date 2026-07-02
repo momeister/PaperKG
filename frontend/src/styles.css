@@ -8427,6 +8427,30 @@ button.parallel-cite {
   flex-wrap: wrap;
   gap: 6px;
 }
+.overlay-source-toggle {
+  opacity: 0.65;
+}
+.overlay-source-toggle--active {
+  opacity: 1;
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.overlay-chat-sources {
+  margin: 6px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  list-style: none;
+  font-size: 10px;
+  opacity: 0.85;
+}
+.overlay-chat-sources li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overlay-chat-sources a {
+  color: inherit;
+}
 .overlay-snip-chip {
   display: flex;
   align-items: center;

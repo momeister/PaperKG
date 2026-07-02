@@ -281,7 +281,7 @@ def test_companion_ask_endpoint_happy_and_request_overrides(monkeypatch) -> None
         },
     )
     assert res.status_code == 200
-    assert res.json() == {"answer": "Antwort."}
+    assert res.json() == {"answer": "Antwort.", "sources": []}
     # Request-level provider/model beat the companion config defaults.
     assert router.calls[0]["provider"] == "anthropic"
     assert router.calls[0]["overrides"]["model"] == "claude-sonnet-5"
@@ -294,6 +294,70 @@ def test_companion_ask_endpoint_error_in_body(monkeypatch) -> None:
     body = res.json()
     assert body["answer"] == ""
     assert "vlm down" in body["error"]
+
+
+def test_companion_ask_with_paper_and_web_sources(monkeypatch) -> None:
+    router = _FakeRouter("Laut [arxiv:123] ja.")
+    client = _client(monkeypatch, router)
+
+    class _FakeSource:
+        paper_id = "arxiv:123"
+        title = "Testpaper"
+
+    class _FakeEvidence:
+        score = 1.0
+        text = "Belegtext aus dem Paper"
+
+    class _FakeHit:
+        source = _FakeSource()
+        evidence = [_FakeEvidence()]
+
+    class _FakeRetriever:
+        def search(self, query, limit=10):  # noqa: ARG002
+            return [_FakeHit()]
+
+    monkeypatch.setattr(product_main, "_parallel_retriever", lambda *a, **k: _FakeRetriever())
+
+    import research.search_provider as search_provider
+
+    async def _fake_search(query, config, provider=None, max_results=6):  # noqa: ARG001
+        return [
+            search_provider.SearchHit(
+                url="https://example.org/a", title="Beispielseite", snippet="Ein <b>Schnipsel</b>"
+            )
+        ]
+
+    monkeypatch.setattr(search_provider, "run_web_search", _fake_search)
+
+    res = client.post(
+        "/companion/ask",
+        json={"question": "Was sagt die Literatur?", "use_papers": True, "use_web": True},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["answer"] == "Laut [arxiv:123] ja."
+    assert {source["type"] for source in body["sources"]} == {"paper", "web"}
+
+    system = router.calls[0]["messages"][0]["content"]
+    assert "[arxiv:123] Testpaper — Belegtext aus dem Paper" in system
+    assert "https://example.org/a" in system
+    assert "Ein Schnipsel" in system  # sanitized: HTML tags stripped
+    assert "DATEN" in system  # untrusted-data rule present
+
+
+def test_companion_sources_are_best_effort(monkeypatch) -> None:
+    router = _FakeRouter("Antwort.")
+    client = _client(monkeypatch, router)
+
+    def _boom(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("db kaputt")
+
+    monkeypatch.setattr(product_main, "_parallel_retriever", _boom)
+    res = client.post("/companion/ask", json={"question": "x?", "use_papers": True})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["answer"] == "Antwort."
+    assert body["sources"] == []
 
 
 def test_companion_config_shape(monkeypatch) -> None:
