@@ -67,6 +67,7 @@ from storage.metadata_db import MetadataDB
 from storage.path_safety import PathSafetyError, ensure_safe_path
 from workspace import manager as workspace_manager
 from workspace.manager import WorkspaceError
+from analysis import runner as analysis_runner, service as analysis_service
 
 
 PROJECTS_PATH = Path("data/projects.json")
@@ -3787,6 +3788,28 @@ class CreatePathRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
+class AnalysisRunRequest(BaseModel):
+    """Start a reproducible analysis run (AI writes + executes a Python script)."""
+    request: str = Field(min_length=1, max_length=4000)
+    project_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    paper_ids: list[str] = Field(default_factory=list)
+    dataset_ids: list[str] = Field(default_factory=list)
+    context: str | None = Field(default=None, max_length=8000)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class AnalysisReviseRequest(BaseModel):
+    """Revise an existing run in place (new instruction and/or figure annotation)."""
+    request: str | None = Field(default=None, max_length=4000)
+    annotation: str | None = Field(default=None, max_length=4000)
+    provider: str | None = None
+    model: str | None = None
+    context: str | None = Field(default=None, max_length=8000)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
 def _require_code_project(db: MetadataDB, project_id: str) -> dict[str, Any]:
     proj = db.get_code_project(project_id)
     if proj is None:
@@ -3924,6 +3947,156 @@ def workspace_git_diff(
         project = _require_code_project(db, project_id)
     root = workspace_manager.ensure_exists(project)
     return workspace_manager.git_diff(root, path)
+
+
+# --------------------------------------------------------------------------- #
+# Analyse-Werkstatt (WP1): reproduzierbare, provenance-tragende Skript-Läufe    #
+# --------------------------------------------------------------------------- #
+
+
+def _analysis_defaults() -> dict[str, Any]:
+    """Read the ``analysis:`` block from config.yaml (with safe fallbacks)."""
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as fh:
+            section = (yaml.safe_load(fh) or {}).get("analysis", {}) or {}
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        section = {}
+    return {
+        "timeout_seconds": float(section.get("timeout_seconds", analysis_runner.DEFAULT_TIMEOUT_SECONDS)),
+        "seed": int(section.get("seed", analysis_runner.DEFAULT_SEED)),
+    }
+
+
+def _analysis_context(db: MetadataDB, paper_ids: list[str], extra: str | None) -> str | None:
+    """Build a compact fachlicher-context block from cited papers + free text."""
+    parts: list[str] = []
+    for pid in (paper_ids or [])[:12]:
+        try:
+            paper = db.get_paper(pid)
+        except Exception:
+            paper = None
+        if not paper:
+            continue
+        title = str(paper.get("title") or pid)
+        year = paper.get("year") or ""
+        abstract = str(paper.get("abstract") or "")[:400]
+        parts.append(f"[{pid}] {title} ({year})\n{abstract}".strip())
+    if extra and extra.strip():
+        parts.append(extra.strip())
+    return "\n\n".join(parts) if parts else None
+
+
+def _analysis_run_response(run: dict[str, Any]) -> dict[str, Any]:
+    """Attach a download URL to each artifact so the frontend can render/link it."""
+    out = dict(run)
+    arts = []
+    for art in run.get("artifacts") or []:
+        art = dict(art)
+        art["url"] = f"/analysis/artifacts/{art.get('id')}"
+        arts.append(art)
+    out["artifacts"] = arts
+    return out
+
+
+@app.post("/analysis/runs")
+def create_analysis_run(request: AnalysisRunRequest) -> dict[str, Any]:
+    """Plan, execute and persist a reproducible analysis run. Returns run + artifacts."""
+    defaults = _analysis_defaults()
+    with MetadataDB(request.metadata_db_path) as db:
+        context = _analysis_context(db, request.paper_ids, request.context)
+        try:
+            run = analysis_service.create_run(
+                db,
+                llm_router,
+                request=request.request,
+                project_id=request.project_id,
+                provider=request.provider,
+                model=request.model,
+                seed=defaults["seed"],
+                timeout=defaults["timeout_seconds"],
+                context=context,
+            )
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail=f"Planer-Fehler: {exc}")
+    return {"run": _analysis_run_response(run)}
+
+
+@app.get("/analysis/runs")
+def list_analysis_runs(
+    project_id: str | None = None, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        runs = db.list_analysis_runs(project_id)
+    return {"runs": runs}
+
+
+@app.get("/analysis/runs/{run_id}")
+def get_analysis_run(
+    run_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        run = db.get_analysis_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Analyse-Lauf nicht gefunden")
+    return {"run": _analysis_run_response(run)}
+
+
+@app.post("/analysis/runs/{run_id}/revise")
+def revise_analysis_run(run_id: str, request: AnalysisReviseRequest) -> dict[str, Any]:
+    """Revise a run in place (new instruction and/or annotation) → new git version."""
+    defaults = _analysis_defaults()
+    with MetadataDB(request.metadata_db_path) as db:
+        try:
+            run = analysis_service.revise_run(
+                db,
+                llm_router,
+                run_id,
+                request=request.request,
+                annotation=request.annotation,
+                provider=request.provider,
+                model=request.model,
+                timeout=defaults["timeout_seconds"],
+                context=request.context,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail=f"Planer-Fehler: {exc}")
+    if run is None:
+        raise HTTPException(status_code=404, detail="Analyse-Lauf nicht gefunden")
+    return {"run": _analysis_run_response(run)}
+
+
+@app.delete("/analysis/runs/{run_id}")
+def delete_analysis_run(
+    run_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    """Unregister a run (DB rows only). The on-disk folder is left for the Werkstatt."""
+    with MetadataDB(metadata_db_path) as db:
+        deleted = db.delete_analysis_run(run_id)
+    return {"deleted": deleted, "id": run_id}
+
+
+@app.get("/analysis/artifacts/{artifact_id}")
+def get_analysis_artifact(
+    artifact_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> FileResponse:
+    """Serve one generated artifact file (figure/table/data/log), path-safety guarded."""
+    with MetadataDB(metadata_db_path) as db:
+        art = db.get_analysis_artifact(artifact_id)
+        if art is None:
+            raise HTTPException(status_code=404, detail="Artefakt nicht gefunden")
+        run = db.get_analysis_run(str(art.get("run_id")))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Analyse-Lauf nicht gefunden")
+    run_dir = Path(str(run.get("run_dir")))
+    target = ensure_safe_path(run_dir / str(art.get("rel_path")), what="analysis artifact")
+    # Containment: the artifact must live inside its run folder.
+    if run_dir.resolve() not in target.resolve().parents and run_dir.resolve() != target.resolve():
+        raise HTTPException(status_code=400, detail="Ungültiger Artefakt-Pfad")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Artefakt-Datei fehlt auf der Platte")
+    return FileResponse(str(target), filename=str(art.get("filename") or target.name))
 
 
 def _run_benchmark_suite_job(request: BenchmarkJobRequest | BenchmarkSuiteJobRequest) -> dict[str, Any]:

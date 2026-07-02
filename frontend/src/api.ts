@@ -13,6 +13,7 @@ import type {
   FileContent,
   GitStatus,
   GitDiff,
+  AnalysisRun,
   BenchmarkReport,
   BenchmarkRun,
   Dashboard,
@@ -564,8 +565,45 @@ export const api = {
       request<GitStatus>(`/workspaces/${encodeURIComponent(projectId)}/git/status`),
     gitDiff: (projectId: string, path?: string) =>
       request<GitDiff>(`/workspaces/${encodeURIComponent(projectId)}/git/diff`, { query: { path } }),
+  },
+
+  // --- Analyse-Werkstatt (reproduzierbare, provenance-tragende Skript-Läufe) ---
+  analysis: {
+    list: (projectId?: string | null) =>
+      request<{ runs: AnalysisRun[] }>("/analysis/runs", { query: { project_id: projectId ?? undefined } }),
+    get: (runId: string) =>
+      request<{ run: AnalysisRun }>(`/analysis/runs/${encodeURIComponent(runId)}`),
+    create: (payload: AnalysisRunRequest) =>
+      request<{ run: AnalysisRun }>("/analysis/runs", { method: "POST", body: JSON.stringify(payload) }),
+    revise: (runId: string, payload: AnalysisReviseRequest) =>
+      request<{ run: AnalysisRun }>(`/analysis/runs/${encodeURIComponent(runId)}/revise`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    remove: (runId: string) =>
+      request<{ deleted: boolean; id: string }>(`/analysis/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
+    /** Absolute URL of one generated artifact file (figure/table/data/log). */
+    artifactUrl: (artifactId: string) => url(`/analysis/artifacts/${encodeURIComponent(artifactId)}`),
   }
 };
+
+export interface AnalysisRunRequest {
+  request: string;
+  project_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  paper_ids?: string[];
+  dataset_ids?: string[];
+  context?: string | null;
+}
+
+export interface AnalysisReviseRequest {
+  request?: string | null;
+  annotation?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  context?: string | null;
+}
 
 export interface ResearchTreeRequest {
   question: string;

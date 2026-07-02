@@ -436,6 +436,16 @@ companion:
     enabled: false
     max_steps: 15
 
+# Analyse-Werkstatt (WP1): reproduzierbare, lokale Ausführung KI-geschriebener
+# Python-Analyse-Skripte. Jeder Lauf ist ein git-versionierter Ordner im verwalteten
+# Werkstatt-Projekt "PaperKG-Analysen" (script.py/inputs/outputs/run.json/README.md).
+# Kein Sandbox — der Subprozess läuft mit Backend-Rechten (wie Terminal/Jupyter);
+# Schutz = Pfad-Containment + fester Seed + hartes Timeout + bereinigtes Environment.
+analysis:
+  timeout_seconds: 120   # harte Obergrenze pro Skriptlauf (Kill danach)
+  seed: 42               # fester Seed → identische Ausgaben bei Wiederholung (Badge)
+  max_output_mb: 25      # max. Größe pro erzeugter Ausgabedatei
+
 # Code-Werkstatt: where *managed* coding projects are created on disk. They live
 # as plain Git folders so other editors (VS Code, …) can open them too; PaperKG
 # only registers them (DuckDB `code_projects`). "Ordner öffnen" registers an

@@ -858,3 +858,43 @@ export type GitDiff = {
   diff: string;
   error?: string | null;
 };
+
+// --- Analyse-Werkstatt (reproduzierbare Skript-Läufe) ---
+export type AnalysisArtifactKind = "figure" | "table" | "data" | "log" | string;
+
+export type AnalysisArtifact = {
+  id: string;
+  run_id: string;
+  kind: AnalysisArtifactKind;
+  filename: string;
+  rel_path: string;
+  caption?: string | null;
+  size?: number | null;
+  sha256?: string | null;
+  /** Download URL, added by the backend response shaper. */
+  url?: string;
+};
+
+export type AnalysisRun = {
+  id: string;
+  project_id?: string | null;
+  code_project_id?: string | null;
+  run_dir: string;
+  rel_dir?: string | null;
+  title?: string | null;
+  description?: string | null;
+  request?: string | null;
+  script_rel?: string | null;
+  status: "ok" | "error" | "timeout" | string;
+  provider?: string | null;
+  model?: string | null;
+  seed?: number | null;
+  output_hash?: string | null;
+  verified_hash?: string | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  duration_s?: number | null;
+  created_timestamp?: string;
+  updated_timestamp?: string;
+  artifacts?: AnalysisArtifact[];
+};

@@ -130,6 +130,26 @@ executes it through `src-tauri/src/control.rs` (`enigo`) in a per-action confirm
 iframe. The **Linux (deb/AppImage) + macOS (dmg) bundles** are built only in CI
 (`.github/workflows/native-build.yml`, `workflow_dispatch`/tag `v*`); Windows NSIS builds locally.
 
+### Analyse-Werkstatt (reproducible code execution)
+A **Claude-Science-style auditable-artifact** surface: the user asks for an analysis in natural
+language, the backend (`analysis/` package) uses `LLMRouter` to **write a Python script**
+(`analysis/planner.py`), runs it locally as a **subprocess** (`analysis/runner.py` — no shell,
+fixed seed, `Agg`/headless, hard timeout, path-contained via `workspace.manager.resolve_within`)
+and returns figures/tables. `analysis/service.py` ties it together: **every run is a real,
+git-versioned folder** inside the managed Werkstatt project `PaperKG-Analysen`
+(`<run>/script.py`, `inputs/`, `outputs/`, `run.json` = env/seed/provider/model/planning-history/
+output-hashes, `README.md` = plain-language). Output is deterministic — same seed ⇒ identical
+`output_hash` (the WP4 reproducibility badge). Persistence lives in DuckDB (`analysis_runs`,
+`analysis_artifacts` in `storage/metadata_db.py`); artifacts are served via
+`GET /analysis/artifacts/{id}` (`FileResponse` + `path_safety`, **no** `StaticFiles`). Routes:
+`POST /analysis/runs`, `GET /analysis/runs[/{id}]`, `POST /analysis/runs/{id}/revise` (NL edit or
+figure annotation → new script version + git commit), `DELETE`. UI: the **Analyse** tab in the
+Workspace center column (`frontend/src/pages/AnalysisPanel.tsx`, swapped in via `WorkspacePage`'s
+`centerView`) renders figures/tables inline with provenance chips (open in Werkstatt, download
+data, revise, copy Markdown). Config: the `analysis:` block in `config.yaml` (`timeout_seconds`,
+`seed`). **No sandbox** — the subprocess runs with backend rights (like the Werkstatt terminal /
+Jupyter); a Docker `--network none` mode is a later option.
+
 ### Tiefenanalyse LaTeX/PDF export
 The deep-analysis "Gesamtantwort" can be exported to a thesis-/paper-style document via the
 **PDF/LaTeX** button (backend `POST /research/tree/export`, package `export/`). It builds LaTeX

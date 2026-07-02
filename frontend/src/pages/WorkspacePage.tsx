@@ -27,6 +27,7 @@ import {
   Globe,
   Link2,
   ListChecks,
+  FlaskConical,
   Loader2,
   Maximize2,
   MessageSquareText,
@@ -100,6 +101,7 @@ import {
 import type { CitationMeta } from "./AssistantPage";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
+import { AnalysisPanel } from "./AnalysisPanel";
 
 export type WorkspaceNavigatorTab = "notes" | "pdfs" | "assistantSessions";
 
@@ -350,6 +352,8 @@ export function WorkspacePage() {
   const [navigatorOpen, setNavigatorOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "navigatorOpen", true));
   const [assistantOpen, setAssistantOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "assistantOpen", true));
   const [pdfOpen, setPdfOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "pdfOpen", true));
+  // Center column can swap between the PDF viewer and the Analyse-Werkstatt panel.
+  const [centerView, setCenterView] = useState<"pdf" | "analysis">("pdf");
   const [notesOpen, setNotesOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "notesOpen", true));
   // Notes pane sub-view: the normal note editor, or the Parallel-Research "Ergebnisse" view.
   const [notesTab, setNotesTab] = useState<"note" | "results">("note");
@@ -2281,7 +2285,7 @@ export function WorkspacePage() {
       : undefined;
   const navColumn = navigatorOpen ? `${navigatorWidth}px` : "46px";
   const assistantColumn = assistantOpen ? `${assistantWidth}px` : "46px";
-  const pdfColumn = pdfOpen ? `${pdfWidth}px` : "46px";
+  const pdfColumn = centerView === "analysis" || pdfOpen ? `${pdfWidth}px` : "46px";
   const notesColumn = notesOpen ? "minmax(80px, 1fr)" : "46px";
 
   return (
@@ -2295,20 +2299,24 @@ export function WorkspacePage() {
         <aside className="workspace-nav-pane">
           <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => setNavigatorOpen(false)} collapseSide="left" />
           <div className="segmented workspace-nav-tabs" aria-label="Arbeitsplatz Navigation">
-            <button type="button" className={navigatorTab === "notes" ? "active" : ""} onClick={() => setNavigatorTab("notes")}>
+            <button type="button" className={centerView === "pdf" && navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
               <NotebookPen size={15} />
               <span>Notizen</span>
               <strong>{notesSnapshot.notes.length}</strong>
             </button>
-            <button type="button" className={navigatorTab === "pdfs" ? "active" : ""} onClick={() => setNavigatorTab("pdfs")}>
+            <button type="button" className={centerView === "pdf" && navigatorTab === "pdfs" ? "active" : ""} onClick={() => { setNavigatorTab("pdfs"); setCenterView("pdf"); }}>
               <FileText size={15} />
               <span>PDFs</span>
               <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
             </button>
-            <button type="button" className={`workspace-nav-tab--wide ${navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => setNavigatorTab("assistantSessions")}>
+            <button type="button" className={`workspace-nav-tab--wide ${centerView === "pdf" && navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => { setNavigatorTab("assistantSessions"); setCenterView("pdf"); }}>
               <MessageSquareText size={15} />
               <span>KI-Sessions</span>
               <strong>{history.length}</strong>
+            </button>
+            <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
+              <FlaskConical size={15} />
+              <span>Analyse</span>
             </button>
           </div>
           <WorkspaceNavigatorBody
@@ -2384,7 +2392,15 @@ export function WorkspacePage() {
         onPointerDown={navigatorOpen ? (event) => startColumnResize(event, navigatorWidth, setNavigatorWidth, navResizeFrameRef, 110, 520) : undefined}
       />
 
-      {pdfOpen ? (
+      {centerView === "analysis" ? (
+        <AnalysisPanel
+          projectId={scopedProjectId}
+          provider={provider}
+          model={model}
+          paperIds={selectedPaperIds}
+          onCollapse={() => setCenterView("pdf")}
+        />
+      ) : pdfOpen ? (
         pdfTarget?.kind === "grey" ? (
           <GreySourceView
             source={pdfTarget.source}
