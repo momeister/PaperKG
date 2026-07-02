@@ -39,14 +39,37 @@ pub struct CaptureState {
     snip_image: Mutex<Option<RgbaImage>>,
 }
 
+/// One physical display for the overlay's monitor picker. Coordinates are the
+/// monitor's origin in the virtual desktop (physical pixels — Tauri runs
+/// per-monitor-DPI-aware, so xcap bounds and `cursor_position` share that space).
+/// xcap monitor ids are only stable for the current session — the picker reloads
+/// the list every time the overlay opens.
+#[derive(Clone, serde::Serialize)]
+pub struct MonitorInfo {
+    pub id: u32,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_factor: f64,
+    pub is_primary: bool,
+}
+
 /// A full-screen capture handed to the frontend. `width`/`height` are physical
 /// monitor pixels — the same space the backend's guide steps come back in.
+/// `origin_x`/`origin_y` locate the captured monitor in the virtual desktop so
+/// the pointer/snip windows can be moved onto it.
 #[derive(Clone, serde::Serialize)]
 pub struct CaptureResult {
     pub image_base64: String,
     pub width: u32,
     pub height: u32,
     pub scale_factor: f64,
+    pub monitor_id: u32,
+    pub monitor_name: String,
+    pub origin_x: i32,
+    pub origin_y: i32,
 }
 
 /// The frozen full-screen frame pushed into the snip window for region selection.
@@ -56,6 +79,10 @@ pub struct SnipBeginPayload {
     pub width: u32,
     pub height: u32,
     pub scale_factor: f64,
+    pub monitor_id: u32,
+    pub monitor_name: String,
+    pub origin_x: i32,
+    pub origin_y: i32,
 }
 
 /// The cropped region pushed back into the chat overlay ("Bereich erklären").
@@ -72,18 +99,62 @@ pub struct CursorPosition {
     pub y: f64,
 }
 
-fn primary_monitor() -> Result<Monitor, String> {
+fn monitor_info(monitor: &Monitor) -> MonitorInfo {
+    MonitorInfo {
+        id: monitor.id().unwrap_or(0),
+        name: monitor.name().unwrap_or_default(),
+        x: monitor.x().unwrap_or(0),
+        y: monitor.y().unwrap_or(0),
+        width: monitor.width().unwrap_or(0),
+        height: monitor.height().unwrap_or(0),
+        scale_factor: monitor.scale_factor().map(f64::from).unwrap_or(1.0),
+        is_primary: monitor.is_primary().unwrap_or(false),
+    }
+}
+
+fn monitor_contains(monitor: &Monitor, x: f64, y: f64) -> bool {
+    let mx = monitor.x().unwrap_or(0) as f64;
+    let my = monitor.y().unwrap_or(0) as f64;
+    let mw = monitor.width().unwrap_or(0) as f64;
+    let mh = monitor.height().unwrap_or(0) as f64;
+    x >= mx && x < mx + mw && y >= my && y < my + mh
+}
+
+/// Resolve which monitor a companion action targets: an explicit picker id wins,
+/// otherwise the monitor under the cursor ("the screen I'm looking at"), otherwise
+/// the primary, otherwise the first one xcap knows.
+fn target_monitor(app: &AppHandle, selector: Option<u32>) -> Result<Monitor, String> {
     let monitors = Monitor::all().map_err(|err| err.to_string())?;
+    let cursor = if selector.is_none() { app.cursor_position().ok() } else { None };
+    let mut primary = None;
     let mut fallback = None;
     for monitor in monitors {
-        if monitor.is_primary().unwrap_or(false) {
-            return Ok(monitor);
+        if let Some(id) = selector {
+            if monitor.id().map(|value| value == id).unwrap_or(false) {
+                return Ok(monitor);
+            }
+        }
+        if let Some(position) = cursor.as_ref() {
+            if monitor_contains(&monitor, position.x, position.y) {
+                return Ok(monitor);
+            }
+        }
+        if primary.is_none() && monitor.is_primary().unwrap_or(false) {
+            primary = Some(monitor);
+            continue;
         }
         if fallback.is_none() {
             fallback = Some(monitor);
         }
     }
-    fallback.ok_or_else(|| "Kein Monitor gefunden".to_string())
+    primary.or(fallback).ok_or_else(|| "Kein Monitor gefunden".to_string())
+}
+
+/// All displays for the overlay's monitor picker.
+#[tauri::command]
+pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
+    let monitors = Monitor::all().map_err(|err| err.to_string())?;
+    Ok(monitors.iter().map(monitor_info).collect())
 }
 
 fn encode_png(image: &RgbaImage) -> Result<String, String> {
@@ -94,10 +165,14 @@ fn encode_png(image: &RgbaImage) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(buffer))
 }
 
-/// Capture the primary monitor with the companion's own windows kept out of frame:
+/// Capture the target monitor with the companion's own windows kept out of frame:
 /// the pointer ring is always hidden (and restored), the chat overlay only when
 /// WDA exclusion isn't in effect for it.
-fn grab_primary(app: &AppHandle, state: &CaptureState) -> Result<(RgbaImage, f64), String> {
+fn grab_screen(
+    app: &AppHandle,
+    state: &CaptureState,
+    selector: Option<u32>,
+) -> Result<(RgbaImage, MonitorInfo), String> {
     let pointer = app.get_webview_window(POINTER_LABEL);
     let pointer_was_visible = pointer
         .as_ref()
@@ -125,10 +200,10 @@ fn grab_primary(app: &AppHandle, state: &CaptureState) -> Result<(RgbaImage, f64
     }
 
     let captured = (|| {
-        let monitor = primary_monitor()?;
-        let scale = monitor.scale_factor().map(f64::from).unwrap_or(1.0);
+        let monitor = target_monitor(app, selector)?;
+        let info = monitor_info(&monitor);
         let image = monitor.capture_image().map_err(|err| err.to_string())?;
-        Ok((image, scale))
+        Ok((image, info))
     })();
 
     if overlay_needs_hide {
@@ -144,19 +219,24 @@ fn grab_primary(app: &AppHandle, state: &CaptureState) -> Result<(RgbaImage, f64
     captured
 }
 
-/// Screenshot the primary monitor for a companion question. Runs on a blocking
-/// thread — capture + PNG encode of a 4K frame takes visible milliseconds.
+/// Screenshot one monitor for a companion question (`monitor` = picker id, `None` =
+/// monitor under the cursor). Runs on a blocking thread — capture + PNG encode of a
+/// 4K frame takes visible milliseconds.
 #[tauri::command]
-pub async fn capture_screen(app: AppHandle) -> Result<CaptureResult, String> {
+pub async fn capture_screen(app: AppHandle, monitor: Option<u32>) -> Result<CaptureResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<CaptureState>();
-        let (image, scale_factor) = grab_primary(&app, &state)?;
+        let (image, info) = grab_screen(&app, &state, monitor)?;
         let (width, height) = image.dimensions();
         Ok(CaptureResult {
             image_base64: encode_png(&image)?,
             width,
             height,
-            scale_factor,
+            scale_factor: info.scale_factor,
+            monitor_id: info.id,
+            monitor_name: info.name,
+            origin_x: info.x,
+            origin_y: info.y,
         })
     })
     .await
@@ -165,24 +245,29 @@ pub async fn capture_screen(app: AppHandle) -> Result<CaptureResult, String> {
 
 /// Begin a "Bereich erklären" region selection (invoked from the overlay button).
 #[tauri::command]
-pub async fn snip_start(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || snip_start_impl(&app))
+pub async fn snip_start(app: AppHandle, monitor: Option<u32>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || snip_start_impl(&app, monitor))
         .await
         .map_err(|err| err.to_string())?
 }
 
 /// Freeze-frame snip: capture the full screen FIRST, stash the frame, then open the
-/// fullscreen snip window drawing that frozen image. Also called from the tray menu
-/// (on its own thread — this blocks for the capture).
-pub fn snip_start_impl(app: &AppHandle) -> Result<(), String> {
+/// fullscreen snip window (moved onto the captured monitor) drawing that frozen
+/// image. Also called from the tray menu (on its own thread — this blocks for the
+/// capture; `None` = monitor under the cursor).
+pub fn snip_start_impl(app: &AppHandle, monitor: Option<u32>) -> Result<(), String> {
     let state = app.state::<CaptureState>();
-    let (image, scale_factor) = grab_primary(app, &state)?;
+    let (image, info) = grab_screen(app, &state, monitor)?;
     let (width, height) = image.dimensions();
     let payload = SnipBeginPayload {
         image_base64: encode_png(&image)?,
         width,
         height,
-        scale_factor,
+        scale_factor: info.scale_factor,
+        monitor_id: info.id,
+        monitor_name: info.name.clone(),
+        origin_x: info.x,
+        origin_y: info.y,
     };
     *state
         .snip_image
@@ -197,6 +282,9 @@ pub fn snip_start_impl(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(SNIP_LABEL)
         .ok_or("Snip-Fenster nicht verfügbar")?;
+    // The frozen frame belongs to one specific monitor — the marquee window must
+    // sit exactly on it or the crop coordinates would map to the wrong screen.
+    crate::overlay::fit_window_to_monitor(&window, info.x, info.y, info.width, info.height);
     let _ = window.show();
     let _ = window.set_focus();
     app.emit_to(SNIP_LABEL, "snip://begin", payload)

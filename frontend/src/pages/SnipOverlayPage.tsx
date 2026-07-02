@@ -8,8 +8,11 @@ import type { SnipBeginPayload } from "../types";
 // snip_start_impl / snip_finish / snip_cancel). It works on a FROZEN frame: Rust captures
 // the screen first and pushes the PNG here via `snip://begin`, so the dim/marquee drawn
 // by this page can never leak into the selected region. Mouse coordinates are CSS pixels;
-// the frozen image is physical pixels — snip_finish gets CSS × devicePixelRatio, and Rust
-// crops the stored frame (clamped) and emits `snip://result` to the chat overlay.
+// the frozen image is physical pixels — snip_finish gets CSS × (imageWidth/innerWidth):
+// the frame is stretched over the whole viewport, so that ratio maps CSS onto image
+// pixels exactly, even right after the window moved to a monitor with a different scale
+// factor (devicePixelRatio can lag there). Rust crops the stored frame (clamped) and
+// emits `snip://result` to the chat overlay.
 export function SnipOverlayPage() {
   const [frame, setFrame] = useState<SnipBeginPayload | null>(null);
   const [start, setStart] = useState<{ x: number; y: number } | null>(null);
@@ -66,15 +69,17 @@ export function SnipOverlayPage() {
       cancel();
       return;
     }
-    const dpr = window.devicePixelRatio || 1;
+    // CSS → image pixels via the stretched-background ratio (not devicePixelRatio —
+    // see the header comment; frame is set here, guarded by the early return above).
+    const scale = frame && window.innerWidth > 0 ? frame.width / window.innerWidth : 1;
     setFrame(null);
     setStart(null);
     setCurrent(null);
     void nativeInvoke("snip_finish", {
-      x: rect.x * dpr,
-      y: rect.y * dpr,
-      width: rect.w * dpr,
-      height: rect.h * dpr,
+      x: rect.x * scale,
+      y: rect.y * scale,
+      width: rect.w * scale,
+      height: rect.h * scale,
     }).catch(() => {});
   }
 

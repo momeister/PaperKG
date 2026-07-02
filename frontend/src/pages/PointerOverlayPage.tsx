@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { isTauri, nativeInvoke, nativeListen } from "../native";
-import { dodgeOffset, physicalToCss } from "../pointerMath";
+import { dodgeOffset, physicalToCss, physicalToViewport } from "../pointerMath";
 import type { PointerShowPayload } from "../types";
 
 // AI pointer overlay (see src-tauri/src/overlay.rs → build_pointer_overlay /
@@ -53,9 +53,16 @@ export function PointerOverlayPage() {
     };
   }, []);
 
+  // Physical → CSS: prefer the viewport↔monitor ratio when the payload carries the
+  // monitor's physical width (multi-monitor; devicePixelRatio can lag right after the
+  // window moved between screens with different DPI), else divide by devicePixelRatio.
   const dpr = window.devicePixelRatio || 1;
-  const targetX = point ? (point.space === "physical" ? physicalToCss(point.x, dpr) : point.x) : 0;
-  const targetY = point ? (point.space === "physical" ? physicalToCss(point.y, dpr) : point.y) : 0;
+  const toCss = (value: number): number =>
+    point?.monitor_width
+      ? physicalToViewport(value, point.monitor_width, window.innerWidth)
+      : physicalToCss(value, dpr);
+  const targetX = point ? (point.space === "physical" ? toCss(point.x) : point.x) : 0;
+  const targetY = point ? (point.space === "physical" ? toCss(point.y) : point.y) : 0;
 
   // Cursor-dodge poll — only while a point is visible, so an idle overlay costs nothing.
   useEffect(() => {
@@ -63,13 +70,18 @@ export function PointerOverlayPage() {
     const id = window.setInterval(() => {
       nativeInvoke<{ x: number; y: number }>("cursor_position")
         .then((cursor) => {
+          // cursor_position is global (virtual desktop) — make it monitor-relative
+          // before converting, so dodging works on non-primary screens too.
+          const relX = cursor.x - (point.origin_x ?? 0);
+          const relY = cursor.y - (point.origin_y ?? 0);
           const ratio = window.devicePixelRatio || 1;
-          setDodge(
-            dodgeOffset(
-              { x: targetX, y: targetY },
-              { x: physicalToCss(cursor.x, ratio), y: physicalToCss(cursor.y, ratio) },
-            ),
-          );
+          const cursorCss = point.monitor_width
+            ? {
+                x: physicalToViewport(relX, point.monitor_width, window.innerWidth),
+                y: physicalToViewport(relY, point.monitor_width, window.innerWidth),
+              }
+            : { x: physicalToCss(relX, ratio), y: physicalToCss(relY, ratio) };
+          setDodge(dodgeOffset({ x: targetX, y: targetY }, cursorCss));
         })
         .catch(() => {
           /* transient invoke failure — keep the last offset */

@@ -216,6 +216,7 @@ pub fn run() {
             overlay::pointer_show,
             overlay::pointer_hide,
             capture::capture_screen,
+            capture::list_monitors,
             capture::snip_start,
             capture::snip_finish,
             capture::snip_cancel,

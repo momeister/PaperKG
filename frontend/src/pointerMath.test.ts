@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dodgeOffset, physicalToCss } from "./pointerMath";
+import { dodgeOffset, physicalToCss, physicalToViewport } from "./pointerMath";
 
 describe("physicalToCss", () => {
   it("divides physical pixels by the devicePixelRatio", () => {
@@ -13,6 +13,22 @@ describe("physicalToCss", () => {
     expect(physicalToCss(123, 1)).toBe(123);
     expect(physicalToCss(123, 0)).toBe(123);
     expect(physicalToCss(123, -2)).toBe(123);
+  });
+});
+
+describe("physicalToViewport", () => {
+  it("scales by the viewport↔monitor ratio (multi-monitor / DPR-lag safe)", () => {
+    // 3440px-wide monitor rendered in a 1720px CSS viewport → ratio 0.5.
+    expect(physicalToViewport(1720, 3440, 1720)).toBe(860);
+    // 150% scaling: 2560 physical over ~1706.67 CSS.
+    expect(physicalToViewport(1280, 2560, 2560 / 1.5)).toBeCloseTo(853.33, 1);
+    // 100% scaling is a pass-through.
+    expect(physicalToViewport(500, 1920, 1920)).toBe(500);
+  });
+
+  it("guards against a zero/negative monitor width", () => {
+    expect(physicalToViewport(123, 0, 1000)).toBe(123);
+    expect(physicalToViewport(123, -1, 1000)).toBe(123);
   });
 });
 

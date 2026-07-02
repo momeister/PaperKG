@@ -10,6 +10,7 @@ import type {
   CaptureResult,
   CompanionConfigInfo,
   CompanionStep,
+  MonitorInfo,
   ObserveChatEntry,
   OverlayTaskPayload,
   SnipResultPayload,
@@ -79,6 +80,15 @@ export function OverlayPage() {
   const [steps, setSteps] = useState<CompanionStep[]>([]);
   const [stepIndex, setStepIndex] = useState(0);
   const [snip, setSnip] = useState<SnipResultPayload | null>(null);
+  // Multi-monitor: "" = Auto (monitor under the cursor), otherwise an xcap monitor id.
+  const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [companionMonitor, setCompanionMonitor] = useState<string>(
+    () => localStorage.getItem("sciencekg.companion.monitor") ?? "",
+  );
+  const [activeMonitorName, setActiveMonitorName] = useState<string>("");
+  // The capture a pointing answer belongs to — its monitor origin/size place the ring
+  // window on the right screen (steps stay monitor-relative physical pixels).
+  const captureInfoRef = useRef<CaptureResult | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const bridgeBaseRef = useRef<string | null>(null);
@@ -154,6 +164,26 @@ export function OverlayPage() {
       ? localStorage.setItem("sciencekg.companion.model", companionModel)
       : localStorage.removeItem("sciencekg.companion.model");
   }, [companionModel]);
+
+  useEffect(() => {
+    companionMonitor
+      ? localStorage.setItem("sciencekg.companion.monitor", companionMonitor)
+      : localStorage.removeItem("sciencekg.companion.monitor");
+  }, [companionMonitor]);
+
+  // Monitor list for the picker — loaded per mount; xcap ids are only stable for the
+  // current session, so a persisted pick that no longer exists falls back to Auto.
+  useEffect(() => {
+    if (!isTauri()) return;
+    nativeInvoke<MonitorInfo[]>("list_monitors")
+      .then((list) => {
+        setMonitors(list);
+        setCompanionMonitor((prev) =>
+          prev && !list.some((item) => String(item.id) === prev) ? "" : prev,
+        );
+      })
+      .catch(() => {});
+  }, []);
 
   // Pre-load a task compiled elsewhere (e.g. "An AI-Cursor übergeben" in the Notes
   // Parallelmodus) — the overlay only shows it; nothing runs until "Starten".
@@ -286,18 +316,24 @@ export function OverlayPage() {
     });
   }
 
-  /** Glide the pointer ring to one guidance step (coordinates arrive in physical
-   * monitor pixels from /companion/guide — hence space:"physical"). */
+  /** Glide the pointer ring to one guidance step (coordinates arrive in monitor-
+   * relative physical pixels from /companion/guide — hence space:"physical"; the
+   * capture's monitor origin/size move the ring window onto the captured screen). */
   async function showStep(list: CompanionStep[], index: number) {
     const step = list[index];
     if (!step || !isTauri()) return;
     const counter = list.length > 1 ? `${index + 1}/${list.length}` : "";
     const label = [counter, step.label].filter(Boolean).join(" · ");
+    const capture = captureInfoRef.current;
     await nativeInvoke("pointer_show", {
       x: step.x,
       y: step.y,
       label: label || null,
       space: "physical",
+      originX: capture?.origin_x ?? null,
+      originY: capture?.origin_y ?? null,
+      monitorWidth: capture?.width ?? null,
+      monitorHeight: capture?.height ?? null,
     }).catch(() => {});
   }
 
@@ -322,9 +358,9 @@ export function OverlayPage() {
       return;
     }
     setError(null);
-    await nativeInvoke("snip_start").catch((err) =>
-      setError(err instanceof Error ? err.message : String(err)),
-    );
+    await nativeInvoke("snip_start", {
+      monitor: companionMonitor ? Number(companionMonitor) : null,
+    }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }
 
   /** Primary Companion action: screenshot → /companion/guide (answer + optional pointing
@@ -364,7 +400,11 @@ export function OverlayPage() {
         ]);
         return;
       }
-      const capture = await nativeInvoke<CaptureResult>("capture_screen");
+      const capture = await nativeInvoke<CaptureResult>("capture_screen", {
+        monitor: companionMonitor ? Number(companionMonitor) : null,
+      });
+      captureInfoRef.current = capture;
+      setActiveMonitorName(capture.monitor_name || "");
       const res = await guideCompanion({ question: text, image_base64: capture.image_base64, history, provider, model });
       if (res.error) {
         setChat((prev) => [...prev, { role: "assistant", text: `Fehler: ${res.error}` }]);
@@ -386,6 +426,14 @@ export function OverlayPage() {
   const providerOptions = companionCfg?.providers ?? [];
   const activeProviderModels = providerOptions.find((item) => item.name === companionProvider)?.models ?? [];
   const modelOptions = Array.from(new Set([...activeProviderModels, ...(companionModel ? [companionModel] : [])])).filter(Boolean);
+  const monitorLabel = (item: MonitorInfo) =>
+    `${item.name || `Monitor ${item.id}`}${item.is_primary ? " (primär)" : ""}`;
+  const selectedMonitor = monitors.find((item) => String(item.id) === companionMonitor);
+  const monitorHint = selectedMonitor
+    ? `Bildschirm: ${monitorLabel(selectedMonitor)}`
+    : activeMonitorName
+      ? `Zuletzt gesendet: ${activeMonitorName} (Auto – Cursor)`
+      : "";
 
   return (
     <div className="overlay-root">
@@ -455,8 +503,26 @@ export function OverlayPage() {
               </option>
             ))}
           </select>
+          {monitors.length > 1 ? (
+            <select
+              aria-label="Bildschirm"
+              value={companionMonitor}
+              disabled={pointing}
+              onChange={(event) => setCompanionMonitor(event.target.value)}
+            >
+              <option value="">Auto (Cursor)</option>
+              {monitors.map((item) => (
+                <option key={item.id} value={String(item.id)}>
+                  {monitorLabel(item)}
+                </option>
+              ))}
+            </select>
+          ) : null}
           {discovering ? <Loader2 size={13} className="overlay-spin overlay-picker-spin" /> : null}
         </div>
+      ) : null}
+      {mode === "helper" && monitors.length > 1 && monitorHint ? (
+        <p className="overlay-model-hint">{monitorHint}</p>
       ) : null}
       {mode === "helper" && companionProvider === "anthropic" ? (
         <p className="overlay-model-hint">Screenshots werden zur Beantwortung an Anthropic gesendet.</p>

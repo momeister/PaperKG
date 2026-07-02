@@ -10,6 +10,19 @@ export function physicalToCss(value: number, devicePixelRatio: number): number {
   return devicePixelRatio > 0 ? value / devicePixelRatio : value;
 }
 
+/** Convert a monitor-relative physical-pixel coordinate into this window's CSS pixels
+ * using the actual viewport↔monitor ratio instead of devicePixelRatio. Robust right
+ * after the full-monitor window was moved to a screen with a different scale factor,
+ * where devicePixelRatio can still report the old monitor's value. The ratio is
+ * uniform, so the width-derived factor applies to y as well. */
+export function physicalToViewport(
+  value: number,
+  monitorPhysicalWidth: number,
+  viewportCssWidth: number,
+): number {
+  return monitorPhysicalWidth > 0 ? value * (viewportCssWidth / monitorPhysicalWidth) : value;
+}
+
 /** Dodge offset for the pointer ring: when the real cursor comes within `radius` of the
  * ring's target, the ring flees `push` pixels along the cursor→target direction (the
  * window is click-through, so "wegschieben" can't be a drag — the ring yields instead).

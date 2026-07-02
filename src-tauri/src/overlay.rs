@@ -161,17 +161,38 @@ pub fn control_border_hide(app: AppHandle) {
     }
 }
 
+/// Move a full-monitor overlay window (pointer/snip/control-border) onto a specific
+/// monitor: physical position first, then physical size — the order matters on
+/// Windows, where the size is interpreted in the DPI of the monitor the window is
+/// currently on.
+pub(crate) fn fit_window_to_monitor(
+    window: &tauri::WebviewWindow,
+    origin_x: i32,
+    origin_y: i32,
+    width: u32,
+    height: u32,
+) {
+    let _ = window.set_position(tauri::PhysicalPosition::new(origin_x, origin_y));
+    let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+}
+
 /// A grounded screen point pushed into the pointer overlay so it knows where to draw the
 /// highlight. `space` says which coordinate space `x`/`y` live in: `"physical"` for the
-/// Desktop Companion (physical monitor pixels — the pointer page divides by its own
-/// devicePixelRatio), anything else/absent for the legacy UI-TARS bridge path (logical
-/// pixels, drawn as-is) — see `pointer_show`.
+/// Desktop Companion (monitor-relative physical pixels), anything else/absent for the
+/// legacy UI-TARS bridge path (logical pixels, drawn as-is) — see `pointer_show`.
+/// For multi-monitor captures the companion also passes the monitor's desktop origin
+/// and physical width: the page derives its scale from `monitor_width / innerWidth`
+/// (devicePixelRatio can lag right after the window moved between monitors with
+/// different DPI) and corrects the global cursor position by the origin when dodging.
 #[derive(Clone, serde::Serialize)]
 pub struct PointerShowPayload {
     pub x: f64,
     pub y: f64,
     pub label: Option<String>,
     pub space: Option<String>,
+    pub origin_x: Option<f64>,
+    pub origin_y: Option<f64>,
+    pub monitor_width: Option<f64>,
 }
 
 /// Build the hidden pointer-overlay window: the Assistent's "zeig mir" feature — a
@@ -229,13 +250,27 @@ pub fn pointer_show(
     y: f64,
     label: Option<String>,
     space: Option<String>,
+    origin_x: Option<f64>,
+    origin_y: Option<f64>,
+    monitor_width: Option<f64>,
+    monitor_height: Option<f64>,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window(POINTER_LABEL)
         .ok_or("Zeiger-Fenster nicht verfügbar")?;
+    // Multi-monitor: the capture tells us which monitor the point lives on — move the
+    // ring window there before showing (build-time bounds cover only the primary).
+    if let (Some(ox), Some(oy), Some(mw), Some(mh)) = (origin_x, origin_y, monitor_width, monitor_height)
+    {
+        fit_window_to_monitor(&window, ox as i32, oy as i32, mw as u32, mh as u32);
+    }
     let _ = window.show();
-    app.emit_to(POINTER_LABEL, "pointer://show", PointerShowPayload { x, y, label, space })
-        .map_err(|err| err.to_string())?;
+    app.emit_to(
+        POINTER_LABEL,
+        "pointer://show",
+        PointerShowPayload { x, y, label, space, origin_x, origin_y, monitor_width },
+    )
+    .map_err(|err| err.to_string())?;
 
     let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
     let app_for_timer = app.clone();
@@ -311,7 +346,8 @@ pub fn setup_tray(app: &AppHandle) -> SetupResult {
                 // snip_start_impl blocks for the capture — keep it off this thread.
                 let app = app.clone();
                 thread::spawn(move || {
-                    if let Err(err) = crate::capture::snip_start_impl(&app) {
+                    // None = monitor under the cursor — tray users mean "this screen".
+                    if let Err(err) = crate::capture::snip_start_impl(&app, None) {
                         log::warn!("Bereich erklären failed: {err}");
                     }
                 });

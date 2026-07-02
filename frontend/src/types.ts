@@ -607,13 +607,32 @@ export type ObservePointResult = {
 
 /** Payload pushed into the pointer overlay window via the `pointer://show` event.
  * `space` says which coordinate space `x`/`y` live in: `"physical"` for the Desktop
- * Companion (physical monitor pixels — the pointer page divides by its own
- * devicePixelRatio), anything else/absent for the legacy bridge path (logical px). */
+ * Companion (monitor-relative physical pixels), anything else/absent for the legacy
+ * bridge path (logical px). For multi-monitor captures `monitor_width` lets the page
+ * derive its scale from the viewport (devicePixelRatio can lag after the window moved
+ * to a monitor with different DPI) and `origin_x`/`origin_y` locate the monitor in
+ * the virtual desktop (needed to correct the global cursor position when dodging). */
 export type PointerShowPayload = {
   x: number;
   y: number;
   label?: string | null;
   space?: "css" | "physical" | null;
+  origin_x?: number | null;
+  origin_y?: number | null;
+  monitor_width?: number | null;
+};
+
+/** One physical display from the native `list_monitors` command (physical pixels;
+ * ids are only stable for the current session — reload the list per overlay open). */
+export type MonitorInfo = {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale_factor: number;
+  is_primary: boolean;
 };
 
 /** One ordered click-guidance step from POST /companion/guide — coordinates in
@@ -640,12 +659,18 @@ export type CompanionConfigInfo = {
   providers: { name: string; models: string[] }[];
 };
 
-/** Result of the native `capture_screen` command — physical monitor pixels. */
+/** Result of the native `capture_screen` command — physical monitor pixels.
+ * `origin_x`/`origin_y` locate the captured monitor in the virtual desktop so the
+ * pointer ring can be moved onto the right screen. */
 export type CaptureResult = {
   image_base64: string;
   width: number;
   height: number;
   scale_factor: number;
+  monitor_id: number;
+  monitor_name: string;
+  origin_x: number;
+  origin_y: number;
 };
 
 /** Payload of `snip://begin` into the snip window (the frozen full-screen frame). */
