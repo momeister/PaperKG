@@ -118,7 +118,14 @@ transparent always-on-top window, hotkey `Ctrl/Cmd+Shift+Space` + tray) hosts th
 (R6, default mode: native `xcap` screenshots in `src-tauri/src/capture.rs` → `/companion/*` →
 LLMRouter vision with LM Studio Qwen3-VL or the `anthropic` provider; gliding/dodging pointer ring +
 "Bereich erklären" freeze-frame snip; screenshots leave the machine only when `anthropic` is explicitly
-selected) and, as legacy mode, re-fires the UI-TARS handoff; the
+selected). Pointer grounding uses a **0-1000 normalized grid** (Qwen-VL native space — pixel coords put
+the ring systematically wrong); the companion is **multi-monitor** (captures the monitor under the cursor
+by default, or a picked one via `list_monitors`) and can optionally ground answers in **local papers**
+(`HybridRetriever`, `[arxiv:...]` citations) and/or **web search** (`use_papers`/`use_web`). Its legacy
+mode re-fires the UI-TARS handoff; **native Selbst-Steuerung** (R7, skeleton, off by default via
+`companion.self_drive.enabled`) plans one action per screenshot in the backend (`query/self_drive.py`) and
+executes it through `src-tauri/src/control.rs` (`enigo`) in a per-action confirmation mode, emergency-stop
+`Ctrl+Shift+Q`. The
 **Jupyter** tab (`/jupyter`, `src-tauri/src/jupyter.rs`) runs an optional `jupyter lab` sidecar in an
 iframe. The **Linux (deb/AppImage) + macOS (dmg) bundles** are built only in CI
 (`.github/workflows/native-build.yml`, `workflow_dispatch`/tag `v*`); Windows NSIS builds locally.
