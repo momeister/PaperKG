@@ -2350,6 +2350,9 @@ async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
     ordered click-guidance steps in **original screenshot pixels** (= physical monitor
     pixels for full captures). The companion only points — it never drives input."""
     params = _companion_llm_params(request.provider, request.model)
+    cfg = _load_companion_config()
+    if cfg.get("debug_capture"):
+        params["debug_dir"] = str(cfg.get("debug_dir") or "data/companion_debug")
     history = [turn.model_dump() for turn in request.history]
     try:
         return await asyncio.to_thread(

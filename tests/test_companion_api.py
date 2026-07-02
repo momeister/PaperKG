@@ -75,8 +75,9 @@ def test_prepare_image_accepts_data_url_and_rejects_garbage() -> None:
         raise AssertionError("expected ValueError")
 
 
-def test_guide_scales_steps_back_and_clamps() -> None:
-    # Sent frame is 1400×700 (see above); scale back to 2800×1400 doubles coordinates.
+def test_guide_scales_grid_steps_and_clamps() -> None:
+    # Contract: coordinates on the 0-1000 grid over the whole image (Qwen-VL native
+    # grounding space) → x/1000·width, y/1000·height in original pixels.
     reply = json.dumps(
         {
             "answer": "Klicke dort.",
@@ -91,17 +92,43 @@ def test_guide_scales_steps_back_and_clamps() -> None:
     result = screen_companion.guide(router, "wo?", _png_b64(2800, 1400))
     assert result["answer"] == "Klicke dort."
     assert result["found"] is True
-    assert result["steps"][0] == {"x": 200.0, "y": 100.0, "label": "Erster Schritt"}
+    assert result["steps"][0] == {"x": 280.0, "y": 70.0, "label": "Erster Schritt"}
     assert result["steps"][1]["x"] == 2799.0  # width - 1
     assert result["steps"][1]["y"] == 1399.0
     assert len(result["steps"]) == 2
 
-    # The system prompt tells the model the exact sent-frame dimensions.
+    # The system prompt announces the grid contract, the frame dims and the
+    # point-vs-answer decision rule.
     system = router.calls[0]["messages"][0]["content"]
     assert "1400x700" in system
+    assert "0-1000" in system
+    assert "Wissens" in system  # decision rule: knowledge questions → steps: []
     # Vision part goes to the model as an image_url data URL.
     user_content = router.calls[0]["messages"][-1]["content"]
     assert user_content[0]["type"] == "image_url"
+
+
+def test_guide_pixel_answers_use_sent_frame_fallback() -> None:
+    # Values beyond the 0-1000 grid mean the model answered in sent-frame pixels
+    # (1400×700 here) despite the contract → old sent→original scaling (×2).
+    reply = json.dumps({"answer": "Da.", "steps": [{"x": 1200, "y": 400, "label": "Ziel"}]})
+    router = _FakeRouter(reply)
+    result = screen_companion.guide(router, "wo?", _png_b64(2800, 1400))
+    assert result["steps"][0] == {"x": 2400.0, "y": 800.0, "label": "Ziel"}
+
+
+def test_guide_debug_capture_writes_dump(tmp_path) -> None:
+    reply = json.dumps({"answer": "Da.", "steps": [{"x": 500, "y": 500, "label": "Mitte"}]})
+    router = _FakeRouter(reply)
+    result = screen_companion.guide(router, "wo?", _png_b64(560, 560), debug_dir=str(tmp_path))
+    assert result["found"] is True
+    pngs = list(tmp_path.glob("*.png"))
+    jsons = list(tmp_path.glob("*.json"))
+    assert len(pngs) == 1 and len(jsons) == 1
+    record = json.loads(jsons[0].read_text(encoding="utf-8"))
+    assert record["question"] == "wo?"
+    assert record["frame"]["width"] == 560
+    assert record["steps_original_px"][0]["label"] == "Mitte"
 
 
 def test_guide_degrades_to_text_when_json_missing() -> None:
@@ -207,7 +234,7 @@ def test_companion_guide_endpoint_scales_back(monkeypatch) -> None:
     assert res.status_code == 200
     body = res.json()
     assert body["found"] is True
-    assert body["steps"] == [{"x": 200.0, "y": 100.0, "label": "Ziel"}]
+    assert body["steps"] == [{"x": 280.0, "y": 70.0, "label": "Ziel"}]
     # Config defaults flow into the router call.
     assert router.calls[0]["provider"] == "lm_studio"
     assert router.calls[0]["overrides"]["model"] == "qwen/qwen3-vl-8b"

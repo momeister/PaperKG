@@ -422,6 +422,11 @@ companion:
   # Haengt Qwen3s /no_think-Soft-Switch an den Systemprompt (nur bei Qwen-Modellen),
   # damit Antworten schnell kommen statt im Thinking-Kanal zu versickern.
   disable_thinking: true
+  # Diagnose fuer falsch zeigende Ringe: true schreibt pro /companion/guide-Aufruf das
+  # ans VLM gesendete Bild mit Markern an den Modell-Koordinaten + JSON-Protokoll nach
+  # data/companion_debug/ — so sieht man sofort, ob das Modell falsch zeigt oder die
+  # Rueckskalierung. Im Normalbetrieb aus lassen (Screenshots landen sonst auf Platte).
+  debug_capture: false
 
 # Code-Werkstatt: where *managed* coding projects are created on disk. They live
 # as plain Git folders so other editors (VS Code, …) can open them too; PaperKG

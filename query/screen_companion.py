@@ -135,18 +135,34 @@ _REGION_HINT = (
 )
 
 
+# The pointing contract uses the 0-1000 grid Qwen-VL-family models are trained to
+# ground in (Qwen3-VL emits relative 0-1000 coordinates natively). The old contract
+# demanded absolute sent-frame pixels — the models kept answering on their training
+# grid anyway, which put the ring at a systematically wrong spot (~2.2x off on a
+# 3440x1440 ultrawide). Asking for the native grid instead of fighting it fixes that;
+# `_scale_steps` still catches pixel-style answers via the >1000 fallback.
+COORD_GRID = 1000.0
+
+
 def _guide_system(sent_width: int, sent_height: int) -> str:
     return (
-        "Du bist der PaperKG Desktop-Companion. Du siehst einen Screenshot des primären "
-        f"Bildschirms ({sent_width}x{sent_height} Pixel, Ursprung oben links). "
-        "Beantworte die Frage des Nutzers auf Deutsch, kurz und konkret. Wenn es hilft, dem "
-        "Nutzer Stellen zum Klicken zu ZEIGEN, gib sie als geordnete Schritte mit absoluten "
-        "Pixelkoordinaten im gezeigten Bild an. Du klickst NIEMALS selbst — du zeigst nur.\n"
+        "Du bist der PaperKG Desktop-Companion. Du siehst einen Screenshot des Bildschirms "
+        f"({sent_width}x{sent_height} Pixel, Ursprung oben links). "
+        "Beantworte die Frage des Nutzers auf Deutsch, kurz und konkret. "
+        "Du klickst NIEMALS selbst — du zeigst höchstens.\n"
         "Antworte AUSSCHLIESSLICH mit einem JSON-Objekt in dieser Form:\n"
         '{"answer": "<deutsche Antwort>", "steps": [{"x": <int>, "y": <int>, "label": "<kurz>"}]}\n'
-        'Regeln: "steps": [] wenn Zeigen nicht sinnvoll oder das Ziel nicht sichtbar ist. '
-        f"x/y sind Pixel im mitgeschickten Bild ({sent_width}x{sent_height}) — keine Prozente, "
-        "kein 0-1000-Raster. Kein Text außerhalb des JSON."
+        "Koordinaten: x/y liegen auf einem 0-1000-Raster über das GESAMTE Bild — "
+        "(0,0) ist die linke obere Ecke, (1000,1000) die rechte untere.\n"
+        "Wann zeigen? NUR wenn der Nutzer wissen will, WO etwas auf dem Bildschirm ist oder "
+        'WIE er per Klick irgendwo hinkommt ("Wo finde ich…", "Wie komme ich zu…", "Zeig mir…'
+        '") — dann geordnete Schritte. Bei reinen Wissens-, Verständnis- oder Meinungsfragen '
+        '("Was ist das?", "Erkläre mir…", "Fasse zusammen…") IMMER "steps": []. Ebenso '
+        '"steps": [] wenn das Ziel nicht sichtbar ist.\n'
+        'Beispiel 1 — "Wo kann ich speichern?" → {"answer": "Oben links über das '
+        'Disketten-Symbol.", "steps": [{"x": 38, "y": 21, "label": "Speichern"}]}\n'
+        'Beispiel 2 — "Was ist hier zu sehen?" → {"answer": "Ein Editor mit …", "steps": []}\n'
+        "Kein Text außerhalb des JSON."
     )
 
 
@@ -247,13 +263,15 @@ def guide(
     history_turns: int = DEFAULT_HISTORY_TURNS,
     max_tokens: int | None = None,
     disable_thinking: bool = True,
+    debug_dir: str | None = None,
 ) -> dict[str, Any]:
     """Answer + optional click-guidance steps, one vision round trip.
 
     Returns ``{"answer": str, "found": bool, "steps": [{"x", "y", "label"}]}`` with
     coordinates scaled back to **original screenshot pixels** and clamped to the frame.
     If the model ignores the JSON contract, degrades to a text-only answer instead of
-    failing. Raises only on LLM/transport errors."""
+    failing. Raises only on LLM/transport errors. With ``debug_dir`` set, each call
+    dumps the sent frame (markers at the model's points) + a JSON record there."""
     prepared = prepare_image(image_base64, max_pixels=max_pixels)
     system = _guide_system(prepared.sent_width, prepared.sent_height) + _no_think_suffix(
         router, provider, model, disable_thinking
@@ -275,19 +293,79 @@ def guide(
     try:
         data = LLMRouter._extract_json(raw)
     except Exception:
+        if debug_dir:
+            _write_debug_capture(debug_dir, question, raw, [], prepared)
         return {"answer": raw.strip(), "found": False, "steps": []}
 
     answer = str(data.get("answer") or "").strip() or raw.strip()
     steps = _scale_steps(data.get("steps"), prepared)
+    if debug_dir:
+        _write_debug_capture(debug_dir, question, raw, steps, prepared)
     return {"answer": answer, "found": bool(steps), "steps": steps}
 
 
+def _write_debug_capture(
+    debug_dir: str,
+    question: str,
+    raw: str,
+    steps: list[dict[str, Any]],
+    prepared: PreparedImage,
+) -> None:
+    """Best-effort diagnosis dump (``companion.debug_capture``): the exact frame the
+    VLM saw with markers at the returned points, plus a JSON record — makes "model
+    points wrong" vs "our scaling is wrong" visible at a glance. Never raises."""
+    try:
+        import json
+        import os
+        import time
+
+        from PIL import Image, ImageDraw
+
+        os.makedirs(debug_dir, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        image = Image.open(
+            io.BytesIO(base64.b64decode(_strip_data_url(prepared.data_url)))
+        ).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        for index, step in enumerate(steps, start=1):
+            # Steps are original-screenshot pixels; map back into the sent frame.
+            sx = float(step["x"]) * prepared.sent_width / prepared.width
+            sy = float(step["y"]) * prepared.sent_height / prepared.height
+            radius = 14
+            draw.ellipse(
+                [sx - radius, sy - radius, sx + radius, sy + radius],
+                outline=(255, 60, 60),
+                width=3,
+            )
+            draw.text((sx + radius + 3, sy - radius), f"{index} {step['label']}"[:48], fill=(255, 60, 60))
+        image.save(os.path.join(debug_dir, f"{stamp}.png"))
+        record = {
+            "question": question,
+            "raw_model_reply": raw,
+            "steps_original_px": steps,
+            "frame": {
+                "width": prepared.width,
+                "height": prepared.height,
+                "sent_width": prepared.sent_width,
+                "sent_height": prepared.sent_height,
+            },
+        }
+        with open(os.path.join(debug_dir, f"{stamp}.json"), "w", encoding="utf-8") as fh:
+            json.dump(record, fh, ensure_ascii=False, indent=2)
+    except Exception:  # noqa: BLE001 - diagnostics must never break the answer
+        pass
+
+
 def _scale_steps(raw_steps: Any, prepared: PreparedImage) -> list[dict[str, Any]]:
-    """Validate model steps and scale sent-frame pixels back to original pixels."""
+    """Validate model steps and map them into original-screenshot pixels.
+
+    Coordinates within [0, 1000] are read as the contracted 0-1000 grid over the
+    sent frame; anything larger means the model answered in sent-frame pixels
+    despite the contract, so those are scaled the old way."""
     if not isinstance(raw_steps, list):
         return []
-    scale_x = prepared.width / prepared.sent_width
-    scale_y = prepared.height / prepared.sent_height
+    pixel_scale_x = prepared.width / prepared.sent_width
+    pixel_scale_y = prepared.height / prepared.sent_height
     steps: list[dict[str, Any]] = []
     for item in raw_steps:
         if not isinstance(item, dict):
@@ -299,8 +377,14 @@ def _scale_steps(raw_steps: Any, prepared: PreparedImage) -> list[dict[str, Any]
             x, y = float(raw_x), float(raw_y)
         except ValueError:
             continue
-        x_orig = min(max(x * scale_x, 0.0), prepared.width - 1.0)
-        y_orig = min(max(y * scale_y, 0.0), prepared.height - 1.0)
+        if x <= COORD_GRID and y <= COORD_GRID:
+            x_orig = x / COORD_GRID * prepared.width
+            y_orig = y / COORD_GRID * prepared.height
+        else:
+            x_orig = x * pixel_scale_x
+            y_orig = y * pixel_scale_y
+        x_orig = min(max(x_orig, 0.0), prepared.width - 1.0)
+        y_orig = min(max(y_orig, 0.0), prepared.height - 1.0)
         label = " ".join(str(item.get("label") or "").split()).strip()[:120]
         steps.append({"x": round(x_orig, 1), "y": round(y_orig, 1), "label": label})
         if len(steps) >= MAX_GUIDE_STEPS:
