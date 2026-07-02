@@ -52,7 +52,11 @@ class ProviderConfig:
 
 class LLMRouter:
 	"""
-	Unified router for Ollama, LM Studio and OpenAI-compatible cloud endpoints.
+	Unified router for Ollama, LM Studio, OpenAI-compatible and Anthropic endpoints.
+
+	Message `content` may be a plain string or an OpenAI-style parts list
+	(`{"type": "text", ...}` / `{"type": "image_url", "image_url": {"url": "data:..."}}`);
+	parts are translated per provider (Ollama `images`, Anthropic content blocks).
 	"""
 
 	def __init__(
@@ -167,6 +171,14 @@ class LLMRouter:
 					for item in payload.get("data", [])
 					if item.get("id") or item.get("name")
 				]
+			elif cfg.provider_type == "anthropic":
+				headers = {"anthropic-version": "2023-06-01"}
+				if cfg.api_key:
+					headers["x-api-key"] = cfg.api_key
+				response = client.get(f"{cfg.base_url.rstrip('/')}/v1/models", headers=headers)
+				response.raise_for_status()
+				payload = response.json()
+				models = [str(item.get("id")) for item in payload.get("data", []) if item.get("id")]
 		except Exception:
 			models = []
 
@@ -269,7 +281,7 @@ class LLMRouter:
 
 	def chat(
 		self,
-		messages: list[dict[str, str]],
+		messages: list[dict[str, Any]],
 		provider: str | None = None,
 		overrides: dict[str, Any] | None = None,
 	) -> str:
@@ -280,6 +292,8 @@ class LLMRouter:
 
 		if cfg.provider_type == "ollama":
 			return self._chat_ollama(cfg, messages, settings, request_timeout_seconds)
+		if cfg.provider_type == "anthropic":
+			return self._chat_anthropic(cfg, messages, settings, request_timeout_seconds)
 		if cfg.provider_type in {"openai_compatible", "lm_studio", "openai", "nvidia"}:
 			return self._chat_openai_compatible(cfg, messages, settings, request_timeout_seconds)
 
@@ -330,7 +344,7 @@ class LLMRouter:
 
 	def chat_json(
 		self,
-		messages: list[dict[str, str]],
+		messages: list[dict[str, Any]],
 		provider: str | None = None,
 		overrides: dict[str, Any] | None = None,
 	) -> dict[str, Any]:
@@ -375,10 +389,11 @@ class LLMRouter:
 	def _chat_ollama(
 		self,
 		cfg: ProviderConfig,
-		messages: list[dict[str, str]],
+		messages: list[dict[str, Any]],
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:
+		messages = [self._ollama_message(message) for message in messages]
 		extra_options = dict(settings.extra)
 		keep_alive = extra_options.pop("keep_alive", "0s")
 		response_format = extra_options.pop("format", None)
@@ -422,10 +437,130 @@ class LLMRouter:
 		message = data.get("message") or {}
 		return strip_reasoning_blocks(str(message.get("content", "")))
 
+	@classmethod
+	def _ollama_message(cls, message: dict[str, Any]) -> dict[str, Any]:
+		"""Translate an OpenAI-style parts message into Ollama's content + images shape."""
+		content = message.get("content")
+		if not isinstance(content, list):
+			return message
+		texts: list[str] = []
+		images: list[str] = []
+		for part in content:
+			if not isinstance(part, dict):
+				continue
+			if part.get("type") == "text":
+				texts.append(str(part.get("text", "")))
+			elif part.get("type") == "image_url":
+				url = str((part.get("image_url") or {}).get("url", ""))
+				_, image_b64 = cls._split_data_url(url)
+				if image_b64:
+					images.append(image_b64)
+		converted = {**message, "content": "\n".join(text for text in texts if text)}
+		if images:
+			converted["images"] = images
+		return converted
+
+	def _chat_anthropic(
+		self,
+		cfg: ProviderConfig,
+		messages: list[dict[str, Any]],
+		settings: GenerationSettings,
+		request_timeout_seconds: float,
+	) -> str:
+		system_parts: list[str] = []
+		chat_messages: list[dict[str, Any]] = []
+		for message in messages:
+			role = str(message.get("role", "user"))
+			if role == "system":
+				system_parts.append(self._flatten_text_content(message.get("content")))
+			else:
+				chat_messages.append({"role": role, "content": self._anthropic_content(message.get("content"))})
+
+		# Sampling params (temperature/top_p/seed) are deliberately omitted: newer Claude
+		# models reject non-default combinations with 400, and defaults work everywhere.
+		payload: dict[str, Any] = {
+			"model": settings.model,
+			"max_tokens": settings.max_tokens,
+			"messages": chat_messages,
+		}
+		system_text = "\n\n".join(part for part in system_parts if part)
+		if system_text:
+			payload["system"] = system_text
+
+		headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
+		if cfg.api_key:
+			headers["x-api-key"] = cfg.api_key
+
+		client = self._client_for(request_timeout_seconds)
+		response = client.post(f"{cfg.base_url.rstrip('/')}/v1/messages", headers=headers, json=payload)
+		try:
+			response.raise_for_status()
+		except httpx.HTTPStatusError as exc:
+			raise self._http_status_runtime_error(exc) from exc
+		data = response.json()
+		self.last_response_metadata = {
+			"provider_type": "anthropic",
+			"usage": data.get("usage") or {},
+			"stop_reason": data.get("stop_reason"),
+			"model": data.get("model"),
+		}
+		# Content may open with non-text blocks (e.g. thinking), so join all text blocks
+		# instead of indexing content[0].
+		blocks = data.get("content") or []
+		text = "".join(
+			str(block.get("text", ""))
+			for block in blocks
+			if isinstance(block, dict) and block.get("type") == "text"
+		)
+		return strip_reasoning_blocks(text)
+
+	@staticmethod
+	def _split_data_url(url: str) -> tuple[str, str]:
+		"""Split a `data:<media_type>;base64,<data>` URL into (media_type, base64_data)."""
+		if not url.startswith("data:"):
+			return "", ""
+		header, _, data = url.partition(",")
+		media_type = header[len("data:") :].split(";", 1)[0] or "image/png"
+		return media_type, data
+
+	@classmethod
+	def _flatten_text_content(cls, content: Any) -> str:
+		if isinstance(content, list):
+			return "\n".join(
+				str(part.get("text", ""))
+				for part in content
+				if isinstance(part, dict) and part.get("type") == "text"
+			)
+		return str(content or "")
+
+	@classmethod
+	def _anthropic_content(cls, content: Any) -> list[dict[str, Any]] | str:
+		if not isinstance(content, list):
+			return str(content or "")
+		blocks: list[dict[str, Any]] = []
+		for part in content:
+			if not isinstance(part, dict):
+				continue
+			if part.get("type") == "text":
+				blocks.append({"type": "text", "text": str(part.get("text", ""))})
+			elif part.get("type") == "image_url":
+				url = str((part.get("image_url") or {}).get("url", ""))
+				media_type, image_b64 = cls._split_data_url(url)
+				if image_b64:
+					blocks.append(
+						{
+							"type": "image",
+							"source": {"type": "base64", "media_type": media_type, "data": image_b64},
+						}
+					)
+				elif url:
+					blocks.append({"type": "image", "source": {"type": "url", "url": url}})
+		return blocks
+
 	def _chat_openai_compatible(
 		self,
 		cfg: ProviderConfig,
-		messages: list[dict[str, str]],
+		messages: list[dict[str, Any]],
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:

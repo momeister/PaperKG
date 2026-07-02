@@ -30,3 +30,13 @@ tauri-plugin-global-shortcut = "2"
 portable-pty = "0.8"
 # Random token for the optional JupyterLab sidecar (R3).
 getrandom = "0.2"
+# Desktop Companion (R6): native primary-monitor screenshots for the screen-aware
+# assistant. `image` matches xcap's own dependency so RgbaImage is one shared type.
+xcap = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+# Hide the companion overlay windows from screen captures (WDA_EXCLUDEFROMCAPTURE).
+# Version matches tauri's, so `window.hwnd()` returns exactly this crate's HWND.
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

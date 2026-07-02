@@ -11,6 +11,9 @@ feedparser==6.0.11
 pypdf==5.9.0
 pdfplumber==0.11.4
 
+# Images (Desktop Companion screenshot resize; also a pdfplumber dependency)
+pillow==12.2.0
+
 # Tiefenanalyse LaTeX/PDF export — statistic charts in the generated document
 matplotlib==3.11.0
 

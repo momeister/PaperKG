@@ -57,6 +57,7 @@ from query.auto_answer import auto_research_answer
 from query.research_tree import ResearchTreeRunner, _extract_questions
 from query import parallel_research
 from query import agent_handoff
+from query import screen_companion
 from query.web_research import run_deep_research
 from export import ExportOptions, build_export
 from query.source_verifier import find_pdf_path
@@ -384,10 +385,43 @@ class AgentObserveAskRequest(BaseModel):
     bridge_base: str | None = None
 
 
+class AgentObservePointRequest(BaseModel):
+    """Ask the bridge to locate a screen element ("zeig mir wo ich klicken kann") and
+    return real screen coordinates. Pure lookup — never dispatches mouse/keyboard input."""
+    session_id: str = Field(min_length=1, max_length=200)
+    question: str = Field(min_length=1, max_length=4000)
+    bridge_base: str | None = None
+
+
 class AgentObserveStopRequest(BaseModel):
     """Stop an active Assistent observation session."""
     session_id: str = Field(min_length=1, max_length=200)
     bridge_base: str | None = None
+
+
+class CompanionTurn(BaseModel):
+    """One prior Desktop-Companion chat turn (text only — screenshots are never replayed)."""
+    role: str = Field(min_length=1, max_length=20)
+    content: str = Field(default="", max_length=8000)
+
+
+class CompanionAskRequest(BaseModel):
+    """Free-form question about the screen or a snipped region — answer only, no pointing."""
+    question: str = Field(min_length=1, max_length=4000)
+    image_base64: str | None = None
+    history: list[CompanionTurn] = Field(default_factory=list)
+    region: bool = False
+    provider: str | None = None
+    model: str | None = None
+
+
+class CompanionGuideRequest(BaseModel):
+    """Question about a full screenshot; the model may return click-guidance steps."""
+    question: str = Field(min_length=1, max_length=4000)
+    image_base64: str = Field(min_length=1)
+    history: list[CompanionTurn] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -1673,6 +1707,36 @@ def _load_agent_bridge_config() -> dict[str, Any]:
     return cfg
 
 
+_COMPANION_CONFIG_CACHE: dict[str, Any] | None = None
+
+
+def _load_companion_config() -> dict[str, Any]:
+    """Load and cache the ``companion:`` section of config.yaml (Desktop Companion)."""
+    global _COMPANION_CONFIG_CACHE
+    if _COMPANION_CONFIG_CACHE is not None:
+        return _COMPANION_CONFIG_CACHE
+    cfg: dict[str, Any] = {}
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as fh:
+            section = (yaml.safe_load(fh) or {}).get("companion", {}) or {}
+            cfg = section if isinstance(section, dict) else {}
+    except FileNotFoundError:
+        cfg = {}
+    _COMPANION_CONFIG_CACHE = cfg
+    return cfg
+
+
+def _companion_llm_params(provider: str | None, model: str | None) -> dict[str, Any]:
+    """Merge request overrides with ``companion:`` defaults into screen_companion kwargs."""
+    cfg = _load_companion_config()
+    return {
+        "provider": provider or (str(cfg.get("provider") or "").strip() or None),
+        "model": model or (str(cfg.get("model") or "").strip() or None),
+        "max_pixels": int(cfg.get("grounding_max_pixels") or screen_companion.DEFAULT_MAX_PIXELS),
+        "history_turns": int(cfg.get("history_turns") or screen_companion.DEFAULT_HISTORY_TURNS),
+    }
+
+
 _AGENT_BRIDGE_VLM_BASE_URL_CACHE: str | None = None
 
 
@@ -2243,6 +2307,26 @@ async def observe_agent_ask(request: AgentObserveAskRequest) -> dict[str, Any]:
         return {"answer": "", "error": str(exc)}
 
 
+@app.post("/agent/observe/point")
+async def observe_agent_point(request: AgentObservePointRequest) -> dict[str, Any]:
+    """Locate a UI element for the Assistent's pointer overlay (the "zeig mir"-Funktion):
+    relays the bridge's grounding call and returns real screen coordinates. Never
+    dispatches input — the overlay only draws a highlight at the returned point."""
+    origin, from_config = _resolve_bridge_origin(request.bridge_base)
+    if not origin or not _validate_bridge_url(origin, from_config=from_config):
+        return {"error": "bridge url rejected or not configured"}
+    timeout = float(_load_agent_bridge_config().get("timeout_seconds") or 600)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{origin}/observe/point",
+                json={"sessionId": request.session_id, "question": request.question},
+            )
+            return resp.json()
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"error": str(exc)}
+
+
 @app.post("/agent/observe/stop")
 async def observe_agent_stop(request: AgentObserveStopRequest) -> dict[str, Any]:
     """Stop an active Assistent observation session."""
@@ -2255,6 +2339,66 @@ async def observe_agent_stop(request: AgentObserveStopRequest) -> dict[str, Any]
             return resp.json()
     except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
         return {"ok": False, "error": str(exc)}
+
+
+@app.post("/companion/guide")
+async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
+    """Desktop-Companion: answer a question about the screenshot and optionally return
+    ordered click-guidance steps in **original screenshot pixels** (= physical monitor
+    pixels for full captures). The companion only points — it never drives input."""
+    params = _companion_llm_params(request.provider, request.model)
+    history = [turn.model_dump() for turn in request.history]
+    try:
+        return await asyncio.to_thread(
+            screen_companion.guide,
+            llm_router,
+            request.question,
+            request.image_base64,
+            history=history,
+            **params,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"answer": "", "found": False, "steps": [], "error": str(exc)}
+
+
+@app.post("/companion/ask")
+async def companion_ask(request: CompanionAskRequest) -> dict[str, Any]:
+    """Desktop-Companion: free-form screen Q&A without pointing — used for the
+    Bereich-erklären snips (``region=true``) and text-only follow-up questions."""
+    params = _companion_llm_params(request.provider, request.model)
+    history = [turn.model_dump() for turn in request.history]
+    try:
+        answer = await asyncio.to_thread(
+            screen_companion.ask,
+            llm_router,
+            request.question,
+            image_base64=request.image_base64,
+            history=history,
+            region=request.region,
+            **params,
+        )
+        return {"answer": answer}
+    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
+        return {"answer": "", "error": str(exc)}
+
+
+@app.get("/companion/config")
+def companion_config() -> dict[str, Any]:
+    """Companion defaults plus the selectable providers/models for the overlay picker.
+
+    Uses cached model options (``refresh=False``) so opening the overlay stays instant;
+    the picker can call ``POST /models/{provider}/discover`` for a live refresh."""
+    cfg = _load_companion_config()
+    return {
+        "provider": str(cfg.get("provider") or "").strip() or llm_router.default_provider,
+        "model": str(cfg.get("model") or "").strip(),
+        "language": str(cfg.get("language") or "de"),
+        "default_provider": llm_router.default_provider,
+        "providers": [
+            {"name": name, "models": llm_router.provider_model_options(name, refresh=False)}
+            for name in llm_router.available_providers()
+        ],
+    }
 
 
 @app.post("/research/tree/export")

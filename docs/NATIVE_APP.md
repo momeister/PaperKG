@@ -104,6 +104,10 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | R3   | Jupyter als Sidecar + Tab | ✅ (native; optionaler `jupyter lab`-Sidecar + iframe-Tab) | `src-tauri/src/jupyter.rs`, `frontend/src/pages/JupyterPage.tsx` |
 | R4   | Code-Editor (Monaco) | ✅ (Werkstatt-Tab, offline gebündelt) | `frontend/src/pages/WorkstationPage.tsx`, `frontend/src/monaco-setup.ts` |
 | R5   | Desktop-Agent v2 (Selbst-Steuerung + Assistent; verwalteter Bridge-Sidecar; jederzeit abbrechbar) | ✅ (native; Tauri spawnt/killt `bridge/uitars`, Overlay bekommt vorgeladene Aufgaben per Event, Assistent beobachtet den Bildschirm periodisch) | `bridge/uitars/server.mjs`, `src-tauri/src/agent_bridge.rs`, `frontend/src/pages/OverlayPage.tsx`, `api/product_main.py` |
+| R5.1 | Nachbesserung: Sprachsteuerung (Mitigation), Assistent-Antworten entfesselt, "KI hat Kontrolle"-Bildschirmrand, Modell-Sichtbarkeit; UI-TARS-Alternativen recherchiert (nicht umgesetzt) | ✅ | `bridge/uitars/server.mjs`, `src-tauri/src/overlay.rs`, `frontend/src/pages/{OverlayPage,ControlBorderPage}.tsx` |
+| R5.2 | Assistent-Pointer ("zeig mir, wo ich klicken kann"): Grounding-Aufruf + eigenes Zeiger-Overlay-Fenster, klickt nie | ✅ | `bridge/uitars/server.mjs`, `api/product_main.py`, `src-tauri/src/overlay.rs`, `frontend/src/pages/{OverlayPage,PointerOverlayPage}.tsx` |
+| R5.3 | Pointer-Reparatur: Assistent-Umbau (ein Frage-Feld, "Zeigen & Antworten" liefert Text **und** Ring; stateless `/observe/point`) + **Koordinaten-Bugfix** (Screenshot vor dem Grounding client-seitig auf ein bekanntes Budget herunterskalieren und daran normalisieren — sonst staucht LM Studios stiller Downscale die Klick-Koordinaten um ~0,6×) | ✅ | `bridge/uitars/server.mjs`, `frontend/src/pages/OverlayPage.tsx`, `src-tauri/src/overlay.rs` |
+| R6   | **Desktop Companion** (UI-TARS-frei): screen-aware Chat mit freier Modellwahl (LM Studio Qwen3-VL / Claude via `anthropic`-Provider), gleitender + ausweichender AI-Pointer, „Bereich erklären"-Snip (Freeze-Frame); Rust-Capture (`xcap`, WDA-Exclusion) → `/companion/*` → LLMRouter-Vision. Selbst-Steuerung/UI-TARS bleibt als Legacy-Modus | ✅ (Code; manuelle End-to-End-Verifikation am Gerät offen) | `src-tauri/src/capture.rs`, `src-tauri/src/overlay.rs`, `query/screen_companion.py`, `query/llm_router.py`, `api/product_main.py`, `frontend/src/pages/{OverlayPage,PointerOverlayPage,SnipOverlayPage}.tsx`, `frontend/src/pointerMath.ts` |
 
 ## Verifikation M1 (Stand)
 
@@ -322,6 +326,209 @@ Agenten, der die Maus/Tastatur steuert bzw. den Bildschirm beobachtet).
   **nicht** ins Standalone-Bundle gepackt — `agent_bridge_ensure` setzt Node.js auf PATH und
   bereits ausgeführtes `npm install` in `bridge/uitars` voraus. Vollständiges Node-Vendoring ist
   Folgearbeit.
+
+## AI-Cursor: Sprachsteuerung, Kontroll-Anzeige, VLM-Alternativen (Nachbesserung zu R5)
+
+Direktes Feedback nach dem ersten produktiven Einsatz von R5 (Chat auf Chinesisch, Unklarheit über
+die Cursor-Übernahme und die Modellwahl, Assistent lehnte bildschirmbezogene Fragen ab) führte zu
+vier gezielten Nachbesserungen, ohne die R5-Architektur zu verändern:
+
+- **Sprache (Mitigation, keine Garantie):** `ui-tars-1.5-7b` (Qwen-basiert) schreibt den
+  `Thought`-Teil manchmal auf Chinesisch, obwohl `@ui-tars/sdk`s Default-`SYSTEM_PROMPT` komplett
+  englischsprachig ist und keinerlei Sprachvorgabe enthält. `server.mjs` baut für
+  Selbst-Steuerung jetzt ein eigenes `systemPrompt` (`@ui-tars/sdk/constants`-Export + ein
+  `## Language`-Abschnitt **vor** `## User Instruction` — sonst würde die Anweisung hinter dem
+  eigentlichen Auftrag landen und vermutlich ignoriert), das Deutsch für `Thought` vorschreibt;
+  `Action:`-Zeilen bleiben exakt in der geparsten Syntax. Die Assistent-Prompts (`observeTick`,
+  `/observe/ask`) bekamen dieselbe explizite Deutsch-Anweisung. Da das Modell trotzdem gelegentlich
+  abweichen kann, bleibt ein Nicht-UI-TARS `helper_vlm_model` die zuverlässigere Lösung für
+  Assistent — es folgt Sprachanweisungen deutlich besser, weil es nicht auf GUI-Grounding
+  spezialisiert ist.
+- **Assistent nicht mehr an die ursprüngliche Aufgabe gefesselt:** `/observe/ask` behandelte die
+  einmal gesetzte `Aufgabe` (`session.primer`) wie eine harte Grenze und lehnte z. B. "Wo ist der
+  Download-Button?" ab, obwohl der Button im aktuellen Screenshot sichtbar war — kein Hard-Filter,
+  reines Prompt-Framing. Der System-Prompt behandelt `Aufgabe` jetzt nur noch als Hintergrund­
+  kontext; der Assistent beantwortet beliebige bildschirmbezogene Fragen. Er bewegt dabei
+  weiterhin **nichts** — reine Text-Antwort; für echtes Hinklicken bleibt Selbst-Steuerung
+  zuständig.
+- **Sichtbares "KI hat Kontrolle"-Signal:** Es gibt keinen separaten "KI-eigenen" Cursor — die
+  Selbst-Steuerung bewegt den echten OS-Cursor (`@ui-tars/operator-nut-js`/`NutJSOperator`), weil
+  Klicks auf echte Fenster treffen müssen. Damit die Übernahme trotzdem unmissverständlich ist,
+  gibt es jetzt ein zweites, minimales, klickdurchlässiges Always-on-Top-Fenster
+  (`CONTROL_BORDER_LABEL` in `src-tauri/src/overlay.rs`: `build_control_border` +
+  `control_border_show`/`_hide`), das einen farbigen, pulsierenden Bildschirmrand über den
+  gesamten primären Monitor legt, solange ein Selbst-Steuerung-Lauf aktiv ist
+  (`frontend/src/pages/ControlBorderPage.tsx`, Route `#/control-border`). Ein-/Ausblenden ist an
+  `runActive` in `OverlayPage.tsx` gekoppelt; `agent_bridge_stop` (der Rust-seitige Hard-Kill-
+  Fallback) blendet den Rand zusätzlich nativ aus, falls der Sidecar abrupt stirbt, bevor das
+  Frontend selbst aufräumen kann. **Bekannte Grenzen:** es ist ein echtes (wenn auch transparentes)
+  OS-Fenster, taucht also potenziell auch in den Screenshots auf, die die Selbst-Steuerung selbst
+  für ihr Grounding macht — deshalb sitzt das Label bewusst unten rechts statt oben mittig (dort
+  liegen typischerweise Navigationsleisten/Klickziele). Der sauberere Fix wäre, das Fenster aktiv
+  von der Bildschirmaufnahme auszuschließen (Windows: `SetWindowDisplayAffinity` /
+  `WDA_EXCLUDEFROMCAPTURE`) — plattformspezifische Zusatzarbeit, nicht Teil dieser Nachbesserung.
+  Außerdem deckt der Rand nur den primären Monitor ab, nicht alle angeschlossenen Displays.
+- **Modellwahl pro Modus sichtbar gemacht:** `config.yaml`s `agent_bridge.helper_vlm_model` war
+  schon vorher frei wählbar (jedes vision-fähige lokale/Cloud-Modell aus `llm.providers`) — nur
+  auskommentiert und im Overlay nicht sichtbar, wodurch es wie eine feste Ein-Modell-Bindung
+  wirkte. Das Overlay zeigt jetzt unter dem Modus-Umschalter das aktive Modell je Modus
+  (`config.vlm_model` bzw. `config.helper_vlm_model`) inklusive Hinweis, dass Letzteres änderbar
+  ist.
+
+### UI-TARS-Alternativen für Selbst-Steuerung — Recherche-Stand (keine Umsetzung)
+
+Selbst-Steuerungs `vlm_model` **muss** UI-TARS-kompatibel bleiben — die Kopplung sitzt tief in
+`@ui-tars/sdk`s internem `Model.js`, das `@ui-tars/action-parser`s strikte
+`Thought:`/`Action: fn(args)`-Regex-Grammatik aufruft; `GUIAgent` ruft das intern auf, ohne Hook für
+einen eigenen Parser. Ein beliebiges anderes lokales/Cloud-VLM lässt sich deshalb nicht einfach in
+`vlm_model` eintragen.
+
+Der einzige gefundene Entkopplungspfad: der offiziell exportierte Subpath `@ui-tars/sdk/core`
+stellt die wiederverwendbaren Low-Level-Bausteine bereits bereit (`Operator`-Basisklasse,
+`parseBoxToScreenCoords`, `convertToOpenAIMessages`), und `NutJSOperator.execute()`
+(`@ui-tars/operator-nut-js`) erwartet nur eine generische, bereits geparste Struktur
+(`ExecuteParams`: `{ prediction, parsedPrediction, screenWidth, screenHeight, scaleFactor,
+factors }`, siehe `@ui-tars/sdk/dist/types.d.ts`). Ein eigener, schlanker Agent-Loop (Screenshot →
+Aufruf eines beliebigen tool-calling-fähigen VLMs mit eigenem JSON-Aktionsschema → Mapping auf
+`parsedPrediction` → `operator.execute()`) könnte `GUIAgent` ersetzen und die UI-TARS-Bindung
+vollständig aufheben — auf Kosten von eigenem Loop-/Prompt-/Schema-Unterhalt und dem Risiko, die
+UI-TARS-spezifische Trainings-Güte für GUI-Grounding (Klick-Zielgenauigkeit) zu verlieren. Als
+eigenständige Folgearbeit vorgemerkt, nicht Teil dieser Nachbesserung.
+
+## Assistent-Pointer: „zeig mir, wo ich klicken kann" (R5.2)
+
+Erste, risikoarme Umsetzung aus dem Nachbesserungs-Plan (`~/.claude/plans/die-ai-cursor-funktion-
+ich-frolicking-seahorse.md`) zum obigen UI-TARS-Feedback. Assistent beschreibt bisher nur in Text,
+wo ein Element ist — jetzt kann er zusätzlich einen echten Bildschirm-Marker zeigen, ohne jemals
+zu klicken.
+
+- **Grounding statt Freitext** (`bridge/uitars/server.mjs`, `groundPoint()`): ein Single-Shot-Aufruf
+  gegen **`VLM_MODEL`** (das UI-TARS-Grounding-Modell, nicht `HELPER_VLM_MODEL` — ein allgemeines
+  Vision-Modell liefert keine verlässlichen Klick-Koordinaten). Nutzt dafür bewusst dieselben schon
+  vorhandenen, offiziell exportierten Bausteine wie Selbst-Steuerung: `@ui-tars/action-parser`s
+  `actionParser()` parst die `Thought:`/`Action: click(start_box='[x1,y1,x2,y2]')`-Antwort (Action-
+  Space auf nur `click` verengt, da hier nichts ausgeführt wird), `@ui-tars/sdk/core`s
+  `parseBoxToScreenCoords()` rechnet die Box in echte Bildschirmkoordinaten um — dieselbe
+  Koordinaten-Mathematik, die `@ui-tars/operator-nut-js` für echte Klicks nutzt, damit kein zweites,
+  abweichendes Koordinatensystem entsteht. `width`/`height` (Screenshot-Pixelgröße) werden wie in
+  `GUIAgent` selbst per `Jimp` aus dem Screenshot decodiert. Neuer Endpoint `POST /observe/point`
+  (Bridge) → Relay `POST /agent/observe/point` (`api/product_main.py`, gleiches Muster wie
+  `/observe/ask`).
+- **Eigenes Zeiger-Fenster** (`src-tauri/src/overlay.rs`): drittes full-monitor, klickdurchlässiges,
+  always-on-top-Fenster (`PointerState`/`build_pointer_overlay`/`pointer_show`/`pointer_hide`,
+  gleiche physical-pixel-Größe/-Position wie der bestehende „KI hat Kontrolle"-Rand — dadurch fällt
+  die logische/CSS-Pixel-Ebene des Webviews mit der Koordinatenebene zusammen, in der
+  `parseBoxToScreenCoords` misst, ohne eigene DPI-Umrechnung). **Bleibt rein passiv** wie
+  `ControlBorderPage` — ruft selbst nie einen Command auf (kein Capability-Eintrag nötig): das
+  Auto-Hide (25 s) läuft rein in Rust über einen Generationszähler, damit ein alter Timer nie ein
+  inzwischen neu gezeigtes Ziel wieder verbirgt. `frontend/src/pages/PointerOverlayPage.tsx` hört
+  nur auf `pointer://show` und zeichnet einen pulsierenden Ring + Label an der gemeldeten Position.
+- **Frontend-Trigger:** `OverlayPage.tsx`s Assistent-Chat hat jetzt neben „Senden" einen
+  „Zeigen"-Button (`handleShowPointer`), der `askObservePoint` aufruft und bei Erfolg
+  `nativeInvoke("pointer_show", {x, y, label})` feuert; `handleStop()` blendet den Zeiger beim
+  Beenden zusätzlich aus.
+- **Nebenbei gefundener Korrektheitsfehler (mitbehoben):** `@ui-tars/action-parser` skaliert die
+  vom Modell gemeldeten `start_box`-Zahlen je nach UI-TARS-Generation unterschiedlich — v1.0 nutzt
+  ein festes 1000×1000-Raster, v1.5 ein screenshotgrößenabhängiges „Smart-Resize"-Raster — und
+  entscheidet das über `uiTarsVersion`/`modelVer`, das aber **weder `GUIAgent` noch `actionParser`
+  selbst aus dem Modellnamen ableiten**; ohne diesen Parameter wird still auf v1.0-Mathematik
+  zurückgefallen. Der bisherige Selbst-Steuerung-Code (`new GUIAgent({...})`) setzte
+  `uiTarsVersion` nie, obwohl `vlm_model` standardmäßig `ui-tars-1.5-7b` ist — vermutlich ein
+  Mitverursacher der gemeldeten Fehlklicks. Behoben: `UI_TARS_VERSION` (aus `VLM_MODEL`s Namen
+  hergeleitet, `/1\.5/` → `V1_5`) wird jetzt sowohl an `GUIAgent` (`uiTarsVersion`) als auch an
+  `groundPoint()`s `actionParser()`-Aufruf (`modelVer`) durchgereicht.
+- **Bekannte, bewusst nicht behobene Grenzen:** wie der „KI hat Kontrolle"-Rand deckt auch dieses
+  Fenster nur den **primären Monitor**, und `NutJSOperator.screenshot()` erfasst ebenfalls nur
+  diesen — auf Mehrschirm-Setups zeigt der Zeiger also nur korrekt, wenn das Zielelement dort sitzt.
+  Getestet werden sollte das insbesondere auf dem ungewöhnlichen Seitenverhältnis-Monitor, auf dem
+  das ursprüngliche Feedback entstand (DPI-/Scale-Mapping-Fehler zeigen sich dort eher).
+- **Nächster Schritt (nicht Teil dieser Umsetzung):** der größere Selbst-Steuerung-Umbau
+  (Accessibility-/DOM-first-Automatisierung statt reinem Vision-Grounding, austauschbare
+  Grounding-Backends inkl. Cloud-Opt-in) — siehe der oben verlinkte Plan, Phase 2.
+
+## AI-Cursor-Pointer: Assistent-Umbau + Koordinaten-Bugfix (R5.3)
+
+Nach R5.2 zeigte der Ring in der Praxis **komplett falsch** (auf einem 3440×1440-Ultrawide ~0,6×
+zu weit links/oben), und der Frage-/Zeigen-Pfad blieb oft stumm. Beides ist hier behoben:
+
+- **Assistent-UX vereinfacht** (`OverlayPage.tsx`): statt Zwei-Knopf-Split (Mini-Pin „Zeigen" vs.
+  blaues „Senden") jetzt **ein** immer sichtbares Frage-Feld + ein „Zeigen & Antworten"-Button
+  (`handleAssist`), der **standardmäßig beides** liefert — Text-Antwort **und** Ring (Redundanz gegen
+  ungenaues 7B-Grounding). Die Live-Beobachtungsschleife ist optional/aus per Default; ein leeres
+  Session-Guard führt nicht mehr zu wortlosem Nichts, sondern startet die Bridge on-demand
+  (`ensureBridge`). Die `/observe/point`- und `/observe/ask`-Endpoints der Bridge sind jetzt
+  **stateless** (brauchen keine laufende Observe-Session mehr).
+- **Root-Cause des Fehlzeigers — stiller Downscale des VLM-Servers:** UI-TARS-1.5 schreibt
+  Klick-Koordinaten im Pixelraum **des Bildes, das es tatsächlich bekommt**. Wird der rohe
+  Screenshot an einen OpenAI-kompatiblen Server (LM Studio/Ollama) geschickt, skaliert **dieser** ihn
+  vor dem Modell still auf sein eigenes Vision-Budget herunter (hier gemessen ~2055 px Breite statt
+  3440), das Modell zählt in diesem kleineren Rahmen — `actionParser` normalisiert die Zahlen aber
+  gegen die **native** Größe (`smartResizeForV15` gibt bei <12,8 MP unverändert ≈3444×1428 zurück).
+  Ergebnis: konstant um ~0,6× gestauchte Koordinaten (empirisch bestätigt — kein Modell-Streuen,
+  sondern konstanter Faktor).
+- **Fix (`groundPoint`, `server.mjs`):** den Screenshot **selbst** per Qwen2.5-VL-„Smart-Resize" auf
+  ein bekanntes Budget herunterskalieren (Default `1280·28²` ≈ 1,0 MP, sicher unter LM Studios Cap;
+  per `GROUNDING_MAX_PIXELS` überschreibbar), **dieses** Bild senden, die Modell-Koordinaten gegen die
+  **gesendete** Größe normalisieren (`actionParser` mit `screenContext={sentWidth,sentHeight}`) und die
+  resultierende [0,1]-Box mit den **nativen** Dims auf den Bildschirm abbilden
+  (`parseBoxToScreenCoords`, dessen Faktor sich herauskürzt). Verifiziert gegen echten Screenshot +
+  echtes VLM: ein korrekt erkanntes Ziel (Telegram-Icon) landet jetzt auf ~8 px genau statt ~620 px
+  daneben. Reststreuung bei winzigen, dicht gepackten Desktop-Icons ist ein **separates**
+  Modell-Erkennungsproblem (7B), unabhängig von der Koordinaten-Mathematik.
+
+## Desktop Companion: screen-aware Chat + AI-Pointer + Bereich erklären (R6)
+
+Der **Companion** ist der neue Default-Modus des AI-Cursor-Overlays (Hotkey
+`Ctrl/Cmd+Shift+Space`): ein Assistent, der den Bildschirm *sieht*, Fragen auf Deutsch
+beantwortet und mit dem Zeiger-Ring *zeigt*, wo man klicken kann — er klickt/tippt **niemals**
+selbst. Er ist komplett **UI-TARS-frei**; der bisherige UI-TARS-Pfad (Selbst-Steuerung über
+`bridge/uitars/`) bleibt unverändert als Legacy-Modus im selben Overlay erhalten.
+
+**Architektur (pro Frage genau ein Vision-Roundtrip):**
+
+1. **Rust-Capture** (`src-tauri/src/capture.rs`): `capture_screen` schießt den Primärmonitor
+   nativ via `xcap` (physische Pixel + `scale_factor`). Die eigenen Overlay-Fenster sind per
+   `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` (Win10 2004+) von Captures ausgenommen;
+   schlägt das fehl (`wda_ok=false`, wird pro Fenster geloggt), greift deterministisch der
+   Fallback verstecken → ~180 ms warten → capturen → wiederherstellen. Der Pointer-Ring wird
+   vor jedem Capture immer versteckt.
+2. **Backend** (`query/screen_companion.py`, `POST /companion/guide|ask`, `GET /companion/config`):
+   skaliert den Screenshot **selbst** per Qwen-Smart-Resize auf ein bekanntes Pixelbudget
+   (28er-Vielfache, Default `1280·28²` ≈ 1,0 MP — dieselbe Kur wie der R5.3-Koordinaten-Bugfix:
+   LM Studio/Ollama dürfen nie still weiterskalieren), schickt ihn mit einem strikten
+   Absolut-Pixel-JSON-Prompt durch den **LLMRouter** und skaliert die Antwort-Koordinaten auf
+   Original-Pixel zurück (geclippt, ≤6 Schritte). Antwortet das Modell ohne valides JSON,
+   degradiert `guide` zu einer Text-Antwort statt zu scheitern. Konfiguration im
+   `companion:`-Block der `config.yaml` (Default-Provider/-Modell, `grounding_max_pixels`,
+   `history_turns`).
+3. **Modelle über den normalen Provider-Matrix-Picker** (im Overlay, persistiert in
+   localStorage): lokal z. B. **Qwen3-VL** in LM Studio (Empfehlung; `qwen/qwen3-vl-8b`) oder
+   **Claude** über den neuen `anthropic`-Provider in `query/llm_router.py`
+   (`/v1/messages`, top-level `system`, Base64-Image-Blöcke, `max_tokens` Pflicht; Sampling-
+   Parameter werden bewusst weggelassen, weil neuere Claude-Modelle Nicht-Defaults ablehnen).
+   Key nur per `ANTHROPIC_API_KEY` in `.env`.
+4. **Pointer** (`PointerOverlayPage.tsx` + `pointer_show {space:"physical"}`): der Ring
+   **gleitet** per CSS-Transform-Transition zum Ziel (Koordinaten ÷ eigener
+   `devicePixelRatio`, da das Fenster physisch auf Monitorgröße gesetzt ist). Mehrschritt-
+   Antworten laufen über den „Weiter (n/m)"-Button. **Wegschieben:** das Fenster ist
+   click-through, also weicht der Ring dem echten Cursor aus (50-ms-Poll von
+   `cursor_position`, nur solange sichtbar; Mathe in `frontend/src/pointerMath.ts`) und faded
+   dabei auf ~0,35. Auto-Hide nach 25 s + `pointer://hide` stoppt den Poll garantiert.
+5. **Bereich erklären** (Overlay-Button + Tray-Menü): `snip_start` capturet **zuerst** den
+   ganzen Bildschirm (Freeze-Frame), zeigt dann das `snip`-Fenster mit dem eingefrorenen Bild
+   + Marquee (Snipping-Tool-Look; Dim/Fadenkreuz können die Aufnahme nie verschmutzen).
+   Rechteck loslassen → Rust croppt aus dem State → `snip://result` hängt den Ausschnitt als
+   Chip an die nächste Frage (`/companion/ask` mit `region=true`). Esc oder Mini-Drag (<8 px)
+   bricht ab.
+
+**Privacy:** Screenshots verlassen den Rechner **nur**, wenn im Picker explizit der
+`anthropic`-Provider gewählt ist (Opt-in durch Auswahl; ein Hinweis erscheint direkt unter dem
+Picker). Default ist der lokale Provider aus `companion.provider` (LM Studio). Es wird nur der
+**Primärmonitor** erfasst (bekannte Limitation, wie beim Legacy-Pfad). Chat-Verlauf wird als
+Text-Historie mitgeschickt (`history_turns`), Bilder werden nie erneut übertragen.
+
+**Web-Modus:** ohne Tauri-Shell erklärt der Companion im Chat, dass er den Bildschirm nur in
+der nativen App sehen kann; „Bereich erklären" zeigt denselben Hinweis.
 
 ## Jupyter-Sidecar (R3)
 

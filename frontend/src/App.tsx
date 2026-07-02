@@ -39,6 +39,9 @@ import { WorkspacePage } from "./pages/WorkspacePage";
 import { WorkstationPage } from "./pages/WorkstationPage";
 import { JupyterPage } from "./pages/JupyterPage";
 import { OverlayPage } from "./pages/OverlayPage";
+import { ControlBorderPage } from "./pages/ControlBorderPage";
+import { PointerOverlayPage } from "./pages/PointerOverlayPage";
+import { SnipOverlayPage } from "./pages/SnipOverlayPage";
 
 const navigation = [
   { to: "/projects", label: "Projekte", icon: Briefcase },
@@ -88,14 +91,19 @@ export default function App() {
   const [paramsOpen, setParamsOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadStoredTheme);
 
-  // The AI-Cursor overlay (R1) loads the same app in a separate Tauri window; it
-  // renders only the compact overlay and skips the heavy main-shell queries.
+  // The AI-Cursor overlay (R1) and the "AI has control" border both load the same app
+  // in a separate Tauri window; each renders only its own compact view and skips the
+  // heavy main-shell queries.
   const location = useLocation();
   const isOverlay = window.__OVERLAY__ === true || location.pathname === "/overlay";
+  const isControlBorder = window.__CONTROL_BORDER__ === true || location.pathname === "/control-border";
+  const isPointerOverlay = window.__POINTER_OVERLAY__ === true || location.pathname === "/pointer";
+  const isSnipOverlay = window.__SNIP_OVERLAY__ === true || location.pathname === "/snip";
+  const skipHeavyQueries = isOverlay || isControlBorder || isPointerOverlay || isSnipOverlay;
 
-  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects, enabled: !isOverlay });
-  const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000, enabled: !isOverlay });
-  const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders, enabled: !isOverlay });
+  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects, enabled: !skipHeavyQueries });
+  const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000, enabled: !skipHeavyQueries });
+  const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders, enabled: !skipHeavyQueries });
   // Local providers (LM Studio, Ollama) know their loaded models best — discover them
   // live instead of relying on the static list in config.yaml.
   const activeProviderInfo = providersQuery.data?.providers.find((item) => item.name === provider);
@@ -105,7 +113,7 @@ export default function App() {
   const discoveredModelsQuery = useQuery({
     queryKey: ["models-discovered", provider],
     queryFn: () => api.discoverModels(provider as string),
-    enabled: Boolean(provider) && supportsDiscovery && !isOverlay,
+    enabled: Boolean(provider) && supportsDiscovery && !skipHeavyQueries,
     staleTime: 60_000,
     retry: false
   });
@@ -183,6 +191,18 @@ export default function App() {
   // Overlay window: no sidebar/topbar — just the compact AI-Cursor.
   if (isOverlay) {
     return <OverlayPage />;
+  }
+  // Control-border window: no sidebar/topbar — just the full-screen click-through frame.
+  if (isControlBorder) {
+    return <ControlBorderPage />;
+  }
+  // Pointer-overlay window: no sidebar/topbar — just the full-screen click-through highlight.
+  if (isPointerOverlay) {
+    return <PointerOverlayPage />;
+  }
+  // Snip window: no sidebar/topbar — just the full-screen frozen-frame region selector.
+  if (isSnipOverlay) {
+    return <SnipOverlayPage />;
   }
 
   return (
@@ -334,6 +354,9 @@ export default function App() {
             <Route path="/werkstatt" element={<WorkstationPage />} />
             <Route path="/jupyter" element={<JupyterPage />} />
             <Route path="/overlay" element={<OverlayPage />} />
+            <Route path="/control-border" element={<ControlBorderPage />} />
+            <Route path="/pointer" element={<PointerOverlayPage />} />
+            <Route path="/snip" element={<SnipOverlayPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/quality" element={<QualityPage />} />
             <Route path="/benchmarks" element={<BenchmarksPage />} />

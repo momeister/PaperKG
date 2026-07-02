@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "snip",
+  "description": "Permissions for the Desktop Companion snip window (R6) — listens for snip://begin and invokes snip_finish/snip_cancel.",
+  "windows": [
+    "snip"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

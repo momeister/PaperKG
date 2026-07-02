@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pointer",
+  "description": "Permissions for the Assistent pointer overlay window (R5.2) — it listens for pointer://show, so it needs event permissions unlike the passive control-border window.",
+  "windows": [
+    "pointer"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

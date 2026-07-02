@@ -2,6 +2,9 @@ import type {
   AgentConfig,
   AgentHandoffResponse,
   Answer,
+  CompanionAskResult,
+  CompanionConfigInfo,
+  CompanionGuideResult,
   CodeProject,
   WorkspaceList,
   FileTreeNode,
@@ -50,6 +53,12 @@ declare global {
     __API_BASE__?: string;
     /** Set by the Tauri shell on the overlay window so the app renders the AI-Cursor (R1). */
     __OVERLAY__?: boolean;
+    /** Set by the Tauri shell on the "AI has control" border window (Selbst-Steuerung). */
+    __CONTROL_BORDER__?: boolean;
+    /** Set by the Tauri shell on the Assistent "zeig mir" pointer overlay window. */
+    __POINTER_OVERLAY__?: boolean;
+    /** Set by the Tauri shell on the Desktop-Companion "Bereich erklären" snip window (R6). */
+    __SNIP_OVERLAY__?: boolean;
   }
 }
 
@@ -781,6 +790,15 @@ export const askObserve = (payload: { session_id: string; question: string; brid
     body: JSON.stringify(payload),
   });
 
+/** POST /agent/observe/point: locate a UI element for the Assistent's pointer overlay
+ * ("zeig mir wo ich klicken kann"). Returns real screen coordinates — never dispatches
+ * mouse/keyboard input, the overlay only draws a highlight there. */
+export const askObservePoint = (payload: { session_id: string; question: string; bridge_base?: string | null }) =>
+  request<import("./types").ObservePointResult>("/agent/observe/point", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
 /** POST /agent/observe/stop: stop an active Assistent observation session. */
 export const stopObserve = (payload: { session_id: string; bridge_base?: string | null }) =>
   request<{ ok: boolean; error?: string }>("/agent/observe/stop", {
@@ -794,6 +812,39 @@ export const cancelAgent = (payload: { run_id: string; bridge_base?: string | nu
     method: "POST",
     body: JSON.stringify(payload),
   });
+
+/** POST /companion/guide: Desktop-Companion answer + optional click-guidance steps for
+ * a full screenshot. Step coordinates come back in physical monitor pixels — the
+ * pointer overlay only *shows* them; nothing ever clicks. */
+export const guideCompanion = (payload: {
+  question: string;
+  image_base64: string;
+  history?: { role: string; content: string }[];
+  provider?: string | null;
+  model?: string | null;
+}) =>
+  request<CompanionGuideResult>("/companion/guide", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+/** POST /companion/ask: free-form Desktop-Companion screen Q&A — used for
+ * "Bereich erklären" snips (`region: true`) and text-only follow-up questions. */
+export const askCompanion = (payload: {
+  question: string;
+  image_base64?: string | null;
+  history?: { role: string; content: string }[];
+  region?: boolean;
+  provider?: string | null;
+  model?: string | null;
+}) =>
+  request<CompanionAskResult>("/companion/ask", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+/** GET /companion/config: companion defaults + selectable vision providers/models. */
+export const getCompanionConfig = () => request<CompanionConfigInfo>("/companion/config");
 
 export interface ResearchTreeExportOptions {
   tikz_tree: boolean;

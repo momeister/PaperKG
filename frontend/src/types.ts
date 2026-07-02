@@ -594,6 +594,70 @@ export type OverlayTaskPayload = {
   variantId?: string | null;
 };
 
+/** Result of POST /agent/observe/point — a grounded screen point for the Assistent's
+ * pointer overlay ("zeig mir wo ich klicken kann"). Never implies a click happened. */
+export type ObservePointResult = {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  thought?: string;
+  error?: string;
+};
+
+/** Payload pushed into the pointer overlay window via the `pointer://show` event.
+ * `space` says which coordinate space `x`/`y` live in: `"physical"` for the Desktop
+ * Companion (physical monitor pixels — the pointer page divides by its own
+ * devicePixelRatio), anything else/absent for the legacy bridge path (logical px). */
+export type PointerShowPayload = {
+  x: number;
+  y: number;
+  label?: string | null;
+  space?: "css" | "physical" | null;
+};
+
+/** One ordered click-guidance step from POST /companion/guide — coordinates in
+ * original screenshot pixels (= physical monitor pixels for full captures). */
+export type CompanionStep = { x: number; y: number; label: string };
+
+/** Result of POST /companion/guide: German answer + optional pointing steps. */
+export type CompanionGuideResult = {
+  answer: string;
+  found: boolean;
+  steps: CompanionStep[];
+  error?: string;
+};
+
+/** Result of POST /companion/ask (free-form screen Q&A, no pointing). */
+export type CompanionAskResult = { answer: string; error?: string };
+
+/** GET /companion/config: defaults + selectable vision providers for the picker. */
+export type CompanionConfigInfo = {
+  provider: string;
+  model: string;
+  language: string;
+  default_provider: string;
+  providers: { name: string; models: string[] }[];
+};
+
+/** Result of the native `capture_screen` command — physical monitor pixels. */
+export type CaptureResult = {
+  image_base64: string;
+  width: number;
+  height: number;
+  scale_factor: number;
+};
+
+/** Payload of `snip://begin` into the snip window (the frozen full-screen frame). */
+export type SnipBeginPayload = CaptureResult;
+
+/** Payload of `snip://result` into the chat overlay (the cropped region). */
+export type SnipResultPayload = {
+  image_base64: string;
+  width: number;
+  height: number;
+};
+
 export type NoteCitation = {
   id: string;
   note_id: string;

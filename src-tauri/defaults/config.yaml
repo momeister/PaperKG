@@ -259,6 +259,23 @@ llm:
         chat_template_kwargs:
           thinking: false
 
+    # Anthropic Claude - native Messages API (vision-capable, used by the Desktop Companion).
+    # Keep the real key in ANTHROPIC_API_KEY (shell env or local .env), never in config.yaml.
+    anthropic:
+      provider_type: "anthropic"
+      base_url: "https://api.anthropic.com"
+      api_key_env: "ANTHROPIC_API_KEY"
+      timeout_seconds: 120
+      models:
+        - "claude-sonnet-5"
+        - "claude-opus-4-8"
+        - "claude-haiku-4-5-20251001"
+
+      model: "claude-sonnet-5"
+      max_tokens: 2048
+      context_size: 200000
+      repeat_penalty: null
+
     # Generic OpenAI-compatible API (e.g., Ollama exposed via proxy, DeepSeek, etc.)
     custom_api:
       provider_type: "openai_compatible"
@@ -379,6 +396,22 @@ agent_bridge:
   helper_enabled: true
   observe_interval_seconds: 4      # screenshot cadence
   observe_context_size: 8          # rolling descriptions kept per session
+
+# Desktop Companion (native AI-Cursor, UI-TARS-free): screen-aware chat + "zeig mir"
+# pointer + region-explain. Screenshots are captured natively (Rust, src-tauri/src/
+# capture.rs) and answered via the normal LLMRouter (POST /companion/*) — the model
+# must be vision-capable. Local providers (lm_studio/ollama) keep everything on-device;
+# picking the `anthropic` provider is the explicit opt-in to send screenshots to the
+# Anthropic API. The overlay's provider/model picker overrides these defaults per call.
+companion:
+  provider: "lm_studio"
+  model: "qwen/qwen3-vl-8b"          # hint default — load a Qwen3-VL build in LM Studio
+  # Screenshot pixel budget before the VLM sees it (1280*28*28, Qwen smart-resize
+  # multiples). Keeps the frame under LM Studio's silent-downscale cap so the model's
+  # pixel coordinates match what we sent — the root cause of the old wrong-pointer bug.
+  grounding_max_pixels: 1003520
+  language: "de"
+  history_turns: 8                   # prior chat turns sent along per question
 
 # Code-Werkstatt: where *managed* coding projects are created on disk. They live
 # as plain Git folders so other editors (VS Code, …) can open them too; PaperKG

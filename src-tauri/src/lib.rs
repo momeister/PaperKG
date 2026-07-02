@@ -28,6 +28,7 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 mod agent_bridge;
+mod capture;
 mod jupyter;
 mod overlay;
 mod terminal;
@@ -199,6 +200,8 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .manage(jupyter::JupyterState::default())
         .manage(agent_bridge::AgentBridgeState::default())
+        .manage(overlay::PointerState::default())
+        .manage(capture::CaptureState::default())
         .invoke_handler(tauri::generate_handler![
             open_external,
             terminal::terminal_spawn,
@@ -208,6 +211,15 @@ pub fn run() {
             overlay::overlay_hide,
             overlay::overlay_toggle,
             overlay::overlay_dispatch_task,
+            overlay::control_border_show,
+            overlay::control_border_hide,
+            overlay::pointer_show,
+            overlay::pointer_hide,
+            capture::capture_screen,
+            capture::snip_start,
+            capture::snip_finish,
+            capture::snip_cancel,
+            capture::cursor_position,
             jupyter::jupyter_start,
             jupyter::jupyter_stop,
             agent_bridge::agent_bridge_ensure,
@@ -259,7 +271,13 @@ pub fn run() {
             // AI-Cursor overlay (R1): hidden second window (shares the backend
             // origin via the same init script) + system-tray toggle.
             overlay::build_overlay(app.handle(), &init_script)?;
+            overlay::build_control_border(app.handle(), &init_script)?;
+            overlay::build_pointer_overlay(app.handle(), &init_script)?;
+            overlay::build_snip_overlay(app.handle(), &init_script)?;
             overlay::setup_tray(app.handle())?;
+            // Desktop Companion (R6): keep the companion's own windows out of its
+            // screenshots (WDA where available; capture falls back to hide/restore).
+            capture::setup_capture_exclusion(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

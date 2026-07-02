@@ -114,7 +114,11 @@ heavy runtime deps installed first (torch is *not* in the `.venv` by default —
 the **Code-Werkstatt** tab (`/werkstatt`, `WorkstationPage.tsx`) pairs a `portable-pty` terminal
 (`src-tauri/src/terminal.rs`, for `claude`/opencode/codex/git) with a Monaco editor + git diff over the
 `/workspaces*` backend (`workspace/manager.py`); the **AI-Cursor overlay** (`src-tauri/src/overlay.rs`,
-transparent always-on-top window, hotkey `Ctrl/Cmd+Shift+Space` + tray) re-fires the UI-TARS handoff; the
+transparent always-on-top window, hotkey `Ctrl/Cmd+Shift+Space` + tray) hosts the **Desktop Companion**
+(R6, default mode: native `xcap` screenshots in `src-tauri/src/capture.rs` → `/companion/*` →
+LLMRouter vision with LM Studio Qwen3-VL or the `anthropic` provider; gliding/dodging pointer ring +
+"Bereich erklären" freeze-frame snip; screenshots leave the machine only when `anthropic` is explicitly
+selected) and, as legacy mode, re-fires the UI-TARS handoff; the
 **Jupyter** tab (`/jupyter`, `src-tauri/src/jupyter.rs`) runs an optional `jupyter lab` sidecar in an
 iframe. The **Linux (deb/AppImage) + macOS (dmg) bundles** are built only in CI
 (`.github/workflows/native-build.yml`, `workflow_dispatch`/tag `v*`); Windows NSIS builds locally.
@@ -139,7 +143,8 @@ manually — always available) and **Kanal B** (`POST /agent/dispatch` SSE → t
 local bridge in `bridge/uitars/`, which runs `@ui-tars/sdk` against a local VLM and streams
 progress back as a variant entry). Off by default; enable via the `agent_bridge:` block in
 `config.yaml`. The VLM (e.g. `ui-tars-1.5-7b`) is served by your existing LM Studio/Ollama
-provider — `LLMRouter` itself stays text-only, no vision plumbing was added.
+provider — this legacy bridge path never goes through `LLMRouter`. (The router *does* speak
+vision since R6, but only for the Desktop Companion's `/companion/*` endpoints.)
 
 ### Frontend checks
 ```powershell

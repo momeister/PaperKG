@@ -199,14 +199,17 @@ pub fn agent_bridge_ensure(
 }
 
 /// Hard-kill the bridge — the guaranteed fallback for "cancel at any time", used when
-/// a graceful `/agent/cancel` or `/agent/observe/stop` doesn't land in time.
+/// a graceful `/agent/cancel` or `/agent/observe/stop` doesn't land in time. Also hides
+/// the "AI has control" border natively, so it can never stay stuck on screen even if
+/// the frontend's own cleanup path didn't run (e.g. the sidecar died mid-step).
 #[tauri::command]
-pub fn agent_bridge_stop(state: State<'_, AgentBridgeState>) -> Result<(), String> {
+pub fn agent_bridge_stop(app: AppHandle, state: State<'_, AgentBridgeState>) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|err| err.to_string())?;
     if let Some(mut child) = guard.child.take() {
         let _ = child.kill();
     }
     guard.port = None;
+    crate::overlay::control_border_hide(app);
     Ok(())
 }
 
