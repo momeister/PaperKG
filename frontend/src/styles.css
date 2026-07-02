@@ -8168,6 +8168,15 @@ button.parallel-cite {
   font-size: 11.5px;
   color: #8ab4f8;
 }
+.overlay-model-hint {
+  margin: 0;
+  font-size: 10.5px;
+  color: #8a909b;
+}
+.overlay-model-hint strong {
+  color: #c7cbd3;
+  font-weight: 600;
+}
 .overlay-stop {
   align-self: flex-end;
   color: #ff8a8a;
@@ -8255,6 +8264,191 @@ button.parallel-cite {
   color: #f0c674;
   cursor: pointer;
   padding: 10px 14px;
+}
+
+/* "AI has control" border (Desktop-Agent v2): full-monitor, click-through frame shown
+   only while Selbst-Steuerung is actively driving the real mouse/keyboard. */
+.control-border-frame {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  border: 4px solid rgba(240, 138, 60, 0.85);
+  box-shadow: inset 0 0 28px rgba(240, 138, 60, 0.55);
+  animation: control-border-pulse 2.2s ease-in-out infinite;
+}
+.control-border-label {
+  /* Bottom-right, not top-center: this window is a real (if transparent) OS window, so
+     it's visible to the agent's own screenshots too — top-center is exactly where nav
+     bars/menus (and thus click targets) usually sit, so keep this out of that zone. */
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: rgba(30, 20, 10, 0.85);
+  color: #ffd9ad;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 138, 60, 0.6);
+}
+@keyframes control-border-pulse {
+  0%, 100% {
+    border-color: rgba(240, 138, 60, 0.85);
+  }
+  50% {
+    border-color: rgba(240, 138, 60, 0.45);
+  }
+}
+
+/* Assistent "zeig mir" pointer overlay: full-monitor, click-through, always-on-top window
+   that highlights a grounded screen point — pure annotation, never dispatches input. */
+.pointer-overlay-frame {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+.pointer-overlay-ring {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  margin-top: -22px;
+  border-radius: 50%;
+  border: 3px solid rgba(88, 166, 255, 0.9);
+  box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.25), 0 0 24px rgba(88, 166, 255, 0.55);
+  animation: pointer-overlay-pulse 1.4s ease-in-out infinite;
+}
+.pointer-overlay-label {
+  position: absolute;
+  transform: translate(-50%, 20px);
+  background: rgba(20, 24, 31, 0.9);
+  color: #e6e8ec;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid rgba(88, 166, 255, 0.5);
+}
+@keyframes pointer-overlay-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.6;
+  }
+}
+/* Desktop Companion (R6): the anchor carries the glide/dodge translate3d so the ring
+   can keep its transform:scale pulse animation on the inner element. */
+.pointer-overlay-anchor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+  will-change: transform, opacity;
+}
+
+/* Desktop Companion "Bereich erklären" (R6): fullscreen frozen-frame region selector.
+   The background image is the physical-pixel screenshot stretched onto the CSS
+   viewport, so CSS px × devicePixelRatio map 1:1 onto image pixels. */
+.snip-overlay-root {
+  position: fixed;
+  inset: 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  cursor: crosshair;
+  user-select: none;
+}
+.snip-overlay-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 12, 16, 0.42);
+  pointer-events: none;
+}
+.snip-overlay-marquee {
+  position: absolute;
+  border: 2px solid rgba(88, 166, 255, 0.95);
+  /* The huge shadow dims everything OUTSIDE the marquee — the hole stays bright. */
+  box-shadow: 0 0 0 100vmax rgba(10, 12, 16, 0.42);
+  pointer-events: none;
+}
+.snip-overlay-hint {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 24, 31, 0.9);
+  color: #e6e8ec;
+  font-size: 12.5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(88, 166, 255, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Desktop Companion chat extras in the overlay card (R6). */
+.overlay-companion-pickers {
+  display: flex;
+  gap: 6px;
+}
+.overlay-companion-pickers select {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e6e8ec;
+  padding: 4px 6px;
+  font-size: 11px;
+  /* The overlay card is always dark regardless of the app theme, but the native
+     <option> popup follows :root's color-scheme (light by default) — near-white
+     text on a white popup. Force the dark scheme + explicit option colors. */
+  color-scheme: dark;
+}
+.overlay-companion-pickers select option {
+  background: #161a21;
+  color: #e6e8ec;
+}
+.overlay-companion-pickers select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.overlay-companion-pickers .overlay-picker-spin {
+  flex: 0 0 auto;
+  align-self: center;
+  color: rgba(230, 232, 236, 0.6);
+}
+.overlay-companion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.overlay-snip-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9ecbff;
+  background: rgba(88, 166, 255, 0.12);
+  border: 1px solid rgba(88, 166, 255, 0.35);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+.overlay-snip-chip span {
+  flex: 1;
+  min-width: 0;
+}
+.overlay-snip-chip button {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
 }
 
 /* ----------------------------------------------------------------------- */

@@ -1,23 +1,37 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Eye, Loader2, Play, Send, Sparkles, Square, X } from "lucide-react";
+import { ArrowRight, Check, Copy, Crop, EyeOff, Loader2, MapPin, Play, Sparkles, Square, X } from "lucide-react";
 
-import { api, askObserve, cancelAgent, streamAgentDispatch, streamObserve, stopObserve } from "../api";
+import { api, askCompanion, cancelAgent, getCompanionConfig, guideCompanion, streamAgentDispatch } from "../api";
 import { isTauri, nativeInvoke, nativeListen } from "../native";
-import type { AgentConfig, AgentDispatchEvent, AgentMode, ObserveChatEntry, OverlayTaskPayload } from "../types";
+import type {
+  AgentConfig,
+  AgentDispatchEvent,
+  AgentMode,
+  CaptureResult,
+  CompanionConfigInfo,
+  CompanionStep,
+  ObserveChatEntry,
+  OverlayTaskPayload,
+  SnipResultPayload,
+} from "../types";
 
-// AI-Cursor overlay (R1, reworked for Desktop-Agent v2). Rendered only in the
+// AI-Cursor overlay (R1, reworked for the Desktop Companion R6). Rendered only in the
 // transparent, always-on-top Tauri overlay window (toggled by a global hotkey / tray,
 // or spawned pre-loaded via `overlay_dispatch_task` from the Notes Parallelmodus
 // "An AI-Cursor übergeben" button). Two modes:
-//   - Selbst-Steuerung: the bridge drives mouse/keyboard autonomously (streamAgentDispatch).
-//   - Assistent: the bridge only describes the screen periodically and answers questions
-//     (streamObserve / askObserve) — it never touches mouse/keyboard.
-// Nothing runs until the user clicks "Starten" here, even if a task arrived pre-loaded — that
-// click is the consent gesture, so neither mode is gated on `agent_bridge.enabled` (that flag
-// only gates the web-mode fallback in ParallelResultsTab.tsx, which has no on-demand sidecar).
-// Tauri manages the bridge/uitars sidecar itself (agent_bridge_ensure/_stop); if it can't start
-// (e.g. Node.js missing), the resulting error offers a "Brief kopieren" fallback instead of a
-// dead end. `agent_bridge.helper_enabled` remains a standalone toggle to disable just Assistent.
+//   - Companion (default): screen-aware chat. Each question captures the primary monitor
+//     natively (capture_screen — the card itself is excluded via WDA or hidden), sends it
+//     to POST /companion/guide (vision through the project's own LLMRouter: local
+//     LM Studio/Ollama VLMs or Claude via the `anthropic` provider) and shows the German
+//     answer; returned steps glide the separate pointer ring to each spot
+//     (pointer_show {space:"physical"}). "Bereich erklären" snips a frozen-frame region
+//     (snip_start → snip://result) that is attached to the next question. The companion
+//     only *sees* and *points* — it never drives mouse or keyboard.
+//   - Selbst-Steuerung (legacy): the UI-TARS bridge drives the real mouse/keyboard
+//     autonomously (streamAgentDispatch via bridge/uitars). Unchanged.
+// Nothing runs until the user acts here — a question or "Starten" is the consent gesture.
+// Screenshots only leave the machine when the user explicitly selects the `anthropic`
+// provider in the picker; local providers are the default.
 
 /** One streamed dispatch event, rendered compactly. */
 function EventLine({ event }: { event: AgentDispatchEvent }) {
@@ -37,34 +51,39 @@ function ChatBubble({ entry }: { entry: ObserveChatEntry }) {
 }
 
 export function OverlayPage() {
-  const [mode, setMode] = useState<AgentMode>("self_managing");
+  const [mode, setMode] = useState<AgentMode>("helper");
   const [taskText, setTaskText] = useState("");
   const [goalLabel, setGoalLabel] = useState("");
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
   const [briefCopied, setBriefCopied] = useState(false);
 
-  // Selbst-Steuerung state.
+  // Selbst-Steuerung state (legacy UI-TARS path).
   const [runActive, setRunActive] = useState(false);
   const [events, setEvents] = useState<AgentDispatchEvent[]>([]);
   const runIdRef = useRef<string | null>(null);
 
-  // Assistent state.
-  const [observeActive, setObserveActive] = useState(false);
-  const [lastObservation, setLastObservation] = useState<string | null>(null);
+  // Companion state.
+  const [companionCfg, setCompanionCfg] = useState<CompanionConfigInfo | null>(null);
+  const [companionProvider, setCompanionProvider] = useState<string>(
+    () => localStorage.getItem("sciencekg.companion.provider") ?? "",
+  );
+  const [companionModel, setCompanionModel] = useState<string>(
+    () => localStorage.getItem("sciencekg.companion.model") ?? "",
+  );
+  const [discovering, setDiscovering] = useState(false);
   const [chat, setChat] = useState<ObserveChatEntry[]>([]);
   const [question, setQuestion] = useState("");
-  const [asking, setAsking] = useState(false);
-  const sessionIdRef = useRef<string | null>(null);
+  const [pointing, setPointing] = useState(false);
+  const [steps, setSteps] = useState<CompanionStep[]>([]);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [snip, setSnip] = useState<SnipResultPayload | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const bridgeBaseRef = useRef<string | null>(null);
   const variantIdRef = useRef<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
-
-  const sessionActive = runActive || observeActive;
 
   // Transparent window: drop the app's opaque background (html + body) for this
   // window only, so the desktop shows through behind the floating card.
@@ -80,8 +99,61 @@ export function OverlayPage() {
   useEffect(() => {
     let alive = true;
     api.getAgentConfig().then((cfg) => { if (alive) setConfig(cfg); }).catch(() => {});
+    getCompanionConfig()
+      .then((cfg) => {
+        if (!alive) return;
+        setCompanionCfg(cfg);
+        setCompanionProvider((prev) => prev || cfg.provider);
+        setCompanionModel((prev) => prev || cfg.model);
+      })
+      .catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    companionProvider
+      ? localStorage.setItem("sciencekg.companion.provider", companionProvider)
+      : localStorage.removeItem("sciencekg.companion.provider");
+  }, [companionProvider]);
+
+  // Live model discovery per provider (LM Studio /models, Ollama /api/tags, …) —
+  // /companion/config only serves the cached list so the overlay opens instantly.
+  // Best-effort: on failure the cached options stay usable.
+  useEffect(() => {
+    if (!companionProvider) return;
+    let alive = true;
+    setDiscovering(true);
+    api
+      .discoverModels(companionProvider)
+      .then((res) => {
+        if (!alive || !res.models.length) return;
+        setCompanionCfg((prev) => {
+          if (!prev) return prev;
+          const known = prev.providers.some((item) => item.name === res.provider);
+          const providers = known
+            ? prev.providers.map((item) =>
+                item.name === res.provider
+                  ? { ...item, models: Array.from(new Set([...item.models, ...res.models])) }
+                  : item,
+              )
+            : [...prev.providers, { name: res.provider, models: res.models }];
+          return { ...prev, providers };
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setDiscovering(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [companionProvider]);
+
+  useEffect(() => {
+    companionModel
+      ? localStorage.setItem("sciencekg.companion.model", companionModel)
+      : localStorage.removeItem("sciencekg.companion.model");
+  }, [companionModel]);
 
   // Pre-load a task compiled elsewhere (e.g. "An AI-Cursor übergeben" in the Notes
   // Parallelmodus) — the overlay only shows it; nothing runs until "Starten".
@@ -93,26 +165,29 @@ export function OverlayPage() {
       setGoalLabel(payload.goal ?? "");
       setMode(payload.mode === "helper" ? "helper" : "self_managing");
       variantIdRef.current = payload.variantId ?? null;
-      setCollapsed(false);
     }).then((fn) => { unlisten = fn; });
     return () => unlisten?.();
   }, []);
 
-  // Escape hides the overlay — unless an Assistent session is watching the screen,
-  // in which case it only collapses to a small "watching" pill (privacy: stopping
-  // the observation should always be an explicit, visible action).
+  // A snipped region arrives from the snip window (tray or "Bereich erklären" button)
+  // and is attached as a chip to the next companion question.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    nativeListen<SnipResultPayload>("snip://result", (payload) => {
+      setSnip(payload);
+      setMode("helper");
+    }).then((fn) => { unlisten = fn; });
+    return () => unlisten?.();
+  }, []);
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      if (observeActive) {
-        setCollapsed((c) => !c);
-      } else {
-        void hide();
-      }
+      if (event.key === "Escape") void hide();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [observeActive]);
+  }, []);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
@@ -122,110 +197,81 @@ export function OverlayPage() {
     if (isTauri()) await nativeInvoke("overlay_hide").catch(() => {});
   }
 
-  function closeOrCollapse() {
-    if (observeActive) {
-      setCollapsed(true);
-      return;
-    }
-    void hide();
-  }
-
-  async function handleStart() {
-    const text = taskText.trim();
-    if (!text || starting || sessionActive) return;
-    setError(null);
-    setStarting(true);
-    let port: number;
+  /** Ensure the bridge sidecar is running and return its loopback base URL (or null on
+   * failure, error surfaced). Idempotent — `agent_bridge_ensure` reuses a live child — so
+   * it's safe to call before every action instead of gating everything behind one "Starten". */
+  async function ensureBridge(): Promise<string | null> {
     try {
-      port = await nativeInvoke<number>("agent_bridge_ensure", {
+      const port = await nativeInvoke<number>("agent_bridge_ensure", {
         vlmBaseUrl: config?.vlm_base_url || undefined,
         vlmModel: config?.vlm_model || undefined,
         helperVlmModel: config?.helper_vlm_model || undefined,
         observeIntervalSeconds: config?.observe_interval_seconds || undefined,
         observeContextSize: config?.observe_context_size || undefined,
       });
+      bridgeBaseRef.current = `http://127.0.0.1:${port}`;
+      return bridgeBaseRef.current;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setStarting(false);
-      return;
-    }
-    setStarting(false);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    if (mode === "self_managing") {
-      bridgeBaseRef.current = `http://127.0.0.1:${port}`;
-      setEvents([]);
-      setRunActive(true);
-      try {
-        await streamAgentDispatch(
-          {
-            task: text,
-            variant_id: variantIdRef.current ?? undefined,
-            bridge_url: `http://127.0.0.1:${port}/run`,
-          },
-          (event) => {
-            if (event.runId) runIdRef.current = event.runId;
-            setEvents((prev) => [...prev, event]);
-          },
-          controller.signal,
-        );
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setEvents((prev) => [
-            ...prev,
-            { status: "error", error: err instanceof Error ? err.message : String(err) },
-          ]);
-        }
-      } finally {
-        setRunActive(false);
-        abortRef.current = null;
-        runIdRef.current = null;
-      }
-    } else {
-      bridgeBaseRef.current = `http://127.0.0.1:${port}`;
-      setChat([]);
-      setLastObservation(null);
-      setObserveActive(true);
-      try {
-        await streamObserve(
-          { primer: text, bridge_base: bridgeBaseRef.current },
-          (event) => {
-            if (event.status === "started" && event.sessionId) sessionIdRef.current = event.sessionId;
-            if (event.status === "observation") setLastObservation(event.value ?? null);
-            if (event.status === "error") setError(event.error ?? null);
-          },
-          controller.signal,
-        );
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      } finally {
-        setObserveActive(false);
-        abortRef.current = null;
-        sessionIdRef.current = null;
-      }
+      return null;
     }
   }
 
-  /** Stop at any time: abort the local stream immediately, ask the bridge to stop
-   * gracefully, then hard-kill the sidecar as the guaranteed fallback. */
+  /** Selbst-Steuerung: hand the task to the bridge, which drives the real mouse/keyboard. */
+  async function handleStart() {
+    const text = taskText.trim();
+    if (!text || starting || runActive) return;
+    setError(null);
+    setStarting(true);
+    const base = await ensureBridge();
+    setStarting(false);
+    if (!base) return;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setEvents([]);
+    setRunActive(true);
+    // No separate "AI-only" cursor exists — Selbst-Steuerung moves the user's real OS
+    // cursor, so this full-screen border is the visible signal that a takeover is live.
+    if (isTauri()) await nativeInvoke("control_border_show").catch(() => {});
+    try {
+      await streamAgentDispatch(
+        { task: text, variant_id: variantIdRef.current ?? undefined, bridge_url: `${base}/run` },
+        (event) => {
+          if (event.runId) runIdRef.current = event.runId;
+          setEvents((prev) => [...prev, event]);
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setEvents((prev) => [
+          ...prev,
+          { status: "error", error: err instanceof Error ? err.message : String(err) },
+        ]);
+      }
+    } finally {
+      setRunActive(false);
+      abortRef.current = null;
+      runIdRef.current = null;
+      if (isTauri()) await nativeInvoke("control_border_hide").catch(() => {});
+    }
+  }
+
+  /** Stop a Selbst-Steuerung run at any time: abort the local stream immediately, ask the
+   * bridge to stop gracefully, then hard-kill the sidecar as the guaranteed fallback. */
   async function handleStop() {
     abortRef.current?.abort();
-    const bridgeBase = bridgeBaseRef.current ?? undefined;
     try {
-      if (mode === "self_managing" && runIdRef.current) {
-        await cancelAgent({ run_id: runIdRef.current, bridge_base: bridgeBase });
-      } else if (mode === "helper" && sessionIdRef.current) {
-        await stopObserve({ session_id: sessionIdRef.current, bridge_base: bridgeBase });
+      if (runIdRef.current) {
+        await cancelAgent({ run_id: runIdRef.current, bridge_base: bridgeBaseRef.current ?? undefined });
       }
     } catch {
       /* best-effort — the hard-kill below is the guaranteed fallback */
     }
     if (isTauri()) {
       await nativeInvoke("agent_bridge_stop").catch(() => {});
+      await nativeInvoke("pointer_hide").catch(() => {});
     }
   }
 
@@ -240,48 +286,113 @@ export function OverlayPage() {
     });
   }
 
-  async function handleAsk() {
-    const text = question.trim();
-    if (!text || asking || !sessionIdRef.current) return;
-    setAsking(true);
-    setChat((prev) => [...prev, { role: "user", text }]);
-    setQuestion("");
-    try {
-      const res = await askObserve({
-        session_id: sessionIdRef.current,
-        question: text,
-        bridge_base: bridgeBaseRef.current ?? undefined,
-      });
-      setChat((prev) => [...prev, { role: "assistant", text: res.answer || res.error || "(keine Antwort)" }]);
-    } catch (err) {
-      setChat((prev) => [...prev, { role: "assistant", text: err instanceof Error ? err.message : String(err) }]);
-    } finally {
-      setAsking(false);
-    }
+  /** Glide the pointer ring to one guidance step (coordinates arrive in physical
+   * monitor pixels from /companion/guide — hence space:"physical"). */
+  async function showStep(list: CompanionStep[], index: number) {
+    const step = list[index];
+    if (!step || !isTauri()) return;
+    const counter = list.length > 1 ? `${index + 1}/${list.length}` : "";
+    const label = [counter, step.label].filter(Boolean).join(" · ");
+    await nativeInvoke("pointer_show", {
+      x: step.x,
+      y: step.y,
+      label: label || null,
+      space: "physical",
+    }).catch(() => {});
   }
 
-  if (collapsed) {
-    return (
-      <div className="overlay-root overlay-root--collapsed" onClick={() => setCollapsed(false)}>
-        <span className="overlay-watching-dot" />
-        <span>Assistent beobachtet deinen Bildschirm…</span>
-      </div>
+  function nextStep() {
+    const next = stepIndex + 1;
+    if (next >= steps.length) return;
+    setStepIndex(next);
+    void showStep(steps, next);
+  }
+
+  async function hidePointer() {
+    setSteps([]);
+    setStepIndex(0);
+    if (isTauri()) await nativeInvoke("pointer_hide").catch(() => {});
+  }
+
+  /** Start a "Bereich erklären" region selection. Rust hides this card, shows the
+   * frozen-frame snip window and pushes the crop back via `snip://result`. */
+  async function startSnip() {
+    if (!isTauri()) {
+      setError("„Bereich erklären“ braucht die native Desktop-App (Bildschirmzugriff).");
+      return;
+    }
+    setError(null);
+    await nativeInvoke("snip_start").catch((err) =>
+      setError(err instanceof Error ? err.message : String(err)),
     );
   }
 
-  const blockedReason =
-    !config
-      ? null
-      : mode === "helper" && !config.helper_enabled
-        ? "Assistent-Modus ist per Konfiguration deaktiviert (`agent_bridge.helper_enabled`)."
-        : null;
+  /** Primary Companion action: screenshot → /companion/guide (answer + optional pointing
+   * steps) — or /companion/ask when a snipped region is attached. One vision round trip;
+   * the model decides whether pointing helps. */
+  async function handleCompanionAsk() {
+    const text = question.trim();
+    if (!text || pointing) return;
+    setPointing(true);
+    setError(null);
+    // History excludes the question being asked — the backend appends it itself.
+    const history = chat.slice(-16).map((entry) => ({ role: entry.role, content: entry.text }));
+    setChat((prev) => [...prev, { role: "user", text }]);
+    setQuestion("");
+    setSteps([]);
+    setStepIndex(0);
+    if (isTauri()) await nativeInvoke("pointer_hide").catch(() => {});
+    const provider = companionProvider || undefined;
+    const model = companionModel || undefined;
+    try {
+      if (snip) {
+        // Region question: the frozen crop is the image; no pointing (its coordinates
+        // wouldn't be meaningful on the live screen).
+        const image = snip.image_base64;
+        setSnip(null);
+        const res = await askCompanion({ question: text, image_base64: image, history, region: true, provider, model });
+        setChat((prev) => [
+          ...prev,
+          { role: "assistant", text: res.error ? `Fehler: ${res.error}` : res.answer || "Dazu kann ich nichts sagen." },
+        ]);
+        return;
+      }
+      if (!isTauri()) {
+        setChat((prev) => [
+          ...prev,
+          { role: "assistant", text: "Der Desktop-Companion braucht die native Desktop-App — im Browser kann ich deinen Bildschirm nicht sehen." },
+        ]);
+        return;
+      }
+      const capture = await nativeInvoke<CaptureResult>("capture_screen");
+      const res = await guideCompanion({ question: text, image_base64: capture.image_base64, history, provider, model });
+      if (res.error) {
+        setChat((prev) => [...prev, { role: "assistant", text: `Fehler: ${res.error}` }]);
+        return;
+      }
+      setChat((prev) => [...prev, { role: "assistant", text: res.answer || "Dazu kann ich nichts sagen." }]);
+      if (res.steps?.length) {
+        setSteps(res.steps);
+        setStepIndex(0);
+        await showStep(res.steps, 0);
+      }
+    } catch (err) {
+      setChat((prev) => [...prev, { role: "assistant", text: err instanceof Error ? err.message : String(err) }]);
+    } finally {
+      setPointing(false);
+    }
+  }
+
+  const providerOptions = companionCfg?.providers ?? [];
+  const activeProviderModels = providerOptions.find((item) => item.name === companionProvider)?.models ?? [];
+  const modelOptions = Array.from(new Set([...activeProviderModels, ...(companionModel ? [companionModel] : [])])).filter(Boolean);
 
   return (
     <div className="overlay-root">
       <header className="overlay-head" data-tauri-drag-region>
         <Sparkles size={15} />
         <strong>AI-Cursor</strong>
-        <button className="overlay-close" type="button" onClick={closeOrCollapse} aria-label="Ausblenden">
+        <button className="overlay-close" type="button" onClick={() => void hide()} aria-label="Ausblenden">
           <X size={15} />
         </button>
       </header>
@@ -289,27 +400,72 @@ export function OverlayPage() {
       <div className="overlay-mode-toggle" role="tablist" aria-label="Modus">
         <button
           type="button"
+          className={`overlay-mode-toggle__item ${mode === "helper" ? "overlay-mode-toggle__item--active" : ""}`}
+          disabled={runActive}
+          onClick={() => setMode("helper")}
+        >
+          Companion
+        </button>
+        <button
+          type="button"
           className={`overlay-mode-toggle__item ${mode === "self_managing" ? "overlay-mode-toggle__item--active" : ""}`}
-          disabled={sessionActive}
+          disabled={runActive || pointing}
           onClick={() => setMode("self_managing")}
         >
           Selbst-Steuerung
         </button>
-        <button
-          type="button"
-          className={`overlay-mode-toggle__item ${mode === "helper" ? "overlay-mode-toggle__item--active" : ""}`}
-          disabled={sessionActive}
-          onClick={() => setMode("helper")}
-        >
-          Assistent
-        </button>
       </div>
 
-      {blockedReason ? <p className="overlay-hint">{blockedReason}</p> : null}
+      {mode === "self_managing" && config ? (
+        <p className="overlay-model-hint">
+          Modell: <strong>{config.vlm_model}</strong> (muss UI-TARS-kompatibel sein)
+        </p>
+      ) : null}
+
+      {mode === "helper" ? (
+        <div className="overlay-companion-pickers">
+          <select
+            aria-label="Provider"
+            value={companionProvider}
+            disabled={pointing}
+            onChange={(event) => {
+              setCompanionProvider(event.target.value);
+              setCompanionModel("");
+            }}
+          >
+            {providerOptions.map((item) => (
+              <option key={item.name} value={item.name}>
+                {item.name}
+              </option>
+            ))}
+            {companionProvider && !providerOptions.some((item) => item.name === companionProvider) ? (
+              <option value={companionProvider}>{companionProvider}</option>
+            ) : null}
+          </select>
+          <select
+            aria-label="Modell"
+            value={companionModel}
+            disabled={pointing}
+            onChange={(event) => setCompanionModel(event.target.value)}
+          >
+            <option value="">Standardmodell</option>
+            {modelOptions.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+          {discovering ? <Loader2 size={13} className="overlay-spin overlay-picker-spin" /> : null}
+        </div>
+      ) : null}
+      {mode === "helper" && companionProvider === "anthropic" ? (
+        <p className="overlay-model-hint">Screenshots werden zur Beantwortung an Anthropic gesendet.</p>
+      ) : null}
+
       {error ? (
         <div className="overlay-hint overlay-hint--error">
           <p>{error}</p>
-          {taskText.trim() ? (
+          {mode === "self_managing" && taskText.trim() ? (
             <button className="button button-compact" type="button" onClick={copyBrief}>
               {briefCopied ? <Check size={13} /> : <Copy size={13} />}
               {briefCopied ? "Kopiert" : "Brief kopieren"}
@@ -318,65 +474,52 @@ export function OverlayPage() {
         </div>
       ) : null}
 
-      {observeActive ? (
-        <div className="overlay-watching">
-          <Eye size={13} className="overlay-watching-dot" />
-          <span>Ich sehe deinen Bildschirm{lastObservation ? ":" : "…"}</span>
-          {lastObservation ? <p className="overlay-watching-text">{lastObservation}</p> : null}
-        </div>
-      ) : null}
-
-      {!blockedReason ? (
-        <div className="overlay-input">
-          {goalLabel && !sessionActive ? <p className="overlay-goal">Ziel: {goalLabel}</p> : null}
-          <textarea
-            autoFocus
-            rows={3}
-            placeholder={
-              mode === "self_managing"
-                ? "Was soll der Desktop-Agent tun? (Strg+Enter)"
-                : "Woran arbeitest du? (Kontext für den Assistenten, Strg+Enter)"
-            }
-            value={taskText}
-            disabled={sessionActive}
-            onChange={(event) => setTaskText(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                void handleStart();
-              }
-            }}
-          />
-          {!sessionActive ? (
-            <button
-              className="button button-primary button-compact"
-              type="button"
-              disabled={!taskText.trim() || starting}
-              onClick={() => void handleStart()}
-            >
-              {starting ? <Loader2 size={15} className="overlay-spin" /> : <Play size={15} />}
-              {starting ? "Startet…" : "Starten"}
-            </button>
-          ) : (
-            <button className="button button-compact overlay-stop" type="button" onClick={() => void handleStop()}>
-              <Square size={15} />
-              Stoppen
-            </button>
-          )}
-        </div>
-      ) : null}
-
       {mode === "self_managing" ? (
-        events.length ? (
-          <ul className="overlay-log">
-            {events.map((event, index) => (
-              <EventLine key={index} event={event} />
-            ))}
-            <div ref={logEndRef} />
-          </ul>
-        ) : (
-          <p className="overlay-muted">Beschreibe eine Aufgabe und starte den Desktop-Agenten.</p>
-        )
+        <>
+          <div className="overlay-input">
+            {goalLabel && !runActive ? <p className="overlay-goal">Ziel: {goalLabel}</p> : null}
+            <textarea
+              autoFocus
+              rows={3}
+              placeholder="Was soll der Desktop-Agent tun? (Strg+Enter)"
+              value={taskText}
+              disabled={runActive}
+              onChange={(event) => setTaskText(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  void handleStart();
+                }
+              }}
+            />
+            {!runActive ? (
+              <button
+                className="button button-primary button-compact"
+                type="button"
+                disabled={!taskText.trim() || starting}
+                onClick={() => void handleStart()}
+              >
+                {starting ? <Loader2 size={15} className="overlay-spin" /> : <Play size={15} />}
+                {starting ? "Startet…" : "Starten"}
+              </button>
+            ) : (
+              <button className="button button-compact overlay-stop" type="button" onClick={() => void handleStop()}>
+                <Square size={15} />
+                Stoppen
+              </button>
+            )}
+          </div>
+          {events.length ? (
+            <ul className="overlay-log">
+              {events.map((event, index) => (
+                <EventLine key={index} event={event} />
+              ))}
+              <div ref={logEndRef} />
+            </ul>
+          ) : (
+            <p className="overlay-muted">Beschreibe eine Aufgabe und starte den Desktop-Agenten.</p>
+          )}
+        </>
       ) : (
         <>
           {chat.length ? (
@@ -388,33 +531,63 @@ export function OverlayPage() {
             </div>
           ) : (
             <p className="overlay-muted">
-              {observeActive ? "Stell jederzeit eine Frage zu deinem Bildschirm." : "Starte die Beobachtung, um Fragen zu stellen."}
+              Frag mich etwas zu deinem Bildschirm — ich antworte und zeige dir mit dem Zeiger, wo du klicken kannst.
             </p>
           )}
-          {observeActive ? (
-            <div className="overlay-chat-input">
-              <input
-                type="text"
-                placeholder="Frage stellen…"
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleAsk();
-                  }
-                }}
-              />
-              <button
-                className="button button-compact button-primary"
-                type="button"
-                disabled={!question.trim() || asking}
-                onClick={() => void handleAsk()}
-              >
-                {asking ? <Loader2 size={13} className="overlay-spin" /> : <Send size={13} />}
+          {snip ? (
+            <div className="overlay-snip-chip">
+              <Crop size={13} />
+              <span>
+                Ausschnitt angehängt ({snip.width}×{snip.height}px) — die nächste Frage bezieht sich darauf
+              </span>
+              <button type="button" aria-label="Ausschnitt entfernen" onClick={() => setSnip(null)}>
+                <X size={13} />
               </button>
             </div>
           ) : null}
+          <div className="overlay-chat-input">
+            <input
+              type="text"
+              autoFocus
+              placeholder={snip ? "Frage zum Ausschnitt…" : "z. B. „Wie komme ich von hier zu den Einstellungen?“"}
+              value={question}
+              disabled={pointing}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleCompanionAsk();
+                }
+              }}
+            />
+            <button
+              className="button button-primary button-compact"
+              type="button"
+              disabled={!question.trim() || pointing}
+              onClick={() => void handleCompanionAsk()}
+            >
+              {pointing ? <Loader2 size={15} className="overlay-spin" /> : <MapPin size={15} />}
+              {pointing ? "Schaue…" : "Fragen"}
+            </button>
+          </div>
+          <div className="overlay-companion-actions">
+            <button className="button button-compact" type="button" disabled={pointing} onClick={() => void startSnip()}>
+              <Crop size={13} />
+              Bereich erklären
+            </button>
+            {steps.length > 1 && stepIndex < steps.length - 1 ? (
+              <button className="button button-compact" type="button" onClick={nextStep}>
+                <ArrowRight size={13} />
+                Weiter ({stepIndex + 2}/{steps.length})
+              </button>
+            ) : null}
+            {steps.length ? (
+              <button className="button button-compact" type="button" onClick={() => void hidePointer()}>
+                <EyeOff size={13} />
+                Zeiger ausblenden
+              </button>
+            ) : null}
+          </div>
         </>
       )}
     </div>
