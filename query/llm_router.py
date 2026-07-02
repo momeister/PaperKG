@@ -637,6 +637,7 @@ class LLMRouter:
 			"usage": data.get("usage") or {},
 			"finish_reason": choices[0].get("finish_reason") if choices else None,
 			"response_format_fallback": response_format_fallback,
+			"reasoning_fallback": False,
 		}
 		if not choices:
 			return ""
@@ -644,8 +645,12 @@ class LLMRouter:
 		content = str(message.get("content", "") or "")
 		if not content.strip():
 			# Some LM Studio builds put the entire output of reasoning models into
-			# `reasoning_content` and leave `content` empty.
+			# `reasoning_content` and leave `content` empty. Callers that must not
+			# show raw chain-of-thought (e.g. the Desktop Companion) check this flag:
+			# combined with finish_reason == "length" it means the model burned its
+			# whole token budget thinking and never produced an answer.
 			content = str(message.get("reasoning_content", "") or "")
+			self.last_response_metadata["reasoning_fallback"] = bool(content.strip())
 		return strip_reasoning_blocks(content)
 
 	@staticmethod

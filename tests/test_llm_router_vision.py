@@ -61,6 +61,39 @@ def test_openai_compatible_passes_parts_through() -> None:
     assert captured["payload"]["messages"][0]["content"] == PARTS_MESSAGE["content"]
 
 
+def test_openai_compatible_flags_reasoning_fallback() -> None:
+    # LM Studio reasoning builds can leave `content` empty and put everything into
+    # `reasoning_content`; with finish_reason=length the model never produced an
+    # answer — the metadata flag lets callers turn that into a clear error.
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": "", "reasoning_content": "The user is asking…"},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {},
+            },
+        )
+
+    router = _router("lm_studio", handler)
+    assert router.chat([PARTS_MESSAGE]) == "The user is asking…"
+    assert router.last_response_metadata["reasoning_fallback"] is True
+    assert router.last_response_metadata["finish_reason"] == "length"
+
+    def handler_normal(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
+        )
+
+    router = _router("lm_studio", handler_normal)
+    router.chat([PARTS_MESSAGE])
+    assert router.last_response_metadata["reasoning_fallback"] is False
+
+
 # --------------------------------------------------------------------------- #
 # Ollama native API: text flattened, images moved to the per-message field      #
 # --------------------------------------------------------------------------- #

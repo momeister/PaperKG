@@ -1734,6 +1734,9 @@ def _companion_llm_params(provider: str | None, model: str | None) -> dict[str, 
         "model": model or (str(cfg.get("model") or "").strip() or None),
         "max_pixels": int(cfg.get("grounding_max_pixels") or screen_companion.DEFAULT_MAX_PIXELS),
         "history_turns": int(cfg.get("history_turns") or screen_companion.DEFAULT_HISTORY_TURNS),
+        # None lets ask/guide fall back to their per-call defaults (ask < guide).
+        "max_tokens": int(cfg.get("max_tokens") or 0) or None,
+        "disable_thinking": bool(cfg.get("disable_thinking", True)),
     }
 
 

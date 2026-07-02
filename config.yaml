@@ -415,6 +415,13 @@ companion:
   grounding_max_pixels: 1003520
   language: "de"
   history_turns: 8                   # prior chat turns sent along per question
+  # Antwortbudget pro Frage. Thinking-Modelle (z.B. Qwen3.x-Thinking-Builds) brauchen
+  # Headroom: ist das Budget zu klein, geht alles ins Nachdenken und es kommt keine
+  # Antwort — der Companion meldet das dann als klaren Fehler statt Denkprotokoll.
+  max_tokens: 2000
+  # Haengt Qwen3s /no_think-Soft-Switch an den Systemprompt (nur bei Qwen-Modellen),
+  # damit Antworten schnell kommen statt im Thinking-Kanal zu versickern.
+  disable_thinking: true
 
 # Code-Werkstatt: where *managed* coding projects are created on disk. They live
 # as plain Git folders so other editors (VS Code, …) can open them too; PaperKG

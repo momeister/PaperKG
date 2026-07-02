@@ -34,6 +34,12 @@ DEFAULT_MIN_PIXELS = 100 * IMAGE_FACTOR * IMAGE_FACTOR
 MAX_GUIDE_STEPS = 6
 DEFAULT_HISTORY_TURNS = 8
 
+# Token budgets with headroom for reasoning models (Qwen3.x "thinking" builds burn
+# hundreds of tokens before the first answer token — the old 900 cap meant the
+# whole budget went into <think> and the user saw raw chain-of-thought).
+DEFAULT_MAX_TOKENS_GUIDE = 2000
+DEFAULT_MAX_TOKENS_ASK = 1500
+
 
 def smart_resize_to_budget(
     width: int,
@@ -144,6 +150,33 @@ def _guide_system(sent_width: int, sent_height: int) -> str:
     )
 
 
+def _no_think_suffix(router: Any, provider: str | None, model: str | None, disable_thinking: bool) -> str:
+    """Qwen3's soft switch: a trailing ``/no_think`` in the system prompt disables
+    thinking for the turn. Only appended for Qwen models — other models would just
+    see a stray token in their instructions."""
+    if not disable_thinking:
+        return ""
+    name = model or ""
+    if not name:
+        try:
+            name = str(router.provider_default_model(provider) or "")
+        except Exception:
+            name = ""
+    return "\n/no_think" if "qwen" in name.lower() else ""
+
+
+def _raise_if_thinking_exhausted(router: Any) -> None:
+    """A reasoning model that spent its entire token budget inside its thinking
+    channel has produced no answer — surface that clearly instead of showing the
+    user raw chain-of-thought (see LLMRouter reasoning_fallback metadata)."""
+    meta = getattr(router, "last_response_metadata", None) or {}
+    if meta.get("reasoning_fallback") and meta.get("finish_reason") == "length":
+        raise RuntimeError(
+            "Das Modell hat sein Token-Budget beim Nachdenken aufgebraucht — "
+            "`companion.max_tokens` in config.yaml erhöhen oder ein Nicht-Thinking-Modell wählen."
+        )
+
+
 def _history_messages(history: Any, limit_turns: int) -> list[dict[str, Any]]:
     """Prior chat turns as plain text messages (images are never replayed)."""
     messages: list[dict[str, Any]] = []
@@ -179,19 +212,27 @@ def ask(
     model: str | None = None,
     max_pixels: int = DEFAULT_MAX_PIXELS,
     history_turns: int = DEFAULT_HISTORY_TURNS,
+    max_tokens: int | None = None,
+    disable_thinking: bool = True,
 ) -> str:
     """Free-form German screen Q&A (no pointing). Raises on LLM/transport failure —
     the endpoint layer reports errors in-body."""
-    system = _ASK_SYSTEM + (f"\n{_REGION_HINT}" if region else "")
+    system = (
+        _ASK_SYSTEM
+        + (f"\n{_REGION_HINT}" if region else "")
+        + _no_think_suffix(router, provider, model, disable_thinking)
+    )
     data_url = prepare_image(image_base64, max_pixels=max_pixels).data_url if image_base64 else None
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history, history_turns))
     messages.append({"role": "user", "content": _user_content(f"Frage: {question}", data_url)})
 
-    overrides: dict[str, Any] = {"temperature": 0.3, "max_tokens": 700}
+    overrides: dict[str, Any] = {"temperature": 0.3, "max_tokens": max_tokens or DEFAULT_MAX_TOKENS_ASK}
     if model:
         overrides["model"] = model
-    return router.chat(messages, provider=provider, overrides=overrides).strip()
+    answer = router.chat(messages, provider=provider, overrides=overrides).strip()
+    _raise_if_thinking_exhausted(router)
+    return answer
 
 
 def guide(
@@ -204,6 +245,8 @@ def guide(
     model: str | None = None,
     max_pixels: int = DEFAULT_MAX_PIXELS,
     history_turns: int = DEFAULT_HISTORY_TURNS,
+    max_tokens: int | None = None,
+    disable_thinking: bool = True,
 ) -> dict[str, Any]:
     """Answer + optional click-guidance steps, one vision round trip.
 
@@ -212,20 +255,22 @@ def guide(
     If the model ignores the JSON contract, degrades to a text-only answer instead of
     failing. Raises only on LLM/transport errors."""
     prepared = prepare_image(image_base64, max_pixels=max_pixels)
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _guide_system(prepared.sent_width, prepared.sent_height)}
-    ]
+    system = _guide_system(prepared.sent_width, prepared.sent_height) + _no_think_suffix(
+        router, provider, model, disable_thinking
+    )
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history, history_turns))
     messages.append({"role": "user", "content": _user_content(f"Frage: {question}", prepared.data_url)})
 
     overrides: dict[str, Any] = {
         "temperature": 0.1,
-        "max_tokens": 900,
+        "max_tokens": max_tokens or DEFAULT_MAX_TOKENS_GUIDE,
         "extra": {"json_mode": True},
     }
     if model:
         overrides["model"] = model
     raw = router.chat(messages, provider=provider, overrides=overrides)
+    _raise_if_thinking_exhausted(router)
 
     try:
         data = LLMRouter._extract_json(raw)

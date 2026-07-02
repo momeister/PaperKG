@@ -138,6 +138,54 @@ def test_ask_includes_history_and_region_hint() -> None:
     assert all(m.get("content") != "ignoriert" for m in messages)
 
 
+class _ThinkingExhaustedRouter(_FakeRouter):
+    """Simulates a reasoning model that burned the whole max_tokens budget inside its
+    thinking channel: the router falls back to reasoning_content + finish_reason=length."""
+
+    def chat(self, messages, provider=None, overrides=None):
+        result = super().chat(messages, provider, overrides)
+        self.last_response_metadata = {"reasoning_fallback": True, "finish_reason": "length"}
+        return result
+
+
+def test_thinking_budget_exhausted_raises_clear_error() -> None:
+    router = _ThinkingExhaustedRouter("The user is asking what they can imagine…")
+    try:
+        screen_companion.ask(router, "Was ist das?", image_base64=_png_b64(280, 280))
+    except RuntimeError as exc:
+        assert "Token-Budget" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected RuntimeError")
+
+
+def test_no_think_suffix_only_for_qwen_models() -> None:
+    router = _FakeRouter("ok")
+    screen_companion.ask(router, "Frage", model="qwen/qwen3-vl-8b")
+    assert router.calls[0]["messages"][0]["content"].endswith("/no_think")
+
+    router = _FakeRouter("ok")
+    screen_companion.ask(router, "Frage", model="gemma-3-27b-it")
+    assert "/no_think" not in router.calls[0]["messages"][0]["content"]
+
+    router = _FakeRouter("ok")
+    screen_companion.ask(router, "Frage", model="qwen/qwen3-vl-8b", disable_thinking=False)
+    assert "/no_think" not in router.calls[0]["messages"][0]["content"]
+
+
+def test_max_tokens_defaults_and_override() -> None:
+    router = _FakeRouter("ok")
+    screen_companion.ask(router, "Frage")
+    assert router.calls[0]["overrides"]["max_tokens"] == screen_companion.DEFAULT_MAX_TOKENS_ASK
+
+    router = _FakeRouter(json.dumps({"answer": "a", "steps": []}))
+    screen_companion.guide(router, "wo?", _png_b64(280, 280))
+    assert router.calls[0]["overrides"]["max_tokens"] == screen_companion.DEFAULT_MAX_TOKENS_GUIDE
+
+    router = _FakeRouter(json.dumps({"answer": "a", "steps": []}))
+    screen_companion.guide(router, "wo?", _png_b64(280, 280), max_tokens=3200)
+    assert router.calls[0]["overrides"]["max_tokens"] == 3200
+
+
 # --------------------------------------------------------------------------- #
 # /companion/* endpoints                                                       #
 # --------------------------------------------------------------------------- #
@@ -173,6 +221,15 @@ def test_companion_guide_endpoint_reports_errors_in_body(monkeypatch) -> None:
     assert body["answer"] == ""
     assert body["found"] is False
     assert "vlm down" in body["error"]
+
+
+def test_companion_guide_endpoint_thinking_budget_error_in_body(monkeypatch) -> None:
+    client = _client(monkeypatch, _ThinkingExhaustedRouter("Denkprotokoll…"))
+    res = client.post("/companion/guide", json={"question": "wo?", "image_base64": _png_b64(280, 280)})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["answer"] == ""
+    assert "Token-Budget" in body["error"]
 
 
 def test_companion_guide_endpoint_bad_image_in_body(monkeypatch) -> None:
