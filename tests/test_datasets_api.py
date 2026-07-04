@@ -51,7 +51,7 @@ def test_datasets_api_flow(tmp_path, monkeypatch):
     async def fake_search(query, sources=None, per_source=8, timeout=25.0):  # noqa: ANN001
         return {"results": [_hit("zenodo", "z9").as_dict()], "warnings": []}
 
-    monkeypatch.setattr(product_main.dataset_clients, "search_datasets", fake_search)
+    monkeypatch.setattr(dataset_clients, "search_datasets", fake_search)
     client = TestClient(product_main.app)
 
     sources = client.get("/datasets/sources")
