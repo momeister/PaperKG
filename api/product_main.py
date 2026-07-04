@@ -63,7 +63,7 @@ from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 from storage.path_safety import PathSafetyError, ensure_safe_path
-from workspace import manager as workspace_manager
+from workspace import manager as workspace_manager  # noqa: F401  # pm.workspace_manager (routers) + test patch surface
 from workspace.manager import WorkspaceError
 
 
@@ -114,6 +114,8 @@ from api.routers import datasets as _datasets_router  # noqa: E402
 app.include_router(_datasets_router.router)
 from api.routers import analysis as _analysis_router  # noqa: E402
 app.include_router(_analysis_router.router)
+from api.routers import workspaces as _workspaces_router  # noqa: E402
+app.include_router(_workspaces_router.router)
 
 
 @app.exception_handler(PathSafetyError)
@@ -3833,169 +3835,14 @@ def delete_benchmark_run(run_id: str, metadata_db_path: str = DEFAULT_METADATA_D
 # --------------------------------------------------------------------------- #
 
 
-class CreateWorkspaceRequest(BaseModel):
-    name: str
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-
-
-class OpenWorkspaceRequest(BaseModel):
-    path: str
-    name: str | None = None
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-
-
-class WriteFileRequest(BaseModel):
-    path: str
-    content: str = ""
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-
-
-class CreatePathRequest(BaseModel):
-    path: str
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
 
 
 
 
-def _require_code_project(db: MetadataDB, project_id: str) -> dict[str, Any]:
-    proj = db.get_code_project(project_id)
-    if proj is None:
-        raise HTTPException(status_code=404, detail="Code-Projekt nicht gefunden")
-    return proj
 
 
-def _code_project_summary(project: dict[str, Any]) -> dict[str, Any]:
-    """Project record + a cheap on-disk existence flag for the picker."""
-    out = dict(project)
-    try:
-        out["exists"] = Path(str(project.get("path"))).is_dir()
-    except OSError:
-        out["exists"] = False
-    return out
-
-
-@app.get("/workspaces")
-def list_workspaces(metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        projects = [_code_project_summary(p) for p in db.list_code_projects()]
-    return {
-        "projects": projects,
-        "base_dir": str(workspace_manager.base_dir()),
-        "git_available": workspace_manager.git_available(),
-    }
-
-
-@app.post("/workspaces")
-def create_workspace(request: CreateWorkspaceRequest) -> dict[str, Any]:
-    """Create a new *managed* project folder (mkdir + git init) and register it."""
-    name = (request.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Projektname fehlt")
-    root = workspace_manager.init_managed_project(workspace_manager.base_dir(), name)
-    with MetadataDB(request.metadata_db_path) as db:
-        project = db.add_code_project(name=name, path=str(root), kind="managed")
-    return _code_project_summary(project)
-
-
-@app.post("/workspaces/open")
-def open_workspace(request: OpenWorkspaceRequest) -> dict[str, Any]:
-    """Register an existing folder as an *external* project ("Ordner öffnen")."""
-    root = workspace_manager.validate_external_folder(request.path)
-    name = (request.name or "").strip() or root.name
-    with MetadataDB(request.metadata_db_path) as db:
-        existing = db.get_code_project_by_path(str(root))
-        if existing is not None:
-            return _code_project_summary(existing)
-        project = db.add_code_project(name=name, path=str(root), kind="external")
-    return _code_project_summary(project)
-
-
-@app.delete("/workspaces/{project_id}")
-def delete_workspace(
-    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-) -> dict[str, Any]:
-    """Unregister a project. The folder on disk is left untouched."""
-    with MetadataDB(metadata_db_path) as db:
-        deleted = db.delete_code_project(project_id)
-    return {"deleted": deleted, "id": project_id}
-
-
-@app.get("/workspaces/{project_id}/tree")
-def workspace_tree(
-    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.build_tree(root)
-
-
-@app.get("/workspaces/{project_id}/file")
-def workspace_read_file(
-    project_id: str, path: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.read_file(root, path)
-
-
-@app.put("/workspaces/{project_id}/file")
-def workspace_write_file(project_id: str, request: WriteFileRequest) -> dict[str, Any]:
-    with MetadataDB(request.metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.write_file(root, request.path, request.content)
-
-
-@app.post("/workspaces/{project_id}/file")
-def workspace_create_file(project_id: str, request: CreatePathRequest) -> dict[str, Any]:
-    with MetadataDB(request.metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.create_file(root, request.path)
-
-
-@app.post("/workspaces/{project_id}/dir")
-def workspace_create_dir(project_id: str, request: CreatePathRequest) -> dict[str, Any]:
-    with MetadataDB(request.metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.create_dir(root, request.path)
-
-
-@app.delete("/workspaces/{project_id}/file")
-def workspace_delete_file(
-    project_id: str, path: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.delete_path(root, path)
-
-
-@app.get("/workspaces/{project_id}/git/status")
-def workspace_git_status(
-    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.git_status(root)
-
-
-@app.get("/workspaces/{project_id}/git/diff")
-def workspace_git_diff(
-    project_id: str,
-    path: str | None = None,
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
-) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        project = _require_code_project(db, project_id)
-    root = workspace_manager.ensure_exists(project)
-    return workspace_manager.git_diff(root, path)
 
 
 # --------------------------------------------------------------------------- #
