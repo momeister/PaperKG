@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import { ChevronLeft, ChevronRight, Languages, Layers, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Languages, Layers, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
@@ -133,10 +133,10 @@ export function PdfPane({
   const resizeFrameRef = useRef<number | null>(null);
   const lastJumpKeyRef = useRef<string>("");
 
-  // When there is no local PDF, fetch the cited paper's metadata so the user can still
-  // read the abstract and open the original source for verification.
+  // Fetch the paper's metadata whenever an id is known — without local PDF it feeds the
+  // abstract fallback, with PDF it provides the external link to the original source.
   useEffect(() => {
-    if (url || !metaPaperId) {
+    if (!metaPaperId) {
       setSourceMeta(null);
       return;
     }
@@ -152,7 +152,7 @@ export function PdfPane({
     return () => {
       cancelled = true;
     };
-  }, [url, metaPaperId]);
+  }, [metaPaperId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -239,6 +239,18 @@ export function PdfPane({
   }, [layers, matches]);
   const targetPagesSignature = layers.map((layer) => `${layer.index}:${targetPages[layer.index] ?? ""}`).join(",");
   const activeEvidenceText = evidenceMatch?.matchedText ?? "";
+  // The panel shows the backend's faithful pdf_excerpt; the pdf.js-reconstructed
+  // matchedText only drives highlight placement. When the location is uncertain,
+  // say so instead of presenting the excerpt as exact.
+  const activeLocated = activeEvidence?.metadata?.["located"];
+  const excerptApproxHint =
+    activeEvidence?.found_in_pdf_text === false
+      ? "Textstelle nicht wörtlich im PDF verifiziert."
+      : activeLocated === "approx_region" || activeLocated === "term_overlap_only"
+        ? "Ungefähre Stelle — Zitat nicht satzgenau lokalisiert."
+        : evidenceMatch && !evidenceMatch.exact
+          ? "Markierung im PDF ist ungefähr."
+          : "";
   // Pages report in asynchronously; until every page was scanned for the current query
   // the "best" match keeps changing — gate scrolling and "not found" messages on this.
   const activeScanKey = `${scrollLayerIndex}|${scrollSignature}`;
@@ -255,7 +267,7 @@ export function PdfPane({
   }, [activeEvidenceIndex, evidenceSignature, url]);
 
   async function translateActiveExcerpt() {
-    const text = (activeEvidenceText || activeEvidence?.pdf_excerpt || activeEvidence?.reference_text || "").trim();
+    const text = (activeEvidence?.pdf_excerpt || activeEvidenceText || activeEvidence?.reference_text || "").trim();
     if (!text || isTranslating) {
       return;
     }
@@ -519,30 +531,46 @@ export function PdfPane({
       ) : null}
 
       {url && document ? (
-        <div className="pdf-canvas-wrap" ref={canvasWrapRef} onScroll={updateCurrentPageFromScroll}>
-          {Array.from({ length: pageCount }, (_, index) => {
-            const pageNumber = index + 1;
-            return (
-              <PdfPage
-                key={`${url}-${pageNumber}`}
-                document={document}
-                pageNumber={pageNumber}
-                containerWidth={viewportWidth}
-                zoom={zoom}
-                fitMode={fitMode}
-                layers={layers}
-                layersSignature={layersSignature}
-                activeEvidenceIndex={activeEvidenceIndex}
-                evidences={evidences}
-                targetPages={targetPages}
-                targetPagesSignature={targetPagesSignature}
-                onMatch={updateMatch}
-                setPageRef={(node) => {
-                  pageRefs.current[pageNumber] = node;
-                }}
-              />
-            );
-          })}
+        <div className="pdf-canvas-shell">
+          <div className="pdf-canvas-wrap" ref={canvasWrapRef} onScroll={updateCurrentPageFromScroll}>
+            {Array.from({ length: pageCount }, (_, index) => {
+              const pageNumber = index + 1;
+              return (
+                <PdfPage
+                  key={`${url}-${pageNumber}`}
+                  document={document}
+                  pageNumber={pageNumber}
+                  containerWidth={viewportWidth}
+                  zoom={zoom}
+                  fitMode={fitMode}
+                  layers={layers}
+                  layersSignature={layersSignature}
+                  activeEvidenceIndex={activeEvidenceIndex}
+                  evidences={evidences}
+                  targetPages={targetPages}
+                  targetPagesSignature={targetPagesSignature}
+                  onMatch={updateMatch}
+                  setPageRef={(node) => {
+                    pageRefs.current[pageNumber] = node;
+                  }}
+                />
+              );
+            })}
+          </div>
+          {sourceMeta?.external_url ? (
+            <div className="pdf-side-controls">
+              <a
+                className="icon-button"
+                href={sourceMeta.external_url}
+                target="_blank"
+                rel="noreferrer"
+                title="Original-Quelle öffnen (arXiv/DOI)"
+                aria-label="Original-Quelle öffnen"
+              >
+                <ExternalLink size={16} />
+              </a>
+            </div>
+          ) : null}
         </div>
       ) : url ? (
         <div className="pdf-placeholder">PDF wird geladen</div>
@@ -590,7 +618,7 @@ export function PdfPane({
               <button
                 className="button button-compact button-ghost"
                 type="button"
-                disabled={isTranslating || !(activeEvidenceText || activeEvidence?.pdf_excerpt || activeEvidence?.reference_text)}
+                disabled={isTranslating || !(activeEvidence?.pdf_excerpt || activeEvidenceText || activeEvidence?.reference_text)}
                 onClick={() => void translateActiveExcerpt()}
               >
                 {isTranslating ? "Übersetzt…" : "Übersetzen"}
@@ -598,11 +626,12 @@ export function PdfPane({
             </span>
           </div>
           <p>
-            {activeEvidenceText ||
-              (url && document && !scanComplete
-                ? "Suche Textstelle…"
-                : activeEvidence?.pdf_excerpt || "Keine Textstelle gefunden.")}
+            {activeEvidence?.pdf_excerpt ||
+              (url && document && !scanComplete ? "Suche Textstelle…" : "") ||
+              activeEvidenceText ||
+              "Keine Textstelle gefunden."}
           </p>
+          {excerptApproxHint ? <small className="excerpt-approx-hint">{excerptApproxHint}</small> : null}
           {translateError ? <div className="inline-error">{translateError}</div> : null}
           {translation ? (
             <div className="excerpt-translation">
@@ -1138,17 +1167,37 @@ function verticalOverlapRatio(left: HighlightBox, right: HighlightBox) {
 
 function buildHighlightQuery(evidence: VerificationEvidence): HighlightQuery {
   const explicit = (evidence.matched_terms ?? []).map(normalizeText).filter(Boolean);
-  const excerpt = compactText(evidence.pdf_excerpt);
+  const excerpt = stripExcerptNoise(compactText(evidence.pdf_excerpt));
   const reference = compactText(evidence.reference_text);
   const referenceTerms = extractTerms(`${excerpt} ${reference}`);
-  // Allow the FULL excerpt as a phrase (excerpts are typically 260–700 chars; the old
-  // 180-char cap silently dropped it, so only one sentence chunk ended up highlighted).
-  const phrases = [...extractPhrases(excerpt, 800), ...extractPhrases(reference, 160)].slice(0, 9);
+  // The pdf_excerpt is the passage actually located in this source; reference_text is the
+  // assistant's own sentence, which frequently appears VERBATIM elsewhere in the paper
+  // (e.g. the intro) and would otherwise hijack the highlight to the wrong region. So
+  // build phrases from the excerpt and only fall back to the reference when the excerpt
+  // yields none — this keeps "Aktive Textstelle" in sync with the cited excerpt.
+  const excerptPhrases = extractPhrases(excerpt, 800);
+  const phrases = (excerptPhrases.length ? excerptPhrases : extractPhrases(reference, 200)).slice(0, 9);
   const terms = extractTerms(`${explicit.join(" ")} ${excerpt} ${reference}`).filter(isAnchorTerm);
   return {
     phrases: Array.from(new Set(phrases)).slice(0, 8),
     terms: Array.from(new Set([...explicit, ...referenceTerms, ...terms])).filter(isAnchorTerm).slice(0, 18)
   };
+}
+
+// Located excerpts often carry a leading noise prefix that never matches the body text as
+// one phrase (author block + "Abstract—…", or a running header) — strip it so the clean
+// sentence remains and matches the source at the right place.
+function stripExcerptNoise(excerpt: string): string {
+  if (!excerpt) {
+    return excerpt;
+  }
+  let text = excerpt;
+  // Drop everything up to and including an "Abstract" header near the start.
+  const abstract = /^(.{0,240}?)\babstract\b[\s:—–-]*/i.exec(text);
+  if (abstract && abstract[0].length < text.length - 20) {
+    text = text.slice(abstract[0].length);
+  }
+  return compactText(text);
 }
 
 function evidenceListSignature(evidences: VerificationEvidence[]) {

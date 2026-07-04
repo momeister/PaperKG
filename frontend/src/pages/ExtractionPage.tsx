@@ -352,7 +352,7 @@ export function ExtractionPage() {
                       <span>Entity Linking</span>
                     </label>
                     <div className="button-row">
-                      <button className="button" type="button" disabled={!selectedPdf || selectedPdf.source_type === "grey" || parsePdf.isPending} onClick={() => parsePdf.mutate()}>
+                      <button className="button" type="button" disabled={!selectedPdf || selectedPdf.source_type === "grey" || selectedPdf.pdf_available === false || parsePdf.isPending} onClick={() => parsePdf.mutate()}>
                         <FileSearch size={16} />
                         <span>Parsen</span>
                       </button>
@@ -602,27 +602,59 @@ function ExtractionLibraryTable({
 }) {
   const [pdfsOpen, setPdfsOpen] = useState(true);
   const [webOpen, setWebOpen] = useState(true);
+  // Filter/Sortierung für die PDF-Liste: Status (auch "ohne PDF"/fehlgeschlagen) + Datum.
+  const [statusFilter, setStatusFilter] = useState<"alle" | "unextracted" | "success" | "failed" | "nopdf">("alle");
+  const [sortBy, setSortBy] = useState<"title" | "status" | "date">("title");
 
   if (!items.length) {
     return <EmptyState title="Keine PDFs oder Webquellen" />;
   }
 
-  const pdfItems = items.filter((item) => item.source_type !== "grey");
+  const matchesStatus = (item: ExtractionLibraryItem) => {
+    const noPdf = item.pdf_available === false;
+    switch (statusFilter) {
+      case "unextracted":
+        return item.latest_extraction_status !== "success";
+      case "success":
+        return item.latest_extraction_status === "success";
+      case "failed":
+        return item.latest_extraction_status === "failed";
+      case "nopdf":
+        return noPdf;
+      default:
+        return true;
+    }
+  };
+  const pdfItems = items
+    .filter((item) => item.source_type !== "grey")
+    .filter(matchesStatus)
+    .sort((left, right) => {
+      if (sortBy === "status") {
+        return String(left.latest_extraction_status ?? "").localeCompare(String(right.latest_extraction_status ?? ""));
+      }
+      if (sortBy === "date") {
+        return String(right.modified_timestamp ?? "").localeCompare(String(left.modified_timestamp ?? ""));
+      }
+      return String(left.title || left.filename).localeCompare(String(right.title || right.filename));
+    });
   const greyItems = items.filter((item) => item.source_type === "grey");
 
   const renderRow = (item: ExtractionLibraryItem) => {
     const isGrey = item.source_type === "grey";
     const noPdf = !isGrey && item.pdf_available === false;
-    const alreadyExtracted = !isGrey && !noPdf && batchMode && item.latest_extraction_status === "success";
+    const alreadyExtracted = !isGrey && !noPdf && item.latest_extraction_status === "success";
     return (
       <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""} ${noPdf ? "data-row--muted" : ""}`} key={item.paper_id}>
         <label className="check-row extraction-row-check">
           {isGrey || noPdf ? (
             <Globe size={14} style={{ opacity: 0.5 }} />
-          ) : alreadyExtracted ? (
-            <span title="Bereits extrahiert" style={{ color: "var(--success, #16a34a)", fontSize: "0.9rem" }}>✓</span>
           ) : (
-            <input type="checkbox" checked={selectedBatchPaths.includes(item.paper_id)} onChange={() => onToggleBatch(item.paper_id)} />
+            <>
+              <input type="checkbox" checked={selectedBatchPaths.includes(item.paper_id)} onChange={() => onToggleBatch(item.paper_id)} />
+              {alreadyExtracted && batchMode ? (
+                <span title="Bereits extrahiert — erneutes Anhaken extrahiert neu" style={{ color: "var(--success, #16a34a)", fontSize: "0.9rem" }}>✓</span>
+              ) : null}
+            </>
           )}
         </label>
         <strong>
@@ -631,15 +663,17 @@ function ExtractionLibraryTable({
         </strong>
         <span>{item.paper_id}</span>
         <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
-        <span>{noPdf ? <span className="muted" title="Kein PDF verfügbar — bitte hochladen">Kein PDF</span> : formatBytes(item.size_bytes)}</span>
-        {noPdf ? (
-          <span className="muted">—</span>
-        ) : (
-          <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
-            <FileSearch size={15} />
-            <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
-          </button>
-        )}
+        <span>
+          {noPdf ? (
+            <span className="muted" title="Kein PDF — Extraktion nutzt Titel + Abstract">nur Abstract</span>
+          ) : (
+            formatBytes(item.size_bytes)
+          )}
+        </span>
+        <button className={batchMode ? "button button-compact" : "button button-primary button-compact"} type="button" onClick={() => onSelect(item)}>
+          <FileSearch size={15} />
+          <span>{batchMode ? "Öffnen" : "Auswählen"}</span>
+        </button>
       </div>
     );
   };
@@ -657,6 +691,26 @@ function ExtractionLibraryTable({
 
   return (
     <div className="extraction-library-sections">
+      <div className="extraction-library-filters">
+        <label>
+          Status
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+            <option value="alle">Alle</option>
+            <option value="unextracted">Nicht extrahiert</option>
+            <option value="success">Extrahiert</option>
+            <option value="failed">Fehlgeschlagen</option>
+            <option value="nopdf">Ohne PDF (nur Abstract)</option>
+          </select>
+        </label>
+        <label>
+          Sortierung
+          <select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)}>
+            <option value="title">Titel</option>
+            <option value="status">Status</option>
+            <option value="date">Datum (neueste zuerst)</option>
+          </select>
+        </label>
+      </div>
       <div>
         <button className="extraction-section-toggle" type="button" onClick={() => setPdfsOpen((o) => !o)}>
           {pdfsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}

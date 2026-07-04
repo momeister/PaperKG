@@ -1,6 +1,6 @@
-import { KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -15,6 +15,7 @@ import {
   Globe,
   Highlighter,
   ImagePlus,
+  ImageOff,
   Italic,
   Languages,
   Link,
@@ -26,6 +27,7 @@ import {
   Quote,
   Redo2,
   Search,
+  MessageSquareText,
   SpellCheck2,
   Sparkles,
   Table2,
@@ -35,7 +37,7 @@ import {
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
-import { evidenceColorVars } from "../citationColors";
+import { colorVarsForPaperId, evidenceColorVars } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { PdfPane } from "../components/PdfPane";
 import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
@@ -87,6 +89,69 @@ const THREAD_RANGE_TEXT_LIMIT = 16000;
 
 const TABLE_PICKER_COLS = 6;
 const TABLE_PICKER_ROWS = 6;
+const IMAGE_PREVIEW_HIDDEN_KEY = "sciencekg.notes.hideImagePreview";
+
+// Character index in a <textarea> under a screen point. Textareas expose no caret-from-
+// point API, so measure against a throwaway mirror <div> laid out identically over the
+// textarea (same font/padding/wrapping) and read the caret there. Used for the pointer-
+// based image drag so images can be dropped exactly between characters.
+function caretIndexFromPoint(textarea: HTMLTextAreaElement, clientX: number, clientY: number): number | null {
+  const doc = textarea.ownerDocument;
+  const win = doc.defaultView ?? window;
+  const rect = textarea.getBoundingClientRect();
+  const style = win.getComputedStyle(textarea);
+  const mirror = doc.createElement("div");
+  const copy = [
+    "boxSizing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+    "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+    "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "letterSpacing",
+    "lineHeight", "textTransform", "wordSpacing", "textIndent", "tabSize", "wordBreak"
+  ] as const;
+  for (const property of copy) {
+    mirror.style[property as any] = style[property as any];
+  }
+  mirror.style.position = "fixed";
+  mirror.style.left = `${rect.left}px`;
+  mirror.style.top = `${rect.top - textarea.scrollTop}px`;
+  mirror.style.width = `${rect.width}px`;
+  mirror.style.height = "auto";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflowWrap = "break-word";
+  mirror.style.overflow = "hidden";
+  mirror.style.opacity = "0";
+  // Muss hit-testbar sein: caretRangeFromPoint überspringt pointer-events:none-Elemente
+  // (dann käme die Position der Textarea/Overlay dahinter zurück, nie der Spiegel).
+  mirror.style.pointerEvents = "auto";
+  mirror.style.zIndex = "2147483647";
+  // A single text node → caret offset is directly the character index. Trailing newline
+  // needs a sentinel char so the last line has measurable height.
+  const value = textarea.value;
+  mirror.textContent = value.endsWith("\n") ? `${value} ` : value;
+  doc.body.appendChild(mirror);
+  try {
+    const anyDoc = doc as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    };
+    if (typeof anyDoc.caretRangeFromPoint === "function") {
+      const range = anyDoc.caretRangeFromPoint(clientX, clientY);
+      if (range && mirror.contains(range.startContainer)) {
+        return Math.min(value.length, range.startOffset);
+      }
+    }
+    if (typeof anyDoc.caretPositionFromPoint === "function") {
+      const position = anyDoc.caretPositionFromPoint(clientX, clientY);
+      if (position && mirror.contains(position.offsetNode)) {
+        return Math.min(value.length, position.offset);
+      }
+    }
+  } catch {
+    // fall through
+  } finally {
+    mirror.remove();
+  }
+  return null;
+}
 const TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spanisch", "Italienisch", "Portugiesisch", "Niederländisch", "Polnisch", "Chinesisch", "Japanisch"];
 
 export function buildMarkdownTable(cols: number, rows: number) {
@@ -226,15 +291,22 @@ export function NotesSurface({
   const [notePdfOpen, setNotePdfOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
   const [citationListOpen, setCitationListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
   const [spellcheckEnabled, setSpellcheckEnabled] = useState(() => loadBooleanUiState("spellcheckEnabled", true));
+  // N-Marker (KI-Thread-Anker) im Editor ein-/ausblendbar.
+  const [threadAnchorsVisible, setThreadAnchorsVisible] = useState(() => loadBooleanUiState("threadAnchorsVisible", true));
   const [contextWidth, setContextWidth] = useState(() => loadNumberUiState(`${scopedProjectId}.contextWidth`, 430));
   const [activeThreadId, setActiveThreadId] = useState("");
   const [locatedThreadId, setLocatedThreadId] = useState("");
   const [threadMetaById, setThreadMetaById] = useState<Record<string, ThreadAnchorMeta>>({});
   const [localThreadRanges, setLocalThreadRanges] = useState<Record<string, ThreadStoredRange>>({});
+  const lastAiThreadRef = useRef<NoteAiThread | null>(null);
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [editorScrollLeft, setEditorScrollLeft] = useState(0);
   const [insertPreview, setInsertPreview] = useState<{ index: number; content: string } | null>(null);
+  // Bild-Thumbnails im Edit-Modus verdecken sonst den Text darunter — abschaltbar (persistiert).
+  const [imagePreviewHidden, setImagePreviewHidden] = useState(
+    () => typeof localStorage !== "undefined" && localStorage.getItem(IMAGE_PREVIEW_HIDDEN_KEY) === "1"
+  );
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const selectionPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -357,6 +429,10 @@ export function NotesSurface({
         anchor_quote: stripHighlightMarkers(selection?.text ?? "").slice(0, 2000) || null
       }),
     onSuccess: (payload) => {
+      // Direktreferenz auf den frisch erzeugten Thread: „Ersetzen"/„Darunter einfügen"
+      // dürfen nicht davon abhängen, dass der Threads-Refetch schon durch ist — sonst
+      // landet der Ergebnis-Anker auf der alten Selektion statt auf dem KI-Text.
+      lastAiThreadRef.current = payload.thread;
       const currentMarkdown = markdownRef.current;
       const anchor = threadAnchorRange(payload.thread, currentMarkdown);
       if (anchor) {
@@ -581,6 +657,12 @@ export function NotesSurface({
       if (exact) {
         return [exact];
       }
+      // Preview-Offsets passen nicht exakt zum Markdown (z.B. Zitat in Fett/Liste):
+      // nächstgelegene echte Fundstelle markieren statt stumpf der ersten.
+      const nearest = [...refs].sort(
+        (left, right) => Math.abs(left.start - selectedCitationRef.start) - Math.abs(right.start - selectedCitationRef.start)
+      )[0];
+      return [nearest];
     }
     return [refs[0]];
   }, [citationRefs, selectedCitation, selectedCitationRef]);
@@ -751,6 +833,10 @@ export function NotesSurface({
   useEffect(() => {
     saveBooleanUiState("spellcheckEnabled", spellcheckEnabled);
   }, [spellcheckEnabled]);
+
+  useEffect(() => {
+    saveBooleanUiState("threadAnchorsVisible", threadAnchorsVisible);
+  }, [threadAnchorsVisible]);
 
   useEffect(() => {
     setInsertPreview(null);
@@ -1073,6 +1159,17 @@ export function NotesSurface({
     });
   }
 
+  /** Aktiver Thread — bevorzugt aus der Liste, sonst die frische aiEdit-Antwort. */
+  function resolveActiveThread(): NoteAiThread | null {
+    if (!activeThreadId) {
+      return null;
+    }
+    return (
+      threads.find((item) => item.id === activeThreadId) ??
+      (lastAiThreadRef.current?.id === activeThreadId ? lastAiThreadRef.current : null)
+    );
+  }
+
   function replaceSelection(value: string) {
     if (!selection) {
       return;
@@ -1082,7 +1179,7 @@ export function NotesSurface({
     // trail. Re-attach every citation link of the replaced range that the rewrite
     // did not carry over.
     const replaced = withPreservedCitationLinks(markdown.slice(selection.start, selection.end), value);
-    const thread = activeThreadId ? threads.find((item) => item.id === activeThreadId) : null;
+    const thread = resolveActiveThread();
     pushUndo();
     updateMarkdown(`${markdown.slice(0, selection.start)}${replaced}${markdown.slice(selection.end)}`);
     rememberThreadResultRange(thread, selection.start, selection.start + replaced.length, replaced);
@@ -1096,6 +1193,148 @@ export function NotesSurface({
     setSelectionPinned(false);
     setAiInstruction("");
     setAiPreview("");
+  }
+
+  // ---- Bilder: Strg+V / Drag&Drop → Note-Asset hochladen + Markdown einfügen ----
+
+  function handleEditorPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (!files.length) {
+      return;
+    }
+    event.preventDefault();
+    for (const file of files) {
+      uploadAsset.mutate(file);
+    }
+  }
+
+  function handleEditorDragOver(event: ReactDragEvent<HTMLTextAreaElement>) {
+    const types = event.dataTransfer.types;
+    if (types.includes("Files") || types.includes("application/x-paperkg-image")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = types.includes("Files") ? "copy" : "move";
+    }
+  }
+
+  function handleEditorDrop(event: ReactDragEvent<HTMLTextAreaElement>) {
+    const moveSnippet = event.dataTransfer.getData("application/x-paperkg-image");
+    const files = Array.from(event.dataTransfer.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (!moveSnippet && !files.length) {
+      return; // normaler Text-Drop → Browser-Default
+    }
+    event.preventDefault();
+    const node = event.currentTarget;
+    const caret = node.selectionStart ?? markdown.length;
+    if (moveSnippet) {
+      // Bild-Referenz verschieben: alte Stelle entfernen, an der Drop-Position einfügen.
+      const snippetIndex = markdown.indexOf(moveSnippet);
+      if (snippetIndex < 0) {
+        return;
+      }
+      const without = `${markdown.slice(0, snippetIndex)}${markdown.slice(snippetIndex + moveSnippet.length)}`;
+      const adjusted = snippetIndex < caret ? Math.max(0, caret - moveSnippet.length) : caret;
+      pushUndo();
+      updateMarkdown(`${without.slice(0, adjusted)}${moveSnippet}${without.slice(adjusted)}`);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(adjusted + moveSnippet.length, adjusted + moveSnippet.length);
+      });
+      return;
+    }
+    // Datei-Drop: Cursor auf die Drop-Position setzen, dann hochladen + einfügen.
+    lastCursorRef.current = caret;
+    node.focus();
+    node.setSelectionRange(caret, caret);
+    for (const file of files) {
+      uploadAsset.mutate(file);
+    }
+  }
+
+  /** Bild-Referenz (```![](url)```) an eine Zeichenposition im Markdown verschieben.
+   *  ``sourceIndex`` ist die exakte Start-Position des zu ziehenden Vorkommens (damit
+   *  bei mehreren identischen Bildern das richtige verschoben wird). */
+  function moveImageSnippet(snippet: string, sourceIndex: number, targetIndex: number) {
+    const snippetIndex =
+      markdown.slice(sourceIndex, sourceIndex + snippet.length) === snippet ? sourceIndex : markdown.indexOf(snippet);
+    if (snippetIndex < 0) {
+      return;
+    }
+    // Innerhalb des Bild-Snippets abgelegt → nichts zu tun.
+    if (targetIndex >= snippetIndex && targetIndex <= snippetIndex + snippet.length) {
+      return;
+    }
+    const without = `${markdown.slice(0, snippetIndex)}${markdown.slice(snippetIndex + snippet.length)}`;
+    // Beim Verschieben nach hinten die entfernte Länge kompensieren.
+    const clampedTarget = Math.max(0, Math.min(without.length, targetIndex));
+    const adjusted = snippetIndex < targetIndex ? Math.max(0, clampedTarget - snippet.length) : clampedTarget;
+    if (adjusted === snippetIndex) {
+      return; // Position unverändert.
+    }
+    pushUndo();
+    updateMarkdown(`${without.slice(0, adjusted)}${snippet}${without.slice(adjusted)}`);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(adjusted + snippet.length, adjusted + snippet.length);
+    });
+  }
+
+  /** Pointer-basiertes Ziehen eines Bild-Thumbnails (Maus gedrückt halten + ziehen) —
+   *  unabhängig von der nativen HTML5-DnD, die im WebView oft blockiert ist. Der Caret
+   *  im Textfeld zeigt live die Ziel-Einfügeposition. */
+  function startImagePointerDrag(event: ReactPointerEvent<HTMLImageElement>, snippet: string, src: string, sourceIndex: number) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    const ghost = document.createElement("img");
+    ghost.src = src;
+    ghost.className = "note-image-drag-ghost";
+    document.body.appendChild(ghost);
+    const place = (x: number, y: number) => {
+      ghost.style.left = `${x + 12}px`;
+      ghost.style.top = `${y + 12}px`;
+    };
+    place(event.clientX, event.clientY);
+    textarea.focus();
+    let lastCaret = -1;
+    const onMove = (moveEvent: PointerEvent) => {
+      place(moveEvent.clientX, moveEvent.clientY);
+      const index = caretIndexFromPoint(textarea, moveEvent.clientX, moveEvent.clientY);
+      if (index != null) {
+        lastCaret = index;
+        textarea.setSelectionRange(index, index);
+      }
+    };
+    const onUp = (upEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      ghost.remove();
+      document.body.style.cursor = "";
+      const index = caretIndexFromPoint(textarea, upEvent.clientX, upEvent.clientY) ?? lastCaret;
+      if (index != null && index >= 0) {
+        moveImageSnippet(snippet, sourceIndex, index);
+      }
+    };
+    document.body.style.cursor = "grabbing";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function toggleImagePreview() {
+    setImagePreviewHidden((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(IMAGE_PREVIEW_HIDDEN_KEY, next ? "1" : "0");
+      } catch {
+        // ignore storage failures
+      }
+      return next;
+    });
   }
 
   function handleEditorPointerDown() {
@@ -1453,7 +1692,7 @@ export function NotesSurface({
       insertAtSelection(insertText);
       return;
     }
-    const thread = activeThreadId ? threads.find((item) => item.id === activeThreadId) : null;
+    const thread = resolveActiveThread();
     const start = selection.end;
     pushUndo();
     updateMarkdown(`${markdown.slice(0, start)}${insertText}${markdown.slice(start)}`);
@@ -1611,8 +1850,18 @@ export function NotesSurface({
   }
 
   function openCitation(citation: NoteCitation, ref?: CitationMarkdownRef | null) {
+    // Ref nur übernehmen, wenn seine Offsets wirklich auf den Zitat-Link im Markdown
+    // zeigen — sonst markiert der Edit-Modus später einen falschen Bereich.
+    let safeRef = ref ?? null;
+    if (safeRef && !markdown.slice(safeRef.start, safeRef.end).includes(`sciencekg://citation/${citation.id}`)) {
+      const anchor = safeRef.start;
+      const candidates = citationRefs.filter((item) => item.id === citation.id);
+      safeRef = candidates.length
+        ? [...candidates].sort((left, right) => Math.abs(left.start - anchor) - Math.abs(right.start - anchor))[0]
+        : null;
+    }
     setSelectedCitation(citation);
-    setSelectedCitationRef(ref ?? null);
+    setSelectedCitationRef(safeRef);
     setContextOpen(true);
     setHistoryOpen(false);
     setCitationListOpen(true);
@@ -1682,6 +1931,9 @@ export function NotesSurface({
         ]
       : []),
     ...threadAnchors.flatMap((anchor) => {
+      if (!threadAnchorsVisible) {
+        return [];
+      }
       const isActive = anchor.thread.id === inlineThreadId || anchor.thread.id === locatedThreadId;
       const isHovered = anchor.thread.id === hoverThreadId;
       if (!isActive && !isHovered) {
@@ -1700,7 +1952,9 @@ export function NotesSurface({
       start: ref.start,
       end: ref.end,
       className: "textarea-highlight-range--citation-active",
-      style: evidenceColorVars(selectedCitationColorIndex)
+      // Gleiche Farbfunktion wie die PDF-Marker (paper_id-Hash), damit Notiz- und
+      // PDF-Highlight einer Quelle identisch gefärbt sind.
+      style: colorVarsForPaperId(selectedCitation?.paper_id, selectedCitationColorIndex)
     })),
     ...noteSearchRanges.map((range, index) => ({
       start: range.start,
@@ -1708,7 +1962,7 @@ export function NotesSurface({
       className: index === noteSearchIndex ? "textarea-highlight-range--note-search textarea-highlight-range--note-search-active" : "textarea-highlight-range--note-search"
     }))
   ];
-  const threadAnchorInsertions = threadAnchors.map((anchor) => {
+  const threadAnchorInsertions = (threadAnchorsVisible ? threadAnchors : []).map((anchor) => {
     const meta = threadAnchorMeta.get(anchor.thread.id) ?? { label: "N?", colorIndex: 0 };
     return {
       index: anchor.end,
@@ -1742,9 +1996,43 @@ export function NotesSurface({
       )
     };
   });
+  // Bilder auch im Edit-Modus zeigen: pro ![alt](url) ein verankertes Thumbnail
+  // (nimmt im Textfluss keine Breite ein — gleiche Technik wie die N-Marker).
+  // Per Drag lässt sich die Bild-Referenz an eine andere Stelle ziehen.
+  const imageInsertions = useMemo(() => {
+    const insertions: { index: number; className: string; content: ReactNode }[] = [];
+    if (imagePreviewHidden) {
+      return insertions;
+    }
+    const pattern = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(markdown)) !== null) {
+      const snippet = match[0];
+      const src = match[1];
+      const sourceIndex = match.index;
+      insertions.push({
+        index: sourceIndex + snippet.length,
+        className: "textarea-image-insertion",
+        content: (
+          <span className="textarea-image-wrap" key={`img-${sourceIndex}`}>
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              title="Gedrückt halten und ziehen, um das Bild an eine andere Stelle zu verschieben"
+              onPointerDown={(event) => startImagePointerDrag(event, snippet, src, sourceIndex)}
+            />
+          </span>
+        )
+      });
+    }
+    return insertions;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markdown, imagePreviewHidden]);
   const editorGhostInsertions = [
     ...(insertPreview ? [{ ...insertPreview, className: "textarea-ghost-insertion--ai" }] : []),
-    ...threadAnchorInsertions
+    ...threadAnchorInsertions,
+    ...imageInsertions
   ];
   const sourcePanelRows = citationListOpen ? undefined : "auto minmax(0, 1fr)";
   const editorBottomStyle = {
@@ -1987,6 +2275,16 @@ export function NotesSurface({
                 >
                   <SpellCheck2 size={17} />
                 </button>
+                <button
+                  className={`icon-button ${threadAnchorsVisible ? "active" : ""}`}
+                  type="button"
+                  aria-label={threadAnchorsVisible ? "KI-Marker (N…) ausblenden" : "KI-Marker (N…) einblenden"}
+                  aria-pressed={threadAnchorsVisible}
+                  title={threadAnchorsVisible ? "KI-Marker (N…) ausblenden" : "KI-Marker (N…) einblenden"}
+                  onClick={() => setThreadAnchorsVisible((current) => !current)}
+                >
+                  <MessageSquareText size={17} />
+                </button>
                 <select aria-label="Textfarbe" onChange={(event) => event.target.value && applyWrap(`<span style="color:${event.target.value}">`, "</span>")} defaultValue="">
                   <option value="">Farbe</option>
                   <option value="#2563eb">Blau</option>
@@ -2035,6 +2333,16 @@ export function NotesSurface({
                 </span>
                 <button className="icon-button" type="button" aria-label="Bild einfuegen" onClick={() => imageInputRef.current?.click()} disabled={!activeNoteId}>
                   <ImagePlus size={17} />
+                </button>
+                <button
+                  className={`icon-button ${imagePreviewHidden ? "icon-button--active" : ""}`}
+                  type="button"
+                  aria-pressed={imagePreviewHidden}
+                  aria-label={imagePreviewHidden ? "Bildvorschau im Editor einblenden" : "Bildvorschau im Editor ausblenden"}
+                  title={imagePreviewHidden ? "Bildvorschau im Editor einblenden" : "Bildvorschau im Editor ausblenden (verdeckt sonst den Text)"}
+                  onClick={toggleImagePreview}
+                >
+                  <ImageOff size={17} />
                 </button>
                 <input ref={imageInputRef} className="hidden-input" type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && uploadAsset.mutate(event.target.files[0])} />
                 <div className="segmented markdown-mode-toggle">
@@ -2106,7 +2414,7 @@ export function NotesSurface({
                       insertions={editorGhostInsertions}
                       scrollTop={editorScrollTop}
                       scrollLeft={editorScrollLeft}
-                      interactive={threadAnchorInsertions.length > 0}
+                      interactive={threadAnchorInsertions.length > 0 || imageInsertions.length > 0}
                     />
                     <textarea
                       ref={textareaRef}
@@ -2120,6 +2428,9 @@ export function NotesSurface({
                         setEditorScrollLeft(event.currentTarget.scrollLeft);
                       }}
                       onKeyDown={handleEditorKeyDown}
+                      onPaste={handleEditorPaste}
+                      onDragOver={handleEditorDragOver}
+                      onDrop={handleEditorDrop}
                       spellCheck={spellcheckEnabled}
                       placeholder="Markdown schreiben"
                     />
@@ -2127,7 +2438,7 @@ export function NotesSurface({
                       <button
                         className="editor-citation-chip"
                         type="button"
-                        style={evidenceColorVars(activeEditorCitationColorIndex)}
+                        style={colorVarsForPaperId(activeEditorCitation.paper_id, activeEditorCitationColorIndex)}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => openCitation(activeEditorCitation, activeEditorCitationRef)}
                       >
@@ -2338,7 +2649,7 @@ export function NotesSurface({
                             citationRowRefs.current[citation.id] = node;
                           }}
                           onClick={() => openCitation(citation)}
-                          style={evidenceColorVars(colorIndex)}
+                          style={colorVarsForPaperId(citation.paper_id, colorIndex)}
                           aria-label={`Quelle ${badge} öffnen`}
                           aria-pressed={selectedCitation?.id === citation.id}
                         >
@@ -3103,7 +3414,7 @@ function renderInline(
           contentEditable={false}
           data-citation-id={citationMatch[2]}
           data-citation-label={citationMatch[1]}
-          style={citation ? evidenceColorVars(colorIndex) : undefined}
+          style={citation ? colorVarsForPaperId(citation.paper_id, colorIndex) : undefined}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => citation && onCitationClick(citation, ref)}
         >
@@ -3138,7 +3449,19 @@ function renderInline(
     if (colorMatch) {
       return <span key={`${part}-${index}`} style={{ color: colorMatch[1] }} data-color={colorMatch[1]}>{colorMatch[2]}</span>;
     }
-    return <span key={`${part}-${index}`}>{highlightPreviewSearch(part, searchQuery)}</span>;
+    // Einzelne Zeilenumbrüche sichtbar machen: eine neue Zeile im Editor ist auch in
+    // der Preview eine neue Zeile (serializePreviewNode mappt <br> zurück auf \n).
+    const lines = part.split("\n");
+    return (
+      <span key={`${part}-${index}`}>
+        {lines.map((line, lineIndex) => (
+          <Fragment key={lineIndex}>
+            {highlightPreviewSearch(line, searchQuery)}
+            {lineIndex < lines.length - 1 ? <br /> : null}
+          </Fragment>
+        ))}
+      </span>
+    );
   });
 }
 

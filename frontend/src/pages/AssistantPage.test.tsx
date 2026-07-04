@@ -136,6 +136,66 @@ describe("assistant grouped citations", () => {
 
     expect(metas.map((meta) => meta.source.paper_id)).toEqual(["p1", "p2"]);
     expect(metas.map((meta) => meta.evidenceIndex)).toEqual([0, 0]);
+    // Both evidences are verified in the PDF - no proactive uncertainty marker.
+    expect(metas.map((meta) => Boolean(meta.approximate))).toEqual([false, false]);
+  });
+
+  it("marks citations approximate when the located evidence is verification-uncertain", () => {
+    const uncertain: VerificationSource[] = [
+      {
+        paper_id: "p1",
+        title: "Not Found Study",
+        pdf_available: true,
+        evidence: [
+          {
+            paper_id: "p1",
+            kind: "claim",
+            reference_text: "The Earth is round.",
+            pdf_excerpt: "",
+            matched_terms: [],
+            found_in_pdf_text: false
+          }
+        ]
+      },
+      {
+        paper_id: "p2",
+        title: "Fuzzy Anchor Study",
+        pdf_available: true,
+        evidence: [
+          {
+            paper_id: "p2",
+            kind: "claim",
+            reference_text: "Earth orbits the Sun.",
+            pdf_excerpt: "Some fuzzy term-overlap window.",
+            matched_terms: ["earth"],
+            found_in_pdf_text: true,
+            metadata: { located: "term_overlap_only" }
+          }
+        ]
+      },
+      {
+        paper_id: "p3",
+        title: "No PDF Study",
+        pdf_available: false,
+        evidence: [
+          {
+            paper_id: "p3",
+            kind: "claim",
+            reference_text: "Moon orbits the Earth.",
+            pdf_excerpt: "",
+            matched_terms: [],
+            found_in_pdf_text: false
+          }
+        ]
+      }
+    ];
+
+    const metas = citationMetasFor(uncertain, "p1, p2, p3", "Earth is round and orbits the Sun.");
+
+    expect(metas.map((meta) => meta.source.paper_id)).toEqual(["p1", "p2", "p3"]);
+    // not-found and term_overlap_only -> flagged; missing local PDF -> NOT flagged
+    // (nothing to verify against, the badge already explains that case).
+    expect(metas.map((meta) => Boolean(meta.approximate))).toEqual([true, true, false]);
   });
 
   it("exports grouped answer citations as separate note citation links", () => {

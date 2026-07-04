@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Database, PanelRightClose, Search, Plus, Trash2, ExternalLink, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Database, Download, PanelRightClose, Search, Plus, Trash2, ExternalLink, RefreshCw } from "lucide-react";
 
 import { api } from "../api";
-import type { Dataset, DatasetHit, DatasetSource } from "../types";
+import type { Dataset, DatasetDetails, DatasetHit, DatasetSource } from "../types";
 
 /**
  * Datensatz-Panel (WP2).
@@ -21,6 +21,76 @@ type Props = {
 
 function sourceLabel(sources: DatasetSource[], id: string): string {
   return sources.find((s) => s.id === id)?.label ?? id;
+}
+
+/**
+ * Einklappbare Detail-Ansicht: lädt beim ersten Aufklappen die Datei-Liste,
+ * Beschreibung und Download-Links direkt aus der Registry (nur Metadaten;
+ * der Download selbst läuft beim Anbieter).
+ */
+function DatasetDetailsBlock({ source, externalId }: { source: string; externalId: string }) {
+  const [open, setOpen] = useState(false);
+  const [details, setDetails] = useState<DatasetDetails | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = useCallback(() => {
+    setOpen((current) => {
+      const next = !current;
+      if (next && !details && !loading) {
+        setLoading(true);
+        api.datasets
+          .details(source, externalId)
+          .then((res) => setDetails(res))
+          .catch((e) => setError(e instanceof Error ? e.message : "Details nicht abrufbar."))
+          .finally(() => setLoading(false));
+      }
+      return next;
+    });
+  }, [details, loading, source, externalId]);
+
+  return (
+    <div className="dataset-details">
+      <button type="button" className="dataset-details-toggle" onClick={toggle}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        Details & Dateien
+      </button>
+      {open ? (
+        <div className="dataset-details-body">
+          {loading ? <p className="analysis-muted">Lade Details …</p> : null}
+          {error ? <p className="analysis-error">{error}</p> : null}
+          {details?.warning ? <p className="analysis-muted">{details.warning}</p> : null}
+          {details?.license ? <p className="analysis-muted">Lizenz: {details.license}</p> : null}
+          {details?.description ? (
+            <p className="dataset-details-desc">{details.description.replace(/<[^>]+>/g, " ").slice(0, 1200)}</p>
+          ) : null}
+          {details?.files.length ? (
+            <ul className="dataset-file-list">
+              {details.files.map((file, index) => (
+                <li key={`${file.name}-${index}`}>
+                  <span className="dataset-file-name">{file.name}</span>
+                  {file.size ? <span className="analysis-muted">{file.size}</span> : null}
+                  {file.download_url ? (
+                    <a href={file.download_url} target="_blank" rel="noreferrer" className="analysis-inline-link" title="Bei der Registry herunterladen">
+                      <Download size={12} /> Download
+                    </a>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {details && !details.files.length && details.download_url ? (
+            <a href={details.download_url} target="_blank" rel="noreferrer" className="analysis-inline-link">
+              <Download size={12} /> Kompletten Datensatz herunterladen
+            </a>
+          ) : null}
+          {details && !details.files.length && !details.download_url && !loading && !details.warning ? (
+            <p className="analysis-muted">Keine Datei-Liste verfügbar — Landingpage nutzen.</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function DatasetsPanel({ projectId, onCollapse }: Props) {
@@ -174,6 +244,7 @@ export function DatasetsPanel({ projectId, onCollapse }: Props) {
                         <ExternalLink size={12} /> {hit.doi || "Quelle öffnen"}
                       </a>
                     ) : null}
+                    <DatasetDetailsBlock source={hit.source} externalId={hit.external_id} />
                   </div>
                   <button
                     type="button"
@@ -212,6 +283,8 @@ export function DatasetsPanel({ projectId, onCollapse }: Props) {
                     <ExternalLink size={12} /> {ds.doi || "Quelle öffnen"}
                   </a>
                 ) : null}
+                {ds.description ? <p className="dataset-desc">{ds.description}</p> : null}
+                <DatasetDetailsBlock source={ds.source} externalId={ds.external_id} />
               </div>
               <button type="button" className="icon-button" title="Entfernen" onClick={() => void removeOne(ds.id)}>
                 <Trash2 size={15} />

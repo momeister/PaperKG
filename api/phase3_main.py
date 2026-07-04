@@ -13,12 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from extraction.entity_extractor import EntityExtractor
 from extraction.entity_linker import ExtractionPipeline
 from extraction.embedding_engine import EmbeddingEngine
 from extraction.batch_processor import BatchProcessor

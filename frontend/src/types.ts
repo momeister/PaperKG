@@ -190,6 +190,8 @@ export type CitationLink = {
   score?: number;
   context?: string;
   approximate?: boolean;
+  /** "model" when the LLM itself bound this citation to an evidence item ([pid#N]). */
+  binding?: string;
 };
 
 export type Answer = {
@@ -859,6 +861,22 @@ export type GitDiff = {
   error?: string | null;
 };
 
+// --- Zitat-Nachcheck (Claim gegen Quelle prüfen) ---
+export type ClaimCheckVerdict = "supported" | "partially_supported" | "not_supported" | "insufficient_evidence";
+
+export type ClaimCheckResult = {
+  paper_id: string;
+  statement: string;
+  verdict: ClaimCheckVerdict;
+  explanation: string;
+  supporting_quotes: string[];
+  excerpts: string[];
+  source_origin: "pdf" | "abstract" | "grey" | "shown_evidence" | "none" | string;
+  /** Wie weit wurde geprüft: nur die Belegstelle/Abstract, oder das ganze Paper (bei
+   *  unsicherem Auszug-Urteil wird das ganze PDF fensterweise nachgeprüft). */
+  checked_scope?: "excerpt" | "whole_paper" | string;
+};
+
 // --- Analyse-Werkstatt (reproduzierbare Skript-Läufe) ---
 export type AnalysisArtifactKind = "figure" | "table" | "data" | "log" | string;
 
@@ -896,6 +914,22 @@ export type Dataset = DatasetHit & {
   project_id?: string | null;
   linked_paper_id?: string | null;
   created_timestamp?: string;
+};
+
+export type DatasetFileInfo = {
+  name: string;
+  size?: string | null;
+  download_url?: string | null;
+};
+
+export type DatasetDetails = {
+  source: string;
+  external_id: string;
+  description?: string | null;
+  license?: string | null;
+  files: DatasetFileInfo[];
+  download_url?: string | null;
+  warning?: string | null;
 };
 
 export type AnalysisRun = {

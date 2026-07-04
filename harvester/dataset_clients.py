@@ -257,3 +257,101 @@ async def search_datasets(
                 continue
             results.extend(h.as_dict() for h in res)
     return {"results": results, "warnings": warnings}
+
+
+def _human_size(size: Any) -> str | None:
+    try:
+        value = float(size)
+    except (TypeError, ValueError):
+        return None
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return None
+
+
+async def fetch_dataset_details(
+    source: str, external_id: str, timeout: float = 25.0
+) -> dict[str, Any]:
+    """Detail-Ansicht eines Datensatzes: Datei-Liste + Download-Links + Volltext-Beschreibung.
+
+    Nur Metadaten/Links — heruntergeladen wird beim Registry-Anbieter, nicht von uns.
+    Fail-soft: nicht unterstützte Quellen oder API-Fehler liefern ``files: []`` mit Warnung.
+    """
+    files: list[dict[str, Any]] = []
+    description: str | None = None
+    license_name: str | None = None
+    download_url: str | None = None
+    warning: str | None = None
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, headers={"User-Agent": "PaperKG/1.0 (dataset details)"}
+        ) as client:
+            if source == "zenodo":
+                resp = await client.get(f"https://zenodo.org/api/records/{external_id}")
+                resp.raise_for_status()
+                data = resp.json()
+                meta = data.get("metadata", {}) or {}
+                description = str(meta.get("description") or "") or None
+                lic = meta.get("license")
+                license_name = (lic.get("id") if isinstance(lic, dict) else lic) or None
+                for f in data.get("files", []) or []:
+                    files.append({
+                        "name": f.get("key") or f.get("filename") or "",
+                        "size": _human_size(f.get("size")),
+                        "download_url": ((f.get("links", {}) or {}).get("self")) or None,
+                    })
+            elif source == "figshare":
+                resp = await client.get(f"https://api.figshare.com/v2/articles/{external_id}")
+                resp.raise_for_status()
+                data = resp.json()
+                description = str(data.get("description") or "") or None
+                lic = data.get("license")
+                license_name = (lic.get("name") if isinstance(lic, dict) else lic) or None
+                for f in data.get("files", []) or []:
+                    files.append({
+                        "name": f.get("name") or "",
+                        "size": _human_size(f.get("size")),
+                        "download_url": f.get("download_url") or None,
+                    })
+            elif source == "dryad":
+                encoded = external_id.replace("/", "%2F")
+                resp = await client.get(
+                    f"https://datadryad.org/api/v2/datasets/{encoded}",
+                    headers={"Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                description = str(data.get("abstract") or "") or None
+                license_name = str(data.get("license") or "") or None
+                download_url = f"https://datadryad.org/api/v2/datasets/{encoded}/download"
+            elif source == "clinicaltrials":
+                resp = await client.get(f"https://clinicaltrials.gov/api/v2/studies/{external_id}")
+                resp.raise_for_status()
+                proto = resp.json().get("protocolSection", {}) or {}
+                desc_module = proto.get("descriptionModule", {}) or {}
+                description = str(desc_module.get("detailedDescription") or desc_module.get("briefSummary") or "") or None
+                design = proto.get("designModule", {}) or {}
+                enrollment = (design.get("enrollmentInfo", {}) or {}).get("count")
+                if enrollment:
+                    description = f"Teilnehmer (geplant/ist): {enrollment}\n\n{description or ''}".strip()
+            elif source == "papers_with_code":
+                resp = await client.get(f"https://paperswithcode.com/api/v1/datasets/{external_id}/")
+                resp.raise_for_status()
+                data = resp.json()
+                description = str(data.get("description") or "") or None
+                download_url = str(data.get("url") or "") or None
+            else:
+                warning = f"Quelle {source} hat keine Detail-API."
+    except Exception as exc:  # noqa: BLE001 — fail-soft
+        warning = f"Details nicht abrufbar: {type(exc).__name__}"
+    return {
+        "source": source,
+        "external_id": external_id,
+        "description": description,
+        "license": license_name,
+        "files": files,
+        "download_url": download_url,
+        "warning": warning,
+    }

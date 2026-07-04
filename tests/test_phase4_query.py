@@ -15,6 +15,7 @@ from query.grounded_responder import (
     _best_citation_evidence,
     _build_grounded_prompt,
     _citation_links_for_answer,
+    _extract_evidence_bindings,
     _map_numeric_citations,
     _parse_numbered_translations,
     _strip_invalid_citations,
@@ -966,8 +967,10 @@ def test_map_numeric_citations_replaces_evidence_numbers_with_paper_ids() -> Non
 
     mapped = _map_numeric_citations(text, evidence)
 
-    assert "[arxiv:2501.00001]" in mapped
-    assert "[p2]" in mapped
+    # The item number is kept as a `#N` binding suffix; _extract_evidence_bindings
+    # strips it before the answer is shown.
+    assert "[arxiv:2501.00001#1]" in mapped
+    assert "[p2#2]" in mapped
     assert "[99]" in mapped
     assert "[17-22]" in mapped
     assert "[1]" not in mapped
@@ -984,9 +987,113 @@ def test_map_numeric_citations_resolves_z_labels_from_lm_studio_models() -> None
 
     mapped = _map_numeric_citations(text, evidence)
 
-    assert "[arxiv:2501.00001]" in mapped
-    assert "[p2]" in mapped
+    assert "[arxiv:2501.00001#1]" in mapped
+    assert "[p2#2]" in mapped
     assert "[Z99]" in mapped
+
+
+def test_build_grounded_prompt_instructs_evidence_item_binding() -> None:
+    source = Source(paper_id="p1", title="Paper One", year=2024, doi=None, url=None)
+    hit = SearchHit(source=source)
+    item = Evidence(paper_id="p1", kind="claim", field="claims", text="Claim one", score=7.0)
+    hit.add_evidence(item)
+
+    prompt = _build_grounded_prompt("What?", [hit], [item])
+
+    # The model must declare WHICH numbered evidence item each citation draws on...
+    assert "append '#' plus the number" in prompt
+    assert "[arxiv:2301.12345#3]" in prompt
+    # ...while bare item numbers stay forbidden.
+    assert "never cite evidence item numbers like [1] or [4]" in prompt
+
+
+def test_extract_evidence_bindings_strips_suffix_and_binds() -> None:
+    evidence = [
+        Evidence(paper_id="p1", kind="claim", field="claims", text="Claim one", score=7.0),
+        Evidence(paper_id="p1", kind="claim", field="claims", text="Claim two", score=6.0),
+        Evidence(paper_id="arxiv:2501.00001", kind="claim", field="claims", text="Claim three", score=5.0),
+    ]
+    text = "Fact one [p1#2]. Fact two [p1#9, arxiv:2501.00001#3]. Fact three [p1]."
+
+    cleaned, bindings = _extract_evidence_bindings(text, evidence)
+
+    # The suffix never reaches the display text — including invalid ones.
+    assert "#" not in cleaned
+    assert "[p1]" in cleaned
+    assert "[p1, arxiv:2501.00001]" in cleaned
+    by_paper = {pid: ids for (pid, _context), ids in bindings.items()}
+    # Valid binding: p1#2 -> second evidence item.
+    assert by_paper["p1"] == [evidence[1].evidence_id]
+    # arxiv:...#3 binds to item 3 (same paper).
+    assert by_paper["arxiv:2501.00001"] == [evidence[2].evidence_id]
+    # p1#9 is out of range: stripped, no binding for that occurrence.
+    assert sum(len(ids) for ids in bindings.values()) == 2
+
+
+def test_extract_evidence_bindings_rejects_paper_mismatch() -> None:
+    evidence = [
+        Evidence(paper_id="p1", kind="claim", field="claims", text="Claim one", score=7.0),
+        Evidence(paper_id="p2", kind="claim", field="claims", text="Claim two", score=6.0),
+    ]
+    # p1#2 points at evidence item 2, which belongs to p2 — suffix stripped, no binding.
+    cleaned, bindings = _extract_evidence_bindings("Fact [p1#2].", evidence)
+
+    assert cleaned == "Fact [p1]."
+    assert bindings == {}
+
+
+def test_citation_links_prefer_model_binding_over_lexical() -> None:
+    lexical_favorite = Evidence(
+        paper_id="p1",
+        kind="claim",
+        field="claims",
+        text="Vision language models produce detailed image descriptions in benchmarks.",
+        score=7.0,
+    )
+    bound_target = Evidence(
+        paper_id="p1",
+        kind="claim",
+        field="claims",
+        text="BLIP generates less detailed captions than newer models in comparisons.",
+        score=6.0,
+    )
+    evidence = [lexical_favorite, bound_target]
+    answer_text = "Vision language models produce detailed image descriptions [p1]."
+    # Without a binding, lexical overlap would pick `lexical_favorite`.
+    baseline = _citation_links_for_answer(answer_text, evidence)
+    assert baseline[0]["evidence_id"] == lexical_favorite.evidence_id
+
+    context = baseline[0]["context"]
+    bindings = {("p1", context): [bound_target.evidence_id]}
+    links = _citation_links_for_answer(answer_text, evidence, model_bindings=bindings)
+
+    assert links[0]["evidence_id"] == bound_target.evidence_id
+    assert links[0]["evidence_index"] == 1
+    assert links[0]["score"] == round(_CONTEXT_MATCH_SCORE, 4)
+    assert links[0]["binding"] == "model"
+    # "detailed" + "models" shared with the sentence -> plausible binding, no flag.
+    assert links[0].get("approximate") is not True
+
+
+def test_citation_links_flag_model_binding_without_content_overlap() -> None:
+    unrelated = Evidence(
+        paper_id="p1",
+        kind="claim",
+        field="claims",
+        text="We previously hypothesized that manipulating mid-spatial frequency components matters.",
+        score=6.0,
+    )
+    evidence = [unrelated]
+    answer_text = "BLIP produces weaker image captions than newer systems [p1]."
+    context = _citation_links_for_answer(answer_text, evidence)[0]["context"]
+
+    links = _citation_links_for_answer(
+        answer_text, evidence, model_bindings={("p1", context): [unrelated.evidence_id]}
+    )
+
+    assert links[0]["binding"] == "model"
+    # Zero content overlap between sentence and bound item -> honest approximate flag.
+    assert links[0].get("approximate") is True
 
 
 def test_normalize_citation_brackets_converts_cjk_variants() -> None:
@@ -1030,7 +1137,7 @@ def test_generate_answer_maps_numeric_citations_without_llm_repair() -> None:
     )
     hit.add_evidence(item)
 
-    text, error, diagnostics = responder._generate_answer(
+    text, error, diagnostics, bindings = responder._generate_answer(
         question="What links concepts?",
         hits=[hit],
         evidence=[item],
@@ -1041,10 +1148,14 @@ def test_generate_answer_maps_numeric_citations_without_llm_repair() -> None:
 
     assert "[arxiv:2501.00001]" in text
     assert "[1]" not in text
+    assert "#" not in text
     assert error is None
     # The numeric citation is resolved deterministically - no LLM repair round trip.
     assert len(fake_llm.calls) == 1
     assert diagnostics.get("uncited_sentence_count") == 0
+    # The bare [1] declared WHICH evidence item was used — it becomes a binding.
+    assert diagnostics.get("model_evidence_binding_count") == 1
+    assert list(bindings.values()) == [[item.evidence_id]]
 
 
 class UncitedThenCitedLLMRouter(FakeLLMRouter):
@@ -1069,7 +1180,7 @@ def test_sparse_repair_fires_when_answer_has_zero_citations_and_few_sources() ->
     )
     hit.add_evidence(item)
 
-    text, error, diagnostics = responder._generate_answer(
+    text, error, diagnostics, _bindings = responder._generate_answer(
         question="What links concepts?",
         hits=[hit],
         evidence=[item],
@@ -1105,7 +1216,7 @@ def test_zero_citation_answer_falls_back_to_extractive_with_note() -> None:
     )
     hit.add_evidence(item)
 
-    text, error, diagnostics = responder._generate_answer(
+    text, error, diagnostics, _bindings = responder._generate_answer(
         question="What links concepts?",
         hits=[hit],
         evidence=[item],

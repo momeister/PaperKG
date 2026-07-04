@@ -56,6 +56,9 @@ class AnswerRequest(Phase4Request):
     grey_source_ids: list[str] = Field(default_factory=list)
     include_project_grey: bool = False
     llm_overrides: dict[str, Any] = Field(default_factory=dict)
+    # "kritisch" aktiviert den skeptischen Antwortmodus (Limitationen, Gegenbelege,
+    # Kritische Einordnung) — vom Frontend per /kritisch-Kommando gesetzt.
+    answer_style: str = Field(default="standard", pattern="^(standard|kritisch)$")
 
 
 class HypothesisRequest(Phase4Request):
@@ -134,6 +137,7 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         metadata_db_path=request.metadata_db_path,
         grey_source_ids=request.grey_source_ids or None,
         include_project_grey=request.include_project_grey,
+        critical=request.answer_style == "kritisch",
     )
     return answer.to_dict()
 

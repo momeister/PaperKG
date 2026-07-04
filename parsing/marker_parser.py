@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -135,7 +136,7 @@ def _words_to_text(words: list[dict[str, Any]]) -> str:
 	return "\n".join(" ".join(line) for line in lines)
 
 
-def _chars_to_spaced_text(chars: list[dict[str, Any]], gap_ratio: float = 0.20) -> str:
+def _chars_to_spaced_text(chars: list[dict[str, Any]], gap_ratio: float = 0.28) -> str:
 	"""Rebuild text from pdfplumber char data, inserting spaces based on inter-character gaps.
 
 	Uses the gap between consecutive characters relative to font size to detect word boundaries.
@@ -171,6 +172,34 @@ def _chars_to_spaced_text(chars: list[dict[str, Any]], gap_ratio: float = 0.20) 
 	if current_line:
 		lines.append(current_line)
 	return "\n".join("".join(line) for line in lines)
+
+
+def _text_needs_char_reconstruction(text: str) -> bool:
+	"""True when extract_text() lacks word spacing (glued words), so the char-gap
+	reconstruction is likely to improve it. For normally spaced text the reconstruction
+	is a net loss: its gap heuristic injects spurious mid-word spaces ("ass essing")
+	that defeat verbatim quote matching downstream."""
+	if len(text) < 200:
+		return False
+	space_ratio = text.count(" ") / len(text)
+	if space_ratio < 0.04:
+		return True
+	return len(re.findall(r"[A-Za-z]{25,}", text)) >= 3
+
+
+# Joins words hyphenated across a line break ("assess-\ning" -> "assessing"). Column
+# reconstruction flattens line breaks to spaces first, so "- " is matched as well.
+# The lowercase-continuation requirement keeps capitalized compounds ("Wilcoxon-\nMann")
+# intact, and the conjunction stoplist protects suspended hyphens ("pre- and
+# post-treatment"). Genuine lowercase compounds broken at the line end lose their
+# hyphen, which is acceptable for matching purposes.
+_HYPHEN_BREAK_RE = re.compile(
+	r"([A-Za-zÄÖÜäöüß])-[ \n](?!(?:and|or|to|as|und|oder|bis|als|sowie)\b)([a-zäöüß])"
+)
+
+
+def _join_hyphenated_linebreaks(text: str) -> str:
+	return _HYPHEN_BREAK_RE.sub(r"\1\2", text)
 
 
 def _classify_chars_by_region(
@@ -258,6 +287,7 @@ class MarkerParser:
 					with pdfplumber.open(str(path)) as pdf:
 						page_texts: list[str] = []
 						columns_used = 0
+						char_reconstructed = 0
 						for page in pdf.pages:
 							naive_text = page.extract_text() or ""
 							words: list[dict[str, Any]] | None = None
@@ -272,16 +302,25 @@ class MarkerParser:
 							if recon_text is not None and naive_text and len(recon_text) < 0.9 * len(naive_text):
 								recon_text = None
 							if recon_text is not None:
-								page_texts.append(recon_text)
+								page_texts.append(_join_hyphenated_linebreaks(recon_text))
 								columns_used += 1
 							else:
-								spaced = _chars_to_spaced_text(chars) if chars else ""
-								page_texts.append(spaced or (_words_to_text(words) if words else naive_text))
+								# Prefer pdfplumber's own text: the char-gap reconstruction
+								# only helps when the naive text lacks word spacing, and it
+								# injects spurious mid-word spaces otherwise.
+								spaced = ""
+								if not naive_text or _text_needs_char_reconstruction(naive_text):
+									spaced = _chars_to_spaced_text(chars) if chars else ""
+									if spaced:
+										char_reconstructed += 1
+								page_text = spaced or naive_text or (_words_to_text(words) if words else "")
+								page_texts.append(_join_hyphenated_linebreaks(page_text))
 						text = "\n\n---PAGE BREAK---\n\n".join(page_texts).strip()
 						page_count = len(pdf.pages)
 						metadata["extraction_method"] = "pdfplumber_columns" if columns_used else "pdfplumber"
 						metadata["chars_extracted"] = len(text)
 						metadata["columns_pages"] = columns_used
+						metadata["char_reconstructed_pages"] = char_reconstructed
 						if text and len(text) > 100:  # Good extraction
 							return ParsedDocument(
 								paper_id=paper_id,
@@ -300,7 +339,7 @@ class MarkerParser:
 					reader = PdfReader(str(path))
 					page_texts: list[str] = []
 					for page in reader.pages:
-						page_texts.append(page.extract_text() or "")
+						page_texts.append(_join_hyphenated_linebreaks(page.extract_text() or ""))
 					text = "\n\n---PAGE BREAK---\n\n".join(page_texts).strip()
 					page_count = len(reader.pages)
 					metadata["extraction_method"] = "pypdf"

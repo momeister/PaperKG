@@ -44,12 +44,15 @@ import {
   Search,
   Send,
   Settings2,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Square,
   Star,
   Trash2,
   Upload,
-  X
+  X,
+  XCircle
 } from "lucide-react";
 
 import { api, streamResearchTree, streamAutoAnswer, exportResearchTree } from "../api";
@@ -65,6 +68,7 @@ import { useAppState } from "../state";
 import type {
   Answer,
   CitationLink,
+  ClaimCheckResult,
   DeepResearchFinding,
   GreySource,
   NoteAiMessage,
@@ -81,12 +85,17 @@ import { ParallelResultsTab } from "./ParallelResultsTab";
 import {
   AnswerText,
   answerLimitFor,
+  citationContext,
   citationMetasFor,
+  citationSegmentFromParts,
+  claimVerdictLabel,
   cleanAnswerQuote,
   EvidenceVerificationBadge,
+  evidenceLocationUncertain,
   fetchAssistantSession,
   formatAnswerForNote,
   formatNoteQuote,
+  formatNoteQuoteMulti,
   formatTurnTime,
   loadAssistantSession,
   meaningfulQuote,
@@ -99,7 +108,7 @@ import {
   turnContext,
   verificationSourcesFor
 } from "./AssistantPage";
-import type { CitationMeta } from "./AssistantPage";
+import type { CitationInsertExtras, CitationMeta } from "./AssistantPage";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
 import { AnalysisPanel } from "./AnalysisPanel";
@@ -115,6 +124,8 @@ export type WorkspacePdfTarget =
   | { kind: "missing"; paperId: string; title?: string };
 
 const ALL_PAPERS_SCOPES = new Set(["", "__all_papers__"]);
+// Obergrenze für den Vorab-Nachcheck unsicherer Zuordnungen (bounded latency/cost).
+const MAX_PREVERIFY_CITATIONS = 6;
 
 type PaperQuestionScope = "current" | "selected" | "all";
 type WorkspaceAssistantMode = "pdf" | "notes";
@@ -141,6 +152,7 @@ export const WORKSPACE_COMMANDS: WorkspaceCommandDef[] = [
   { name: "summary", args: "[fokus]", description: "Zusammenfassung des aktuellen Papers", group: "frage" },
   { name: "extract", args: "[fokus]", description: "Methoden, Ergebnisse & Schlussfolgerungen", group: "frage" },
   { name: "compare", args: "[fokus]", description: "Papers vergleichen", group: "frage" },
+  { name: "kritisch", aliases: ["critical"], args: "[frage]", description: "Kritischer Modus: Limitationen, Risiken & Gegenbelege explizit prüfen (ohne Frage: an/aus)", group: "frage" },
   { name: "projekt", args: "<name>", description: "Neues Projekt anlegen und aktivieren", group: "aktion" },
   { name: "notiz", args: "[titel]", description: "Neue Notiz anlegen", group: "aktion" },
   { name: "suche", aliases: ["papers", "import"], args: "<thema>", description: "Neue Papers suchen & herunterladen (arXiv)", group: "aktion" },
@@ -235,9 +247,7 @@ export function WorkspacePage() {
   const queryClient = useQueryClient();
   const assistantScopeRef = useRef(scopedProjectId);
   const notesActionsRef = useRef<NotesSurfaceActions | null>(null);
-  const navResizeFrameRef = useRef<number | null>(null);
-  const assistantResizeFrameRef = useRef<number | null>(null);
-  const pdfResizeFrameRef = useRef<number | null>(null);
+  const pageRef = useRef<HTMLElement | null>(null);
   const pdfCitationResizeFrameRef = useRef<number | null>(null);
   const greySourceResizeFrameRef = useRef<number | null>(null);
 
@@ -254,6 +264,8 @@ export function WorkspacePage() {
   const [mentionHighlight, setMentionHighlight] = useState(0);
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const [history, setHistory] = useState<AssistantTurn[]>(() => loadAssistantSession(scopedProjectId).history);
+  // Läuft der Vorab-Nachcheck unsicherer Zuordnungen (zwischen Generierung und Anzeige)?
+  const [citationVerifyPending, setCitationVerifyPending] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState(() => loadAssistantSession(scopedProjectId).activeTurnId);
   const [selectedSource, setSelectedSource] = useState<VerificationSource | null>(null);
   const [activeEvidenceIndex, setActiveEvidenceIndex] = useState(0);
@@ -281,6 +293,9 @@ export function WorkspacePage() {
   // automatisch Paper (inkl. Phase-3-Extraktion) + Webquellen — auch zu KI-abgeleiteten
   // verwandten Themen — und beantwortet die Frage neu.
   const [autoResearch, setAutoResearch] = useState(() => loadWorkspaceBoolean(scopedProjectId, "autoResearch", false));
+  // Kritischer Modus (/kritisch): Antworten benennen Limitationen, Risiken und
+  // Gegenbelege explizit (answer_style: "kritisch" im Backend).
+  const [criticalMode, setCriticalMode] = useState(() => loadWorkspaceBoolean(scopedProjectId, "criticalMode", false));
   const [autoProgress, setAutoProgress] = useState<{
     phase: string;
     relatedTopics: string[];
@@ -458,7 +473,7 @@ export function WorkspacePage() {
   const { currentScopePaperId, currentScopeIsGrey } = scopeInfo;
   const questionBlockedByScope = scopeInfo.blocked;
 
-  type AskVariables = { value: string; scope: PaperQuestionScope; newTurn: boolean; extraGreyIds?: string[] };
+  type AskVariables = { value: string; scope: PaperQuestionScope; newTurn: boolean; extraGreyIds?: string[]; critical?: boolean };
 
   const answerMutation = useMutation({
     mutationFn: (vars: AskVariables) => {
@@ -478,7 +493,8 @@ export function WorkspacePage() {
         include_project_grey: vars.scope === "all" && isRealProject ? true : undefined,
         conversation_context: conversationMode === "followup" && !vars.newTurn && activeTurn && activeTurn.type !== "research_tree" ? turnContext(activeTurn) : undefined,
         project_id: activeProject || undefined,
-        llm_overrides: Object.values(llmParams).some((value) => value !== undefined) ? llmParams : undefined
+        llm_overrides: Object.values(llmParams).some((value) => value !== undefined) ? llmParams : undefined,
+        answer_style: vars.critical || criticalMode ? "kritisch" : undefined
       });
     },
     onSuccess: async (payload, vars) => {
@@ -495,6 +511,23 @@ export function WorkspacePage() {
       sources = await verificationSourcesFor(payload);
     } catch {
       sources = [];
+    }
+    // Unsichere Zuordnungen nachprüfen + korrigieren, BEVOR die Antwort angezeigt wird.
+    // Unsicher = vom Backend geflaggt (approximate) ODER die Belegstelle wurde im PDF
+    // nicht/nur ungefähr verortet — auch lexikalisch plausible Fehlzuordnungen laufen so
+    // durch den Nachcheck statt unmarkiert durchzurutschen.
+    const anyUncertain =
+      (payload.citation_links ?? []).some((link) => link.approximate) ||
+      sources.some((source) => source.evidence.some((evidence) => evidenceLocationUncertain(source, evidence)));
+    if (anyUncertain) {
+      setCitationVerifyPending(true);
+      try {
+        const verified = await verifyUncertainCitations(payload, sources);
+        payload = verified.payload;
+        sources = verified.sources;
+      } finally {
+        setCitationVerifyPending(false);
+      }
     }
     const block: AssistantAnswerBlock = {
       id: `block_${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -897,6 +930,7 @@ export function WorkspacePage() {
 
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "useInternet", useInternet), [useInternet, scopedProjectId]);
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "autoResearch", autoResearch), [autoResearch, scopedProjectId]);
+  useEffect(() => saveWorkspaceBoolean(scopedProjectId, "criticalMode", criticalMode), [criticalMode, scopedProjectId]);
 
   useEffect(() => {
     if (!chatSettingsOpen && !actionsMenuOpen) {
@@ -1219,7 +1253,7 @@ export function WorkspacePage() {
     }
   }
 
-  type SlashCommandResult = { handled: boolean; ask?: string; scope?: PaperQuestionScope; newTurn?: boolean };
+  type SlashCommandResult = { handled: boolean; ask?: string; scope?: PaperQuestionScope; newTurn?: boolean; critical?: boolean };
 
   function handleSlashCommand(raw: string): SlashCommandResult {
     const match = raw.match(/^\/([\wäöüß]+)\s*([\s\S]*)$/i);
@@ -1308,6 +1342,23 @@ export function WorkspacePage() {
       case "compare":
         setPaperScope("all");
         return { handled: true, ask: "Vergleiche die wichtigsten Unterschiede und Gemeinsamkeiten der Papers." + (remainder ? ` ${remainder}` : ""), scope: "all" };
+      case "kritisch":
+      case "critical":
+        // Mit Frage: einmalig kritisch beantworten. Ohne Frage: Modus umschalten.
+        if (remainder) {
+          return { handled: true, ask: remainder, critical: true };
+        }
+        setCriticalMode((current) => {
+          logAction(
+            "Kritischer Modus",
+            current
+              ? "Kritischer Modus ausgeschaltet."
+              : "Kritischer Modus eingeschaltet — Antworten benennen Limitationen, Risiken und Gegenbelege explizit."
+          );
+          return !current;
+        });
+        setQuestion("");
+        return { handled: true };
       case "projekt":
         if (!remainder) {
           logAction("Projekt anlegen", "Name fehlt — /projekt <Name> verwenden.", "error");
@@ -1372,7 +1423,7 @@ export function WorkspacePage() {
   }
 
   /** Dispatch a question; scope/newTurn overrides come from slash commands. */
-  function ask(value: string, options: { scope?: PaperQuestionScope; newTurn?: boolean; web?: boolean; auto?: boolean; force?: boolean } = {}) {
+  function ask(value: string, options: { scope?: PaperQuestionScope; newTurn?: boolean; web?: boolean; auto?: boolean; force?: boolean; critical?: boolean } = {}) {
     const scope = options.scope ?? paperScope;
     const info = deriveScope(scope);
     if (info.blocked) {
@@ -1388,7 +1439,7 @@ export function WorkspacePage() {
       void runAutoResearch(value, { scope, newTurn, force: options.force });
       return;
     }
-    answerMutation.mutate({ value: value + verbosityInstruction(verbosity), scope, newTurn });
+    answerMutation.mutate({ value: value + verbosityInstruction(verbosity), scope, newTurn, critical: options.critical });
     setNextTurnIsNew(false);
     setQuestion("");
     const runWeb = options.web ?? useInternet;
@@ -1449,7 +1500,7 @@ export function WorkspacePage() {
       const command = handleSlashCommand(value);
       if (command.handled) {
         if (command.ask) {
-          ask(command.ask, { scope: command.scope, newTurn: command.newTurn, web: inline.web || undefined });
+          ask(command.ask, { scope: command.scope, newTurn: command.newTurn, web: inline.web || undefined, critical: command.critical });
         }
         return;
       }
@@ -2019,27 +2070,723 @@ export function WorkspacePage() {
     }
   }
 
-  function insertCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "") {
+  // Baut Text + Quellenliste für die Notiz-Übernahme: bevorzugt nur das belegte
+  // Segment (statt des ganzen Satzes) und nimmt ALLE Quellen des Satzes mit.
+  function citationInsertPayload(
+    source: VerificationSource,
+    evidenceIndex: number,
+    quote: string,
+    extras?: CitationInsertExtras
+  ): { markdown: string; citations: Record<string, unknown>[] } | null {
     const evidence = source.evidence[evidenceIndex];
     if (!evidence) {
-      return;
+      return null;
     }
     // The text that lands in the note is also stored on the citation, so clicking
     // the citation later shows exactly this passage again.
-    const insertedText = meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text;
-    const citation = noteCitation(source, evidence, evidenceIndex, insertedText);
-    notesActionsRef.current?.clearInsertPreview();
-    void appendToActiveNote(formatNoteQuote(insertedText, source, evidenceIndex, citation.id), [citation]);
+    const insertedText =
+      meaningfulQuote(extras?.segment ?? "") || meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text;
+    const primary = noteCitation(source, evidence, evidenceIndex, insertedText);
+    const citations: Record<string, unknown>[] = [primary];
+    const entries = [{ source, evidenceIndex, citationId: String(primary.id) }];
+    for (const sibling of extras?.siblings ?? []) {
+      const siblingEvidence = sibling.source.evidence[sibling.evidenceIndex];
+      if (!siblingEvidence) continue;
+      const siblingCitation = noteCitation(sibling.source, siblingEvidence, sibling.evidenceIndex);
+      if (citations.some((existing) => existing.id === siblingCitation.id)) continue;
+      citations.push(siblingCitation);
+      entries.push({ source: sibling.source, evidenceIndex: sibling.evidenceIndex, citationId: String(siblingCitation.id) });
+    }
+    return { markdown: formatNoteQuoteMulti(insertedText, entries), citations };
   }
 
-  function previewCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "") {
-    const evidence = source.evidence[evidenceIndex];
-    if (!evidence) {
+  // ---- Selektion in der Antwort: Nachchecken / Weiterfragen / In Notiz / Korrigieren ----
+
+  type AnswerSelectionState = { text: string; blockId: string; left: number; top: number };
+  const [answerSelection, setAnswerSelection] = useState<AnswerSelectionState | null>(null);
+  const [selectionCheck, setSelectionCheck] = useState<{
+    status: "loading" | "done" | "error";
+    results?: ClaimCheckResult[];
+    error?: string;
+  } | null>(null);
+  const [correctionDraft, setCorrectionDraft] = useState<string | null>(null);
+  const answerBlocksRef = useRef<HTMLDivElement | null>(null);
+
+  /** Selektionstext ohne die gerenderten Zitat-Chips (Z12, Titel-Kürzel …) — sonst
+   *  landet deren Beschriftung mitten im übernommenen Text. */
+  function selectionPlainText(selection: Selection): string {
+    try {
+      const holder = document.createElement("div");
+      holder.appendChild(selection.getRangeAt(0).cloneContents());
+      holder
+        .querySelectorAll(".citation-link-wrap, .citation-link, .citation-hover-card, .claim-check-card, .citation-more")
+        .forEach((node) => node.remove());
+      return (holder.textContent ?? "").replace(/\s+/g, " ").trim();
+    } catch {
+      return selection.toString().replace(/\s+/g, " ").trim();
+    }
+  }
+
+  function handleAnswerMouseUp() {
+    // getSelection erst nach dem Klick-Handling auslesen.
+    window.setTimeout(() => {
+      const selection = window.getSelection();
+      const container = answerBlocksRef.current;
+      if (!selection || selection.isCollapsed || !container) {
+        return;
+      }
+      const text = selectionPlainText(selection);
+      const anchor = selection.anchorNode;
+      const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+      if (!text || text.length < 8 || !anchorElement || !container.contains(anchorElement)) {
+        return;
+      }
+      const blockId = anchorElement.closest("[data-block-id]")?.getAttribute("data-block-id") ?? "";
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      const width = 340;
+      setSelectionCheck(null);
+      setCorrectionDraft(null);
+      setAnswerSelection({
+        text,
+        blockId,
+        left: Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12)),
+        top: Math.min(rect.bottom + 8, window.innerHeight - 60)
+      });
+    }, 0);
+  }
+
+  function closeAnswerSelection() {
+    setAnswerSelection(null);
+    setSelectionCheck(null);
+    setCorrectionDraft(null);
+  }
+
+  // Klick außerhalb schließt das Selektions-Popover (statt nur das X).
+  useEffect(() => {
+    if (!answerSelection) {
       return;
     }
-    const insertedText = meaningfulQuote(quote) || evidence.pdf_excerpt || evidence.reference_text;
-    const citation = noteCitation(source, evidence, evidenceIndex, insertedText);
-    notesActionsRef.current?.previewAppendMarkdown(formatNoteQuote(insertedText, source, evidenceIndex, citation.id));
+    const onPointerDown = (event: globalThis.PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest(".answer-selection-popover")) {
+        closeAnswerSelection();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answerSelection]);
+
+  const selectionBlock = answerSelection
+    ? activeBlocks.find((block) => block.id === answerSelection.blockId) ?? activeBlocks[activeBlocks.length - 1]
+    : undefined;
+
+  /** Metas der Zitate, die zur Selektion gehören: Brackets in der Selektion selbst,
+   *  sonst das erste Bracket direkt nach der Selektion im Antworttext. */
+  function selectionCitationMetas(selection: AnswerSelectionState, block: AssistantAnswerBlock): CitationMeta[] {
+    const metas: CitationMeta[] = [];
+    const push = (raw: CitationMeta[] | CitationMeta | null) => {
+      for (const meta of Array.isArray(raw) ? raw : raw ? [raw] : []) {
+        if (!metas.some((existing) => existing.source.paper_id === meta.source.paper_id && existing.evidenceIndex === meta.evidenceIndex)) {
+          metas.push(meta);
+        }
+      }
+    };
+    const links = block.answer.citation_links ?? [];
+    const bracketRe = /\[([^\]]+)\]/g;
+    for (const match of selection.text.matchAll(bracketRe)) {
+      push(citationMetasFor(block.verification, match[1], selection.text, links));
+    }
+    if (!metas.length) {
+      // Bracket direkt hinter der Selektion (der Satz endet meist mit dem Zitat).
+      const answerText = block.answer.answer;
+      const position = answerText.replace(/\s+/g, " ").indexOf(selection.text);
+      if (position >= 0) {
+        const tail = answerText.replace(/\s+/g, " ").slice(position + selection.text.length, position + selection.text.length + 160);
+        const tailMatch = /^[^.!?\n]*?\[([^\]]+)\]/.exec(tail);
+        if (tailMatch) {
+          push(citationMetasFor(block.verification, tailMatch[1], selection.text, links));
+        }
+      }
+    }
+    if (!metas.length) {
+      for (const source of block.verification.slice(0, 3)) {
+        if (source.evidence.length) {
+          push({ source, evidenceIndex: 0, evidenceId: source.evidence[0]?.evidence_id });
+        }
+      }
+    }
+    return metas.slice(0, 4);
+  }
+
+  async function checkAnswerSelection() {
+    if (!answerSelection || !selectionBlock) {
+      return;
+    }
+    const metas = selectionCitationMetas(answerSelection, selectionBlock);
+    const statement = cleanAnswerQuote(answerSelection.text);
+    if (!metas.length || !statement) {
+      setSelectionCheck({ status: "error", error: "Keine zugehörigen Quellen gefunden." });
+      return;
+    }
+    setSelectionCheck({ status: "loading" });
+    try {
+      const res = await api.claimCheck({
+        statement,
+        paper_ids: metas.map((meta) => meta.source.paper_id),
+        titles: Object.fromEntries(metas.map((meta) => [meta.source.paper_id, meta.source.title || ""])),
+        evidence_texts: Object.fromEntries(
+          metas.map((meta) => {
+            const evidence = meta.source.evidence[meta.evidenceIndex];
+            // reference_text nur mitgeben, wenn es keine zirkuläre Kopie des
+            // Antwortsatzes ist (claim_excerpt/approx_region).
+            const evidenceMeta = (evidence?.metadata ?? {}) as Record<string, unknown>;
+            const selfReferential =
+              evidenceMeta.context_policy === "claim_excerpt" || evidenceMeta.context_policy === "approx_region";
+            return [meta.source.paper_id, evidence ? evidence.pdf_excerpt || (selfReferential ? "" : evidence.reference_text) : ""];
+          })
+        ),
+        provider: provider || undefined,
+        model: model || undefined
+      });
+      setSelectionCheck({ status: "done", results: res.checks });
+    } catch (error) {
+      setSelectionCheck({ status: "error", error: error instanceof Error ? error.message : "Prüfung fehlgeschlagen" });
+    }
+  }
+
+  function askAboutSelection() {
+    if (!answerSelection) {
+      return;
+    }
+    const quoted = answerSelection.text.length > 260 ? `${answerSelection.text.slice(0, 257)}…` : answerSelection.text;
+    setQuestion(`Zu dieser Aussage aus deiner Antwort: „${quoted}" — `);
+    closeAnswerSelection();
+    questionInputRef.current?.focus();
+  }
+
+  function selectionNotePayload(): { markdown: string; citations: Record<string, unknown>[] } | null {
+    if (!answerSelection || !selectionBlock) {
+      return null;
+    }
+    const metas = selectionCitationMetas(answerSelection, selectionBlock);
+    const quoteText = cleanAnswerQuote(answerSelection.text);
+    const citations: Record<string, unknown>[] = [];
+    const entries: Array<{ source: VerificationSource; evidenceIndex: number; citationId: string }> = [];
+    for (const meta of metas) {
+      const evidence = meta.source.evidence[meta.evidenceIndex];
+      if (!evidence) continue;
+      const citation = noteCitation(meta.source, evidence, meta.evidenceIndex, quoteText);
+      if (citations.some((existing) => existing.id === citation.id)) continue;
+      citations.push(citation);
+      entries.push({ source: meta.source, evidenceIndex: meta.evidenceIndex, citationId: String(citation.id) });
+    }
+    const markdown = entries.length ? formatNoteQuoteMulti(quoteText, entries) : `> ${quoteText}`;
+    return { markdown, citations };
+  }
+
+  function insertSelectionIntoNote() {
+    const payload = selectionNotePayload();
+    if (!payload) {
+      return;
+    }
+    notesActionsRef.current?.clearInsertPreview();
+    closeAnswerSelection();
+    void appendToActiveNote(payload.markdown, payload.citations);
+  }
+
+  function previewSelectionInNote() {
+    const payload = selectionNotePayload();
+    if (payload) {
+      notesActionsRef.current?.previewAppendMarkdown(payload.markdown);
+    }
+  }
+
+  /** Korrigiert die selektierte Passage im gespeicherten Antworttext (z.B. nachdem
+   *  der Nachcheck sie als nicht gestützt entlarvt hat). */
+  function applyAnswerCorrection() {
+    if (!answerSelection || !selectionBlock || correctionDraft === null) {
+      return;
+    }
+    const replacement = correctionDraft.trim();
+    const original = answerSelection.text;
+    const blockId = selectionBlock.id;
+    setHistory((current) =>
+      current.map((turn) => {
+        const blocks = turnBlocks(turn);
+        if (!blocks.some((block) => block.id === blockId)) {
+          return turn;
+        }
+        const nextBlocks = blocks.map((block) => {
+          if (block.id !== blockId) {
+            return block;
+          }
+          const answerText = block.answer.answer;
+          // Selektion stammt aus gerendertem Text (Whitespace normalisiert) — im
+          // Roh-Markdown flexibel über Whitespace hinweg suchen.
+          const pattern = new RegExp(
+            original
+              .split(/\s+/)
+              .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+              .join("\\s+")
+          );
+          const nextAnswer = pattern.test(answerText)
+            ? answerText.replace(pattern, replacement)
+            : answerText;
+          return { ...block, answer: { ...block.answer, answer: nextAnswer } };
+        });
+        const last = nextBlocks[nextBlocks.length - 1];
+        return { ...turn, blocks: nextBlocks, answer: last ? last.answer : turn.answer };
+      })
+    );
+    logAction("Antwort korrigiert", "Die markierte Passage wurde ersetzt und gespeichert.");
+    closeAnswerSelection();
+  }
+
+  /** Whitespace- und Zitat-tolerantes Muster für eine Aussage aus dem Antworttext
+   *  (die Selektion/das Segment enthält keine [ ]-Brackets mehr, der Rohtext schon). */
+  function statementPattern(statement: string): RegExp | null {
+    const words = statement.split(/\s+/).filter(Boolean).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (!words.length) {
+      return null;
+    }
+    return new RegExp(words.join("(?:\\s+|\\s*\\[[^\\]]+\\]\\s*)+"));
+  }
+
+  /** Nachcheck ergab "nicht gestützt": Satz + zugehörige Zitat-Brackets aus dem
+   *  gespeicherten Antworttext entfernen. */
+  function removeStatementFromBlock(blockId: string, statement: string) {
+    const base = statementPattern(cleanAnswerQuote(statement));
+    if (!base) {
+      return;
+    }
+    const withTail = new RegExp(`${base.source}(?:\\s*\\[[^\\]]+\\])*[.!?]?\\s*`);
+    let removed = false;
+    setHistory((current) =>
+      current.map((turn) => {
+        const blocks = turnBlocks(turn);
+        if (!blocks.some((block) => block.id === blockId)) {
+          return turn;
+        }
+        const nextBlocks = blocks.map((block) => {
+          if (block.id !== blockId || !withTail.test(block.answer.answer)) {
+            return block;
+          }
+          removed = true;
+          const nextAnswer = block.answer.answer.replace(withTail, " ").replace(/ {2,}/g, " ").trim();
+          return { ...block, answer: { ...block.answer, answer: nextAnswer } };
+        });
+        const last = nextBlocks[nextBlocks.length - 1];
+        return {
+          ...turn,
+          blocks: nextBlocks,
+          answer: last ? last.answer : turn.answer,
+          verification: mergeVerification(nextBlocks.flatMap((block) => block.verification))
+        };
+      })
+    );
+    logAction(
+      "Aussage entfernt",
+      removed ? "Die nicht gestützte Aussage wurde aus der Antwort entfernt." : "Aussage im Antworttext nicht gefunden.",
+      removed ? "ok" : "error"
+    );
+  }
+
+  /** Nachcheck "nicht gestützt": nur DIESES Zitat aus dem Satz entfernen. Belegt danach
+   *  keine andere Quelle den Satz mehr, wird der ganze Satz entfernt. */
+  function removeCitationFromBlock(blockId: string, paperId: string, statement: string) {
+    const base = statementPattern(cleanAnswerQuote(statement));
+    if (!base) {
+      return;
+    }
+    // Satz + unmittelbar folgender Zitat-Cluster ([a][b] …).
+    const combined = new RegExp(`(${base.source})((?:\\s*\\[[^\\]]+\\])+)`);
+    // Objekt-Halter, damit TS die in der setHistory-Callback gesetzten Werte nicht auf das
+    // Literal "none" verengt.
+    const outcome: { value: "citation" | "statement" | "none" } = { value: "none" };
+    setHistory((current) =>
+      current.map((turn) => {
+        const blocks = turnBlocks(turn);
+        if (!blocks.some((block) => block.id === blockId)) {
+          return turn;
+        }
+        const nextBlocks = blocks.map((block) => {
+          if (block.id !== blockId) {
+            return block;
+          }
+          const answerText = block.answer.answer;
+          const match = combined.exec(answerText);
+          if (!match) {
+            return block;
+          }
+          const brackets = match[2].match(/\[[^\]]+\]/g) ?? [];
+          // Innerhalb jedes Brackets nur die Referenz auf dieses Paper streichen; ein
+          // Bracket, das dadurch leer wird, fällt weg.
+          const rebuilt = brackets.map((bracket) => {
+            const tokens = bracket.slice(1, -1).split(",").map((token) => token.trim()).filter(Boolean);
+            const kept = tokens.filter((token) => !token.includes(paperId));
+            if (kept.length === tokens.length) {
+              return bracket;
+            }
+            return kept.length ? `[${kept.join(", ")}]` : "";
+          });
+          if (rebuilt.join("") === brackets.join("")) {
+            return block; // Paper steckt in keinem Bracket dieses Satzes.
+          }
+          const keptBrackets = rebuilt.filter(Boolean);
+          let nextAnswer: string;
+          if (keptBrackets.length > 0) {
+            outcome.value = "citation";
+            nextAnswer = answerText.replace(combined, `$1${keptBrackets.join("")}`);
+          } else {
+            outcome.value = "statement";
+            const withTail = new RegExp(`${base.source}(?:\\s*\\[[^\\]]+\\])*[.!?]?\\s*`);
+            nextAnswer = answerText.replace(withTail, " ").replace(/ {2,}/g, " ").trim();
+          }
+          return { ...block, answer: { ...block.answer, answer: nextAnswer } };
+        });
+        const last = nextBlocks[nextBlocks.length - 1];
+        return {
+          ...turn,
+          blocks: nextBlocks,
+          answer: last ? last.answer : turn.answer,
+          verification: mergeVerification(nextBlocks.flatMap((block) => block.verification))
+        };
+      })
+    );
+    if (outcome.value === "citation") {
+      logAction("Zitat entfernt", "Das nicht gestützte Zitat wurde entfernt — der Satz bleibt, da ihn eine andere Quelle belegt.");
+    } else if (outcome.value === "statement") {
+      logAction("Aussage entfernt", "Der Satz hatte nur dieses (nicht gestützte) Zitat und wurde entfernt.", "ok");
+    } else {
+      // Kein direkt anhängendes Zitat mit dieser Paper-ID → ganzen Satz entfernen.
+      removeStatementFromBlock(blockId, statement);
+    }
+  }
+
+  /** Nachcheck fand die echte Belegstelle: Evidence des Zitats im Block ersetzen,
+   *  damit Hover-Karte und PDF-Marker die richtige Stelle zeigen. */
+  function updateCitationEvidenceInBlock(
+    blockId: string,
+    source: VerificationSource,
+    evidenceIndex: number,
+    quotes: string[],
+    statement: string
+  ) {
+    const excerpt = quotes.join(" … ").trim();
+    if (!excerpt) {
+      return;
+    }
+    setHistory((current) =>
+      current.map((turn) => {
+        const blocks = turnBlocks(turn);
+        if (!blocks.some((block) => block.id === blockId)) {
+          return turn;
+        }
+        const nextBlocks = blocks.map((block) => {
+          if (block.id !== blockId) {
+            return block;
+          }
+          const nextVerification = block.verification.map((item) => {
+            if (item.paper_id !== source.paper_id) {
+              return item;
+            }
+            const evidence = item.evidence.map((entry, index) =>
+              index === evidenceIndex
+                ? { ...entry, pdf_excerpt: excerpt, reference_text: cleanAnswerQuote(statement) || entry.reference_text }
+                : entry
+            );
+            return { ...item, evidence };
+          });
+          return { ...block, verification: nextVerification };
+        });
+        return {
+          ...turn,
+          blocks: nextBlocks,
+          verification: mergeVerification(nextBlocks.flatMap((block) => block.verification))
+        };
+      })
+    );
+    clearCitationApproximateInBlock(blockId, source.paper_id, evidenceIndex);
+    logAction("Zitat aktualisiert", "Die verifizierte Textstelle ist jetzt der Beleg dieses Zitats.");
+  }
+
+  /** Markiert die Zuordnung eines Zitats als geprüft (approximate=false), damit der
+   *  Auto-Nachcheck sie nach einem Reload nicht erneut prüft/umformuliert. */
+  function clearCitationApproximateInBlock(blockId: string, paperId: string, evidenceIndex: number) {
+    setHistory((current) =>
+      current.map((turn) => {
+        const blocks = turnBlocks(turn);
+        if (!blocks.some((block) => block.id === blockId)) {
+          return turn;
+        }
+        const nextBlocks = blocks.map((block) => {
+          if (block.id !== blockId) {
+            return block;
+          }
+          const links = block.answer.citation_links;
+          if (!links?.length) {
+            return block;
+          }
+          let changed = false;
+          const nextLinks = links.map((link) => {
+            if (
+              link.approximate &&
+              link.paper_id === paperId &&
+              (link.evidence_index == null || link.evidence_index === evidenceIndex)
+            ) {
+              changed = true;
+              return { ...link, approximate: false };
+            }
+            return link;
+          });
+          return changed ? { ...block, answer: { ...block.answer, citation_links: nextLinks } } : block;
+        });
+        const last = nextBlocks[nextBlocks.length - 1];
+        return { ...turn, blocks: nextBlocks, answer: last ? last.answer : turn.answer };
+      })
+    );
+  }
+
+  // ---- Vorab-Nachcheck unsicherer Zuordnungen (läuft, bevor die Antwort angezeigt wird) ----
+  // Reine String/Datentransformationen, damit sie auf die noch nicht in der History
+  // liegende, frisch generierte Antwort angewendet werden können.
+
+  /** Entfernt nur das Zitat dieses Papers am Satz; bleibt kein Beleg übrig → Satz raus. */
+  function stripCitationFromAnswerText(
+    answerText: string,
+    paperId: string,
+    statement: string
+  ): { text: string; outcome: "citation" | "statement" | "none" } {
+    const base = statementPattern(cleanAnswerQuote(statement));
+    if (!base) {
+      return { text: answerText, outcome: "none" };
+    }
+    const combined = new RegExp(`(${base.source})((?:\\s*\\[[^\\]]+\\])+)`);
+    const match = combined.exec(answerText);
+    if (!match) {
+      return { text: answerText, outcome: "none" };
+    }
+    const brackets = match[2].match(/\[[^\]]+\]/g) ?? [];
+    const rebuilt = brackets.map((bracket) => {
+      const tokens = bracket.slice(1, -1).split(",").map((token) => token.trim()).filter(Boolean);
+      const kept = tokens.filter((token) => !token.includes(paperId));
+      if (kept.length === tokens.length) {
+        return bracket;
+      }
+      return kept.length ? `[${kept.join(", ")}]` : "";
+    });
+    if (rebuilt.join("") === brackets.join("")) {
+      return { text: answerText, outcome: "none" };
+    }
+    const keptBrackets = rebuilt.filter(Boolean);
+    if (keptBrackets.length > 0) {
+      return { text: answerText.replace(combined, `$1${keptBrackets.join("")}`), outcome: "citation" };
+    }
+    const withTail = new RegExp(`${base.source}(?:\\s*\\[[^\\]]+\\])*[.!?]?\\s*`);
+    return { text: answerText.replace(withTail, " ").replace(/ {2,}/g, " ").trim(), outcome: "statement" };
+  }
+
+  /** Ersetzt eine Aussage im Antworttext durch eine korrigierte Fassung (Marker bleiben). */
+  function replaceStatementInAnswerText(answerText: string, statement: string, replacement: string): string {
+    const pattern = statementPattern(cleanAnswerQuote(statement));
+    const clean = replacement.trim();
+    if (!pattern || !clean || !pattern.test(answerText)) {
+      return answerText;
+    }
+    return answerText.replace(pattern, clean.replace(/\$/g, "$$$$"));
+  }
+
+  /** Markiert die Zuordnung als geprüft (Warnzeichen verschwindet). */
+  function clearApproximateOnLinks(links: CitationLink[], paperId: string, evidenceIndex: number): CitationLink[] {
+    return links.map((link) =>
+      link.approximate && link.paper_id === paperId && (link.evidence_index == null || link.evidence_index === evidenceIndex)
+        ? { ...link, approximate: false }
+        : link
+    );
+  }
+
+  /** Setzt die verifizierte Belegstelle als Evidence des Zitats. */
+  function updateEvidenceInSources(
+    sources: VerificationSource[],
+    paperId: string,
+    evidenceIndex: number,
+    quotes: string[],
+    statement: string
+  ): VerificationSource[] {
+    const excerpt = quotes.join(" … ").trim();
+    if (!excerpt) {
+      return sources;
+    }
+    return sources.map((item) =>
+      item.paper_id !== paperId
+        ? item
+        : {
+            ...item,
+            evidence: item.evidence.map((entry, index) =>
+              index === evidenceIndex
+                ? { ...entry, pdf_excerpt: excerpt, reference_text: cleanAnswerQuote(statement) || entry.reference_text }
+                : entry
+            )
+          }
+    );
+  }
+
+  /** "teilweise gestützt": Aussage per LLM auf das reduzieren, was die Quelle belegt. */
+  async function reformulateForSource(
+    source: VerificationSource,
+    evidenceIndex: number,
+    statement: string,
+    result: ClaimCheckResult
+  ): Promise<string> {
+    const evidence = source.evidence[evidenceIndex];
+    const support =
+      (result.supporting_quotes ?? []).join(" … ").trim() ||
+      (result.excerpts ?? []).slice(0, 2).join(" … ").trim() ||
+      evidence?.pdf_excerpt ||
+      evidence?.reference_text ||
+      "";
+    if (!support) {
+      return "";
+    }
+    try {
+      const rewrite = await api.rewriteNote({
+        text: `Aussage: ${cleanAnswerQuote(statement)}\n\nWas die Quelle [${source.paper_id}] tatsächlich belegt: ${support}`,
+        instruction:
+          "Die Aussage wird von ihrer Quelle nur teilweise gestützt. Formuliere sie so um, " +
+          "dass sie ausschließlich das aussagt, was die Quelle wirklich belegt — nicht mehr. " +
+          "Kurz, sachlich, auf Deutsch. Gib nur den korrigierten Satz aus, ohne Zitatmarker, " +
+          "ohne Anführungszeichen, ohne Kommentar.",
+        provider: provider || undefined,
+        model: model || undefined
+      });
+      return (rewrite.text || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  /** Prüft alle als unsicher (approximate) markierten Zuordnungen der frisch generierten
+   *  Antwort — VOR dem Anzeigen — und korrigiert Antworttext/Zitate entsprechend:
+   *  nicht gestützt → Zitat/Aussage raus, teilweise → umformuliert, gestützt → Beleg fix.
+   *  So sieht der Nutzer direkt die bereinigte Antwort statt nachträglicher Änderungen. */
+  async function verifyUncertainCitations(
+    payload: Answer,
+    sources: VerificationSource[]
+  ): Promise<{ payload: Answer; sources: VerificationSource[] }> {
+    const links = payload.citation_links ?? [];
+    // Kein Early-Return auf link.approximate: citationMetasFor markiert inzwischen auch
+    // verification-unsichere Belege (nicht im PDF verortet) als approximate — die Items-
+    // Sammlung unten entscheidet, ob es etwas zu prüfen gibt.
+    if (!sources.length) {
+      return { payload, sources };
+    }
+    const parts = payload.answer.split(/(\[[^\]]+\])/g);
+    const seen = new Set<string>();
+    const items: { paperId: string; source: VerificationSource; evidenceIndex: number; statement: string }[] = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      const bracket = /^\[([^\]]+)\]$/.exec(parts[index]);
+      if (!bracket) {
+        continue;
+      }
+      const start = parts.slice(0, index).reduce((sum, item) => sum + item.length, 0);
+      const raw = citationMetasFor(sources, bracket[1], citationContext(parts, index), links, start);
+      const metas = Array.isArray(raw) ? raw : raw ? [raw] : [];
+      const segment = citationSegmentFromParts(parts, index);
+      const statement = meaningfulQuote(segment) || segment;
+      if (!statement || statement.length < 8) {
+        continue;
+      }
+      for (const meta of metas) {
+        if (!meta.approximate) {
+          continue;
+        }
+        const key = `${meta.source.paper_id}#${meta.evidenceIndex}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({ paperId: meta.source.paper_id, source: meta.source, evidenceIndex: meta.evidenceIndex, statement });
+      }
+    }
+    if (!items.length) {
+      return { payload, sources };
+    }
+
+    let answerText = payload.answer;
+    let nextLinks = links.map((link) => ({ ...link }));
+    let nextSources = sources.map((source) => ({ ...source, evidence: source.evidence.map((entry) => ({ ...entry })) }));
+
+    for (const item of items.slice(0, MAX_PREVERIFY_CITATIONS)) {
+      const evidence = item.source.evidence[item.evidenceIndex];
+      // Bei claim_excerpt/approx_region ist reference_text der eigene Antwortsatz —
+      // als "Quellen-Auszug" an den Judge gefüttert würde er die Prüfung zirkulär
+      // Richtung "supported" biasen. Dann lieber gar kein Auszug (der Checker zieht
+      // sich PDF/Abstract selbst).
+      const evidenceMeta = (evidence?.metadata ?? {}) as Record<string, unknown>;
+      const selfReferential =
+        evidenceMeta.context_policy === "claim_excerpt" || evidenceMeta.context_policy === "approx_region";
+      let check: ClaimCheckResult | undefined;
+      try {
+        const res = await api.claimCheck({
+          statement: item.statement,
+          paper_ids: [item.paperId],
+          titles: { [item.paperId]: item.source.title || "" },
+          evidence_texts: { [item.paperId]: evidence?.pdf_excerpt || (selfReferential ? "" : evidence?.reference_text || "") },
+          provider: provider || undefined,
+          model: model || undefined
+        });
+        check = res.checks[0];
+      } catch {
+        continue; // fail-soft: Zuordnung bleibt (mit Warnzeichen) manuell prüfbar
+      }
+      if (!check) {
+        continue;
+      }
+      if (check.verdict === "not_supported") {
+        const stripped = stripCitationFromAnswerText(answerText, item.paperId, item.statement);
+        answerText = stripped.text;
+        nextLinks = clearApproximateOnLinks(nextLinks, item.paperId, item.evidenceIndex);
+        logAction(
+          "Zitat vorab geprüft",
+          stripped.outcome === "statement"
+            ? `Nicht gestützte Aussage entfernt ([${item.paperId}]).`
+            : `Nicht gestütztes Zitat [${item.paperId}] entfernt.`,
+          "ok"
+        );
+      } else if (check.verdict === "partially_supported") {
+        const replacement = await reformulateForSource(item.source, item.evidenceIndex, item.statement, check);
+        if (replacement) {
+          answerText = replaceStatementInAnswerText(answerText, item.statement, replacement);
+        }
+        nextLinks = clearApproximateOnLinks(nextLinks, item.paperId, item.evidenceIndex);
+        logAction("Zitat vorab geprüft", `Aussage an Quelle [${item.paperId}] angepasst (nur teilweise gestützt).`, "ok");
+      } else if (check.verdict === "supported") {
+        if (check.supporting_quotes.length) {
+          nextSources = updateEvidenceInSources(nextSources, item.paperId, item.evidenceIndex, check.supporting_quotes, item.statement);
+        }
+        nextLinks = clearApproximateOnLinks(nextLinks, item.paperId, item.evidenceIndex);
+      }
+      // insufficient_evidence: Warnzeichen bleibt — bleibt manuell nachprüfbar.
+    }
+    return { payload: { ...payload, answer: answerText, citation_links: nextLinks }, sources: nextSources };
+  }
+
+  function insertCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "", extras?: CitationInsertExtras) {
+    const payload = citationInsertPayload(source, evidenceIndex, quote, extras);
+    if (!payload) {
+      return;
+    }
+    notesActionsRef.current?.clearInsertPreview();
+    void appendToActiveNote(payload.markdown, payload.citations);
+  }
+
+  function previewCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "", extras?: CitationInsertExtras) {
+    const payload = citationInsertPayload(source, evidenceIndex, quote, extras);
+    if (!payload) {
+      return;
+    }
+    notesActionsRef.current?.previewAppendMarkdown(payload.markdown);
   }
 
   function toggleScopedPaper(paperId: string) {
@@ -2168,31 +2915,54 @@ export function WorkspacePage() {
     openAssistantSource(sources[0] ?? null, 0);
   }
 
-  function startColumnResize(
-    event: ReactPointerEvent<HTMLDivElement>,
-    value: number,
-    setter: (value: number) => void,
-    frameRef: MutableRefObject<number | null>,
-    min: number,
-    max: number
-  ) {
+  // Flüssiges Spalten-Resize wie in der Werkstatt: während des Drags wird das Grid
+  // direkt am DOM aktualisiert (kein React-Rerender pro Frame), der Clamp ist dynamisch
+  // gegen die Containerbreite statt eines festen Pixel-Maximums; State erst bei pointerup.
+  function startColumnResize(event: ReactPointerEvent<HTMLDivElement>, column: "nav" | "pdf" | "assistant") {
     event.preventDefault();
+    const page = pageRef.current;
+    if (!page) return;
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture ist optional; window-Listener übernehmen ohnehin.
+    }
     const startX = event.clientX;
-    const startWidth = value;
-    const move = (moveEvent: globalThis.PointerEvent) => {
-      const next = Math.min(max, Math.max(min, startWidth + moveEvent.clientX - startX));
-      if (frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current);
-      }
-      frameRef.current = window.requestAnimationFrame(() => {
-        frameRef.current = null;
-        setter(next);
-      });
+    const widths = {
+      nav: navigatorOpen ? navigatorWidth : 46,
+      pdf: centerView !== "pdf" || pdfOpen ? pdfWidth : 46,
+      assistant: assistantOpen ? assistantWidth : 46,
     };
+    const startWidth = widths[column];
+    const minNotes = notesOpen ? 80 : 46;
+    const othersTotal = (Object.keys(widths) as Array<keyof typeof widths>)
+      .filter((key) => key !== column)
+      .reduce((sum, key) => sum + widths[key], 0);
+    const min = 110;
+    const max = Math.max(min, page.clientWidth - 3 * 6 - othersTotal - minNotes);
+    const notesTemplate = notesOpen ? "minmax(80px, 1fr)" : "46px";
+    let next = startWidth;
+    let frame: number | null = null;
+    const apply = () => {
+      frame = null;
+      const cols = { ...widths, [column]: next };
+      page.style.gridTemplateColumns = `${cols.nav}px 6px ${cols.pdf}px 6px ${cols.assistant}px 6px ${notesTemplate}`;
+    };
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      next = Math.min(max, Math.max(min, startWidth + moveEvent.clientX - startX));
+      if (frame === null) frame = window.requestAnimationFrame(apply);
+    };
+    const setter = column === "nav" ? setNavigatorWidth : column === "pdf" ? setPdfWidth : setAssistantWidth;
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setter(next);
     };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
   }
@@ -2202,12 +2972,13 @@ export function WorkspacePage() {
     value: number,
     setter: (value: number) => void,
     frameRef: MutableRefObject<number | null>,
-    min: number,
-    max: number
+    min: number
   ) {
     event.preventDefault();
     const startY = event.clientY;
     const startHeight = value;
+    // Dynamischer Deckel statt fester Pixel: Liste darf fast die ganze Pane-Höhe einnehmen.
+    const max = Math.max(min, window.innerHeight - 240);
     const move = (moveEvent: globalThis.PointerEvent) => {
       const next = Math.min(max, Math.max(min, startHeight + moveEvent.clientY - startY));
       if (frameRef.current !== null) {
@@ -2221,7 +2992,11 @@ export function WorkspacePage() {
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
   }
@@ -2273,7 +3048,7 @@ export function WorkspacePage() {
   const isIngestingCurrentPdf =
     !!ingestingPaperId && pdfTarget?.kind === "assistant" && pdfTarget.source.paper_id === ingestingPaperId;
   const pdfMetaPaperId = (() => {
-    if (pdfView.url || !pdfTarget || isIngestingCurrentPdf) return undefined;
+    if (!pdfTarget || isIngestingCurrentPdf) return undefined;
     if (pdfTarget.kind === "paper") return workspacePaperId(pdfTarget.paper) || undefined;
     if (pdfTarget.kind === "assistant") return isGreySourcePaperId(pdfTarget.source.paper_id) ? undefined : pdfTarget.source.paper_id;
     if (pdfTarget.kind === "noteCitation") return isGreySourcePaperId(pdfTarget.citation.paper_id) ? undefined : pdfTarget.citation.paper_id;
@@ -2292,6 +3067,7 @@ export function WorkspacePage() {
 
   return (
     <section
+      ref={pageRef}
       className="workspace-page"
       style={{
         gridTemplateColumns: `${navColumn} 6px ${pdfColumn} 6px ${assistantColumn} 6px ${notesColumn}`
@@ -2370,8 +3146,8 @@ export function WorkspacePage() {
             selectedGreyIds={selectedGreyIds}
             onToggleScopedGrey={toggleScopedGrey}
             greySourceListHeight={greySourceListHeight}
-            onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90, 520)}
-            onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80, 400)}
+            onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90)}
+            onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80)}
             onOpenAssistantPdf={openSelectedAssistantPdf}
             onActivateSession={activateAssistantTurn}
             onDeleteSession={deleteAssistantTurn}
@@ -2395,7 +3171,7 @@ export function WorkspacePage() {
         className={`split-handle ${navigatorOpen ? "" : "split-handle--idle"}`}
         role="separator"
         aria-label="Navigator Breite anpassen"
-        onPointerDown={navigatorOpen ? (event) => startColumnResize(event, navigatorWidth, setNavigatorWidth, navResizeFrameRef, 110, 520) : undefined}
+        onPointerDown={navigatorOpen ? (event) => startColumnResize(event, "nav") : undefined}
       />
 
       {centerView === "analysis" ? (
@@ -2436,7 +3212,7 @@ export function WorkspacePage() {
         className={`split-handle ${pdfOpen ? "" : "split-handle--idle"}`}
         role="separator"
         aria-label="PDF Breite anpassen"
-        onPointerDown={pdfOpen ? (event) => startColumnResize(event, pdfWidth, setPdfWidth, pdfResizeFrameRef, 110, 900) : undefined}
+        onPointerDown={pdfOpen ? (event) => startColumnResize(event, "pdf") : undefined}
       />
 
       {assistantOpen ? (
@@ -2445,7 +3221,7 @@ export function WorkspacePage() {
             title="Assistant"
             onCollapse={() => setAssistantOpen(false)}
             collapseSide="left"
-            status={answerMutation.isPending ? "running" : answer?.generation_error ? "warning" : "idle"}
+            status={answerMutation.isPending || citationVerifyPending ? "running" : answer?.generation_error ? "warning" : "idle"}
             actions={
               <div className="segmented workspace-assistant-mode-toggle" aria-label="Assistant-Modus">
                 <button
@@ -2615,7 +3391,7 @@ export function WorkspacePage() {
                 onKeyDown={handleQuestionKeyDown}
                 placeholder="Frage stellen — / für Befehle, @ für Papers"
               />
-              <button className="icon-button chat-send-button" aria-label="Senden" disabled={answerMutation.isPending || questionBlockedByScope}>
+              <button className="icon-button chat-send-button" aria-label="Senden" disabled={answerMutation.isPending || citationVerifyPending || questionBlockedByScope}>
                 <Send size={17} />
               </button>
             </div>
@@ -2669,6 +3445,15 @@ export function WorkspacePage() {
               >
                 <Sparkles size={14} />
                 <span>Auto-Recherche</span>
+              </button>
+              <button
+                type="button"
+                className={`internet-toggle ${criticalMode ? "internet-toggle--on" : ""}`}
+                onClick={() => setCriticalMode((v) => !v)}
+                title="Kritischer Modus: Antworten benennen Limitationen, Risiken und Gegenbelege explizit. Auch per /kritisch."
+              >
+                <ShieldAlert size={14} />
+                <span>Kritisch</span>
               </button>
               <button
                 type="button"
@@ -3030,8 +3815,8 @@ export function WorkspacePage() {
                   if (rootQ) launchResearchTree(rootQ, false, "", researchNodes);
                 }}
                 onCitationClick={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
-                onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
-                onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
+                onCitationInsert={(source, evidenceIndex, quote, extras) => insertCitationFromAnswer(source, evidenceIndex, quote, extras)}
+                onCitationInsertPreview={(source, evidenceIndex, quote, extras) => previewCitationFromAnswer(source, evidenceIndex, quote, extras)}
                 onCitationInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
                 onDrillDeeper={(nodeId, question) => drillDeeperInTree(nodeId, question)}
                 onSaveToNotes={() => void saveResearchTreeToNotes()}
@@ -3102,10 +3887,15 @@ export function WorkspacePage() {
                 </button>
               </div>
             ) : null}
+            {citationVerifyPending ? (
+              <div className="scope-status">
+                <Loader2 size={13} className="spin" /> Prüfe unsichere Zitate gegen die Quellen …
+              </div>
+            ) : null}
             {!parallelMode && !deepMode && activeTurn && activeTurn.type !== "research_tree" ? (
-              <div className="answer-blocks">
+              <div className="answer-blocks" ref={answerBlocksRef} onMouseUp={handleAnswerMouseUp}>
                 {activeBlocks.filter((block) => block.answer).map((block, index) => (
-                  <article className={`answer-block ${index > 0 ? "answer-block--followup" : ""}`} key={block.id}>
+                  <article className={`answer-block ${index > 0 ? "answer-block--followup" : ""}`} key={block.id} data-block-id={block.id}>
                     <div className="answer-question">{block.question}</div>
                     <div className="answer-text">
                       <AnswerText
@@ -3120,9 +3910,14 @@ export function WorkspacePage() {
                           citationMetasFor(block.verification, citation, context, block.answer.citation_links ?? [], citationStart)
                         }
                         activeCitation={selectedSource ? { paperId: selectedSource.paper_id, evidenceIndex: activeEvidenceIndex } : undefined}
-                        onCitationInsert={(source, evidenceIndex, quote) => insertCitationFromAnswer(source, evidenceIndex, quote)}
-                        onCitationInsertPreview={(source, evidenceIndex, quote) => previewCitationFromAnswer(source, evidenceIndex, quote)}
+                        onCitationInsert={(source, evidenceIndex, quote, extras) => insertCitationFromAnswer(source, evidenceIndex, quote, extras)}
+                        onCitationInsertPreview={(source, evidenceIndex, quote, extras) => previewCitationFromAnswer(source, evidenceIndex, quote, extras)}
                         onCitationInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
+                        onClaimRemove={(statement) => removeStatementFromBlock(block.id, statement)}
+                        onCitationRemove={(paperId, statement) => removeCitationFromBlock(block.id, paperId, statement)}
+                        onClaimEvidenceUpdate={(source, evidenceIndex, quotes, statement) =>
+                          updateCitationEvidenceInBlock(block.id, source, evidenceIndex, quotes, statement)
+                        }
                         markUncited={Number(block.answer.context_diagnostics?.uncited_sentence_count ?? 0) > 0}
                       />
                     </div>
@@ -3141,6 +3936,126 @@ export function WorkspacePage() {
             ) : (
               !deepMode && !parallelMode ? <EmptyState title="Keine Antwort" /> : null
             )}
+            {answerSelection ? (
+              <div
+                className="answer-selection-popover"
+                style={{ left: answerSelection.left, top: answerSelection.top }}
+                onMouseUp={(event) => event.stopPropagation()}
+              >
+                <div className="answer-selection-popover__head">
+                  <strong>{answerSelection.text.length} Zeichen markiert</strong>
+                  <button className="icon-button" type="button" aria-label="Schließen" onClick={closeAnswerSelection}>
+                    <X size={14} />
+                  </button>
+                </div>
+                {correctionDraft === null ? (
+                  <div className="answer-selection-popover__actions">
+                    <button className="button button-compact" type="button" title="Aussage gegen ihre Quellen prüfen" onClick={() => void checkAnswerSelection()}>
+                      <ShieldCheck size={13} /> Nachchecken
+                    </button>
+                    <button className="button button-compact" type="button" title="Weiterfragen zu dieser Passage" onClick={askAboutSelection}>
+                      <MessageSquareText size={13} /> Weiterfragen
+                    </button>
+                    <button
+                      className="button button-compact"
+                      type="button"
+                      title="Passage samt Quellen in die Notiz übernehmen"
+                      onMouseEnter={previewSelectionInNote}
+                      onMouseLeave={() => notesActionsRef.current?.clearInsertPreview()}
+                      onFocus={previewSelectionInNote}
+                      onBlur={() => notesActionsRef.current?.clearInsertPreview()}
+                      onClick={insertSelectionIntoNote}
+                    >
+                      <NotebookPen size={13} /> In Notiz
+                    </button>
+                    {selectionCheck?.status === "done" &&
+                    (selectionCheck.results ?? []).some(
+                      (check) => check.verdict === "not_supported" || check.verdict === "partially_supported"
+                    ) ? (
+                      <button
+                        className="button button-compact"
+                        type="button"
+                        title="Der Nachcheck hat die Aussage nicht bestätigt — jetzt richtigstellen"
+                        onClick={() => setCorrectionDraft(answerSelection.text)}
+                      >
+                        <Settings2 size={13} /> Korrigieren
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="answer-selection-popover__correction">
+                    <textarea
+                      value={correctionDraft}
+                      rows={3}
+                      onChange={(event) => setCorrectionDraft(event.target.value)}
+                      aria-label="Korrigierter Text"
+                    />
+                    <div className="answer-selection-popover__actions">
+                      <button className="button button-compact button-primary" type="button" onClick={applyAnswerCorrection}>
+                        Ersetzen
+                      </button>
+                      <button className="button button-compact" type="button" onClick={() => setCorrectionDraft(null)}>
+                        Abbrechen
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {selectionCheck?.status === "loading" ? (
+                  <div className="answer-selection-popover__status">
+                    <Loader2 size={13} className="spin" /> Prüfe gegen die Quellen …
+                  </div>
+                ) : null}
+                {selectionCheck?.status === "error" ? (
+                  <div className="answer-selection-popover__status">{selectionCheck.error}</div>
+                ) : null}
+                {selectionCheck?.status === "done"
+                  ? (selectionCheck.results ?? []).map((check) => (
+                      <div className="answer-selection-popover__result" key={check.paper_id}>
+                        <span
+                          className={`claim-check-card__verdict ${
+                            check.verdict === "supported"
+                              ? "claim-check--ok"
+                              : check.verdict === "partially_supported"
+                                ? "claim-check--warn"
+                                : check.verdict === "not_supported"
+                                  ? "claim-check--bad"
+                                  : "claim-check--unknown"
+                          }`}
+                        >
+                          [{check.paper_id}] {claimVerdictLabel(check.verdict)}
+                          {check.checked_scope === "whole_paper" ? " (ganzes Paper geprüft)" : ""}
+                        </span>
+                        {check.explanation ? <p>{check.explanation}</p> : null}
+                        {check.supporting_quotes.slice(0, 1).map((quoteText, quoteIndex) => (
+                          <blockquote className="claim-check-card__quote" key={quoteIndex}>
+                            {quoteText}
+                          </blockquote>
+                        ))}
+                        {check.verdict === "not_supported" && selectionBlock ? (
+                          <button
+                            className="button button-compact claim-check-card__danger"
+                            type="button"
+                            title="Dieses Zitat entfernen — der Satz bleibt, wenn ihn eine andere Quelle belegt, sonst wird auch er entfernt"
+                            onClick={() => {
+                              removeCitationFromBlock(selectionBlock.id, check.paper_id, answerSelection.text);
+                              closeAnswerSelection();
+                            }}
+                          >
+                            <XCircle size={13} /> Zitat entfernen
+                          </button>
+                        ) : null}
+                      </div>
+                    ))
+                  : null}
+                {selectionCheck?.status === "done" &&
+                (selectionCheck.results ?? []).some((check) => check.verdict === "not_supported" || check.verdict === "partially_supported") &&
+                correctionDraft === null ? (
+                  <div className="answer-selection-popover__status">
+                    Aussage nicht (voll) gedeckt — mit „Korrigieren" kannst du sie direkt richtigstellen.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </section>
           {useInternet && (webMutation.isPending || webResult || webMutation.isError) ? (
             <section className="panel web-research-panel">
@@ -3359,7 +4274,7 @@ export function WorkspacePage() {
         className={`split-handle ${assistantOpen ? "" : "split-handle--idle"}`}
         role="separator"
         aria-label="Assistant Breite anpassen"
-        onPointerDown={assistantOpen ? (event) => startColumnResize(event, assistantWidth, setAssistantWidth, assistantResizeFrameRef, 110, 1100) : undefined}
+        onPointerDown={assistantOpen ? (event) => startColumnResize(event, "assistant") : undefined}
       />
 
       {notesOpen ? (
@@ -4577,8 +5492,8 @@ function ResearchTreeView({
   onStop: () => void;
   onResume: () => void;
   onCitationClick: (source: VerificationSource, evidenceIndex: number) => void;
-  onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
-  onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string) => void;
+  onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string, extras?: CitationInsertExtras) => void;
+  onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string, extras?: CitationInsertExtras) => void;
   onCitationInsertPreviewClear: () => void;
   onDrillDeeper: (nodeId: string, question: string) => void;
   onSaveToNotes: () => void;
@@ -4703,8 +5618,8 @@ function ResearchTreeView({
               }
               onCitationClick={() => {}}
               onCitationMetaClick={(meta) => onCitationClick(meta.source, meta.evidenceIndex)}
-              onCitationInsert={(source, evidenceIndex, quote) => onCitationInsert(source, evidenceIndex, quote)}
-              onCitationInsertPreview={(source, evidenceIndex, quote) => onCitationInsertPreview(source, evidenceIndex, quote)}
+              onCitationInsert={(source, evidenceIndex, quote, extras) => onCitationInsert(source, evidenceIndex, quote, extras)}
+              onCitationInsertPreview={(source, evidenceIndex, quote, extras) => onCitationInsertPreview(source, evidenceIndex, quote, extras)}
               onCitationInsertPreviewClear={onCitationInsertPreviewClear}
             />
             {verification.length > 0 ? (
@@ -4802,8 +5717,10 @@ function ResearchTreeView({
         citationMetasFor(synthVerification, citation, context, synthCitationLinks, citationStart),
       onCitationClick: () => {},
       onCitationMetaClick: (meta: CitationMeta) => onCitationClick(meta.source, meta.evidenceIndex),
-      onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string) => onCitationInsert(source, evidenceIndex, quote),
-      onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string) => onCitationInsertPreview(source, evidenceIndex, quote),
+      onCitationInsert: (source: VerificationSource, evidenceIndex: number, quote: string, extras?: CitationInsertExtras) =>
+        onCitationInsert(source, evidenceIndex, quote, extras),
+      onCitationInsertPreview: (source: VerificationSource, evidenceIndex: number, quote: string, extras?: CitationInsertExtras) =>
+        onCitationInsertPreview(source, evidenceIndex, quote, extras),
       onCitationInsertPreviewClear,
     };
 

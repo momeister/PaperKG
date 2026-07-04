@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Notebook, Play, RefreshCw, Square } from "lucide-react";
+import { Notebook, NotebookPen, Play, RefreshCw, Square } from "lucide-react";
 
 import { EmptyState } from "../components/EmptyState";
+import { NotesSidePanel } from "../components/NotesSidePanel";
 import { isTauri, nativeInvoke } from "../native";
 
 // Optional JupyterLab sidecar (roadmap R3). The Rust shell starts `jupyter lab`
@@ -16,6 +17,11 @@ export function JupyterPage() {
   const [status, setStatus] = useState<JupyterStatus>("idle");
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notesOpen, setNotesOpen] = useState(() => localStorage.getItem("sciencekg.jupyter.notes") === "1");
+
+  useEffect(() => {
+    localStorage.setItem("sciencekg.jupyter.notes", notesOpen ? "1" : "0");
+  }, [notesOpen]);
 
   const start = useCallback(async () => {
     setStatus("starting");
@@ -84,6 +90,14 @@ export function JupyterPage() {
           <h1>Jupyter</h1>
         </div>
         <div className="jupyter-toolbar">
+          <button
+            className={`button button-compact ${notesOpen ? "button-primary" : ""}`}
+            type="button"
+            title="Projekt-Notizen ein-/ausklappen"
+            onClick={() => setNotesOpen((v) => !v)}
+          >
+            <NotebookPen size={15} /> Notizen
+          </button>
           {status === "running" ? (
             <>
               <button className="button button-compact" type="button" onClick={restart}>
@@ -106,22 +120,27 @@ export function JupyterPage() {
         </div>
       </div>
 
-      {status === "running" && url ? (
-        <iframe className="jupyter-frame" src={url} title="JupyterLab" />
-      ) : status === "starting" ? (
-        <div className="jupyter-message">
-          <Notebook size={18} /> JupyterLab startet…
+      <div className="jupyter-body">
+        <div className="jupyter-content">
+          {status === "running" && url ? (
+            <iframe className="jupyter-frame" src={url} title="JupyterLab" />
+          ) : status === "starting" ? (
+            <div className="jupyter-message">
+              <Notebook size={18} /> JupyterLab startet…
+            </div>
+          ) : status === "error" ? (
+            <EmptyState title="JupyterLab konnte nicht gestartet werden">
+              {error ? <pre className="jupyter-error">{error}</pre> : null}
+              Installiere es im Backend-venv: <code>pip install jupyterlab</code>, dann „JupyterLab starten".
+            </EmptyState>
+          ) : (
+            <EmptyState title="JupyterLab ist gestoppt">
+              Starte den lokalen Notebook-Server, um Notebooks direkt in PaperKG zu bearbeiten.
+            </EmptyState>
+          )}
         </div>
-      ) : status === "error" ? (
-        <EmptyState title="JupyterLab konnte nicht gestartet werden">
-          {error ? <pre className="jupyter-error">{error}</pre> : null}
-          Installiere es im Backend-venv: <code>pip install jupyterlab</code>, dann „JupyterLab starten".
-        </EmptyState>
-      ) : (
-        <EmptyState title="JupyterLab ist gestoppt">
-          Starte den lokalen Notebook-Server, um Notebooks direkt in PaperKG zu bearbeiten.
-        </EmptyState>
-      )}
+        {notesOpen ? <NotesSidePanel onClose={() => setNotesOpen(false)} /> : null}
+      </div>
     </section>
   );
 }

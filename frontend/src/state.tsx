@@ -31,3 +31,9 @@ export function useAppState() {
   }
   return state;
 }
+
+/** Wie useAppState, aber ohne Provider-Zwang (z.B. für wiederverwendbare
+ *  Komponenten, die auch in Tests ohne App-Shell gerendert werden). */
+export function useOptionalAppState(): AppState | null {
+  return useContext(AppStateContext);
+}

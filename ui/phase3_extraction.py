@@ -299,7 +299,6 @@ async def _download_search_results(results: list[dict], pdf_dir: str | Path = PD
     async with httpx.AsyncClient(timeout=60.0) as client:
         for paper in results:
             url = paper.get("pdf_url")
-            paper_id = _paper_metadata_id(paper)
             storage_id = _paper_pdf_storage_id(paper)
             version = paper.get("version") or 1
             if not url:
@@ -1702,7 +1701,6 @@ with tabs[0]:
                         )
 
                 except Exception as e:
-                    import traceback
                     error_msg = f"Extraction failed: {e}"
                     st.error(error_msg)
                     

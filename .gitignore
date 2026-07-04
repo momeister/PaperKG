@@ -81,6 +81,9 @@ bridge/uitars/node_modules/
 # Generated knowledge/UI artifacts
 .streamlit/
 graphify-out/
+test-output/
+# pyvis writes its JS/CSS assets into a sibling lib/ next to any saved graph HTML
+lib/
 *.html
 GRAPH_TREE.html
 
@@ -90,3 +93,4 @@ GRAPH_TREE.html
 !.env.example
 config.local.yaml
 secrets.toml
+remember.txt

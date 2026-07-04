@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from query.source_verifier import (
     best_excerpt,
+    best_excerpt_with_method,
     best_excerpts,
     find_pdf_path,
     locate_evidence_fragments,
@@ -471,6 +472,67 @@ def test_best_excerpt_never_truncates_the_match_away() -> None:
     excerpt = best_excerpt(pdf_text, reference, strict=True)
 
     assert "42.7" in excerpt
+
+
+def test_best_excerpt_with_method_reports_anchor_kind() -> None:
+    pdf_text = (
+        "Patients receiving mindfulness meditation therapy reported reduced anxiety symptoms "
+        "and improved sleep quality across the intervention period in this cohort. "
+        "The final statistical analysis showed an overall response rate of 42.7% in the group."
+    )
+
+    verbatim_reference = "reported reduced anxiety symptoms and improved sleep quality across the intervention"
+    excerpt, method = best_excerpt_with_method(pdf_text, verbatim_reference, strict=True)
+    assert excerpt
+    assert method == "verbatim"
+
+    number_reference = "The trial achieved a response rate of 42.7% overall."
+    excerpt, method = best_excerpt_with_method(pdf_text, number_reference, strict=True)
+    assert "42.7" in excerpt
+    assert method == "quantitative"
+
+    # Fully paraphrased, no number, no 30-char verbatim run — only shared terms anchor it.
+    paraphrase = "Mindfulness therapy improved sleep and reduced anxiety in patients."
+    excerpt, method = best_excerpt_with_method(pdf_text, paraphrase, strict=True)
+    assert excerpt
+    assert method == "term_overlap"
+
+    excerpt, method = best_excerpt_with_method(pdf_text, "", strict=True)
+    assert (excerpt, method) == ("", "")
+
+
+def test_locate_evidence_flags_term_overlap_only_location() -> None:
+    pdf_text = (
+        "Patients receiving mindfulness meditation therapy reported reduced anxiety symptoms "
+        "and improved sleep quality across the intervention period in this cohort."
+    )
+    evidence = {
+        "paper_id": "p1",
+        "kind": "claim",
+        "text": "Mindfulness therapy improved sleep and reduced anxiety in patients.",
+        "metadata": {},
+    }
+
+    location = locate_evidence_fragments(evidence, pdf_text, max_fragments=1)[0]
+
+    # An excerpt exists (found=True for UI compatibility), but it is anchored on plain
+    # term overlap only — the metadata flag lets the UI warn instead of presenting it
+    # as the exact Belegstelle (the "BLIP cites an unrelated sentence" failure mode).
+    assert location.found_in_pdf_text is True
+    assert location.metadata.get("located") == "term_overlap_only"
+
+
+def test_find_normalized_tolerates_spurious_inner_spaces() -> None:
+    # The PDF parser occasionally injects mid-word spaces ("ass essing"); verbatim
+    # quote verification must still match in BOTH directions.
+    broken_pdf = "The framework provides tools for ass essing model quality in clinical settings."
+    assert verbatim_excerpt(broken_pdf, "for assessing model quality") != ""
+
+    clean_pdf = "The framework provides tools for assessing model quality in clinical settings."
+    assert verbatim_excerpt(clean_pdf, "for ass essing model quality") != ""
+
+    # Guard: tiny squashed needles stay unmatched (too many accidental hits).
+    assert verbatim_excerpt(clean_pdf, "as sess") == ""
 
 
 def test_verbatim_excerpt_locates_quote_whitespace_insensitively() -> None:

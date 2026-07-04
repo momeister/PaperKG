@@ -23,7 +23,6 @@ Requires:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import os
 import signal
 import subprocess
@@ -199,7 +198,7 @@ def _start(args: argparse.Namespace) -> None:
 
         # Start UI if requested
         if not args.api_only:
-            print(f"\n🎨 Starting Phase 3 UI on port 8501...")
+            print("\n🎨 Starting Phase 3 UI on port 8501...")
 
             ui_env = os.environ.copy()
             ui_env["STREAMLIT_SERVER_HEADLESS"] = "false"
@@ -212,7 +211,7 @@ def _start(args: argparse.Namespace) -> None:
                     "streamlit",
                     "run",
                     str(PROJECT_ROOT / "ui" / "phase3_extraction.py"),
-                    f"--server.port=8501",
+                    "--server.port=8501",
                 ],
                 cwd=PROJECT_ROOT,
                 env=ui_env,
@@ -231,7 +230,7 @@ def _start(args: argparse.Namespace) -> None:
             print(f"   ReDoc:   {api_url}/redoc")
 
         if not args.api_only:
-            print(f"🎨 UI:       http://localhost:8501")
+            print("🎨 UI:       http://localhost:8501")
 
         print("\n✓ Press Ctrl+C to stop all services")
         print("=" * 60 + "\n")

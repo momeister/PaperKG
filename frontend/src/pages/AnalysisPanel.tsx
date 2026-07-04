@@ -492,7 +492,16 @@ export function AnalysisPanel({ projectId, provider, model, paperIds, onCollapse
                   <span className="analysis-chip" title="Fingerabdruck der Ausgaben (WP4)">
                     #{(active.output_hash || "").slice(0, 10)}
                   </span>
-                  <button type="button" className="analysis-chip analysis-chip--action" onClick={() => navigate("/werkstatt")}>
+                  <button
+                    type="button"
+                    className="analysis-chip analysis-chip--action"
+                    onClick={() => {
+                      const params = new URLSearchParams();
+                      if (active.code_project_id) params.set("project", active.code_project_id);
+                      if (active.script_rel) params.set("file", active.script_rel);
+                      navigate(params.toString() ? `/werkstatt?${params.toString()}` : "/werkstatt");
+                    }}
+                  >
                     <FileCode2 size={12} /> In Werkstatt öffnen
                   </button>
                   <button type="button" className="analysis-chip analysis-chip--action" onClick={copyMarkdown}>

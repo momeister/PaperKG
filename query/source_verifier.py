@@ -71,6 +71,39 @@ def _normalized_for_match(text: str) -> tuple[str, list[int]]:
     return result
 
 
+_SQUASHED_TEXT_CACHE: dict[str, tuple[str, list[int]]] = {}
+
+# Below this squashed length, space-insensitive matching produces too many accidental
+# hits ("in put" matching "input" inside another word) to be trustworthy.
+_MIN_SQUASHED_NEEDLE_CHARS = 12
+
+
+def _squashed_for_match(text: str) -> tuple[str, list[int]]:
+    """Like `_normalized_for_match`, but additionally drops all spaces.
+
+    The PDF parser occasionally injects spurious mid-word spaces ("ass essing");
+    dropping spaces on BOTH sides lets a clean quote still match such text (and vice
+    versa). The index map keeps pointing at original haystack indices.
+    """
+    cached = _SQUASHED_TEXT_CACHE.get(text) if len(text) > 4096 else None
+    if cached is not None:
+        return cached
+    folded, folded_map = _normalized_for_match(text)
+    chars: list[str] = []
+    index_map: list[int] = []
+    for position, ch in enumerate(folded):
+        if ch.isspace():
+            continue
+        chars.append(ch)
+        index_map.append(folded_map[position])
+    result = ("".join(chars), index_map)
+    if len(text) > 4096:
+        if len(_SQUASHED_TEXT_CACHE) >= 6:
+            _SQUASHED_TEXT_CACHE.clear()
+        _SQUASHED_TEXT_CACHE[text] = result
+    return result
+
+
 def _find_normalized(haystack: str, needle: str) -> tuple[int, int] | None:
     """Unicode-folded substring search; returns (start, length) in the original haystack."""
     needle_norm, _ = _normalized_for_match(needle)
@@ -79,10 +112,21 @@ def _find_normalized(haystack: str, needle: str) -> tuple[int, int] | None:
         return None
     hay_norm, hay_map = _normalized_for_match(haystack)
     position = hay_norm.find(needle_norm)
+    if position >= 0:
+        start = hay_map[position]
+        end = hay_map[position + len(needle_norm) - 1] + 1
+        return start, end - start
+    # Space-insensitive retry: tolerates the parser's spurious mid-word spaces in either
+    # the PDF text or the quote ("for ass essing quality" <-> "for assessing quality").
+    needle_squashed, _ = _squashed_for_match(needle)
+    if len(needle_squashed) < _MIN_SQUASHED_NEEDLE_CHARS:
+        return None
+    hay_squashed, hay_squashed_map = _squashed_for_match(haystack)
+    position = hay_squashed.find(needle_squashed)
     if position < 0:
         return None
-    start = hay_map[position]
-    end = hay_map[position + len(needle_norm) - 1] + 1
+    start = hay_squashed_map[position]
+    end = hay_squashed_map[position + len(needle_squashed) - 1] + 1
     return start, end - start
 
 
@@ -317,19 +361,25 @@ def _location_for_reference(
     # Prefer a confidently anchored excerpt; when none exists, show a LARGER approximate
     # region (flagged for the UI) instead of a confident-looking but wrong single sentence.
     excerpt = ""
-    approximate = False
+    located = ""
     if pdf_text:
-        excerpt = best_excerpt(pdf_text, reference, strict=True)
-        if not excerpt:
-            region = best_excerpt(pdf_text, reference, window_chars=APPROX_REGION_CHARS)
+        excerpt, method = best_excerpt_with_method(pdf_text, reference, strict=True)
+        if excerpt:
+            if method == "term_overlap":
+                # Anchored by plain term overlap only — no verbatim phrase, no matching
+                # number. Right section at best; flag it so the UI warns instead of
+                # presenting the window as the exact Belegstelle.
+                located = "term_overlap_only"
+        else:
+            region, _ = best_excerpt_with_method(pdf_text, reference, window_chars=APPROX_REGION_CHARS)
             if region:
                 excerpt = region
-                approximate = True
+                located = "approx_region"
     terms = highlightable_terms(reference)
     raw_metadata = evidence.get("metadata")
     metadata: dict[str, Any] = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
-    if approximate:
-        metadata["located"] = "approx_region"
+    if located:
+        metadata["located"] = located
     return EvidenceLocation(
         evidence_id=str(evidence.get("evidence_id") or ""),
         paper_id=str(evidence.get("paper_id") or ""),
@@ -453,10 +503,25 @@ def best_excerpt(
     window_chars: int = DEFAULT_EXCERPT_CHARS,
     strict: bool = False,
 ) -> str:
+    return best_excerpt_with_method(pdf_text, reference, window_chars=window_chars, strict=strict)[0]
+
+
+def best_excerpt_with_method(
+    pdf_text: str,
+    reference: str,
+    window_chars: int = DEFAULT_EXCERPT_CHARS,
+    strict: bool = False,
+) -> tuple[str, str]:
+    """Like `best_excerpt`, but also reports HOW the excerpt was anchored.
+
+    Method is "" (no excerpt), "verbatim" (shared verbatim phrase), "quantitative"
+    (anchored on a number from the reference), or "term_overlap" (plain term-overlap
+    window — no concrete anchor, callers should surface it as uncertain).
+    """
     clean = re.sub(r"\s+", " ", pdf_text or "").strip()
     reference_clean = re.sub(r"\s+", " ", reference or "").strip()
     if not clean or not reference_clean:
-        return ""
+        return "", ""
     quantitative = _quantitative_tokens(reference_clean)
 
     exact = _find_longest_substring(clean, reference_clean)
@@ -468,14 +533,14 @@ def best_excerpt(
             and _is_complete_sentence(matched)
             and _contains_quantitative_tokens(matched, quantitative)
         ):
-            return matched
+            return matched, "verbatim"
         excerpt = _excerpt_around(clean, position, length, window_chars)
         if _contains_quantitative_tokens(excerpt, quantitative):
-            return excerpt
+            return excerpt, "verbatim"
 
     tokens = highlightable_terms(reference_clean)
     if not tokens:
-        return _truncate_at_sentence(clean, window_chars)
+        return _truncate_at_sentence(clean, window_chars), "term_overlap"
 
     lower = clean.lower()
     if quantitative:
@@ -491,7 +556,7 @@ def best_excerpt(
                 number_candidates.append((score, excerpt))
         if number_candidates:
             number_candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
-            return number_candidates[0][1]
+            return number_candidates[0][1], "quantitative"
 
     best_start = 0
     best_score = -1
@@ -529,7 +594,9 @@ def best_excerpt(
     if best_score >= minimum_overlap:
         excerpt = _term_centered_excerpt(clean, lower, best_start, window_chars, tokens)
         if _contains_quantitative_tokens(excerpt, quantitative):
-            return excerpt
+            # Windows that satisfied the quantitative filter are number-anchored; without
+            # quantitative tokens this is a plain overlap window — no concrete anchor.
+            return excerpt, ("quantitative" if quantitative else "term_overlap")
     # Nothing matched the (stricter) quantitative requirement — fall back to the window
     # with the best plain textual overlap, but only if it's a meaningfully strong match.
     # This covers paraphrased/computed claims whose numbers don't appear verbatim in the PDF.
@@ -538,8 +605,8 @@ def best_excerpt(
     # dominated by names that recur throughout the whole paper — better to report no match than
     # a confident-looking excerpt that doesn't actually support the claim.
     if not strict and fallback_score >= 3:
-        return _term_centered_excerpt(clean, lower, fallback_start, window_chars, tokens)
-    return ""
+        return _term_centered_excerpt(clean, lower, fallback_start, window_chars, tokens), "term_overlap"
+    return "", ""
 
 
 def _term_centered_excerpt(clean: str, lower: str, start: int, window_chars: int, tokens: list[str]) -> str:

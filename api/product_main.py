@@ -32,7 +32,6 @@ from extraction.vocabulary import VocabularyManager
 from graph.paper_ingestion import extract_citation_ids, paper_id
 from harvester.arxiv_client import ArxivClient
 from harvester import dataset_clients
-from harvester.biorxiv_client import BiorxivClient
 from harvester.core_client import CoreApiKeyMissing, CoreClient, CoreConfig
 from harvester.crossref_client import CrossrefClient, CrossrefConfig
 from harvester.doaj_client import DoajClient, DoajConfig
@@ -41,7 +40,6 @@ from harvester.oa_resolver import resolve_oa_pdf_url
 from harvester.url_guard import is_safe_public_url
 from harvester.openalex_client import OpenAlexClient
 from harvester.semantic_scholar_client import SemanticScholarClient
-from harvester.unpaywall_client import UnpaywallClient, UnpaywallConfig
 from quality.benchmark import run_benchmark
 from quality.benchmark_suite import SuiteConfig, latest_suite_report, run_suite
 from quality.kg_health import build_health_report
@@ -620,6 +618,21 @@ class RewriteRequest(BaseModel):
     instruction: str = Field(default="Schreibe den Text klarer und wissenschaftlich um.", min_length=1, max_length=500)
     provider: str | None = None
     model: str | None = None
+
+
+class ClaimCheckRequest(BaseModel):
+    """Nachcheck: stützt die zitierte Quelle diese konkrete Aussage wirklich?"""
+
+    statement: str = Field(min_length=1, max_length=4000)
+    paper_ids: list[str] = Field(min_length=1, max_length=4)
+    titles: dict[str, str] = Field(default_factory=dict)
+    evidence_texts: dict[str, str] = Field(default_factory=dict)
+    provider: str | None = None
+    model: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
+    # Bei unsicherem Urteil das ganze Paper nachprüfen (statt nur die Belegstelle).
+    escalate_whole_paper: bool = True
 
 
 class NotePayload(BaseModel):
@@ -2848,27 +2861,44 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail=f"Grey source has no text: {grey_id}")
         text = grey["full_text"].strip()
     elif not text:
-        pdf_path = _resolve_extraction_pdf_path(
-            request.paper_id,
-            request.pdf_path,
-            request.metadata_db_path,
-            request.pdf_base_dir,
-        )
-        parsed = _parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
-        text = parsed.text
-        parse_payload = {
-            "pdf_path": str(pdf_path),
-            "page_count": parsed.page_count,
-            "parser": str(parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser),
-            "metadata": _parsed_document_metadata(parsed),
-            "excerpt": parsed.text[:4000],
-        }
-        _maybe_fix_garbled_pdf_title(
-            paper_id=request.paper_id,
-            text=text,
-            pdf_path=pdf_path,
-            metadata_db_path=request.metadata_db_path,
-        )
+        try:
+            pdf_path = _resolve_extraction_pdf_path(
+                request.paper_id,
+                request.pdf_path,
+                request.metadata_db_path,
+                request.pdf_base_dir,
+            )
+        except HTTPException as pdf_error:
+            # Kein lokales PDF: Abstract-only-Extraktion. Viele Paper haben zwar keinen
+            # PDF-Download, aber Titel + Abstract in der papers-Tabelle — die reichen
+            # für eine (dünnere) Aufnahme in den Knowledge Graph.
+            abstract_text = _abstract_only_extraction_text(request.paper_id, request.metadata_db_path)
+            if not abstract_text:
+                raise pdf_error
+            text = abstract_text
+            parse_payload = {
+                "pdf_path": None,
+                "page_count": 0,
+                "parser": "abstract-only",
+                "metadata": {},
+                "excerpt": text[:4000],
+            }
+        else:
+            parsed = _parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
+            text = parsed.text
+            parse_payload = {
+                "pdf_path": str(pdf_path),
+                "page_count": parsed.page_count,
+                "parser": str(parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser),
+                "metadata": _parsed_document_metadata(parsed),
+                "excerpt": parsed.text[:4000],
+            }
+            _maybe_fix_garbled_pdf_title(
+                paper_id=request.paper_id,
+                text=text,
+                pdf_path=pdf_path,
+                metadata_db_path=request.metadata_db_path,
+            )
     if not text:
         raise HTTPException(status_code=400, detail="No paper text or parseable PDF text provided.")
 
@@ -3109,6 +3139,40 @@ def rewrite_text(request: RewriteRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Rewrite failed: {exc}") from exc
     return {"text": str(text or "").strip(), "model": overrides.get("model") or llm_router.provider_default_model(request.provider)}
+
+
+@app.post("/assistant/claim-check")
+async def assistant_claim_check(request: ClaimCheckRequest) -> dict[str, Any]:
+    """Prüft eine markierte/zitierte Aussage gegen ihre Quelle(n) (PDF → Abstract → Grau).
+
+    Pro Quelle ein Urteil (gestützt / teilweise / nicht gestützt / nicht beurteilbar)
+    mit wörtlichen Belegzitaten. LLM-Aufruf läuft blockierend → Thread.
+    """
+    from query.claim_checker import check_claim
+
+    seen: set[str] = set()
+    checks: list[dict[str, Any]] = []
+    for raw_paper_id in request.paper_ids:
+        pid = str(raw_paper_id or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        checks.append(
+            await asyncio.to_thread(
+                check_claim,
+                llm_router,
+                statement=request.statement,
+                paper_id=pid,
+                title=request.titles.get(pid, ""),
+                evidence_text=request.evidence_texts.get(pid, ""),
+                provider=request.provider,
+                model=request.model,
+                pdf_base_dir=request.pdf_base_dir,
+                metadata_db_path=request.metadata_db_path,
+                escalate_whole_paper=request.escalate_whole_paper,
+            )
+        )
+    return {"statement": request.statement, "checks": checks}
 
 
 @app.get("/projects/{project_id}/notes")
@@ -4163,6 +4227,12 @@ async def search_datasets(request: DatasetSearchRequest) -> dict[str, Any]:
     return result
 
 
+@app.get("/datasets/details")
+async def dataset_details(source: str, external_id: str) -> dict[str, Any]:
+    """Datei-Liste, Beschreibung und Download-Links eines Datensatzes (on demand)."""
+    return await dataset_clients.fetch_dataset_details(source, external_id)
+
+
 @app.post("/datasets/import")
 def import_datasets(request: DatasetImportRequest) -> dict[str, Any]:
     """Persist selected dataset references (de-duplicated) into a project."""
@@ -4608,6 +4678,28 @@ def _default_paper_id_from_pdf(filename: str) -> str:
         if legacy_arxiv:
             return "arxiv:" + legacy_arxiv.group(1).replace("_", "/")
     return _slug(cleaned or filename)
+
+
+def _abstract_only_extraction_text(paper_id_value: str, metadata_db_path: str) -> str:
+    """Titel + Abstract als Extraktionstext für Paper ohne lokales PDF.
+
+    Damit landen auch PDF-lose Paper (nur Metadaten) im Knowledge Graph —
+    die Extraktion ist dünner, aber Konzepte/Claims aus dem Abstract sind
+    besser als gar keine Aufnahme.
+    """
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            paper = db.resolve_paper(paper_id_value)
+    except Exception:
+        return ""
+    if not paper:
+        return ""
+    title = str(paper.get("title") or "").strip()
+    abstract = str(paper.get("abstract") or "").strip()
+    if not abstract:
+        return ""
+    parts = [title, "", "Abstract:", abstract]
+    return "\n".join(part for part in parts if part is not None).strip()
 
 
 def _resolve_extraction_pdf_path(

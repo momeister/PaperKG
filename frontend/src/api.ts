@@ -14,7 +14,9 @@ import type {
   GitStatus,
   GitDiff,
   AnalysisRun,
+  ClaimCheckResult,
   Dataset,
+  DatasetDetails,
   DatasetHit,
   DatasetSource,
   BenchmarkReport,
@@ -301,8 +303,21 @@ export const api = {
     grey_source_ids?: string[];
     include_project_grey?: boolean;
     llm_overrides?: Record<string, number | undefined>;
+    answer_style?: "standard" | "kritisch";
   }) =>
     request<Answer>("/query/answer", { method: "POST", body: JSON.stringify(payload) }),
+  claimCheck: (payload: {
+    statement: string;
+    paper_ids: string[];
+    titles?: Record<string, string>;
+    evidence_texts?: Record<string, string>;
+    provider?: string | null;
+    model?: string | null;
+  }) =>
+    request<{ statement: string; checks: ClaimCheckResult[] }>("/assistant/claim-check", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   verifyAnswer: (answer: Answer, options: { max_sources?: number; max_evidence_per_source?: number } = {}) =>
     request<{ sources: VerificationSource[]; cited_paper_ids: string[]; missing_source_ids: string[] }>("/sources/verify-answer", {
       method: "POST",
@@ -609,6 +624,8 @@ export const api = {
       }),
     list: (projectId?: string | null) =>
       request<{ datasets: Dataset[] }>("/datasets", { query: { project_id: projectId ?? undefined } }),
+    details: (source: string, externalId: string) =>
+      request<DatasetDetails>("/datasets/details", { query: { source, external_id: externalId } }),
     remove: (id: string) =>
       request<{ deleted: boolean; id: string }>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
   }

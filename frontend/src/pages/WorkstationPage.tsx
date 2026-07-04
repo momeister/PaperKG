@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import {
@@ -9,6 +10,7 @@ import {
   FilePlus,
   FolderGit2,
   FolderPlus,
+  NotebookPen,
   PanelsTopLeft,
   RefreshCw,
   Save,
@@ -20,6 +22,7 @@ import Editor from "@monaco-editor/react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { NotesSidePanel } from "../components/NotesSidePanel";
 import { TerminalTabs } from "../components/TerminalTabs";
 import { PreviewPane, normalizePreviewUrl } from "../components/PreviewPane";
 import { useAppState } from "../state";
@@ -30,6 +33,7 @@ import type { CodeProject, FileTreeNode, GitStatus } from "../types";
 
 const SELECTED_KEY = "sciencekg.werkstatt.project";
 const MODE_KEY = "sciencekg.werkstatt.mode";
+const NOTES_KEY = "sciencekg.werkstatt.notes";
 type WerkstattMode = "manual" | "agent";
 
 // Match the origin of a local dev server printed into the terminal
@@ -133,6 +137,7 @@ export function WorkstationPage() {
   const [openFolderPath, setOpenFolderPath] = useState("");
   const [newFilePath, setNewFilePath] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [notesOpen, setNotesOpen] = useState(() => localStorage.getItem(NOTES_KEY) === "1");
   const [toast, setToast] = useState<string | null>(null);
   const editorRef = useRef<unknown>(null);
   // URL auto-detection: rolling buffer of recent terminal output + a flag that
@@ -142,6 +147,31 @@ export function WorkstationPage() {
 
   const workspacesQuery = useQuery({ queryKey: ["werkstatt", "list"], queryFn: api.werkstatt.list });
   const projects = workspacesQuery.data?.projects ?? [];
+
+  // Deep-Link (z.B. aus der Analyse-Werkstatt): /werkstatt?project=<id>&file=<pfad>
+  // wählt das Projekt aus und öffnet die Datei samt aufgeklapptem Baumpfad.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const wanted = searchParams.get("project");
+    if (!wanted || !projects.length) return;
+    if (!projects.some((p) => p.id === wanted)) return;
+    const file = searchParams.get("file");
+    setProjectId(wanted);
+    if (file) {
+      setExpanded((current) => {
+        const next = new Set(current);
+        let acc = "";
+        for (const part of file.split("/").slice(0, -1)) {
+          acc = acc ? `${acc}/${part}` : part;
+          next.add(acc);
+        }
+        return next;
+      });
+      void openFile(file, wanted);
+    }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, searchParams]);
 
   // Keep the selected project valid + persisted.
   useEffect(() => {
@@ -156,6 +186,9 @@ export function WorkstationPage() {
   useEffect(() => {
     localStorage.setItem(MODE_KEY, mode);
   }, [mode]);
+  useEffect(() => {
+    localStorage.setItem(NOTES_KEY, notesOpen ? "1" : "0");
+  }, [notesOpen]);
 
   const activeCodeProject: CodeProject | undefined = projects.find((p) => p.id === projectId);
 
@@ -205,10 +238,10 @@ export function WorkstationPage() {
     setPreviewUrl(next);
   }
 
-  async function openFile(path: string) {
-    if (!projectId) return;
+  async function openFile(path: string, pid: string | null = projectId) {
+    if (!pid) return;
     try {
-      const file = await api.werkstatt.readFile(projectId, path);
+      const file = await api.werkstatt.readFile(pid, path);
       if (file.binary) {
         notify("Binärdatei — im Editor nicht darstellbar.");
         return;
@@ -566,6 +599,14 @@ export function WorkstationPage() {
 
         <div className="wk-toolbar-right">
           <button
+            className={`wk-iconbtn wk-iconbtn--label ${notesOpen ? "wk-iconbtn--active" : ""}`}
+            type="button"
+            title="Projekt-Notizen ein-/ausklappen"
+            onClick={() => setNotesOpen((v) => !v)}
+          >
+            <NotebookPen size={15} /> <span>Notizen</span>
+          </button>
+          <button
             className="wk-iconbtn wk-iconbtn--label"
             type="button"
             title="Neues Projekt anlegen"
@@ -679,6 +720,7 @@ export function WorkstationPage() {
               </Panel>
             </PanelGroup>
           )}
+          {notesOpen ? <NotesSidePanel onClose={() => setNotesOpen(false)} /> : null}
         </div>
       ) : null}
 

@@ -1,9 +1,8 @@
 import pytest
 import json
 import httpx
-from unittest.mock import MagicMock, patch
-from dataclasses import dataclass
-from typing import Any, Protocol
+from unittest.mock import MagicMock
+from typing import Any
 
 from extraction.entity_extractor import (
     CLAIMS_EXTRACTION_PROMPT,
@@ -33,7 +32,9 @@ from parsing.marker_parser import (
     _chars_to_spaced_text,
     _classify_and_split_words,
     _find_column_gutter,
+    _join_hyphenated_linebreaks,
     _reconstruct_page_text,
+    _text_needs_char_reconstruction,
 )
 from query.llm_router import LLMRouter, ProviderConfig, GenerationSettings
 from query.nim_container import NIMContainerConfig, NIMContainerManager
@@ -860,7 +861,7 @@ class TestEntityExtractor:
         mock_router = FakeLLMRouter()
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
-        result = extractor.extract(
+        extractor.extract(
             "paper_001", "Sample text", provider="openai"
         )
 
@@ -872,7 +873,7 @@ class TestEntityExtractor:
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
         overrides = {"model": "qwen3.6:35b", "context_size": 32768}
-        result = extractor.extract(
+        extractor.extract(
             "paper_001", "Sample text", overrides=overrides
         )
 
@@ -985,7 +986,7 @@ class TestEntityExtractor:
         # Create text > extractor text budget
         long_text = "x" * 90000
 
-        result = extractor.extract("paper_001", long_text)
+        extractor.extract("paper_001", long_text)
 
         # Check that chat was called with bounded text.
         assert mock_router.last_messages is not None
@@ -4448,8 +4449,8 @@ class TestCharsToSpacedText:
         return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + size, "size": size}
 
     def test_inserts_space_at_word_boundary(self):
-        # Two words separated by a gap larger than 0.22 * font_size
-        # font_size=10, threshold = 0.22 * 10 = 2.2 — gap of 5 should insert space
+        # Two words separated by a gap larger than 0.28 * font_size
+        # font_size=10, threshold = 0.28 * 10 = 2.8 — gap of 12 should insert space
         chars = [
             *[self._char(c, 10 * i, 10 * i + 8) for i, c in enumerate("Hello")],
             *[self._char(c, 60 + 10 * i, 60 + 10 * i + 8) for i, c in enumerate("World")],
@@ -4478,9 +4479,9 @@ class TestCharsToSpacedText:
 
     def test_fixes_merged_tokens(self):
         # Simulate a PDF where two words have no space between them in extract_text
-        # but the chars have a measurable x-gap >= 0.22 * size
+        # but the chars have a measurable x-gap > 0.28 * size
         size = 10.0
-        gap = 3.0  # 3pt > 0.22 * 10 = 2.2 → should insert space
+        gap = 3.0  # 3pt > 0.28 * 10 = 2.8 → should insert space
         chars = [
             self._char("I", 0, 5, size=size),
             self._char("n", 5, 11, size=size),
@@ -4489,6 +4490,50 @@ class TestCharsToSpacedText:
         ]
         result = _chars_to_spaced_text(chars)
         assert " " in result  # space was inserted at the gap
+
+    def test_no_space_for_normal_kerning_gap(self):
+        # Kerned/justified text often has small inter-char gaps well below a word
+        # boundary; the old 0.22 threshold split words apart ("ass essing").
+        size = 10.0
+        gap = 2.5  # 2.5pt < 0.28 * 10 = 2.8 → stays one word
+        chars = [
+            self._char("a", 0, 5, size=size),
+            self._char("s", 5, 10, size=size),
+            self._char("s", 10 + gap, 15 + gap, size=size),
+        ]
+        assert _chars_to_spaced_text(chars) == "ass"
+
+
+class TestParseTextCleanup:
+    """Tests for naive-text preference and de-hyphenation helpers."""
+
+    def test_join_hyphenated_linebreaks_joins_lowercase_continuation(self):
+        assert _join_hyphenated_linebreaks("for assess-\ning model quality") == "for assessing model quality"
+        # Column reconstruction flattens line breaks to spaces before this runs.
+        assert _join_hyphenated_linebreaks("the bevaci- zumab group") == "the bevacizumab group"
+
+    def test_join_hyphenated_linebreaks_keeps_capitalized_compounds(self):
+        # "Wilcoxon-\nMann" is a real hyphenated compound, not a broken word.
+        assert _join_hyphenated_linebreaks("the Wilcoxon-\nMann test") == "the Wilcoxon-\nMann test"
+
+    def test_join_hyphenated_linebreaks_keeps_suspended_hyphens(self):
+        # Suspended hyphenation ("pre- and post-") must not be glued into "preand".
+        assert _join_hyphenated_linebreaks("pre- and post-treatment") == "pre- and post-treatment"
+        assert _join_hyphenated_linebreaks("mid- to long-term effects") == "mid- to long-term effects"
+
+    def test_text_needs_char_reconstruction_false_for_normal_text(self):
+        text = ("This page has perfectly ordinary spacing between all of its words. " * 5)
+        assert _text_needs_char_reconstruction(text) is False
+
+    def test_text_needs_char_reconstruction_true_for_glued_text(self):
+        text = (
+            "Thispagelacksanywordseparationatallbecausethecontentstreamencodesnospaces"
+            "andthereforeneedsthecharlevelgapreconstructiontobecomereadableagain" * 3
+        )
+        assert _text_needs_char_reconstruction(text) is True
+
+    def test_text_needs_char_reconstruction_false_for_short_text(self):
+        assert _text_needs_char_reconstruction("Shortpagefooter") is False
 
 
 class TestParserImplementations:
@@ -4529,10 +4574,11 @@ class TestParserImplementations:
         # progression-free survival was group analyses of ... and 10.6 months ...").
         # After column-aware reconstruction it must appear as one contiguous sentence -
         # the same whitespace-normalized substring match that best_excerpt performs.
+        # De-hyphenation additionally joins the line-broken "bevaci-\nzumab".
         normalized = re.sub(r"\s+", " ", result.text)
         target = (
-            "The median progression-free survival was longer in the bevaci- "
-            "zumab group than in the placebo group (10.6 months vs. 6.2 months"
+            "The median progression-free survival was longer in the bevacizumab "
+            "group than in the placebo group (10.6 months vs. 6.2 months"
         )
         assert target in normalized
 
