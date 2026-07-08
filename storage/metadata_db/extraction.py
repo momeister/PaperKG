@@ -338,6 +338,15 @@ class ExtractionMixin(_Base):
             data_list.append(data)
         return data_list
 
+    def list_extraction_statuses(self, limit: int = 50000) -> list[dict[str, Any]]:
+        """Newest-first (paper_id, extraction_status) pairs without the heavy JSON columns."""
+        rows = self._execute("""
+            SELECT paper_id, extraction_status FROM extraction_results
+            ORDER BY extraction_timestamp DESC
+            LIMIT ?
+        """, [limit]).fetchall()
+        return [{"paper_id": row[0], "extraction_status": row[1]} for row in rows]
+
     def list_entity_review_queue(
         self,
         status: str | None = "pending",

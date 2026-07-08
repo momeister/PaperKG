@@ -3,10 +3,10 @@ import { CheckCircle2, RefreshCcw } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
 import { Status } from "../components/Status";
-import { useAppState } from "../state";
+import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP, useAppState } from "../state";
 
 export function SettingsPage() {
-  const { provider, setProvider, model, setModel } = useAppState();
+  const { provider, setProvider, model, setModel, fontScale, setFontScale } = useAppState();
   const queryClient = useQueryClient();
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders });
   const discover = useMutation({
@@ -43,6 +43,24 @@ export function SettingsPage() {
           <label>
             Modell
             <input value={model ?? ""} onChange={(event) => setModel(event.target.value || undefined)} placeholder="Default" />
+          </label>
+          <label>
+            Schriftgröße ({Math.round(fontScale * 100)}%)
+            <div className="font-scale-setting">
+              <input
+                type="range"
+                min={FONT_SCALE_MIN}
+                max={FONT_SCALE_MAX}
+                step={FONT_SCALE_STEP}
+                value={fontScale}
+                onChange={(event) => setFontScale(Number(event.target.value))}
+                aria-label="Schriftgröße des gesamten Programms"
+              />
+              <button type="button" className="button" onClick={() => setFontScale(1)} disabled={fontScale === 1}>
+                Zurücksetzen
+              </button>
+            </div>
+            <span className="muted">Skaliert das gesamte Programm (Text, Symbole, Layout).</span>
           </label>
         </div>
       </section>

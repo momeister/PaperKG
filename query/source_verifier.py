@@ -395,20 +395,36 @@ def _location_for_reference(
     )
 
 
-def find_pdf_path(paper_id: str, title: str = "", pdf_base_dir: str = "data/pdfs") -> str | None:
-    import re as _re
+def build_pdf_index(pdf_base_dir: str = "data/pdfs") -> list[tuple[str, str]]:
+    """One directory scan → (path, lowercase stem) pairs for repeated `find_pdf_path` lookups.
+
+    Callers that resolve PDFs for many papers must scan the library once and pass the
+    result as `index` — the per-call rglob is what made paper listings O(papers × files).
+    """
     base = Path(pdf_base_dir)
     if not base.exists():
-        return None
+        return []
+    return [(str(path), path.stem.lower()) for path in sorted(base.rglob("*.pdf"))]
 
-    candidates = sorted(base.rglob("*.pdf"))
+
+def find_pdf_path(
+    paper_id: str,
+    title: str = "",
+    pdf_base_dir: str = "data/pdfs",
+    index: list[tuple[str, str]] | None = None,
+) -> str | None:
+    import re as _re
+    if index is None:
+        index = build_pdf_index(pdf_base_dir)
+    if not index:
+        return None
     for token in pdf_lookup_tokens(paper_id, title):
-        token_escaped = _re.escape(token.lower())
-        pattern = _re.compile(r"(?<![a-z0-9])" + token_escaped + r"(?![a-z0-9])")
-        for candidate in candidates:
-            stem = Path(candidate).stem.lower()
+        pattern = _re.compile(r"(?<![a-z0-9])" + _re.escape(token) + r"(?![a-z0-9])")
+        for path_str, stem in index:
+            if token not in stem:
+                continue
             if pattern.search(stem):
-                return str(candidate)
+                return path_str
     return None
 
 

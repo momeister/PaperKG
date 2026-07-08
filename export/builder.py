@@ -21,7 +21,7 @@ from export.latex_builder import (
     build_latex_document,
     markdown_to_latex_body,
 )
-from export.pdf_render import compile_to_pdf, latex_error_excerpt
+from export.pdf_render import compile_to_pdf, engine_is_unicode, find_engine, latex_error_excerpt
 
 
 @dataclass
@@ -184,6 +184,11 @@ def build_export(
             appendix.append(src_table)
 
     # --- assemble .tex -------------------------------------------------------
+    # Resolve the engine up front so the preamble matches how we compile below: xelatex
+    # (Unicode via fontspec) is preferred and renders Greek/CJK letters that would abort a
+    # pdflatex build. For tex/zip output without any engine installed, fall back to the
+    # broadly-compatible pdflatex preamble (Overleaf's default compiler).
+    engine = find_engine()
     tex = build_latex_document(
         title=root_question or "Tiefenanalyse",
         body_latex=body_latex,
@@ -191,6 +196,7 @@ def build_export(
         use_forest=opts.tikz_tree and any(r"\begin{forest}" in b for b in appendix),
         use_graphics=bool(image_files),
         appendix_blocks=appendix,
+        unicode_engine=engine_is_unicode(engine),
     )
     (work_dir / "main.tex").write_text(tex, encoding="utf-8")
 
@@ -200,7 +206,7 @@ def build_export(
         return ExportResult(tex.encode("utf-8"), "application/x-tex", f"{stem}.tex", warnings)
 
     if export_format == "pdf":
-        result = compile_to_pdf(work_dir)
+        result = compile_to_pdf(work_dir, engine=engine)
         if result.pdf_bytes is not None:
             (work_dir / "main.pdf").write_bytes(result.pdf_bytes)
             return ExportResult(result.pdf_bytes, "application/pdf", f"{stem}.pdf", warnings)

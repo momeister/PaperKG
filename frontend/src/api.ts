@@ -259,7 +259,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   runExtractionBatch: (payload: {
-    items: Array<{ paper_id: string; pdf_path: string }>;
+    items: Array<{ paper_id: string; pdf_path?: string }>;
     job_id?: string;
     provider?: string;
     model?: string;

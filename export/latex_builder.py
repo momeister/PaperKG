@@ -258,14 +258,33 @@ def build_latex_document(
     use_forest: bool,
     use_graphics: bool,
     appendix_blocks: Iterable[str] = (),
+    unicode_engine: bool = False,
 ) -> str:
-    """Assemble the full ``.tex`` source (preamble, title page, ToC, body, appendix)."""
+    """Assemble the full ``.tex`` source (preamble, title page, ToC, body, appendix).
+
+    ``unicode_engine`` selects the font stack: when the document will be compiled with
+    xelatex/lualatex it uses ``fontspec`` (Latin Modern), which renders arbitrary Unicode
+    letters such as Greek ``α``/``β`` found in harvested paper text. Otherwise it keeps the
+    classic pdflatex ``inputenc``/``fontenc``/``lmodern`` stack (no glyph for non-Latin
+    letters — those are dropped upstream by ``_strip_unsupported``).
+    """
+    if unicode_engine:
+        # fontspec must load before babel; Latin Modern covers Latin + Greek glyphs.
+        font_packages = [
+            r"\usepackage{fontspec}",
+            r"\setmainfont{Latin Modern Roman}",
+            r"\usepackage[ngerman]{babel}",
+        ]
+    else:
+        font_packages = [
+            r"\usepackage[utf8]{inputenc}",
+            r"\usepackage[T1]{fontenc}",
+            r"\usepackage[ngerman]{babel}",
+            r"\usepackage{lmodern}",
+        ]
     packages = [
-        r"\usepackage[utf8]{inputenc}",
-        r"\usepackage[T1]{fontenc}",
-        r"\usepackage[ngerman]{babel}",
+        *font_packages,
         r"\usepackage[a4paper,margin=2.5cm]{geometry}",
-        r"\usepackage{lmodern}",
         r"\usepackage{microtype}",
         r"\usepackage{booktabs}",
         r"\usepackage{longtable}",

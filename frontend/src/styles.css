@@ -1388,6 +1388,103 @@ h1 {
   outline: 1px solid var(--evidence-border, #7ca8f8);
 }
 
+/* ----------------------------------------------------------------------- */
+/* Aufklappbarer Quellen-Chip (CitationGroupButton) am Ende eines Zitats    */
+/* ----------------------------------------------------------------------- */
+.citation-group {
+  position: relative;
+  display: inline-flex;
+  vertical-align: baseline;
+  margin-left: 4px;
+}
+.citation-group-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-muted, #eef2f8);
+  color: var(--text-soft, #475569);
+  padding: 1px 8px 2px;
+  font: inherit;
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.citation-group-button:hover,
+.citation-group-button:focus-visible,
+.citation-group-button--active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+}
+.citation-group-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+}
+.citation-group-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  padding: 6px 8px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.citation-group-item:hover,
+.citation-group-item:focus-visible {
+  background: var(--evidence-soft, #eef2f8);
+  border-color: var(--evidence-border, var(--line));
+}
+.citation-group-item-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--evidence-soft, #e7f0ff);
+  color: var(--evidence-color, #164eaf);
+  padding: 1px 7px 2px;
+  font-size: 0.78em;
+  font-weight: 700;
+}
+.citation-group-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.citation-group-item-title {
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+.citation-group-item-paper {
+  font-size: 0.75em;
+  color: var(--text-soft, #64748b);
+}
+.citation-group-empty {
+  padding: 6px 8px;
+  font-size: 0.82em;
+  color: var(--text-soft, #64748b);
+}
+
 .citation-more {
   font-weight: 700;
   opacity: 0.75;
@@ -8910,6 +9007,43 @@ button.parallel-cite {
 .theme-toggle:hover {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+/* ----------------------------------------------------------------------- */
+/* Globaler Schriftgrößen-/Zoom-Regler in der Topbar (A− / % / A+)          */
+/* ----------------------------------------------------------------------- */
+.font-scale-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.font-scale-button {
+  min-width: 34px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.font-scale-button:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.font-scale-glyph {
+  font-weight: 700;
+  line-height: 1;
+}
+.font-scale-glyph--small {
+  font-size: 0.72rem;
+}
+.font-scale-glyph--large {
+  font-size: 1.05rem;
+}
+.font-scale-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.font-scale-setting input[type="range"] {
+  flex: 1 1 auto;
 }
 
 /* ----------------------------------------------------------------------- */

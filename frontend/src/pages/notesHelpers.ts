@@ -1,4 +1,5 @@
 import { api, API_BASE_URL } from "../api";
+import { decodeCitationId } from "./assistantHelpers";
 import { colorVarsForPaperId, evidenceColorVars } from "../citationColors";
 import type { CSSProperties, ReactNode } from "react";
 import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
@@ -197,17 +198,35 @@ export function stripHighlightMarkers(value: string) {
 
 export function parseMarkdownCitationRefs(markdown: string): CitationMarkdownRef[] {
   const refs: CitationMarkdownRef[] = [];
-  const pattern = /\[([^\]]+)\]\(sciencekg:\/\/citation\/([^)]+)\)/g;
+  // Matches the single-citation link (``sciencekg://citation/<id>``) and the grouped
+  // Quellen-chip in both its long (``sciencekg://citations/<cite_id,...>``) and short
+  // (``skg://c/<hash,...>``) form. For a group we emit one ref per contained id — all
+  // sharing the token's span — so id-keyed consumers (citation panel, overlay highlight,
+  // editor chip) keep working while the chip renders as a single button. Group ids are
+  // normalized via decodeCitationId so ``refs[].id`` always carries the full ``cite_...`` key.
+  const pattern = /\[([^\]]+)\]\((sciencekg:\/\/citation|sciencekg:\/\/citations|skg:\/\/c)\/([^)]+)\)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(markdown)) !== null) {
     const label = match[1].trim();
+    const start = match.index;
+    const end = match.index + match[0].length;
+    const isGroup = match[2] === "sciencekg://citations" || match[2] === "skg://c";
+    if (isGroup) {
+      const ids = match[3].split(",").map((id) => decodeCitationId(id)).filter(Boolean);
+      for (const id of ids) {
+        // Empty label/badge/title so the citation panel falls back to per-citation metadata
+        // (its own badge/title) instead of the group label "n Quellen".
+        refs.push({ id, label: "", badge: "", title: "", start, end, groupIds: ids });
+      }
+      continue;
+    }
     refs.push({
-      id: match[2],
+      id: match[3],
       label,
       badge: citationBadgeFromLabel(label),
       title: citationTitleFromLabel(label),
-      start: match.index,
-      end: match.index + match[0].length
+      start,
+      end
     });
   }
   return refs;
@@ -258,7 +277,9 @@ export function findNoteSearchRanges(markdown: string, query: string) {
 
 
 export function citationRefAtPosition(refs: CitationMarkdownRef[], position: number) {
-  return refs.find((ref) => position >= ref.start && position <= ref.end) ?? null;
+  // End-exclusive: a caret sitting right after the closing ``)`` is *outside* the
+  // citation, so typing there is treated as new text rather than editing the token.
+  return refs.find((ref) => position >= ref.start && position < ref.end) ?? null;
 }
 
 

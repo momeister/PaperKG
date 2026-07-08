@@ -68,13 +68,43 @@ export function verificationLimits(answer: Answer) {
 }
 
 
-export function formatNoteQuote(quote: string, source: VerificationSource, evidenceIndex: number, citationId: string) {
-  const text = cleanCitationText(quote);
-  const title = source.title || source.paper_id;
-  return `> ${text}\n\nQuelle: [Z${evidenceIndex + 1} - ${title}](sciencekg://citation/${citationId}) (${source.paper_id})`;
+// Zitat-IDs sind intern ``cite_<hash>``. Im Roh-Markdown-Token wird das ``cite_``-Präfix
+// weggelassen, damit der Link im Editor kompakt bleibt (``skg://c/<hash>``); beim Auflösen
+// (parseMarkdownCitationRefs / renderInline) wird es wieder ergänzt. decodeCitationId ist
+// idempotent, sodass das alte Schema (mit vollem ``cite_...``) unverändert weiter geparst wird.
+export function encodeCitationId(id: string): string {
+  return id.replace(/^cite_/, "");
 }
 
-/** Wie formatNoteQuote, aber mit ALLEN Quellen des Satzes in der Quellenzeile. */
+export function decodeCitationId(short: string): string {
+  const trimmed = short.trim();
+  return trimmed.startsWith("cite_") ? trimmed : `cite_${trimmed}`;
+}
+
+/**
+ * Kompaktes Sammel-Token für Zitate: rendert in den Notizen als EIN aufklappbarer
+ * Quellen-Chip am Ende des Zitats (siehe CitationGroupButton / renderInline), statt die
+ * Quellen als eigene Fließtext-Zeile darunter zu setzen und den Schreibfluss zu stören.
+ * Format: ``[{n} Quellen](skg://c/{hash1,hash2,...})`` (IDs ohne ``cite_``-Präfix). Das
+ * ältere Schema ``sciencekg://citations/{cite_id,...}`` wird beim Parsen weiterhin erkannt.
+ */
+export function citationGroupToken(citationIds: string[]): string {
+  const unique = Array.from(new Set(citationIds.filter(Boolean)));
+  if (!unique.length) {
+    return "";
+  }
+  const label = unique.length === 1 ? "1 Quelle" : `${unique.length} Quellen`;
+  return `[${label}](skg://c/${unique.map(encodeCitationId).join(",")})`;
+}
+
+
+export function formatNoteQuote(quote: string, _source: VerificationSource, _evidenceIndex: number, citationId: string) {
+  const text = cleanCitationText(quote);
+  const token = citationGroupToken([citationId]);
+  return token ? `> ${text} ${token}` : `> ${text}`;
+}
+
+/** Wie formatNoteQuote, aber mit ALLEN Quellen des Satzes im Sammel-Chip. */
 
 
 export function formatNoteQuoteMulti(
@@ -82,12 +112,8 @@ export function formatNoteQuoteMulti(
   entries: Array<{ source: VerificationSource; evidenceIndex: number; citationId: string }>
 ) {
   const text = cleanCitationText(quote);
-  const links = entries.map(({ source, evidenceIndex, citationId }) => {
-    const title = source.title || source.paper_id;
-    return `[Z${evidenceIndex + 1} - ${shortTitle(title)}](sciencekg://citation/${citationId}) (${source.paper_id})`;
-  });
-  const label = links.length > 1 ? "Quellen" : "Quelle";
-  return `> ${text}\n\n${label}: ${links.join(" · ")}`;
+  const token = citationGroupToken(entries.map((entry) => entry.citationId));
+  return token ? `> ${text} ${token}` : `> ${text}`;
 }
 
 
@@ -123,14 +149,13 @@ export function formatAnswerForNote(answer: Answer, verification: VerificationSo
     if (!metas.length) {
       return match;
     }
-    return metas
-      .map((meta) => {
-        const evidence = meta.source.evidence[meta.evidenceIndex];
-        const citation = noteCitation(meta.source, evidence, meta.evidenceIndex);
-        citations.set(String(citation.id), citation);
-        return `[Z${meta.evidenceIndex + 1} - ${shortTitle(meta.source.title || meta.source.paper_id)}](sciencekg://citation/${citation.id})`;
-      })
-      .join(" ");
+    const ids = metas.map((meta) => {
+      const evidence = meta.source.evidence[meta.evidenceIndex];
+      const citation = noteCitation(meta.source, evidence, meta.evidenceIndex);
+      citations.set(String(citation.id), citation);
+      return String(citation.id);
+    });
+    return citationGroupToken(ids);
   });
   return { markdown, citations: Array.from(citations.values()) };
 }

@@ -85,6 +85,7 @@ class BatchProcessor:
         parser_selection: dict[str, ParserType] | None = None,
         resume: bool = True,
         supersede_job_id: str | None = None,
+        texts: dict[str, str] | None = None,
     ) -> BatchJobStatus:
         """
         Process batch of papers: parse, extract, embed.
@@ -98,6 +99,8 @@ class BatchProcessor:
             parser_selection: Optional {paper_id -> ParserType} overrides
             resume: Skip papers already completed in persistent job state
             supersede_job_id: Existing job to mark as superseded by this run
+            texts: Optional {paper_id -> text} for papers without a PDF
+                (abstract-only extraction); used when pdf_paths has no entry
 
         Returns:
             BatchJobStatus with processing results
@@ -176,17 +179,19 @@ class BatchProcessor:
                         return self._status_from_record(current_job)
 
                 pdf_path = pdf_paths.get(paper_id)
-                if not pdf_path:
+                inline_text = str((texts or {}).get(paper_id) or "").strip()
+                if not pdf_path and not inline_text:
+                    missing_message = f"Missing PDF path and abstract text for {paper_id}"
                     status.papers_failed += 1
                     if status.error_message is None:
-                        status.error_message = f"Missing PDF path for {paper_id}"
+                        status.error_message = missing_message
                     if metadata_db is not None:
                         metadata_db.upsert_batch_job_item(
                             job_id,
                             paper_id,
                             None,
                             "failed",
-                            error_message=status.error_message,
+                            error_message=missing_message,
                         )
                         self._persist_job_status(metadata_db, status, request_payload, llm_provider)
                     continue
@@ -203,12 +208,16 @@ class BatchProcessor:
                         )
                         self._persist_job_status(metadata_db, status, request_payload, llm_provider)
                     try:
-                        forced_parser = parser_selection.get(paper_id) if parser_selection else None
-                        parsed = self.parser_router.parse(pdf_path, paper_id, force_parser=forced_parser)
+                        if pdf_path:
+                            forced_parser = parser_selection.get(paper_id) if parser_selection else None
+                            parsed = self.parser_router.parse(pdf_path, paper_id, force_parser=forced_parser)
+                            paper_text = parsed.text
+                        else:
+                            paper_text = inline_text
 
                         extraction = self.extraction_pipeline.process(
                             paper_id,
-                            parsed.text,
+                            paper_text,
                             provider=llm_provider,
                             overrides=llm_overrides,
                             link_concepts=self.link_concepts,
@@ -234,7 +243,7 @@ class BatchProcessor:
                         if metadata_db is not None:
                             canonical_paper_id = metadata_db.ensure_paper_record(
                                 paper_id,
-                                title=self._title_from_text(parsed.text),
+                                title=self._title_from_text(paper_text),
                                 year=self._year_from_extraction(extraction),
                                 pdf_path=pdf_path,
                             )

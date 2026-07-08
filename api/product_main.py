@@ -58,7 +58,7 @@ from query import agent_handoff
 from query import screen_companion, self_drive
 from query.web_research import run_deep_research
 from export import ExportOptions, build_export
-from query.source_verifier import find_pdf_path
+from query.source_verifier import build_pdf_index, find_pdf_path
 from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
@@ -527,7 +527,8 @@ class ExtractionRunRequest(BaseModel):
 
 class ExtractionBatchItem(BaseModel):
     paper_id: str = Field(min_length=1, max_length=240)
-    pdf_path: str = Field(min_length=1, max_length=1000)
+    # Ohne pdf_path fällt der Batch auf Abstract-only-Extraktion zurück (wie /extraction/extract).
+    pdf_path: str | None = Field(default=None, max_length=1000)
 
 
 class ExtractionBatchRequest(BaseModel):
@@ -865,6 +866,7 @@ def list_papers(
         papers = db.list_papers(limit=50000)
         latest_by_paper = _latest_extraction_statuses(db)
 
+    pdf_index = build_pdf_index(pdf_base_dir)
     filtered = []
     for paper in papers:
         pid = str(paper.get("id") or "")
@@ -879,7 +881,7 @@ def list_papers(
             continue
         filtered.append(
             {
-                **_paper_list_view(paper, pdf_base_dir),
+                **_paper_list_view(paper, pdf_base_dir, pdf_index=pdf_index),
                 "project_ids": sorted(memberships.get(pid, [])),
                 "latest_extraction_status": latest_status,
             }
@@ -890,11 +892,15 @@ def list_papers(
     return {"items": page, "total": len(filtered), "limit": limit, "offset": offset}
 
 
-def _paper_list_view(paper: dict[str, Any], pdf_base_dir: str = DEFAULT_PDF_BASE_DIR) -> dict[str, Any]:
+def _paper_list_view(
+    paper: dict[str, Any],
+    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR,
+    pdf_index: list[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
     paper_id_value = _clean_display_text(paper.get("id") or paper.get("paper_id") or paper.get("source_id"))
     source_id = _clean_display_text(paper.get("source_id"))
     title = _clean_display_text(paper.get("title"))
-    local_pdf_path = _paper_local_pdf_path(paper, pdf_base_dir)
+    local_pdf_path = _paper_local_pdf_path(paper, pdf_base_dir, pdf_index=pdf_index)
     pdf_filename = Path(local_pdf_path).name if local_pdf_path else _paper_filename_from_value(paper.get("pdf_url"))
     display_title = title or _clean_pdf_title(pdf_filename) or paper_id_value or source_id or "Unbenanntes PDF"
     return {
@@ -906,7 +912,11 @@ def _paper_list_view(paper: dict[str, Any], pdf_base_dir: str = DEFAULT_PDF_BASE
     }
 
 
-def _paper_local_pdf_path(paper: dict[str, Any], pdf_base_dir: str) -> str | None:
+def _paper_local_pdf_path(
+    paper: dict[str, Any],
+    pdf_base_dir: str,
+    pdf_index: list[tuple[str, str]] | None = None,
+) -> str | None:
     pdf_url = _clean_display_text(paper.get("pdf_url"))
     if pdf_url and not re.match(r"^[a-z][a-z0-9+.-]*://", pdf_url, flags=re.IGNORECASE):
         path = Path(str(pdf_url).replace("\\", "/"))
@@ -917,7 +927,7 @@ def _paper_local_pdf_path(paper: dict[str, Any], pdf_base_dir: str) -> str | Non
             pass
     paper_id_value = _clean_display_text(paper.get("id") or paper.get("paper_id") or paper.get("source_id"))
     title = _clean_display_text(paper.get("title"))
-    return find_pdf_path(paper_id_value, title, pdf_base_dir) if paper_id_value else None
+    return find_pdf_path(paper_id_value, title, pdf_base_dir, index=pdf_index) if paper_id_value else None
 
 
 @app.get("/paper/meta")
@@ -2806,6 +2816,7 @@ def extraction_library(
                 "filename": "",
                 "pdf_path": "",
                 "pdf_available": False,
+                "abstract_available": bool(str(paper.get("abstract") or "").strip()),
                 "source_type": "pdf",
                 "size_bytes": None,
                 "modified_timestamp": None,
@@ -2987,15 +2998,25 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
     if not request.items:
         raise HTTPException(status_code=400, detail="Select at least one PDF.")
     pdf_paths: dict[str, str] = {}
+    abstract_texts: dict[str, str] = {}
     for item in request.items:
-        pdf_paths[item.paper_id] = str(
-            _resolve_extraction_pdf_path(
-                item.paper_id,
-                item.pdf_path,
-                request.metadata_db_path,
-                request.pdf_base_dir,
+        try:
+            pdf_paths[item.paper_id] = str(
+                _resolve_extraction_pdf_path(
+                    item.paper_id,
+                    item.pdf_path,
+                    request.metadata_db_path,
+                    request.pdf_base_dir,
+                )
             )
-        )
+        except HTTPException as pdf_error:
+            if pdf_error.status_code != 404:
+                raise
+            # Kein lokales PDF: Abstract-only wie bei /extraction/extract. Fehlt auch der
+            # Abstract, läuft der Batch weiter und nur dieses Item schlägt fehl.
+            abstract_text = _abstract_only_extraction_text(item.paper_id, request.metadata_db_path)
+            if abstract_text:
+                abstract_texts[item.paper_id] = abstract_text
     processor = BatchProcessor(
         llm_router,
         parser_router,
@@ -3005,8 +3026,9 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
         quality_db_path=request.metadata_db_path,
     )
     status = processor.process_papers(
-        list(pdf_paths),
+        [item.paper_id for item in request.items],
         pdf_paths,
+        texts=abstract_texts,
         job_id=request.job_id,
         llm_provider=request.provider,
         llm_overrides=_extraction_overrides(request),
@@ -4189,7 +4211,7 @@ def _paper_matches_query(paper: dict[str, Any], query: str) -> bool:
 
 def _latest_extraction_statuses(db: MetadataDB) -> dict[str, str]:
     latest_by_paper: dict[str, str] = {}
-    for extraction in db.list_extraction_results(limit=50000):
+    for extraction in db.list_extraction_statuses(limit=50000):
         pid = str(extraction.get("paper_id") or "")
         if pid and pid not in latest_by_paper:
             latest_by_paper[pid] = str(extraction.get("extraction_status") or "unknown")
@@ -4207,13 +4229,13 @@ def _latest_successful_extractions(extractions: list[dict[str, Any]]) -> dict[st
 
 
 def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[str, Any]]:
-    base = Path(pdf_base_dir)
     latest_by_paper: dict[str, str] = {}
     rows_by_path: dict[str, dict[str, Any]] = {}
+    pdf_index = build_pdf_index(pdf_base_dir)
     with MetadataDB(metadata_db_path) as db:
         latest_by_paper = _latest_extraction_statuses(db)
         for paper in db.list_papers(limit=50000):
-            view = _paper_list_view(paper, pdf_base_dir)
+            view = _paper_list_view(paper, pdf_base_dir, pdf_index=pdf_index)
             pdf_path = view.get("pdf_path")
             if not pdf_path:
                 continue
@@ -4231,22 +4253,22 @@ def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[st
                 "known_paper": True,
             }
 
-    if base.exists():
-        for path in sorted(base.rglob("*.pdf")):
-            key = str(path.resolve())
-            if key in rows_by_path:
-                continue
-            paper_id_value = _default_paper_id_from_pdf(path.name)
-            rows_by_path[key] = {
-                "paper_id": paper_id_value,
-                "title": _clean_pdf_title(path.name) or paper_id_value,
-                "filename": path.name,
-                "pdf_path": str(path),
-                "size_bytes": path.stat().st_size,
-                "modified_timestamp": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
-                "latest_extraction_status": latest_by_paper.get(paper_id_value),
-                "known_paper": False,
-            }
+    for path_str, _stem in pdf_index:
+        path = Path(path_str)
+        key = str(path.resolve())
+        if key in rows_by_path:
+            continue
+        paper_id_value = _default_paper_id_from_pdf(path.name)
+        rows_by_path[key] = {
+            "paper_id": paper_id_value,
+            "title": _clean_pdf_title(path.name) or paper_id_value,
+            "filename": path.name,
+            "pdf_path": str(path),
+            "size_bytes": path.stat().st_size,
+            "modified_timestamp": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+            "latest_extraction_status": latest_by_paper.get(paper_id_value),
+            "known_paper": False,
+        }
     rows = list(rows_by_path.values())
     rows.sort(key=lambda row: str(row.get("modified_timestamp") or ""), reverse=True)
     return rows

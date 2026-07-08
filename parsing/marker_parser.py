@@ -176,15 +176,55 @@ def _chars_to_spaced_text(chars: list[dict[str, Any]], gap_ratio: float = 0.28) 
 
 def _text_needs_char_reconstruction(text: str) -> bool:
 	"""True when extract_text() lacks word spacing (glued words), so the char-gap
-	reconstruction is likely to improve it. For normally spaced text the reconstruction
+	reconstruction is worth attempting. For normally spaced text the reconstruction
 	is a net loss: its gap heuristic injects spurious mid-word spaces ("ass essing")
-	that defeat verbatim quote matching downstream."""
+	that defeat verbatim quote matching downstream — so callers still guard the result
+	with _looks_better_spaced() before adopting it.
+
+	Besides fully unspaced pages (very low space ratio), extract_text() also drops
+	individual space glyphs at font/style changes and around parentheses on otherwise
+	well-spaced pages ("SimulationEnvironment(MOOSE)framework"). Long letter runs and
+	missing spaces around parentheses flag that localized gluing."""
 	if len(text) < 200:
 		return False
 	space_ratio = text.count(" ") / len(text)
 	if space_ratio < 0.04:
 		return True
-	return len(re.findall(r"[A-Za-z]{25,}", text)) >= 3
+	long_runs = len(re.findall(r"[A-Za-z]{16,}", text))
+	paren_glue = len(re.findall(r"[A-Za-z0-9]\(|\)[A-Za-z]", text))
+	return long_runs >= 3 or paren_glue >= 3
+
+
+# extract_text() frequently drops the space glyph on the boundary between a word and an
+# adjacent parenthesis at a font/style change, gluing e.g. "Environment(MOOSE)framework".
+# Inserting a space there is near-zero risk in prose. Requiring at least two letters (or a
+# digit) before "(" leaves single-letter math like "f(x)" / "H(t)" untouched.
+_GLUED_OPEN_PAREN_RE = re.compile(r"([A-Za-z]{2,}|[0-9])\(")
+_GLUED_CLOSE_PAREN_RE = re.compile(r"\)([A-Za-z])")
+
+
+def _repair_glued_parens(text: str) -> str:
+	text = _GLUED_OPEN_PAREN_RE.sub(r"\1 (", text)
+	return _GLUED_CLOSE_PAREN_RE.sub(r") \1", text)
+
+
+def _looks_better_spaced(naive: str, recon: str) -> bool:
+	"""Adopt char-gap reconstruction only when it actually fixes glued words without
+	over-splitting. It must reduce the number of long glued runs, and it must not flood
+	the text with spurious single-letter tokens (the "ass essing" failure mode)."""
+	if not recon:
+		return False
+	naive_glue = len(re.findall(r"[A-Za-z]{16,}", naive))
+	recon_glue = len(re.findall(r"[A-Za-z]{16,}", recon))
+	if recon_glue >= naive_glue:
+		return False
+	singleton_re = re.compile(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])")
+	naive_singletons = len(singleton_re.findall(naive))
+	recon_singletons = len(singleton_re.findall(recon))
+	token_count = max(1, len(re.findall(r"\S+", recon)))
+	if recon_singletons > naive_singletons + max(5, int(0.02 * token_count)):
+		return False
+	return True
 
 
 # Joins words hyphenated across a line break ("assess-\ning" -> "assessing"). Column
@@ -302,19 +342,21 @@ class MarkerParser:
 							if recon_text is not None and naive_text and len(recon_text) < 0.9 * len(naive_text):
 								recon_text = None
 							if recon_text is not None:
-								page_texts.append(_join_hyphenated_linebreaks(recon_text))
+								page_texts.append(_repair_glued_parens(_join_hyphenated_linebreaks(recon_text)))
 								columns_used += 1
 							else:
 								# Prefer pdfplumber's own text: the char-gap reconstruction
 								# only helps when the naive text lacks word spacing, and it
-								# injects spurious mid-word spaces otherwise.
+								# injects spurious mid-word spaces otherwise — so adopt it only
+								# when _looks_better_spaced confirms it fixes gluing.
 								spaced = ""
 								if not naive_text or _text_needs_char_reconstruction(naive_text):
-									spaced = _chars_to_spaced_text(chars) if chars else ""
-									if spaced:
+									candidate = _chars_to_spaced_text(chars) if chars else ""
+									if candidate and (not naive_text or _looks_better_spaced(naive_text, candidate)):
+										spaced = candidate
 										char_reconstructed += 1
 								page_text = spaced or naive_text or (_words_to_text(words) if words else "")
-								page_texts.append(_join_hyphenated_linebreaks(page_text))
+								page_texts.append(_repair_glued_parens(_join_hyphenated_linebreaks(page_text)))
 						text = "\n\n---PAGE BREAK---\n\n".join(page_texts).strip()
 						page_count = len(pdf.pages)
 						metadata["extraction_method"] = "pdfplumber_columns" if columns_used else "pdfplumber"

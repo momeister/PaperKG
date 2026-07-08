@@ -98,6 +98,7 @@ import {
   threadSizeStyle,
   withPreservedCitationLinks,
 } from "./notesHelpers";
+import { decodeCitationId } from "./assistantHelpers";
 import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
 
 import type {
@@ -787,6 +788,95 @@ export function renderBlock(
 }
 
 
+/**
+ * Ein aufklappbarer Quellen-Chip am Ende eines Zitats. Zeigt kompakt „📖 n Quellen" und
+ * öffnet auf Klick ein Popover mit allen enthaltenen Zitaten (jeweils anklickbar → Quelle
+ * öffnen). Ersetzt die frühere Fließtext-Quellenzeile, die den Schreibfluss störte.
+ */
+export function CitationGroupButton({
+  ids,
+  citations,
+  citationColorById,
+  onCitationClick,
+  groupRef,
+  activeCitationId
+}: {
+  ids: string[];
+  citations: Map<string, NoteCitation>;
+  citationColorById: Map<string, number>;
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void;
+  groupRef: CitationMarkdownRef | null;
+  activeCitationId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const resolved = ids.map((id) => citations.get(id)).filter((item): item is NoteCitation => Boolean(item));
+  const label = ids.length === 1 ? "1 Quelle" : `${ids.length} Quellen`;
+  const isActive = ids.some((id) => id === activeCitationId);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onDocMouseDown = (event: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  return (
+    <span className="citation-group" ref={wrapRef} contentEditable={false}>
+      <button
+        type="button"
+        className={`citation-group-button ${isActive ? "citation-group-button--active" : ""}`}
+        contentEditable={false}
+        aria-expanded={open}
+        title="Quellen anzeigen"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Quote size={12} aria-hidden />
+        <span>{label}</span>
+      </button>
+      {open ? (
+        <span className="citation-group-popover" role="menu">
+          {resolved.length ? (
+            resolved.map((citation, i) => {
+              const colorIndex = citationColorById.get(citation.id) ?? citationColorIndex(citation, i);
+              const badge = `Z${Number(citation.evidence_index ?? i) + 1}`;
+              return (
+                <button
+                  key={citation.id}
+                  type="button"
+                  className="citation-group-item"
+                  role="menuitem"
+                  style={colorVarsForPaperId(citation.paper_id, colorIndex)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setOpen(false);
+                    onCitationClick(citation, groupRef);
+                  }}
+                >
+                  <span className="citation-group-item-badge">{badge}</span>
+                  <span className="citation-group-item-text">
+                    <span className="citation-group-item-title">{citation.title || citation.paper_id}</span>
+                    <span className="citation-group-item-paper">{citation.paper_id}</span>
+                  </span>
+                </button>
+              );
+            })
+          ) : (
+            <span className="citation-group-empty">Quellen nicht gefunden</span>
+          )}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export function renderInline(
   text: string,
   citations: Map<string, NoteCitation>,
@@ -802,6 +892,33 @@ export function renderInline(
   return parts.map((part, index) => {
     const partStart = cursor;
     cursor += part.length;
+    const groupMatch = /^\[([^\]]+)\]\((?:sciencekg:\/\/citations|skg:\/\/c)\/([^)]+)\)$/.exec(part);
+    if (groupMatch) {
+      const ids = groupMatch[2].split(",").map((id) => decodeCitationId(id)).filter(Boolean);
+      const groupRef: CitationMarkdownRef | null =
+        baseOffset === null
+          ? null
+          : {
+              id: ids.join(","),
+              label: groupMatch[1],
+              badge: "",
+              title: "",
+              start: baseOffset + partStart,
+              end: baseOffset + partStart + part.length,
+              groupIds: ids
+            };
+      return (
+        <CitationGroupButton
+          key={`${part}-${index}`}
+          ids={ids}
+          citations={citations}
+          citationColorById={citationColorById}
+          onCitationClick={onCitationClick}
+          groupRef={groupRef}
+          activeCitationId={activeCitationId}
+        />
+      );
+    }
     const citationMatch = /^\[([^\]]+)\]\(sciencekg:\/\/citation\/([^)]+)\)$/.exec(part);
     if (citationMatch) {
       const citation = citations.get(citationMatch[2]);

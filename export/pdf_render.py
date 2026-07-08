@@ -41,17 +41,20 @@ def _miktex_bin_dirs() -> list[Path]:
 def find_engine() -> str | None:
     """Return the preferred available LaTeX driver, or None.
 
-    Order: a direct engine (``pdflatex``/``xelatex``) on PATH, then in the known MiKTeX
+    Order: a direct engine (``xelatex``/``pdflatex``) on PATH, then in the known MiKTeX
     dirs, then — only if a real Perl interpreter is present to run it — ``latexmk``.
-    Preferring the direct engine avoids the common Windows/MiKTeX failure where
-    ``latexmk`` can't find Perl and the export silently degrades to a ZIP.
+    ``xelatex`` is preferred over ``pdflatex`` because it renders arbitrary Unicode
+    letters (Greek ``α``/``β``, Cyrillic, CJK, …) that appear in harvested paper text;
+    the pdflatex utf8/T1 setup aborts on the first such glyph and the export silently
+    degrades to a ZIP. Preferring a direct engine over ``latexmk`` avoids the common
+    Windows/MiKTeX failure where ``latexmk`` can't find Perl.
     """
-    for tool in ("pdflatex", "xelatex"):
+    for tool in ("xelatex", "pdflatex"):
         found = shutil.which(tool)
         if found:
             return found
     for directory in _miktex_bin_dirs():
-        for tool in ("pdflatex", "xelatex"):
+        for tool in ("xelatex", "pdflatex"):
             candidate = directory / f"{tool}.exe"
             if candidate.exists():
                 return str(candidate)
@@ -65,6 +68,14 @@ def find_engine() -> str | None:
             if candidate.exists():
                 return str(candidate)
     return None
+
+
+def engine_is_unicode(engine: str | None) -> bool:
+    """True if ``engine`` natively typesets Unicode (xelatex/lualatex) and therefore
+    wants a ``fontspec`` preamble instead of the pdflatex ``inputenc``/``fontenc`` one."""
+    if not engine:
+        return False
+    return Path(engine).stem.lower() in {"xelatex", "lualatex"}
 
 
 def _commands(engine: str, tex_name: str) -> list[list[str]]:
@@ -102,15 +113,21 @@ def latex_error_excerpt(log: str, max_lines: int = 12) -> str:
     return "\n".join(tail[-max_lines:])
 
 
-def compile_to_pdf(work_dir: Path, tex_name: str = "main.tex", timeout: float = 600.0) -> CompileResult:
+def compile_to_pdf(
+    work_dir: Path, tex_name: str = "main.tex", timeout: float = 600.0, engine: str | None = None
+) -> CompileResult:
     """Compile ``work_dir/tex_name`` to PDF. Never raises — failures land in ``log``.
+
+    ``engine`` may be pre-resolved by the caller (so the preamble it already wrote
+    matches the engine used here); if ``None`` it is detected via ``find_engine``.
 
     Security: commands are run as argument lists (no shell) and ``-shell-escape`` is
     deliberately NOT passed, so even though the document embeds user-derived text
     (escaped via ``latex_builder.latex_escape``) it cannot execute shell commands
     through TeX ``\\write18``.
     """
-    engine = find_engine()
+    if engine is None:
+        engine = find_engine()
     if engine is None:
         return CompileResult(None, "No LaTeX engine (pdflatex/xelatex/latexmk) found on PATH.", None)
 

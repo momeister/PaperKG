@@ -198,7 +198,7 @@ describe("assistant grouped citations", () => {
     expect(metas.map((meta) => Boolean(meta.approximate))).toEqual([true, true, false]);
   });
 
-  it("exports grouped answer citations as separate note citation links", () => {
+  it("exports grouped answer citations into one collapsible Quellen-chip token", () => {
     const answer: Answer = {
       question: "What supports Earth facts?",
       answer: "The Earth is round and orbits the Sun [p1, p2].",
@@ -211,10 +211,16 @@ describe("assistant grouped citations", () => {
 
     const formatted = formatAnswerForNote(answer, verification);
 
+    // Both sources are still persisted as note citations …
     expect(formatted.citations).toHaveLength(2);
-    expect(formatted.markdown).toContain("sciencekg://citation/cite_");
-    expect(formatted.markdown).toContain("Z1 - Earth Shape Study");
-    expect(formatted.markdown).toContain("Z1 - Solar Companion Study");
+    // … but the marker collapses into a single grouped Quellen-chip token (short scheme,
+    // ids without the cite_ prefix), not two inline title chips — so the raw note text
+    // stays clean.
+    expect(formatted.markdown).toContain("](skg://c/");
+    expect(formatted.markdown).not.toContain("sciencekg://citations/");
+    expect(formatted.markdown).not.toContain("skg://c/cite_");
+    expect(formatted.markdown).toContain("2 Quellen");
+    expect(formatted.markdown).not.toContain("Z1 - Earth Shape Study");
     expect(formatted.markdown).not.toContain("[p1, p2]");
   });
 

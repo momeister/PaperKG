@@ -330,6 +330,7 @@ export type ExtractionLibraryItem = {
   filename: string;
   pdf_path: string;
   pdf_available?: boolean;
+  abstract_available?: boolean;
   source_type?: "pdf" | "grey";
   text?: string;
   size_bytes?: number | null;

@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "./api";
-import { AppStateContext } from "./state";
+import { AppStateContext, clampFontScale, FONT_SCALE_STEP } from "./state";
 import type { LlmParams, Theme } from "./state";
 import { Status } from "./components/Status";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
@@ -82,6 +82,10 @@ function loadStoredTheme(): Theme {
   return "light";
 }
 
+function loadStoredFontScale(): number {
+  return clampFontScale(Number(localStorage.getItem("sciencekg.fontScale") ?? "1"));
+}
+
 export default function App() {
   const [activeProject, setActiveProject] = useState<string | undefined>(() => localStorage.getItem("sciencekg.project") ?? undefined);
   const [provider, setProvider] = useState<string | undefined>(() => localStorage.getItem("sciencekg.provider") ?? undefined);
@@ -90,6 +94,7 @@ export default function App() {
   const [llmParams, setLlmParams] = useState<LlmParams>(loadStoredLlmParams);
   const [paramsOpen, setParamsOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadStoredTheme);
+  const [fontScale, setFontScaleState] = useState<number>(loadStoredFontScale);
 
   // The AI-Cursor overlay (R1) and the "AI has control" border both load the same app
   // in a separate Tauri window; each renders only its own compact view and skips the
@@ -163,7 +168,17 @@ export default function App() {
     localStorage.setItem("sciencekg.theme", theme);
   }, [theme]);
 
+  // Globaler UI-Zoom: skaliert Text, Icons und Layout proportional. ``zoom`` ist im
+  // Tauri-/Chromium-Webview sicher (anders als ``transform: scale`` bricht es keine
+  // 100vh-Panes). Der Boot-Script in index.html setzt denselben Wert flimmerfrei vorab.
+  useEffect(() => {
+    document.documentElement.style.zoom = String(fontScale);
+    localStorage.setItem("sciencekg.fontScale", String(fontScale));
+  }, [fontScale]);
+
   const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
+  const setFontScale = (scale: number) => setFontScaleState(clampFontScale(scale));
+  const adjustFontScale = (delta: number) => setFontScaleState((current) => clampFontScale(current + delta));
 
   const selectedProvider = providersQuery.data?.providers.find((item) => item.name === provider);
   const modelOptions = useMemo(() => {
@@ -177,8 +192,8 @@ export default function App() {
     return Array.from(new Set(merged.filter(Boolean)));
   }, [discoveredModelsQuery.data?.models, selectedProvider, model]);
   const state = useMemo(
-    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, toggleTheme }),
-    [activeProject, provider, model, llmParams, theme]
+    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, toggleTheme, fontScale, setFontScale }),
+    [activeProject, provider, model, llmParams, theme, fontScale]
   );
 
   function updateLlmParam(key: keyof LlmParams, rawValue: string) {
@@ -269,6 +284,35 @@ export default function App() {
               <Status value={healthQuery.data?.status ?? "loading"} />
               <span>{healthQuery.data?.warnings?.length ?? 0} Warnungen</span>
               <span>{API_BASE_URL}</span>
+              <span className="font-scale-controls" role="group" aria-label="Schriftgröße">
+                <button
+                  className="icon-button font-scale-button"
+                  type="button"
+                  aria-label="Schrift verkleinern"
+                  title="Schrift verkleinern"
+                  onClick={() => adjustFontScale(-FONT_SCALE_STEP)}
+                >
+                  <span className="font-scale-glyph font-scale-glyph--small">A</span>
+                </button>
+                <button
+                  className="icon-button font-scale-button"
+                  type="button"
+                  aria-label="Schriftgröße zurücksetzen"
+                  title={`Schriftgröße: ${Math.round(fontScale * 100)}% – auf 100% zurücksetzen`}
+                  onClick={() => setFontScale(1)}
+                >
+                  {Math.round(fontScale * 100)}%
+                </button>
+                <button
+                  className="icon-button font-scale-button"
+                  type="button"
+                  aria-label="Schrift vergrößern"
+                  title="Schrift vergrößern"
+                  onClick={() => adjustFontScale(FONT_SCALE_STEP)}
+                >
+                  <span className="font-scale-glyph font-scale-glyph--large">A</span>
+                </button>
+              </span>
               <button
                 className="icon-button theme-toggle"
                 type="button"

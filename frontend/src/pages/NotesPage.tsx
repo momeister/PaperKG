@@ -130,6 +130,8 @@ export type CitationMarkdownRef = {
   title: string;
   start: number;
   end: number;
+  /** Present when this ref comes from a grouped Quellen-chip: all citation ids it holds. */
+  groupIds?: string[];
 };
 
 export type ThreadAnchorMeta = {
@@ -1546,9 +1548,19 @@ export function NotesSurface({
     }
     const currentMarkdown = markdownRef.current;
     const { start, end } = externalInsertRange();
-    const insertText = markdownBlockInsertion(currentMarkdown, start, content);
+    let insertText = markdownBlockInsertion(currentMarkdown, start, content);
+    // Guarantee a blank line after the inserted quote/citation block so the caret lands
+    // on a fresh paragraph — not fused onto the trailing citation token, which is what
+    // made the next keystrokes appear "inside" the citation's parentheses.
+    if (!currentMarkdown.slice(end).trim()) {
+      insertText = `${insertText.replace(/\n+$/, "")}\n\n`;
+    }
     const nextMarkdown = `${currentMarkdown.slice(0, start)}${insertText}${currentMarkdown.slice(end)}`;
-    const nextCursor = start + insertText.length;
+    // Move the caret past the blank line that follows the block.
+    let nextCursor = start + insertText.length;
+    while (nextCursor < nextMarkdown.length && nextMarkdown[nextCursor] === "\n") {
+      nextCursor += 1;
+    }
     const viewportSnapshot = captureEditorViewport(nextCursor);
     pushUndo();
     applyMarkdownChange(nextMarkdown);
@@ -1568,7 +1580,8 @@ export function NotesSurface({
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
       queryClient.invalidateQueries({ queryKey: ["note", note.id] });
-      restoreEditorViewport(viewportSnapshot, note.markdown.length);
+      // No second restore here: re-forcing the caret after the async round-trip is what
+      // yanked it back into the citation even after the user clicked elsewhere.
       return note.id;
     }
 
@@ -1585,7 +1598,7 @@ export function NotesSurface({
     queryClient.invalidateQueries({ queryKey: ["notes"] });
     queryClient.invalidateQueries({ queryKey: ["note", note.id] });
     persistLocalThreadRanges();
-    restoreEditorViewport(viewportSnapshot, note.markdown.length);
+    // No second restore here (see create branch): it re-stole the caret after the save.
     return note.id;
   }
 
@@ -1620,12 +1633,11 @@ export function NotesSurface({
   }
 
   function restoreEditorViewport(snapshot: EditorViewportSnapshot, markdownLength = markdownRef.current.length) {
+    // Restore once now and once after the next render (via the layout effect). The old
+    // multi-frame loop kept re-forcing the selection for several frames, which stole focus
+    // and the caret back from wherever the user had clicked after an insert.
     pendingEditorViewportRestoreRef.current = { snapshot, markdownLength };
     restoreEditorViewportNow(snapshot, markdownLength);
-    requestAnimationFrame(() => {
-      restoreEditorViewportNow(snapshot, markdownLength);
-      requestAnimationFrame(() => restoreEditorViewportNow(snapshot, markdownLength));
-    });
   }
 
   function restoreEditorViewportNow(snapshot: EditorViewportSnapshot, markdownLength = markdownRef.current.length) {
@@ -1634,13 +1646,18 @@ export function NotesSurface({
     if (!node) {
       return;
     }
-    node.focus({ preventScroll: true });
-    node.setSelectionRange(cursor, cursor);
+    // Only move the caret when the editor still owns focus. If the insert came from another
+    // panel (e.g. the Assistant) or the user has since clicked elsewhere, forcing focus +
+    // selection here would drag the caret back into the just-inserted citation.
+    const editorHasFocus = document.activeElement === node;
+    if (editorHasFocus) {
+      node.setSelectionRange(cursor, cursor);
+      lastCursorRef.current = cursor;
+    }
     node.scrollTop = Math.min(snapshot.scrollTop, Math.max(0, node.scrollHeight - node.clientHeight));
     node.scrollLeft = snapshot.scrollLeft;
     setEditorScrollTop(node.scrollTop);
     setEditorScrollLeft(node.scrollLeft);
-    lastCursorRef.current = cursor;
   }
 
   function markdownBlockInsertion(source: string, index: number, content: string) {

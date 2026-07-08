@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMarkdownTable, withPreservedCitationLinks } from "./NotesPage";
+import { buildMarkdownTable, parseMarkdownCitationRefs, withPreservedCitationLinks } from "./NotesPage";
 
 describe("withPreservedCitationLinks", () => {
   const original =
@@ -22,6 +22,24 @@ describe("withPreservedCitationLinks", () => {
     const result = withPreservedCitationLinks(withPreview, "neuer Text");
     expect(result.match(/sciencekg:\/\/citation\/c1/g)).toHaveLength(1);
     expect(result).not.toContain("citation/preview");
+  });
+});
+
+describe("parseMarkdownCitationRefs group schemes", () => {
+  it("resolves the short skg://c/ scheme to full cite_ ids", () => {
+    const refs = parseMarkdownCitationRefs("> Text [2 Quellen](skg://c/aaa,bbb)");
+    expect(refs.map((ref) => ref.id)).toEqual(["cite_aaa", "cite_bbb"]);
+    expect(refs.every((ref) => ref.groupIds?.join(",") === "cite_aaa,cite_bbb")).toBe(true);
+  });
+
+  it("still parses the legacy sciencekg://citations/ scheme identically", () => {
+    const legacy = parseMarkdownCitationRefs("> Text [2 Quellen](sciencekg://citations/cite_aaa,cite_bbb)");
+    expect(legacy.map((ref) => ref.id)).toEqual(["cite_aaa", "cite_bbb"]);
+  });
+
+  it("keeps the single-citation scheme working", () => {
+    const refs = parseMarkdownCitationRefs("Quelle: [Z1 - A](sciencekg://citation/cite_abc)");
+    expect(refs.map((ref) => ref.id)).toEqual(["cite_abc"]);
   });
 });
 

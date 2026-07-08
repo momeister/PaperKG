@@ -174,16 +174,15 @@ export function ExtractionPage() {
   }
 
   function toggleAllBatch() {
-    const batchable = (libraryQueryResult.data?.items ?? []).filter(
-      (item) => item.source_type !== "grey" && item.pdf_path && item.pdf_available !== false && item.latest_extraction_status !== "success"
-    );
-    const ids = batchable.map((item) => item.paper_id);
+    const ids = (libraryQueryResult.data?.items ?? [])
+      .filter((item) => isBatchable(item) && item.latest_extraction_status !== "success")
+      .map((item) => item.paper_id);
     setSelectedBatchPaths((current) => (current.length === ids.length ? [] : ids));
   }
 
   function selectUnextracted() {
     const ids = (libraryQueryResult.data?.items ?? [])
-      .filter((item) => item.source_type !== "grey" && item.pdf_path && item.pdf_available !== false && item.latest_extraction_status !== "success")
+      .filter((item) => isBatchable(item) && item.latest_extraction_status !== "success")
       .map((item) => item.paper_id);
     setSelectedBatchPaths(ids);
   }
@@ -202,7 +201,7 @@ export function ExtractionPage() {
   const noPdfCount = libraryItems.filter((i) => i.source_type !== "grey" && (!i.pdf_path || i.pdf_available === false)).length;
   const totalPdfCount = hasPdfItems.length;
   const extractedPdfCount = hasPdfItems.filter((i) => i.latest_extraction_status === "success").length;
-  const unextractedCount = hasPdfItems.filter((i) => i.latest_extraction_status !== "success").length;
+  const unextractedCount = libraryItems.filter((i) => isBatchable(i) && i.latest_extraction_status !== "success").length;
   const batchItems: BatchJobItem[] = batchItemsQuery.data?.items ?? [];
   const currentItem = batchItems.find((i) => i.status === "processing");
   const runningJob = pendingJobId ? jobsQuery.data?.jobs.find((j) => j.job_id === pendingJobId) : null;
@@ -642,11 +641,12 @@ function ExtractionLibraryTable({
   const renderRow = (item: ExtractionLibraryItem) => {
     const isGrey = item.source_type === "grey";
     const noPdf = !isGrey && item.pdf_available === false;
+    const batchable = isBatchable(item);
     const alreadyExtracted = !isGrey && !noPdf && item.latest_extraction_status === "success";
     return (
       <div className={`data-row ${selectedPath === item.paper_id ? "data-row--active" : ""} ${noPdf ? "data-row--muted" : ""}`} key={item.paper_id}>
         <label className="check-row extraction-row-check">
-          {isGrey || noPdf ? (
+          {!batchable ? (
             <Globe size={14} style={{ opacity: 0.5 }} />
           ) : (
             <>
@@ -908,10 +908,21 @@ function formatApiError(error: ApiError) {
   return error.message;
 }
 
+function isBatchable(item: ExtractionLibraryItem) {
+  if (item.source_type === "grey") {
+    return false;
+  }
+  if (item.pdf_available === false || !item.pdf_path) {
+    // Ohne PDF nur batchbar, wenn ein Abstract für die Abstract-only-Extraktion existiert.
+    return item.abstract_available === true;
+  }
+  return true;
+}
+
 function selectedBatchItems(items: ExtractionLibraryItem[], selectedIds: string[]) {
   return items
-    .filter((item) => selectedIds.includes(item.paper_id) && item.source_type !== "grey" && item.pdf_path)
-    .map((item) => ({ paper_id: item.paper_id, pdf_path: item.pdf_path }));
+    .filter((item) => selectedIds.includes(item.paper_id) && isBatchable(item))
+    .map((item) => ({ paper_id: item.paper_id, pdf_path: item.pdf_path || undefined }));
 }
 
 function itemLabel(item: Record<string, unknown>) {

@@ -33,7 +33,9 @@ from parsing.marker_parser import (
     _classify_and_split_words,
     _find_column_gutter,
     _join_hyphenated_linebreaks,
+    _looks_better_spaced,
     _reconstruct_page_text,
+    _repair_glued_parens,
     _text_needs_char_reconstruction,
 )
 from query.llm_router import LLMRouter, ProviderConfig, GenerationSettings
@@ -4534,6 +4536,33 @@ class TestParseTextCleanup:
 
     def test_text_needs_char_reconstruction_false_for_short_text(self):
         assert _text_needs_char_reconstruction("Shortpagefooter") is False
+
+    def test_text_needs_char_reconstruction_true_for_localized_paren_gluing(self):
+        # Otherwise well-spaced page, but extract_text() dropped spaces around parentheses.
+        text = (
+            "The finite element analysis is performed using the Multiphysics Object "
+            "Oriented Simulation Environment(MOOSE)framework which is widely used. " * 3
+        )
+        assert _text_needs_char_reconstruction(text) is True
+
+    def test_repair_glued_parens_inserts_spaces_around_parentheses(self):
+        assert (
+            _repair_glued_parens("Simulation Environment(MOOSE)framework")
+            == "Simulation Environment (MOOSE) framework"
+        )
+        assert _repair_glued_parens("the results(2020)show") == "the results (2020) show"
+
+    def test_repair_glued_parens_keeps_single_letter_math_and_punctuation(self):
+        # single-letter functions and a closing paren before non-letters stay intact
+        assert _repair_glued_parens("f(x) and H(t).") == "f(x) and H(t)."
+        assert _repair_glued_parens("group (10.6 months).") == "group (10.6 months)."
+
+    def test_looks_better_spaced_accepts_real_fix_and_rejects_over_splitting(self):
+        glued = "TheresultshighlighttheutilityofDMD asaframework"
+        fixed = "The results highlight the utility of DMD as a framework"
+        over_split = "T h e r e s u l t s h i g h l i g h t"
+        assert _looks_better_spaced(glued, fixed) is True
+        assert _looks_better_spaced(glued, over_split) is False
 
 
 class TestParserImplementations:
