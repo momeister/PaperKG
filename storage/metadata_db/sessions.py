@@ -162,6 +162,7 @@ class SessionsMixin(_Base):
         session = dict(zip(cols, row))
         session["synthesis_payload"] = self._decode_json(session.get("synthesis_payload"), None)
         session["overview_payload"] = self._decode_json(session.get("overview_payload"), None)
+        session["stages"] = self.list_parallel_stages(session_id)
         variants = self.list_parallel_variants(session_id)
         entries_by_variant: dict[str, list[dict[str, Any]]] = {}
         for entry in self.list_parallel_entries(session_id=session_id):
@@ -193,6 +194,10 @@ class SessionsMixin(_Base):
                 "SELECT COUNT(*) FROM parallel_variants WHERE session_id = ?", [rec["id"]]
             ).fetchone()
             rec["variant_count"] = int(count[0]) if count else 0
+            stage_count = self._execute(
+                "SELECT COUNT(*) FROM parallel_stages WHERE session_id = ?", [rec["id"]]
+            ).fetchone()
+            rec["stage_count"] = int(stage_count[0]) if stage_count else 0
             out.append(rec)
         return out
 
@@ -231,7 +236,98 @@ class SessionsMixin(_Base):
         self._execute("DELETE FROM parallel_followups WHERE session_id = ?", [str(session_id)])
         self._execute("DELETE FROM parallel_entries WHERE session_id = ?", [str(session_id)])
         self._execute("DELETE FROM parallel_variants WHERE session_id = ?", [str(session_id)])
+        self._execute("DELETE FROM parallel_stages WHERE session_id = ?", [str(session_id)])
         self._execute("DELETE FROM parallel_sessions WHERE id = ?", [str(session_id)])
+        return True
+
+    # ------------------------------------------------------------------ #
+    # Parallel-Research stages (Etappen)                                  #
+    # ------------------------------------------------------------------ #
+
+    def add_parallel_stage(
+        self,
+        session_id: str,
+        name: str,
+        goal: str = "",
+        status: str = "offen",
+        position: int | None = None,
+        stage_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = datetime.now()
+        sid = stage_id or f"stg_{uuid.uuid4().hex}"
+        if position is None:
+            mx = self._execute(
+                "SELECT COALESCE(MAX(position), -1) FROM parallel_stages WHERE session_id = ?",
+                [str(session_id)],
+            ).fetchone()
+            position = (int(mx[0]) + 1) if mx else 0
+        self._execute("""
+            INSERT INTO parallel_stages
+            (id, session_id, name, goal, status, position, created_timestamp, updated_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [sid, str(session_id), str(name or "Etappe"), str(goal or ""),
+              str(status or "offen"), int(position), now, now])
+        self._touch_parallel_session(session_id)
+        return self.get_parallel_stage(sid)
+
+    def get_parallel_stage(self, stage_id: str) -> dict[str, Any] | None:
+        row = self._execute("SELECT * FROM parallel_stages WHERE id = ?", [str(stage_id)]).fetchone()
+        if row is None:
+            return None
+        cols = [desc[0] for desc in self.conn.description]
+        stage = dict(zip(cols, row))
+        stage["review_payload"] = self._decode_json(stage.get("review_payload"), None)
+        return stage
+
+    def list_parallel_stages(self, session_id: str) -> list[dict[str, Any]]:
+        rows = self._execute(
+            "SELECT * FROM parallel_stages WHERE session_id = ? "
+            "ORDER BY position ASC, created_timestamp ASC",
+            [str(session_id)],
+        ).fetchall()
+        cols = [desc[0] for desc in self.conn.description]
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            rec = dict(zip(cols, row))
+            rec["review_payload"] = self._decode_json(rec.get("review_payload"), None)
+            out.append(rec)
+        return out
+
+    def update_parallel_stage(self, stage_id: str, **fields: Any) -> dict[str, Any] | None:
+        current = self.get_parallel_stage(stage_id)
+        if current is None:
+            return None
+        allowed = ("name", "goal", "status", "position", "review_markdown", "review_payload")
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return current
+        if "review_payload" in updates:
+            updates["review_payload"] = json.dumps(updates["review_payload"])
+        set_clause = ", ".join(f"{k} = ?" for k in updates) + ", updated_timestamp = ?"
+        params = list(updates.values()) + [datetime.now(), str(stage_id)]
+        self._execute(f"UPDATE parallel_stages SET {set_clause} WHERE id = ?", params)
+        self._touch_parallel_session(str(current.get("session_id")))
+        return self.get_parallel_stage(stage_id)
+
+    def delete_parallel_stage(self, stage_id: str) -> bool:
+        """Delete a stage; its variants move to the session's first remaining stage.
+        Raises ValueError for the session's last stage (a session always keeps one)."""
+        current = self.get_parallel_stage(stage_id)
+        if current is None:
+            return False
+        session_id = str(current.get("session_id"))
+        remaining = [
+            s for s in self.list_parallel_stages(session_id) if str(s.get("id")) != str(stage_id)
+        ]
+        if not remaining:
+            raise ValueError("Letzte Etappe kann nicht gelöscht werden")
+        target = str(remaining[0]["id"])
+        self._execute(
+            "UPDATE parallel_variants SET stage_id = ? WHERE stage_id = ?",
+            [target, str(stage_id)],
+        )
+        self._execute("DELETE FROM parallel_stages WHERE id = ?", [str(stage_id)])
+        self._touch_parallel_session(session_id)
         return True
 
     def add_parallel_variant(
@@ -245,6 +341,7 @@ class SessionsMixin(_Base):
         status: str = "vorgeschlagen",
         variant_id: str | None = None,
         position: int | None = None,
+        stage_id: str | None = None,
     ) -> dict[str, Any] | None:
         now = datetime.now()
         vid = variant_id or f"var_{uuid.uuid4().hex}"
@@ -256,10 +353,11 @@ class SessionsMixin(_Base):
             position = (int(mx[0]) + 1) if mx else 0
         self._execute("""
             INSERT INTO parallel_variants
-            (id, session_id, name, approach, rationale, suggested_prompt, origin, status,
+            (id, session_id, stage_id, name, approach, rationale, suggested_prompt, origin, status,
              position, created_timestamp, updated_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [vid, str(session_id), str(name or "Variante"), str(approach or ""),
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [vid, str(session_id), str(stage_id) if stage_id else None,
+              str(name or "Variante"), str(approach or ""),
               str(rationale or ""), str(suggested_prompt or ""), str(origin or "ai"),
               str(status or "vorgeschlagen"), int(position), now, now])
         self._touch_parallel_session(session_id)
@@ -287,7 +385,7 @@ class SessionsMixin(_Base):
         current = self.get_parallel_variant(variant_id)
         if current is None:
             return None
-        allowed = ("name", "approach", "rationale", "suggested_prompt", "origin", "status", "position")
+        allowed = ("name", "approach", "rationale", "suggested_prompt", "origin", "status", "position", "stage_id")
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return current

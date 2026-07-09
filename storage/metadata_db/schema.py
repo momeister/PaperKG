@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -409,6 +410,26 @@ class SchemaMixin(_Base):
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Etappen: ein Forschungsvorhaben (= Session) gliedert sich in sequentielle
+        # Stages; Varianten hängen an einer Stage. review_* trägt den Professor-
+        # Etappen-Review (strukturierte Kritik über alle Ergebnisse der Etappe).
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS parallel_stages (
+                id VARCHAR PRIMARY KEY,
+                session_id VARCHAR,
+                name VARCHAR,
+                goal VARCHAR,
+                status VARCHAR,
+                position INTEGER,
+                review_markdown VARCHAR,
+                review_payload JSON,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Older DBs predate stages — add the FK column and adopt orphan variants below.
+        self._add_missing_columns("parallel_variants", {"stage_id": "VARCHAR"})
+        self._backfill_parallel_stages()
         self._execute("""
             CREATE TABLE IF NOT EXISTS parallel_entries (
                 id VARCHAR PRIMARY KEY,
@@ -541,6 +562,7 @@ class SchemaMixin(_Base):
         self._execute("CREATE INDEX IF NOT EXISTS idx_research_sessions_project ON research_sessions(project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_sessions_project ON parallel_sessions(project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_variants_session ON parallel_variants(session_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_stages_session ON parallel_stages(session_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_entries_variant ON parallel_entries(variant_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_entries_session ON parallel_entries(session_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_followups_session ON parallel_followups(session_id)")
@@ -549,6 +571,37 @@ class SchemaMixin(_Base):
         self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_artifacts_run ON analysis_artifacts(run_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_pdf_annotations_paper ON pdf_annotations(paper_id)")
+
+    def _backfill_parallel_stages(self) -> None:
+        """Adopt pre-stage variants: every session with stage-less variants and no stage
+        yet gets a default "Etappe 1" (aktiv) that its variants are attached to. Runs on
+        every open; a no-op after the first migration."""
+        rows = self._execute("""
+            SELECT DISTINCT v.session_id FROM parallel_variants v
+            WHERE v.stage_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM parallel_stages s WHERE s.session_id = v.session_id)
+        """).fetchall()
+        for (session_id,) in rows:
+            stage_id = f"stg_{uuid.uuid4().hex}"
+            self._execute("""
+                INSERT INTO parallel_stages (id, session_id, name, goal, status, position)
+                VALUES (?, ?, 'Etappe 1', '', 'aktiv', 0)
+            """, [stage_id, str(session_id)])
+            self._execute(
+                "UPDATE parallel_variants SET stage_id = ? WHERE session_id = ? AND stage_id IS NULL",
+                [stage_id, str(session_id)],
+            )
+        # Sessions that gained stages later can still hold stragglers: attach any
+        # remaining stage-less variant to its session's first stage.
+        self._execute("""
+            UPDATE parallel_variants v SET stage_id = (
+                SELECT s.id FROM parallel_stages s
+                WHERE s.session_id = v.session_id
+                ORDER BY s.position ASC, s.created_timestamp ASC LIMIT 1
+            )
+            WHERE v.stage_id IS NULL
+              AND EXISTS (SELECT 1 FROM parallel_stages s WHERE s.session_id = v.session_id)
+        """)
 
     def _add_missing_columns(
         self,
