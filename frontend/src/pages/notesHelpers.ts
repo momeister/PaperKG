@@ -149,6 +149,13 @@ export function serializePreviewNode(node: Node): string {
     return "";
   }
   const tag = node.tagName.toLowerCase();
+  // Sammel-Zitat-Chip (CitationGroupButton): vor der Kind-Rekursion abfangen, sonst würde
+  // nur der sichtbare Label-Text ("3 Quellen") — bei offenem Popover sogar dessen Einträge —
+  // serialisiert und der skg://c-Marker beim Blur/Moduswechsel unwiederbringlich zerstört.
+  if (node.dataset.citationGroupIds) {
+    const label = (node.dataset.citationLabel || "Quellen").trim();
+    return `[${label}](skg://c/${node.dataset.citationGroupIds})`;
+  }
   const inner = serializePreviewInline(node);
   if (tag === "br") {
     return "\n";

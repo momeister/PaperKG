@@ -11,7 +11,9 @@ from fastapi.testclient import TestClient
 from extraction.embedding_engine import EmbeddingEngine
 from query.grounded_responder import (
     _CONTEXT_MATCH_SCORE,
+    NO_EVIDENCE_SENTINEL,
     GroundedResponder,
+    detect_insufficient_evidence,
     _best_citation_evidence,
     _build_grounded_prompt,
     _citation_links_for_answer,
@@ -388,6 +390,59 @@ def test_grounded_responder_uses_evidence_and_skips_empty_answers() -> None:
         assert "[p1]" in answer.answer
         assert missing.no_answer is True
         assert len(fake_llm.calls) == 1
+
+
+def test_detect_insufficient_evidence_sentinel_and_prose() -> None:
+    # Sentinel: gestrippt + geflaggt.
+    cleaned, flagged = detect_insufficient_evidence(
+        f"X ist Y [p1]. Zu Z fehlen Belege. {NO_EVIDENCE_SENTINEL}"
+    )
+    assert flagged is True
+    assert NO_EVIDENCE_SENTINEL not in cleaned
+    assert cleaned.endswith("Zu Z fehlen Belege.")
+
+    # Prosa-Backstop (DE): die Formulierung aus dem realen Widerspruchsfall.
+    _, flagged_de = detect_insufficient_evidence(
+        "Das lokale Wissensgraphen-Archiv enthält keine Informationen darüber, wie sich X verhält [p1]."
+    )
+    assert flagged_de is True
+
+    # Prosa-Backstop (EN, Wortlaut aus dem SYSTEM_PROMPT).
+    _, flagged_en = detect_insufficient_evidence(
+        "The local KG does not contain enough evidence for this question."
+    )
+    assert flagged_en is True
+
+    # Normale Antwort: unverändert, kein Flag.
+    clean_text = "Graph Transformer is represented in the local KG evidence [p1]."
+    cleaned_ok, flagged_ok = detect_insufficient_evidence(clean_text)
+    assert flagged_ok is False
+    assert cleaned_ok == clean_text
+
+
+class InsufficientEvidenceLLMRouter(FakeLLMRouter):
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        return (
+            "Graph Transformer wird im lokalen Bestand behandelt [p1]. "
+            f"Zur konkreten Teilfrage fehlt lokale Evidenz. {NO_EVIDENCE_SENTINEL}"
+        )
+
+
+def test_grounded_responder_strips_sentinel_and_sets_insufficient_flag() -> None:
+    with _phase4_fixture() as db_path:
+        fake_llm = InsufficientEvidenceLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        answer = responder.answer("What uses graph transformer?")
+
+        assert answer.no_answer is False
+        assert NO_EVIDENCE_SENTINEL not in answer.answer
+        assert "[p1]" in answer.answer
+        assert answer.context_diagnostics.get("insufficient_evidence") is True
 
 
 def test_grounded_responder_skips_grey_source_injection_when_paper_ids_filter_is_set() -> None:

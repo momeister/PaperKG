@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMarkdownTable, parseMarkdownCitationRefs, withPreservedCitationLinks } from "./NotesPage";
+import { buildMarkdownTable, parseMarkdownCitationRefs, previewElementToMarkdown, withPreservedCitationLinks } from "./NotesPage";
 
 describe("withPreservedCitationLinks", () => {
   const original =
@@ -40,6 +40,38 @@ describe("parseMarkdownCitationRefs group schemes", () => {
   it("keeps the single-citation scheme working", () => {
     const refs = parseMarkdownCitationRefs("Quelle: [Z1 - A](sciencekg://citation/cite_abc)");
     expect(refs.map((ref) => ref.id)).toEqual(["cite_abc"]);
+  });
+});
+
+describe("previewElementToMarkdown citation-group round-trip", () => {
+  const raw = "> Zitat [2 Quellen](skg://c/aaa,bbb)";
+
+  function groupChip(withOpenPopover = false) {
+    return `<span class="citation-group" contenteditable="false" data-citation-group-ids="aaa,bbb" data-citation-label="2 Quellen">` +
+      `<button type="button" class="citation-group-button"><span>2 Quellen</span></button>` +
+      (withOpenPopover
+        ? `<span class="citation-group-popover" role="menu"><button type="button" class="citation-group-item">Z1 Paper A</button><button type="button" class="citation-group-item">Z2 Paper B</button></span>`
+        : "") +
+      `</span>`;
+  }
+
+  it("reconstructs the skg://c marker instead of the visible label", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<blockquote>Zitat ${groupChip()}</blockquote>`;
+    expect(previewElementToMarkdown(raw, root)).toBe(raw);
+  });
+
+  it("ignores an open popover during serialization", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<blockquote>Zitat ${groupChip(true)}</blockquote>`;
+    expect(previewElementToMarkdown(raw, root)).toBe(raw);
+  });
+
+  it("round-trips through parseMarkdownCitationRefs", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<blockquote>Zitat ${groupChip()}</blockquote>`;
+    const refs = parseMarkdownCitationRefs(previewElementToMarkdown(raw, root));
+    expect(refs.map((ref) => ref.id)).toEqual(["cite_aaa", "cite_bbb"]);
   });
 });
 

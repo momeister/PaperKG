@@ -42,10 +42,19 @@ def _answer_has_citations(answer_dict: dict[str, Any]) -> bool:
 
 
 def _is_weak_answer(answer_dict: dict[str, Any]) -> bool:
-    """Decide whether a grounded answer warrants an automatic web/paper harvest."""
+    """Decide whether a grounded answer warrants an automatic web/paper harvest.
+
+    ``insufficient_evidence`` is the responder's own verdict (Sentinel-Token bzw.
+    „keine Informationen"-Prosa, siehe grounded_responder.detect_insufficient_evidence):
+    eine Antwort kann Quellen zitieren UND trotzdem eine Evidenz-Lücke melden — vorher
+    galt die dann fälschlich als ausreichend („Lokale Quellen reichten aus"-Widerspruch).
+    """
+    diagnostics = answer_dict.get("context_diagnostics") or {}
     return bool(
         answer_dict.get("no_answer")
-        or answer_dict.get("context_diagnostics", {}).get("low_relevance")
+        or diagnostics.get("low_relevance")
+        or diagnostics.get("insufficient_evidence")
+        or diagnostics.get("fallback_reason") == "no_traceable_citations"
         or not _answer_has_citations(answer_dict)
     )
 

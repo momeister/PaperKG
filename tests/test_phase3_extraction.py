@@ -1,5 +1,6 @@
 import pytest
 import json
+import re
 import httpx
 from unittest.mock import MagicMock
 from typing import Any
@@ -4444,6 +4445,59 @@ class TestColumnAwareExtraction:
         assert text.index("R5") < text.index("FOOTER")
 
 
+class TestReconstructPageTextCharRepair:
+    """The two-column path must fall back to char-gap reconstruction when the column-ordered
+    word text is itself glued (extract_words inherits extract_text()'s dropped-space glyphs)."""
+
+    PAGE_WIDTH = 600.0
+    PAGE_HEIGHT = 800.0
+
+    def _char(self, text: str, x0: float, x1: float, top: float, size: float = 10.0) -> dict[str, Any]:
+        return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + size, "size": size}
+
+    def _phrase_chars(self, phrase: str, start_x: float, top: float, cw: float = 3.0, gap: float = 3.0) -> list[dict]:
+        """Chars for a space-separated phrase: 0 gap within a word, >2.24pt gap between words
+        (the effective floor is 0.28 * max(size, 8)), and no glyph emitted for the space itself.
+        Widths stay narrow so every char's center remains on its own side of the gutter."""
+        chars: list[dict] = []
+        x = start_x
+        for word in phrase.split(" "):
+            for ch in word:
+                chars.append(self._char(ch, x, x + cw, top))
+                x += cw
+            x += gap
+        return chars
+
+    def test_glued_two_column_words_are_repaired_from_chars(self):
+        left = "vision language framework for industrial anomaly understanding"
+        right = "Right column note"
+        words: list[dict] = []
+        chars: list[dict] = []
+        for top in (100.0, 150.0, 200.0):
+            words.append(_word(left.replace(" ", ""), 50, 200, top, top + 10))   # one glued token
+            words.append(_word(right.replace(" ", ""), 350, 500, top, top + 10))
+            chars.extend(self._phrase_chars(left, 50, top))
+            chars.extend(self._phrase_chars(right, 350, top))
+
+        result = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT, chars=chars)
+        assert result is not None
+        assert left in result                              # de-glued via char gaps
+        assert left.replace(" ", "") not in result         # the glued token is gone
+
+    def test_well_spaced_two_column_words_ignore_chars(self):
+        # extract_words already produced clean tokens → the check never fires → chars are ignored
+        # and the word-join is returned verbatim (passing chars must not change a good page).
+        words: list[dict] = []
+        for i, top in enumerate((100.0, 150.0, 200.0, 250.0)):
+            words.append(_word(f"Leftword{i}", 50, 200, top, top + 10))
+            words.append(_word(f"Rightword{i}", 350, 500, top, top + 10))
+        chars = [self._char("Z", 50, 53, 100.0)]  # would corrupt output if wrongly applied
+        with_chars = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT, chars=chars)
+        without = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
+        assert with_chars == without
+        assert with_chars is not None and "Leftword0" in with_chars
+
+
 class TestCharsToSpacedText:
     """Tests for _chars_to_spaced_text char-level space insertion."""
 
@@ -4536,6 +4590,17 @@ class TestParseTextCleanup:
 
     def test_text_needs_char_reconstruction_false_for_short_text(self):
         assert _text_needs_char_reconstruction("Shortpagefooter") is False
+
+    def test_text_needs_char_reconstruction_true_for_single_extreme_run(self):
+        # A lone glued title/sentence ("...vision-languageframeworkforindustrialAnomaly...")
+        # is glue even when the rest of the page is well spaced. Only two 16+ runs here, so the
+        # >=3 long_runs/paren_glue thresholds never fire — the extreme-run (>=25) trigger must.
+        text = (
+            "To address this gap we present GenAU a Generalist "
+            "visionlanguageframeworkforindustrialAnomalyUnderstanding that works well here. "
+        ) * 2
+        assert len(re.findall(r"[A-Za-z]{16,}", text)) < 3  # thresholds alone would say False
+        assert _text_needs_char_reconstruction(text) is True
 
     def test_text_needs_char_reconstruction_true_for_localized_paren_gluing(self):
         # Otherwise well-spaced page, but extract_text() dropped spaces around parentheses.

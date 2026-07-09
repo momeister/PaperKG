@@ -263,7 +263,9 @@ def _build_pdf_context_prompt(
             "copy the citation list of a neighboring sentence. If only one paper supports a sentence, "
             "cite exactly that one paper.",
             "Do not copy reference or citation numbers from the source text (superscripts like [17-22] or [26, 29]); cite only the paper IDs shown above.",
-            "If the PDF context is insufficient, say that the local PDF context does not contain enough evidence.",
+            "If the PDF context is insufficient — fully or for part of the question — say that the "
+            "local PDF context does not contain enough evidence for the missing part AND append the "
+            "exact token [NO_LOCAL_EVIDENCE] at the very end of your answer (it is removed before display).",
             "When the PDF contains both a positive result and an important caveat — side effects, "
             "adverse events, subgroup qualifier, or contradicting result — report both. Do not omit the caveat.",
         ]

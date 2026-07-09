@@ -95,7 +95,11 @@ export function answerSuggestsWebSearch(answer: Answer | null | undefined): bool
   if (answer.context_diagnostics?.fallback_reason === "no_traceable_citations") {
     return true;
   }
-  return /not contain enough evidence|does not contain enough|nicht genug (?:Evidenz|Belege)|keine ausreichenden? (?:Evidenz|Belege)|konnte keine .{0,40}finden/i.test(
+  // Eigenurteil des Responders (Sentinel-Token / Keine-Info-Prosa, backend-seitig erkannt).
+  if (answer.context_diagnostics?.insufficient_evidence) {
+    return true;
+  }
+  return /not contain enough evidence|does not contain enough|contains? no (?:relevant )?(?:information|evidence)|nicht genug (?:Evidenz|Belege|Informationen)|keine ausreichenden? (?:Evidenz|Belege|Informationen)|enth(?:ä|ae)lt (?:keine|nicht gen(?:ü|ue)gend) (?:\w+ ){0,3}?(?:Informationen|Evidenz|Belege|Angaben)|keine (?:passenden|relevanten)? ?(?:Informationen|Belege) (?:dar(?:ü|ue)ber|dazu|zu\b)|konnte keine .{0,40}finden|\[NO_LOCAL_EVIDENCE\]/i.test(
     answer.answer || ""
   );
 }

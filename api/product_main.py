@@ -116,6 +116,8 @@ from api.routers import analysis as _analysis_router  # noqa: E402
 app.include_router(_analysis_router.router)
 from api.routers import workspaces as _workspaces_router  # noqa: E402
 app.include_router(_workspaces_router.router)
+from api.routers import pdf_annotations as _pdf_annotations_router  # noqa: E402
+app.include_router(_pdf_annotations_router.router)
 
 
 @app.exception_handler(PathSafetyError)

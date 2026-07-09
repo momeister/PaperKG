@@ -509,6 +509,24 @@ class SchemaMixin(_Base):
             )
         """)
 
+        # PDF-Notizen: pro Paper an einer Textstelle (Highlight) oder einem Punkt verankerte
+        # kleine Notiz. Rects sind auf 0..1 relativ zur Seiten-Oberfläche normalisiert (zoom-
+        # unabhängig); quote = markierter Text (späterer Re-Anchor-Fallback), body = Notiztext.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS pdf_annotations (
+                id VARCHAR PRIMARY KEY,
+                paper_id VARCHAR NOT NULL,
+                page_number INTEGER NOT NULL,
+                kind VARCHAR DEFAULT 'highlight',
+                rects JSON,
+                quote TEXT,
+                body TEXT,
+                color VARCHAR,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         self._execute("CREATE INDEX IF NOT EXISTS idx_benchmark_runs_kind ON benchmark_runs(kind)")
 
         self._execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
@@ -530,6 +548,7 @@ class SchemaMixin(_Base):
         self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_runs_project ON analysis_runs(project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_artifacts_run ON analysis_artifacts(run_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_pdf_annotations_paper ON pdf_annotations(paper_id)")
 
     def _add_missing_columns(
         self,

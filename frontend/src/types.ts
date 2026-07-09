@@ -956,3 +956,20 @@ export type AnalysisRun = {
   updated_timestamp?: string;
   artifacts?: AnalysisArtifact[];
 };
+
+// --- PDF-Notizen (an einer Textstelle/Punkt im PDF verankert) ---
+// Rects sind 0..1 normalisiert relativ zur Seiten-Oberfläche (zoom-unabhängig).
+export type PdfAnnotationRect = { x: number; y: number; width: number; height: number };
+
+export type PdfAnnotation = {
+  id: string;
+  paper_id: string;
+  page_number: number;
+  kind: "highlight" | "point" | string;
+  rects: PdfAnnotationRect[];
+  quote?: string | null;
+  body: string;
+  color?: string | null;
+  created_timestamp?: string;
+  updated_timestamp?: string;
+};

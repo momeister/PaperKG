@@ -192,7 +192,13 @@ def _text_needs_char_reconstruction(text: str) -> bool:
 		return True
 	long_runs = len(re.findall(r"[A-Za-z]{16,}", text))
 	paren_glue = len(re.findall(r"[A-Za-z0-9]\(|\)[A-Za-z]", text))
-	return long_runs >= 3 or paren_glue >= 3
+	# A single extreme run ("vision-languageframeworkforindustrialAnomalyUnderstanding")
+	# is glue even when the rest of the page is fine — the >=3 count never fires for a
+	# lone glued title/sentence. Real words rarely exceed 25 letters; a legit long German
+	# compound stays intact because _looks_better_spaced rejects reconstructions that
+	# don't actually reduce glued runs.
+	extreme_run = re.search(r"[A-Za-z]{25,}", text) is not None
+	return long_runs >= 3 or paren_glue >= 3 or extreme_run
 
 
 # extract_text() frequently drops the space glyph on the boundary between a word and an
@@ -303,7 +309,17 @@ def _reconstruct_page_text(
 		for group in (header_w, left_w, right_w, footer_w)
 		if group
 	]
-	return "\n\n".join(p for p in parts if p)
+	joined = "\n\n".join(p for p in parts if p)
+	# Word tokens inherit extract_text()'s glue problem (dropped space glyphs → words
+	# concatenated inside one token). When the column-ordered text still lacks word
+	# spacing, rebuild each region from char gaps — same guard as the single-column path.
+	if chars and _text_needs_char_reconstruction(joined):
+		regions = _classify_chars_by_region(chars, gutter_x, page_height)
+		rebuilt_parts = [_chars_to_spaced_text(group) for group in regions if group]
+		rebuilt = "\n\n".join(p for p in rebuilt_parts if p)
+		if rebuilt and _looks_better_spaced(joined, rebuilt):
+			return rebuilt
+	return joined
 
 
 class MarkerParser:
@@ -336,7 +352,7 @@ class MarkerParser:
 							try:
 								words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
 								chars = list(page.chars or [])
-								recon_text = _reconstruct_page_text(words, float(page.width), float(page.height))
+								recon_text = _reconstruct_page_text(words, float(page.width), float(page.height), chars=chars)
 							except Exception:
 								recon_text = None
 							if recon_text is not None and naive_text and len(recon_text) < 0.9 * len(naive_text):

@@ -206,7 +206,10 @@ button {
 .workspace {
   min-width: 0;
   display: grid;
-  grid-template-rows: 64px minmax(0, 1fr);
+  /* Topbar-Zeile ``auto`` statt fix 64px: auf schmalen Fenstern darf die Topbar in
+     eine zweite Zeile umbrechen, ohne dass Bedienelemente unerreichbar abgeschnitten
+     werden. Der Inhalt füllt den Rest. */
+  grid-template-rows: auto minmax(0, 1fr);
   /* Kein Phantom-Scroll am Body: die Hauptspalte ist exakt viewport-hoch,
      lange Seiten scrollen intern statt die ganze App minimal zu verschieben. */
   height: 100vh;
@@ -221,12 +224,20 @@ button {
 .topbar {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px 16px;
   align-items: center;
+  /* Auf schmalen Fenstern umbrechen statt nach rechts aus dem Bild zu laufen. */
+  flex-wrap: wrap;
   padding: 10px 18px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   min-width: 0;
+}
+
+.topbar-group,
+.topbar-health {
+  flex-wrap: wrap;
+  row-gap: 8px;
 }
 
 .topbar-group,
@@ -3836,10 +3847,13 @@ h1 {
 }
 
 .markdown-preview blockquote {
-  padding: 8px 12px;
-  border-left: 4px solid var(--line);
-  color: #40505f;
-  background: var(--surface-2);
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--accent, #6b8afd);
+  /* Zitate erben die normale Textfarbe (kein hartes Dunkelgrau, das im Dark-Mode
+     unlesbar wird) und stehen ohne dunkle Box da — nur ein dezenter Rand. */
+  color: inherit;
+  background: transparent;
+  font-style: normal;
 }
 
 .markdown-preview-search-hit {
@@ -3941,10 +3955,56 @@ h1 {
 
 .note-source-view {
   display: grid;
-  grid-template-rows: minmax(92px, 0.28fr) minmax(0, 1fr);
+  /* Quellenliste behält auch bei geöffnetem PDF genug Höhe (eigener Scroll), damit man
+     nach dem ersten Quellen-Klick weiter zwischen Quellen wechseln kann. */
+  grid-template-rows: minmax(168px, 0.42fr) minmax(0, 1fr);
   gap: 10px;
   min-height: 0;
   min-width: 0;
+}
+
+.evidence-action-log {
+  margin-top: 10px;
+  border-top: 1px solid var(--border, rgba(148, 163, 184, 0.25));
+  padding-top: 8px;
+}
+
+.evidence-action-log > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--muted, #64748b);
+  user-select: none;
+}
+
+.evidence-action-log__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.evidence-action-log__row {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 10px;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(148, 163, 184, 0.08));
+}
+
+.evidence-action-log__row > strong {
+  font-weight: 600;
+}
+
+.evidence-action-log__row--error > strong {
+  color: var(--danger, #dc2626);
+}
+
+.evidence-action-log__row--pending > strong {
+  color: var(--warning, #d97706);
 }
 
 .citation-panel {
@@ -4690,6 +4750,116 @@ h1 {
 .pdf-text-layer span::selection {
   background: rgba(59, 109, 246, 0.32);
   color: transparent;
+}
+
+/* PDF-Notizen: an Textstelle/Punkt verankerte Notizen (über der Textebene, damit sie
+   anklickbar sind). Der Layer selbst lässt Klicks durch (pointer-events:none), nur die
+   Notiz-Elemente fangen sie ab — so bleibt normales Markieren möglich. */
+.pdf-annotation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pdf-annotation-rect {
+  position: absolute;
+  border-radius: 2px;
+  /* Leichte Tönung, damit der Text darunter gut lesbar bleibt; die Unterstreichung
+     macht die Notiz-Markierung eindeutig (und unterscheidet sie vom Evidenz-Gelb). */
+  background: color-mix(in srgb, var(--pdf-annotation-color, #ffb020) 18%, transparent);
+  border-bottom: 2px solid var(--pdf-annotation-color, #ffb020);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pdf-annotation-rect:hover {
+  background: color-mix(in srgb, var(--pdf-annotation-color, #ffb020) 32%, transparent);
+}
+
+.pdf-annotation-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 50% 3px;
+  border: 1.5px solid #fff;
+  background: var(--pdf-annotation-color, #ffb020);
+  color: #23180a;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 1px 5px rgba(32, 43, 54, 0.45);
+}
+
+.pdf-annotation-marker:hover {
+  filter: brightness(1.05);
+}
+
+.pdf-annotation-add {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent, #3b6df6);
+  color: #fff;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(32, 43, 54, 0.3);
+  z-index: 5;
+}
+
+.pdf-annotation-popover {
+  position: absolute;
+  width: 230px;
+  max-width: 88vw;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, rgba(32, 43, 54, 0.16));
+  box-shadow: 0 6px 20px rgba(32, 43, 54, 0.28);
+  pointer-events: auto;
+  z-index: 6;
+}
+
+.pdf-annotation-popover textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(32, 43, 54, 0.2));
+  background: var(--surface);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.pdf-annotation-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.pdf-annotate-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pdf-annotate-row small {
+  color: var(--text-muted, #7b8794);
+  font-size: 11px;
 }
 
 .excerpt-panel-topline {

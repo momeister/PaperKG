@@ -98,7 +98,7 @@ import {
   threadSizeStyle,
   withPreservedCitationLinks,
 } from "./notesHelpers";
-import { decodeCitationId } from "./assistantHelpers";
+import { decodeCitationId, encodeCitationId } from "./assistantHelpers";
 import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
 
 import type {
@@ -828,7 +828,13 @@ export function CitationGroupButton({
   }, [open]);
 
   return (
-    <span className="citation-group" ref={wrapRef} contentEditable={false}>
+    <span
+      className="citation-group"
+      ref={wrapRef}
+      contentEditable={false}
+      data-citation-group-ids={ids.map(encodeCitationId).join(",")}
+      data-citation-label={groupRef?.label ?? label}
+    >
       <button
         type="button"
         className={`citation-group-button ${isActive ? "citation-group-button--active" : ""}`}

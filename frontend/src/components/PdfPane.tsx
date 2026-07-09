@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import { ChevronLeft, ChevronRight, ExternalLink, Languages, Layers, Maximize2, PanelRightClose, Search, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Languages, Layers, MapPin, Maximize2, PanelRightClose, Plus, Search, StickyNote, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
 import { useAppState } from "../state";
-import type { PaperMeta, VerificationEvidence } from "../types";
+import type { PaperMeta, PdfAnnotation, PdfAnnotationRect, VerificationEvidence } from "../types";
+
+const PDF_ANNOTATION_COLOR = "#ffb020"; // v1: single fixed, readable amber
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -132,6 +134,10 @@ export function PdfPane({
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const resizeFrameRef = useRef<number | null>(null);
   const lastJumpKeyRef = useRef<string>("");
+  // PDF-Notizen: persistent kleine Notizen an einer Textstelle/Punkt (nur mit paper_id).
+  const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
+  const [pointMode, setPointMode] = useState(false);
+  const annotationsEnabled = Boolean(metaPaperId);
 
   // Fetch the paper's metadata whenever an id is known — without local PDF it feeds the
   // abstract fallback, with PDF it provides the external link to the original source.
@@ -153,6 +159,55 @@ export function PdfPane({
       cancelled = true;
     };
   }, [metaPaperId]);
+
+  // Load persisted PDF-Notizen for this paper; reset when the paper changes.
+  useEffect(() => {
+    setPointMode(false);
+    if (!metaPaperId) {
+      setAnnotations([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .pdfAnnotations.list(metaPaperId)
+      .then((data) => {
+        if (!cancelled) setAnnotations(data.annotations ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setAnnotations([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [metaPaperId]);
+
+  const createAnnotation = useCallback(
+    async (payload: { page_number: number; kind: "highlight" | "point"; rects: PdfAnnotationRect[]; quote?: string; body: string }) => {
+      if (!metaPaperId) return undefined;
+      const created = await api.pdfAnnotations.create(metaPaperId, { ...payload, color: PDF_ANNOTATION_COLOR });
+      setAnnotations((current) => [...current, created.annotation]);
+      return created.annotation;
+    },
+    [metaPaperId]
+  );
+
+  const updateAnnotation = useCallback(async (id: string, patch: { body?: string }) => {
+    const updated = await api.pdfAnnotations.update(id, patch);
+    setAnnotations((current) => current.map((ann) => (ann.id === id ? updated.annotation : ann)));
+  }, []);
+
+  const deleteAnnotation = useCallback(async (id: string) => {
+    await api.pdfAnnotations.remove(id);
+    setAnnotations((current) => current.filter((ann) => ann.id !== id));
+  }, []);
+
+  const annotationsByPage = useMemo(() => {
+    const map: Record<number, PdfAnnotation[]> = {};
+    for (const ann of annotations) {
+      (map[ann.page_number] ??= []).push(ann);
+    }
+    return map;
+  }, [annotations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -527,6 +582,20 @@ export function PdfPane({
               <Maximize2 size={17} />
             </button>
           </div>
+          {annotationsEnabled ? (
+            <div className="pdf-annotate-row">
+              <button
+                className={`button button-compact ${pointMode ? "button-primary" : "button-ghost"}`}
+                type="button"
+                aria-pressed={pointMode}
+                title="Punkt-Notiz setzen: danach in die Seite klicken"
+                onClick={() => setPointMode((current) => !current)}
+              >
+                <MapPin size={14} /> {pointMode ? "Punkt setzen: klicke in die Seite" : "Punkt-Notiz"}
+              </button>
+              <small>Text markieren → „Notiz hinzufügen"</small>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -550,6 +619,12 @@ export function PdfPane({
                   targetPages={targetPages}
                   targetPagesSignature={targetPagesSignature}
                   onMatch={updateMatch}
+                  annotationsEnabled={annotationsEnabled}
+                  pointMode={pointMode}
+                  annotations={annotationsByPage[pageNumber] ?? EMPTY_ANNOTATIONS}
+                  onCreateAnnotation={createAnnotation}
+                  onUpdateAnnotation={updateAnnotation}
+                  onDeleteAnnotation={deleteAnnotation}
                   setPageRef={(node) => {
                     pageRefs.current[pageNumber] = node;
                   }}
@@ -647,6 +722,9 @@ export function PdfPane({
 
 const EXCERPT_TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spanisch", "Italienisch", "Portugiesisch", "Niederländisch", "Polnisch", "Chinesisch", "Japanisch"];
 
+// Stable empty reference so pages without annotations don't re-render on every parent update.
+const EMPTY_ANNOTATIONS: PdfAnnotation[] = [];
+
 function PdfPage({
   document,
   pageNumber,
@@ -660,6 +738,12 @@ function PdfPage({
   targetPages,
   targetPagesSignature,
   onMatch,
+  annotationsEnabled,
+  pointMode,
+  annotations,
+  onCreateAnnotation,
+  onUpdateAnnotation,
+  onDeleteAnnotation,
   setPageRef
 }: {
   document: PdfDocument;
@@ -674,10 +758,17 @@ function PdfPage({
   targetPages: Record<number, number | null>;
   targetPagesSignature: string;
   onMatch: (evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => void;
+  annotationsEnabled: boolean;
+  pointMode: boolean;
+  annotations: PdfAnnotation[];
+  onCreateAnnotation: (payload: { page_number: number; kind: "highlight" | "point"; rects: PdfAnnotationRect[]; quote?: string; body: string }) => Promise<PdfAnnotation | undefined>;
+  onUpdateAnnotation: (id: string, patch: { body?: string }) => Promise<void>;
+  onDeleteAnnotation: (id: string) => Promise<void>;
   setPageRef: (node: HTMLDivElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const layersRef = useRef(layers);
   const targetPagesRef = useRef(targetPages);
@@ -810,7 +901,7 @@ function PdfPage({
   return (
     <div className="pdf-page" ref={combinedPageRef} style={{ width: size.width || undefined }}>
       <div className="pdf-page-label">Seite {pageNumber}</div>
-      <div className="pdf-page-surface" style={{ width: size.width || undefined, height: size.height || undefined }}>
+      <div className="pdf-page-surface" ref={surfaceRef} style={{ width: size.width || undefined, height: size.height || undefined }}>
         <canvas ref={canvasRef} />
         <div className="pdf-highlight-layer">
           {/* Boxes are pre-normalized per layer; normalizing across layers would merge
@@ -833,9 +924,376 @@ function PdfPage({
           ))}
         </div>
         <div className="pdf-text-layer" ref={textLayerRef} />
+        {annotationsEnabled ? (
+          <PdfAnnotations
+            surfaceRef={surfaceRef}
+            size={size}
+            pageNumber={pageNumber}
+            pointMode={pointMode}
+            annotations={annotations}
+            onCreate={onCreateAnnotation}
+            onUpdate={onUpdateAnnotation}
+            onDelete={onDeleteAnnotation}
+          />
+        ) : null}
       </div>
     </div>
   );
+}
+
+// --- PDF-Notizen (Highlight/Punkt an fester Stelle, persistent pro Paper) ---
+
+type PendingSelection = { rects: PdfAnnotationRect[]; quote: string; left: number; top: number };
+type AnnotationDraft = { kind: "highlight" | "point"; rects: PdfAnnotationRect[]; quote: string; left: number; top: number };
+
+function PdfAnnotations({
+  surfaceRef,
+  size,
+  pageNumber,
+  pointMode,
+  annotations,
+  onCreate,
+  onUpdate,
+  onDelete
+}: {
+  surfaceRef: RefObject<HTMLDivElement | null>;
+  size: { width: number; height: number };
+  pageNumber: number;
+  pointMode: boolean;
+  annotations: PdfAnnotation[];
+  onCreate: (payload: { page_number: number; kind: "highlight" | "point"; rects: PdfAnnotationRect[]; quote?: string; body: string }) => Promise<PdfAnnotation | undefined>;
+  onUpdate: (id: string, patch: { body?: string }) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [pending, setPending] = useState<PendingSelection | null>(null);
+  const [draft, setDraft] = useState<AnnotationDraft | null>(null);
+  const [draftBody, setDraftBody] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [openBody, setOpenBody] = useState("");
+
+  // Everything below autosaves (debounced) instead of using explicit Speichern/Abbrechen
+  // buttons. These refs track in-flight timers/ids synchronously (not via state) because a
+  // stale closure here would mean typing into a fresh draft note creates duplicate annotations.
+  const draftIdRef = useRef<string | null>(null);
+  const draftCreatingRef = useRef(false);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const persistDraft = useCallback(
+    async (body: string) => {
+      const trimmed = body.trim();
+      if (draftIdRef.current) {
+        await onUpdate(draftIdRef.current, { body: trimmed });
+        return;
+      }
+      if (!trimmed || draftCreatingRef.current || !draft) return;
+      draftCreatingRef.current = true;
+      try {
+        const created = await onCreate({ page_number: pageNumber, kind: draft.kind, rects: draft.rects, quote: draft.quote || undefined, body: trimmed });
+        if (created) draftIdRef.current = created.id;
+      } finally {
+        draftCreatingRef.current = false;
+      }
+    },
+    [draft, onCreate, onUpdate, pageNumber]
+  );
+
+  const scheduleDraftSave = (body: string) => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      draftSaveTimer.current = null;
+      void persistDraft(body);
+    }, 500);
+  };
+
+  const closeDraft = () => {
+    if (draftSaveTimer.current) {
+      clearTimeout(draftSaveTimer.current);
+      draftSaveTimer.current = null;
+      void persistDraft(draftBody);
+    }
+    setDraft(null);
+    setDraftBody("");
+    draftIdRef.current = null;
+  };
+
+  const scheduleOpenSave = (id: string, body: string) => {
+    if (openSaveTimer.current) clearTimeout(openSaveTimer.current);
+    openSaveTimer.current = setTimeout(() => {
+      openSaveTimer.current = null;
+      void onUpdate(id, { body: body.trim() });
+    }, 500);
+  };
+
+  const closeOpen = () => {
+    if (openSaveTimer.current) {
+      clearTimeout(openSaveTimer.current);
+      openSaveTimer.current = null;
+      if (openId) void onUpdate(openId, { body: openBody.trim() });
+    }
+    setOpenId(null);
+  };
+
+  const toggleOpen = (ann: PdfAnnotation) => {
+    const wasOpen = openId === ann.id;
+    closeOpen();
+    if (!wasOpen) {
+      setOpenId(ann.id);
+      setOpenBody(ann.body || "");
+    }
+  };
+
+  // Leaving/entering point mode clears any half-finished interaction.
+  useEffect(() => {
+    if (draftSaveTimer.current) {
+      clearTimeout(draftSaveTimer.current);
+      draftSaveTimer.current = null;
+    }
+    if (openSaveTimer.current) {
+      clearTimeout(openSaveTimer.current);
+      openSaveTimer.current = null;
+    }
+    draftIdRef.current = null;
+    setPending(null);
+    setDraft(null);
+    setDraftBody("");
+    setOpenId(null);
+  }, [pointMode]);
+
+  // Text selection → highlight note; plain click (point mode) → point note. Both anchor
+  // to the page surface so the marker survives zoom (rects are normalized 0..1).
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+
+    function handleMouseUp(event: MouseEvent) {
+      // Marker/rect/popover/composer clicks are handled entirely by their own React
+      // handlers — this native listener must not treat them as an "empty page" click.
+      // (Native listeners fire before React's delegated synthetic ones, so a React
+      // stopPropagation() inside those handlers is already too late to stop this.)
+      if ((event.target as HTMLElement | null)?.closest(".pdf-annotation-layer")) return;
+      if (pointMode) return;
+      const surfaceEl = surfaceRef.current;
+      if (!surfaceEl) return;
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) {
+        setPending(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!surfaceEl.contains(range.commonAncestorContainer)) return;
+      const rects = clientRectsToPageRects(range, surfaceEl);
+      if (!rects.length) {
+        setPending(null);
+        return;
+      }
+      const surfRect = surfaceEl.getBoundingClientRect();
+      setPending({
+        rects,
+        quote: (sel.toString() || "").replace(/\s+/g, " ").trim().slice(0, 500),
+        left: event.clientX - surfRect.left,
+        top: event.clientY - surfRect.top
+      });
+      setDraft(null);
+    }
+
+    function handleClick(event: MouseEvent) {
+      if ((event.target as HTMLElement | null)?.closest(".pdf-annotation-layer")) return;
+      if (!pointMode) return;
+      const surfaceEl = surfaceRef.current;
+      if (!surfaceEl) return;
+      const surfRect = surfaceEl.getBoundingClientRect();
+      const x = (event.clientX - surfRect.left) / Math.max(1, surfRect.width);
+      const y = (event.clientY - surfRect.top) / Math.max(1, surfRect.height);
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      draftIdRef.current = null;
+      setDraft({ kind: "point", rects: [{ x, y, width: 0, height: 0 }], quote: "", left: event.clientX - surfRect.left, top: event.clientY - surfRect.top });
+      setDraftBody("");
+      setPending(null);
+    }
+
+    surface.addEventListener("mouseup", handleMouseUp);
+    surface.addEventListener("click", handleClick);
+    return () => {
+      surface.removeEventListener("mouseup", handleMouseUp);
+      surface.removeEventListener("click", handleClick);
+    };
+  }, [surfaceRef, pointMode]);
+
+  const startDraftFromPending = () => {
+    if (!pending) return;
+    draftIdRef.current = null;
+    setDraft({ kind: "highlight", rects: pending.rects, quote: pending.quote, left: pending.left, top: pending.top });
+    setDraftBody("");
+    setPending(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  const removeAnnotation = async (id: string) => {
+    if (saving) return;
+    if (openSaveTimer.current) {
+      clearTimeout(openSaveTimer.current);
+      openSaveTimer.current = null;
+    }
+    setSaving(true);
+    try {
+      await onDelete(id);
+      if (openId === id) setOpenId(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const w = size.width;
+  const h = size.height;
+  if (!w || !h) return null;
+
+  return (
+    <div className="pdf-annotation-layer">
+      {annotations.map((ann) => {
+        const first = ann.rects[0];
+        if (ann.kind === "point") {
+          return (
+            <button
+              key={ann.id}
+              type="button"
+              className="pdf-annotation-marker"
+              style={{ left: (first?.x ?? 0) * w, top: (first?.y ?? 0) * h }}
+              title={ann.body || "Notiz"}
+              onClick={(e) => { e.stopPropagation(); toggleOpen(ann); }}
+            >
+              <StickyNote size={12} />
+            </button>
+          );
+        }
+        return ann.rects.map((r, i) => (
+          <div
+            key={`${ann.id}-${i}`}
+            className="pdf-annotation-rect"
+            style={{ left: r.x * w, top: r.y * h, width: Math.max(3, r.width * w), height: Math.max(6, r.height * h) }}
+            title={ann.body || "Notiz"}
+            onClick={(e) => { e.stopPropagation(); toggleOpen(ann); }}
+          />
+        ));
+      })}
+
+      {openId ? (() => {
+        const ann = annotations.find((a) => a.id === openId);
+        if (!ann) return null;
+        const first = ann.rects[0];
+        const left = Math.min((first?.x ?? 0) * w, Math.max(0, w - 240));
+        const top = ((first?.y ?? 0) + (first?.height ?? 0)) * h + 8;
+        return (
+          <div className="pdf-annotation-popover" style={{ left, top }} onClick={(e) => e.stopPropagation()}>
+            <textarea
+              value={openBody}
+              onChange={(e) => {
+                const v = e.target.value;
+                setOpenBody(v);
+                scheduleOpenSave(ann.id, v);
+              }}
+              rows={3}
+              autoFocus
+              placeholder="Notiz…"
+            />
+            <div className="pdf-annotation-popover-actions">
+              <button className="button button-compact button-ghost" type="button" disabled={saving} onClick={() => void removeAnnotation(ann.id)}>
+                <Trash2 size={13} /> Löschen
+              </button>
+              <button className="icon-button" type="button" aria-label="Schließen" onClick={closeOpen}><X size={14} /></button>
+            </div>
+          </div>
+        );
+      })() : null}
+
+      {pending ? (
+        <button
+          type="button"
+          className="pdf-annotation-add"
+          style={{ left: Math.min(pending.left, Math.max(0, w - 150)), top: pending.top + 10 }}
+          onClick={(e) => { e.stopPropagation(); startDraftFromPending(); }}
+        >
+          <Plus size={13} /> Notiz hinzufügen
+        </button>
+      ) : null}
+
+      {draft ? (
+        <div
+          className="pdf-annotation-popover pdf-annotation-composer"
+          style={{ left: Math.min(draft.left, Math.max(0, w - 240)), top: draft.top + 10 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <textarea
+            value={draftBody}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDraftBody(v);
+              scheduleDraftSave(v);
+            }}
+            rows={3}
+            autoFocus
+            placeholder={draft.kind === "point" ? "Punkt-Notiz…" : "Notiz zur markierten Stelle…"}
+          />
+          <div className="pdf-annotation-popover-actions">
+            <button className="icon-button" type="button" aria-label="Schließen" onClick={closeDraft}><X size={14} /></button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type ClientRectLike = { left: number; top: number; width: number; height: number };
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+// Convert absolute client rects to page-surface-relative 0..1 rects (zoom-independent),
+// merging adjacent fragments on the same text line. Pure + DOM-free so it is unit-testable.
+export function normalizeClientRects(clientRects: ClientRectLike[], surface: ClientRectLike): PdfAnnotationRect[] {
+  const w = surface.width;
+  const h = surface.height;
+  if (w <= 0 || h <= 0) return [];
+  const normalized: PdfAnnotationRect[] = [];
+  for (const r of clientRects) {
+    if (r.width <= 0 || r.height <= 0) continue;
+    const x = (r.left - surface.left) / w;
+    const y = (r.top - surface.top) / h;
+    const width = r.width / w;
+    const height = r.height / h;
+    if (x > 1 || y > 1 || x + width < 0 || y + height < 0) continue; // fully outside
+    const cx = clamp01(x);
+    const cy = clamp01(y);
+    normalized.push({ x: cx, y: cy, width: Math.min(width, 1 - cx), height: Math.min(height, 1 - cy) });
+  }
+  return mergeRowRects(normalized);
+}
+
+export function clientRectsToPageRects(range: Range, surfaceEl: HTMLElement): PdfAnnotationRect[] {
+  return normalizeClientRects(Array.from(range.getClientRects()), surfaceEl.getBoundingClientRect());
+}
+
+function mergeRowRects(rects: PdfAnnotationRect[]): PdfAnnotationRect[] {
+  const sorted = [...rects].sort((a, b) => a.y - b.y || a.x - b.x);
+  const out: PdfAnnotationRect[] = [];
+  for (const r of sorted) {
+    const prev = out[out.length - 1];
+    const sameRow =
+      prev !== undefined &&
+      Math.abs(prev.y + prev.height / 2 - (r.y + r.height / 2)) < Math.min(prev.height, r.height) * 0.7 + 0.002;
+    if (prev !== undefined && sameRow && r.x <= prev.x + prev.width + 0.01) {
+      const right = Math.max(prev.x + prev.width, r.x + r.width);
+      prev.x = Math.min(prev.x, r.x);
+      prev.width = right - prev.x;
+      prev.y = Math.min(prev.y, r.y);
+      prev.height = Math.max(prev.height, r.height);
+      continue;
+    }
+    out.push({ ...r });
+  }
+  return out;
 }
 
 function textItemBox(item: IndexedTextItem, viewport: any, evidenceIndex: number, colorIndex = evidenceIndex, rangeStart = 0, rangeEnd = item.text.length): HighlightBox | null {

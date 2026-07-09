@@ -259,6 +259,9 @@ export function WorkspacePage() {
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [actionLog, setActionLog] = useState<WorkspaceActionEntry[]>([]);
+  // Full, non-dismissing history for the ausklappbares Log unter Quellen/Zitate.
+  const [actionHistory, setActionHistory] = useState<WorkspaceActionEntry[]>([]);
+  const actionDismissTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [commandSearch, setCommandSearch] = useState<{ query: string; results: Paper[]; selected: string[] } | null>(null);
   const [webOfferDismissedFor, setWebOfferDismissedFor] = useState("");
 
@@ -329,6 +332,10 @@ export function WorkspacePage() {
   const [navigatorWidth, setNavigatorWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", 180));
   const [assistantWidth, setAssistantWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "assistantWidth.v3", 420));
   const [pdfWidth, setPdfWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfWidth.v3", 220));
+  // Live-Breite des Grid-Containers: die gespeicherten Pane-Breiten sind Wunschbreiten;
+  // wird das Fenster schmaler als ihre Summe, schrumpfen die effektiven Breiten mit,
+  // damit keine Pane (v.a. die Notizen) unerreichbar abgeschnitten wird.
+  const [containerWidth, setContainerWidth] = useState(0);
   const [pdfCitationListHeight, setPdfCitationListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", 220));
   const [greySourceListHeight, setGreySourceListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "greySourceListHeight", 180));
   const [pdfTarget, setPdfTarget] = useState<WorkspacePdfTarget | null>(null);
@@ -589,11 +596,19 @@ export function WorkspacePage() {
               if (event.answer) {
                 void commitAnswerTurn(event.answer, opts.newTurn);
               }
+              // Toast darf der Antwort nicht widersprechen: meldet die finale Antwort selbst
+              // noch eine Evidenz-Lücke, nie "reichte aus" behaupten.
+              const gapRemains = answerSuggestsWebSearch(event.answer);
+              const addedCount = (summary?.papers.length ?? 0) + (summary?.grey.length ?? 0);
               updateAction(actionId, {
                 status: "ok",
                 detail: summary?.harvested
-                  ? `${summary.papers.length} Paper + ${summary.grey.length} Web-Quellen ergänzt.`
-                  : "Lokale Quellen reichten aus."
+                  ? addedCount
+                    ? `${summary.papers.length} Paper + ${summary.grey.length} Web-Quellen ergänzt.${gapRemains ? " Restlücke bleibt." : ""}`
+                    : "Keine zusätzlichen Quellen gefunden."
+                  : gapRemains
+                    ? "Lokale Antwort meldet Evidenz-Lücke."
+                    : "Lokale Quellen reichten aus."
               });
               if (summary?.harvested) {
                 queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
@@ -681,6 +696,22 @@ export function WorkspacePage() {
     onError: (error) => setSourceIngestStatus(error instanceof Error ? error.message : "Bild konnte nicht gespeichert werden")
   });
 
+  // Ein Toast verschwindet nach kurzer Zeit von selbst; solange er „pending" ist, bleibt
+  // er stehen (z. B. „Auto-Recherche läuft …"). Der volle Verlauf lebt in actionHistory.
+  function scheduleToastDismiss(id: string, status: WorkspaceActionEntry["status"]) {
+    if (actionDismissTimers.current[id]) {
+      clearTimeout(actionDismissTimers.current[id]);
+      delete actionDismissTimers.current[id];
+    }
+    if (status === "pending") {
+      return;
+    }
+    actionDismissTimers.current[id] = setTimeout(() => {
+      setActionLog((current) => current.filter((entry) => entry.id !== id));
+      delete actionDismissTimers.current[id];
+    }, status === "error" ? 8000 : 4500);
+  }
+
   function logAction(title: string, detail: string, status: WorkspaceActionEntry["status"] = "ok") {
     const entry: WorkspaceActionEntry = {
       id: `act_${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -689,13 +720,26 @@ export function WorkspacePage() {
       status,
       createdAt: new Date().toISOString()
     };
-    setActionLog((current) => [...current.slice(-7), entry]);
+    setActionLog((current) => [...current.slice(-4), entry]);
+    setActionHistory((current) => [...current.slice(-60), entry]);
+    scheduleToastDismiss(entry.id, status);
     return entry.id;
   }
 
   function updateAction(id: string, patch: Partial<Pick<WorkspaceActionEntry, "detail" | "status">>) {
     setActionLog((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+    setActionHistory((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+    if (patch.status) {
+      scheduleToastDismiss(id, patch.status);
+    }
   }
+
+  useEffect(() => {
+    const timers = actionDismissTimers.current;
+    return () => {
+      Object.values(timers).forEach(clearTimeout);
+    };
+  }, []);
 
   const createProjectCommand = useMutation({
     mutationFn: (name: string) => api.createProject(name),
@@ -915,6 +959,7 @@ export function WorkspacePage() {
     setSelectedGreyIds([]);
     setFocusedNoteThreadId("");
     setActionLog([]);
+    setActionHistory([]);
     setCommandSearch(null);
     setNextTurnIsNew(false);
     setWebOfferDismissedFor("");
@@ -973,6 +1018,19 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", navigatorWidth), [navigatorWidth, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "assistantWidth.v3", assistantWidth), [assistantWidth, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfWidth.v3", pdfWidth), [pdfWidth, scopedProjectId]);
+  // Containerbreite live verfolgen, damit die effektiven Pane-Breiten bei Fenster-Resize
+  // nachziehen (siehe effectivePaneWidths). Ohne das schneidet ein schmaleres Fenster die
+  // rechte Pane ab (overflow: hidden auf .workspace-page) und macht sie unbedienbar.
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) return;
+    const update = () => setContainerWidth(page.clientWidth);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", pdfCitationListHeight), [pdfCitationListHeight, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "greySourceListHeight", greySourceListHeight), [greySourceListHeight, scopedProjectId]);
 
@@ -3012,9 +3070,38 @@ export function WorkspacePage() {
     : pdfTarget?.kind === "missing"
       ? "Diese Quelle wurde im Antworttext zitiert, ist aber nicht als PDF im Projekt vorhanden. Sie können das Paper importieren oder als Graue Quelle hinzufügen."
       : undefined;
-  const navColumn = navigatorOpen ? `${navigatorWidth}px` : "46px";
-  const assistantColumn = assistantOpen ? `${assistantWidth}px` : "46px";
-  const pdfColumn = centerView !== "pdf" || pdfOpen ? `${pdfWidth}px` : "46px";
+  // Wunschbreiten (aus Drag/localStorage) → effektive Breiten, die bei zu schmalem
+  // Container proportional schrumpfen, sodass nav+pdf+assistant+Lücken+Notizen-Minimum
+  // in die Containerbreite passen. Verhindert das Abschneiden der rechten Pane.
+  const pdfExpanded = centerView !== "pdf" || pdfOpen;
+  const effective = useMemo(() => {
+    const navW = navigatorOpen ? navigatorWidth : 46;
+    const pdfW = pdfExpanded ? pdfWidth : 46;
+    const assistW = assistantOpen ? assistantWidth : 46;
+    if (containerWidth <= 0) return { nav: navW, pdf: pdfW, assistant: assistW };
+    const minNotes = notesOpen ? 80 : 46;
+    const needed = navW + pdfW + assistW + 3 * 6 + minNotes;
+    if (needed <= containerWidth) return { nav: navW, pdf: pdfW, assistant: assistW };
+    const MIN_PANE = 90;
+    const shrinkable = [
+      { key: "nav" as const, open: navigatorOpen, w: navW },
+      { key: "pdf" as const, open: pdfExpanded, w: pdfW },
+      { key: "assistant" as const, open: assistantOpen, w: assistW },
+    ].filter((item) => item.open && item.w > MIN_PANE);
+    const headroom = shrinkable.reduce((sum, item) => sum + (item.w - MIN_PANE), 0);
+    const result = { nav: navW, pdf: pdfW, assistant: assistW };
+    if (headroom > 0) {
+      const ratio = Math.min(1, (needed - containerWidth) / headroom);
+      for (const item of shrinkable) {
+        result[item.key] = Math.round(item.w - (item.w - MIN_PANE) * ratio);
+      }
+    }
+    return result;
+  }, [containerWidth, navigatorOpen, pdfExpanded, assistantOpen, notesOpen, navigatorWidth, pdfWidth, assistantWidth]);
+
+  const navColumn = navigatorOpen ? `${effective.nav}px` : "46px";
+  const assistantColumn = assistantOpen ? `${effective.assistant}px` : "46px";
+  const pdfColumn = pdfExpanded ? `${effective.pdf}px` : "46px";
   const notesColumn = notesOpen ? "minmax(80px, 1fr)" : "46px";
 
   return (
@@ -4213,6 +4300,19 @@ export function WorkspacePage() {
                   </div>
                 </section>
                 </div>
+                {actionHistory.length ? (
+                  <details className="evidence-action-log">
+                    <summary>Log · {actionHistory.length} Aktionen</summary>
+                    <div className="evidence-action-log__list">
+                      {[...actionHistory].reverse().map((entry) => (
+                        <div className={`evidence-action-log__row evidence-action-log__row--${entry.status}`} key={entry.id}>
+                          <strong>{entry.title}</strong>
+                          <span>{entry.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
               </>
             )}
           </section>

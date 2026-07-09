@@ -40,6 +40,8 @@ import type {
   Paper,
   PaperMeta,
   PaperIngestResponse,
+  PdfAnnotation,
+  PdfAnnotationRect,
   ParallelSession,
   ParallelSessionSummary,
   ParallelVariant,
@@ -628,6 +630,39 @@ export const api = {
       request<DatasetDetails>("/datasets/details", { query: { source, external_id: externalId } }),
     remove: (id: string) =>
       request<{ deleted: boolean; id: string }>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  },
+
+  // --- PDF-Notizen (an Textstelle/Punkt im PDF verankert, persistent pro Paper) ---
+  pdfAnnotations: {
+    list: (paperId: string) =>
+      request<{ annotations: PdfAnnotation[] }>(`/papers/${encodeURIComponent(paperId)}/annotations`),
+    create: (
+      paperId: string,
+      payload: {
+        page_number: number;
+        kind: "highlight" | "point";
+        rects: PdfAnnotationRect[];
+        quote?: string | null;
+        body?: string;
+        color?: string | null;
+      }
+    ) =>
+      request<{ annotation: PdfAnnotation }>(`/papers/${encodeURIComponent(paperId)}/annotations`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    update: (
+      annotationId: string,
+      patch: { body?: string; color?: string | null; kind?: string; quote?: string | null; rects?: PdfAnnotationRect[] }
+    ) =>
+      request<{ annotation: PdfAnnotation }>(`/pdf-annotations/${encodeURIComponent(annotationId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+    remove: (annotationId: string) =>
+      request<{ deleted: boolean; id: string }>(`/pdf-annotations/${encodeURIComponent(annotationId)}`, {
+        method: "DELETE",
+      }),
   }
 };
 

@@ -5,6 +5,7 @@ import {
   findPageMatch,
   highlightQuerySignature,
   highlightScrollTop,
+  normalizeClientRects,
   normalizeHighlightBoxes,
   topmostHighlightTop,
   type PageMatch
@@ -205,5 +206,60 @@ describe("PdfPane highlight scroll targeting", () => {
     expect(topmostHighlightTop([])).toBeNull();
     expect(topmostHighlightTop(undefined)).toBeNull();
     expect(topmostHighlightTop(null)).toBeNull();
+  });
+});
+
+describe("PDF annotation rect normalization", () => {
+  const surface = { left: 100, top: 200, width: 400, height: 800 };
+
+  it("maps a client rect to 0..1 surface-relative coordinates (zoom-independent)", () => {
+    const [rect] = normalizeClientRects(
+      [{ left: 140, top: 240, width: 200, height: 16 }],
+      surface
+    );
+    expect(rect.x).toBeCloseTo(0.1, 5); // (140-100)/400
+    expect(rect.y).toBeCloseTo(0.05, 5); // (240-200)/800
+    expect(rect.width).toBeCloseTo(0.5, 5); // 200/400
+    expect(rect.height).toBeCloseTo(0.02, 5); // 16/800
+  });
+
+  it("merges adjacent fragments on the same line into one rect", () => {
+    // Two touching fragments of the same selected line collapse to a single span.
+    const merged = normalizeClientRects(
+      [
+        { left: 140, top: 240, width: 100, height: 16 },
+        { left: 240, top: 241, width: 80, height: 16 }
+      ],
+      surface
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0].x).toBeCloseTo(0.1, 5);
+    expect(merged[0].width).toBeCloseTo((320 - 140) / 400, 5); // spans both fragments
+  });
+
+  it("keeps rects on different lines separate", () => {
+    const rects = normalizeClientRects(
+      [
+        { left: 140, top: 240, width: 100, height: 16 },
+        { left: 140, top: 300, width: 120, height: 16 }
+      ],
+      surface
+    );
+    expect(rects).toHaveLength(2);
+  });
+
+  it("drops zero-size fragments and rects fully outside the surface", () => {
+    const rects = normalizeClientRects(
+      [
+        { left: 140, top: 240, width: 0, height: 16 }, // zero width
+        { left: 900, top: 240, width: 50, height: 16 } // to the right of the surface
+      ],
+      surface
+    );
+    expect(rects).toHaveLength(0);
+  });
+
+  it("returns nothing for a degenerate (unmeasured) surface", () => {
+    expect(normalizeClientRects([{ left: 0, top: 0, width: 10, height: 10 }], { left: 0, top: 0, width: 0, height: 0 })).toEqual([]);
   });
 });

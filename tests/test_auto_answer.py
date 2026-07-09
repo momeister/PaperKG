@@ -119,6 +119,52 @@ async def test_weak_answer_harvests_related_topics_and_reanswers(monkeypatch) ->
     assert len(summary["papers"]) == 3
 
 
+def test_is_weak_answer_reads_responder_verdict() -> None:
+    strong = {"answer": "ok [arxiv:1]", "no_answer": False, "context_diagnostics": {}}
+    assert auto_answer._is_weak_answer(strong) is False
+
+    # Antwort zitiert zwar, aber der Responder meldet selbst eine Evidenz-Lücke
+    # (Sentinel/Prosa-Erkennung) → weak. Vorher der "reichte aus"-Widerspruch.
+    flagged = {
+        "answer": "X ist Y [arxiv:1]. Zu Z liegen keine Informationen vor.",
+        "no_answer": False,
+        "context_diagnostics": {"insufficient_evidence": True},
+    }
+    assert auto_answer._is_weak_answer(flagged) is True
+
+    fallback = {
+        "answer": "Hinweis: Zusammenfassung [arxiv:1]",
+        "no_answer": False,
+        "context_diagnostics": {"fallback_reason": "no_traceable_citations"},
+    }
+    assert auto_answer._is_weak_answer(fallback) is True
+
+
+async def test_cited_but_insufficient_answer_triggers_harvest(monkeypatch) -> None:
+    # Erste Antwort zitiert, meldet aber insufficient_evidence → Harvest + Re-Answer.
+    responder = _ScriptedResponder(
+        [
+            {
+                "answer": "X ist Y [arxiv:1]. Keine Informationen zu Z.",
+                "no_answer": False,
+                "context_diagnostics": {"insufficient_evidence": True},
+            },
+            {"answer": "Jetzt vollständig [arxiv:2].", "no_answer": False},
+        ]
+    )
+    captured = _patch_common(monkeypatch, responder, related=[])
+
+    events = await _collect(
+        auto_answer.auto_research_answer(question="What is X?", llm_router=object())
+    )
+
+    statuses = [e["status"] for e in events]
+    assert "harvesting" in statuses
+    assert events[-1]["harvest_summary"]["harvested"] is True
+    assert captured["papers_for"] == ["What is X?"]
+    assert len(responder.calls) == 2
+
+
 async def test_force_harvests_even_for_strong_answer(monkeypatch) -> None:
     responder = _ScriptedResponder([{"answer": "Strong [arxiv:1].", "no_answer": False}])
     captured = _patch_common(monkeypatch, responder, related=[])
