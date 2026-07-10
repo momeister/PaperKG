@@ -96,6 +96,7 @@ def build_task_brief(
     paper_ids: list[str] | None = None,
     provider: str | None = None,
     model: str | None = None,
+    stage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Turn a variant into a ``TaskBrief`` dict.
 
@@ -119,8 +120,17 @@ def build_task_brief(
         except Exception:
             evidence_block = ""
 
+    stage_line = ""
+    if stage and str(stage.get("name") or "").strip():
+        stage_goal = str(stage.get("goal") or "").strip()
+        stage_line = (
+            f"Etappe: {str(stage.get('name') or '').strip()}"
+            + (f" — Ziel: {stage_goal}" if stage_goal else "")
+            + "\n"
+        )
     user = (
         f"Ausgangsfrage/Problem:\n{question}\n\n"
+        f"{stage_line}"
         f"Gewählte Variante: {variant.get('name') or 'Variante'}\n"
         f"Ansatz: {variant.get('approach') or ''}\n"
         f"Begründung: {variant.get('rationale') or ''}\n\n"

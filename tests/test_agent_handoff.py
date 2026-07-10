@@ -76,6 +76,21 @@ def test_build_task_brief_falls_back_on_empty_llm() -> None:
     assert brief["steps"] == ["Schritt eins", "Schritt zwei"]
 
 
+def test_build_task_brief_includes_stage_line() -> None:
+    captured: dict[str, str] = {}
+
+    class _Recording(_BriefRouter):
+        def chat_json(self, messages, provider=None, overrides=None):  # noqa: ARG002
+            captured["user"] = str(messages[-1]["content"])
+            return super().chat_json(messages)
+
+    agent_handoff.build_task_brief(
+        _variant(), question="Frage", llm_router=_Recording(),
+        stage={"name": "Etappe A", "goal": "Ziel A"},
+    )
+    assert "Etappe: Etappe A — Ziel: Ziel A" in captured["user"]
+
+
 def test_steps_from_prompt_handles_unstructured_text() -> None:
     assert agent_handoff._steps_from_prompt("nur ein fließtext ohne liste") == [
         "nur ein fließtext ohne liste"
@@ -131,6 +146,34 @@ def test_handoff_endpoint_and_agent_config(tmp_path, monkeypatch) -> None:
     cfg = client.get("/agent/config").json()
     assert cfg["enabled"] is False
     assert "type" in cfg
+
+
+def test_handoff_endpoint_passes_variant_stage(tmp_path, monkeypatch) -> None:
+    """A variant attached to an Etappe gets its stage context into the brief prompt."""
+    captured: dict[str, str] = {}
+
+    class _Recording:
+        default_provider = "fake"
+
+        def chat_json(self, messages, provider=None, overrides=None):  # noqa: ARG002
+            captured["user"] = str(messages[-1]["content"])
+            return {"goal": "G", "context": "C", "steps": ["s"]}
+
+    monkeypatch.setattr(product_main, "llm_router", _Recording())
+    client = TestClient(product_main.app)
+    db_path = str(tmp_path / "hs.duckdb")
+
+    with MetadataDB(db_path) as db:
+        session = db.create_parallel_session("proj", "Wie X bauen?")
+        stage = db.add_parallel_stage(session["id"], "Etappe A", goal="Ziel A", status="aktiv")
+        variant = db.add_parallel_variant(session["id"], "V1", stage_id=stage["id"])
+
+    res = client.post(
+        f"/parallel/variants/{variant['id']}/handoff",
+        json={"with_research_context": False, "metadata_db_path": db_path},
+    )
+    assert res.status_code == 200
+    assert "Etappe: Etappe A — Ziel: Ziel A" in captured["user"]
 
 
 def test_dispatch_disabled_emits_error_event(tmp_path, monkeypatch) -> None:
