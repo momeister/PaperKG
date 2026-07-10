@@ -7648,6 +7648,241 @@ button.parallel-cite {
   border-top: 1px solid var(--border);
 }
 
+/* Etappen roadmap strip (assistant-side panel header) */
+.parallel-roadmap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.parallel-roadmap__stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--bg-soft);
+  color: var(--text-muted);
+}
+.parallel-roadmap__stage--aktiv {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.parallel-roadmap__stage--abgeschlossen {
+  border-color: var(--green);
+  color: var(--green);
+}
+.parallel-roadmap__index {
+  font-weight: 700;
+}
+.parallel-roadmap__status {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.8;
+}
+
+/* Session browser (frühere Parallel-Sessions aus DuckDB) */
+.parallel-session-browser {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 6px 8px;
+  margin-bottom: 10px;
+}
+.parallel-session-browser__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+.parallel-session-browser__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.parallel-session-browser__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.parallel-session-browser__open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-size: 12px;
+  min-width: 0;
+}
+.parallel-session-browser__open:hover {
+  border-color: var(--border);
+  background: var(--bg-soft);
+}
+.parallel-session-browser__open strong {
+  overflow-wrap: anywhere;
+}
+.parallel-session-browser__open .muted {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Etappen sections (notes-side "Ergebnisse" tab) */
+.parallel-stage {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.parallel-stage--aktiv {
+  border-left: 3px solid var(--accent);
+}
+.parallel-stage--abgeschlossen {
+  border-left: 3px solid var(--green);
+  opacity: 0.92;
+}
+.parallel-stage__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.parallel-stage__index {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.parallel-stage__name {
+  font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.parallel-stage-status--offen {
+  background: var(--bg-soft);
+  color: var(--text-muted);
+}
+.parallel-stage-status--aktiv {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.parallel-stage-status--abgeschlossen {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+.parallel-stage__goal {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--text-muted);
+}
+.parallel-stage__goal-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.parallel-stage__goal-edit textarea {
+  font-size: 12px;
+}
+.parallel-stage__review {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.parallel-stage-error {
+  color: var(--red);
+}
+
+/* Professor review (structured critique with citations) */
+.professor-review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.professor-review__section p {
+  margin: 2px 0 0;
+}
+.professor-review__section ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.professor-review__title {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.professor-review__final {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.professor-review__verdicts {
+  list-style: none;
+  padding-left: 0 !important;
+}
+.professor-review__verdicts li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.professor-verdict {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+.professor-verdict--weiterverfolgen {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+}
+.professor-verdict--anpassen {
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  color: var(--amber);
+}
+.professor-verdict--verwerfen {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+
 /* Notes-side "Ergebnisse" tab */
 .parallel-results-tab {
   display: flex;

@@ -76,11 +76,12 @@ import type {
   NoteCitation,
   Paper,
   ParallelSession,
+  ParallelSessionSummary,
   ResearchNode,
   VerificationEvidence,
   VerificationSource
 } from "../types";
-import { ParallelResearchPanel } from "./ParallelResearchPanel";
+import { ParallelResearchPanel, ParallelSessionBrowser } from "./ParallelResearchPanel";
 import { ParallelResultsTab } from "./ParallelResultsTab";
 import {
   AnswerText,
@@ -1616,6 +1617,33 @@ export function WorkspacePage() {
         logAction("Parallel Research", err instanceof Error ? err.message : "Folgefrage fehlgeschlagen.", "error");
       })
       .finally(() => setParallelFollowupLoading(false));
+  }
+
+  /** Open a server-persisted parallel session from the browser list: ensure a history
+   * turn exists (older sessions may predate the localStorage history), then hydrate. */
+  function openParallelServerSession(summary: ParallelSessionSummary) {
+    setHistory((prev) => {
+      if (prev.some((t) => t.id === summary.id)) return prev;
+      const turn: AssistantTurn = {
+        id: summary.id,
+        question: summary.question,
+        answer: null as unknown as AssistantTurn["answer"],
+        verification: [],
+        createdAt: summary.updated_timestamp ?? new Date().toISOString(),
+        type: "parallel",
+        parallelSessionId: summary.id,
+        parallelVariantCount: summary.variant_count,
+      };
+      return [turn, ...prev];
+    });
+    setActiveTurnId(summary.id);
+    parallelSessionIdRef.current = summary.id;
+    setDeepMode(false);
+    setParallelMode(true);
+    setParallelSession(null);
+    hydrateParallelSessionFromServer(summary.id);
+    setNotesOpen(true);
+    setNotesTab("results");
   }
 
   /** Load a persisted parallel-research session from the server (open/restore). */
@@ -3823,25 +3851,36 @@ export function WorkspacePage() {
           ) : null}
           <section className="answer-panel workspace-answer-panel">
             {parallelMode ? (
-              parallelSession ? (
-                <ParallelResearchPanel
-                  session={parallelSession}
-                  loading={parallelLoading}
-                  followupLoading={parallelFollowupLoading}
-                  provider={provider || undefined}
-                  model={model || undefined}
-                  paperIds={deriveScope(paperScope).scopedPaperIds}
-                  onChange={onParallelChange}
-                  onOpenCitation={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
+              <>
+                <ParallelSessionBrowser
+                  projectId={activeProject || scopedProjectId}
+                  activeSessionId={parallelSession?.id}
+                  defaultOpen={!parallelSession && !parallelLoading}
+                  onOpen={openParallelServerSession}
                 />
-              ) : parallelLoading ? (
-                <div className="parallel-loading">
-                  <Loader2 size={18} className="spin" />
-                  <span>Varianten werden vorgeschlagen…</span>
-                </div>
-              ) : (
-                <EmptyState title="Parallel Research">Stelle eine Frage, zu der du Varianten ausprobieren willst.</EmptyState>
-              )
+                {parallelSession ? (
+                  <ParallelResearchPanel
+                    session={parallelSession}
+                    loading={parallelLoading}
+                    followupLoading={parallelFollowupLoading}
+                    provider={provider || undefined}
+                    model={model || undefined}
+                    paperIds={deriveScope(paperScope).scopedPaperIds}
+                    onChange={onParallelChange}
+                    onOpenCitation={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
+                  />
+                ) : parallelLoading ? (
+                  <div className="parallel-loading">
+                    <Loader2 size={18} className="spin" />
+                    <span>Etappen &amp; Varianten werden vorgeschlagen…</span>
+                  </div>
+                ) : (
+                  <EmptyState title="Parallel Research">
+                    Stelle eine Frage, zu der du ein Forschungsvorhaben in Etappen aufbauen willst —
+                    oder öffne oben eine frühere Session.
+                  </EmptyState>
+                )}
+              </>
             ) : null}
             {!parallelMode && deepMode && (researchLoading || researchNodes.length > 0 || researchLlmError) ? (
               <ResearchTreeView
@@ -4378,7 +4417,9 @@ export function WorkspacePage() {
                 model: model || undefined,
               }}
               onOpenCitation={(source, evidenceIndex) => openAssistantSource(source, evidenceIndex, "", { openPdf: true })}
-              onTakeIntoNote={(md) => notesActionsRef.current?.insertMarkdownAtCursor(md) ?? Promise.resolve(null)}
+              onTakeIntoNote={(md, citations) =>
+                notesActionsRef.current?.insertMarkdownAtCursor(md, citations ?? []) ?? Promise.resolve(null)
+              }
             />
           ) : null}
         </section>

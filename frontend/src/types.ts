@@ -204,6 +204,34 @@ export type Answer = {
   citation_links?: CitationLink[];
   context_diagnostics?: Record<string, unknown>;
   source_verification?: Record<string, unknown> | null;
+  /** Structured professor critique (Parallel mode); absent on legacy free-text answers. */
+  professor_review?: ProfessorReview;
+};
+
+/** Per-variant verdict inside a professor stage review. */
+export type ProfessorVariantVerdict = {
+  variant_id: string;
+  name: string;
+  urteil: "weiterverfolgen" | "anpassen" | "verwerfen";
+  begruendung: string;
+};
+
+/** Structured professor critique carried on Answer.professor_review (schema v1). */
+export type ProfessorReview = {
+  schema_version: number;
+  kind: "entry" | "stage" | "final";
+  verstaendnis?: string;
+  staerken?: string[];
+  probleme?: string[];
+  ideen?: string[];
+  naechste_schritte?: string[];
+  /** kind="stage" only */
+  varianten_bewertung?: ProfessorVariantVerdict[];
+  /** kind="final" only */
+  gesamtverstaendnis?: string;
+  etappen_zusammenfassung?: Array<{ stage_id: string; name: string; fazit: string }>;
+  offene_punkte?: string[];
+  finale_antwort?: string;
 };
 
 export type AutoHarvestSummary = {
@@ -491,7 +519,22 @@ export type ParallelVariant = {
   origin: "ai" | "manual";
   status: string;
   position: number;
+  stage_id?: string | null;
   entries: ParallelEntry[];
+  created_timestamp?: string | null;
+  updated_timestamp?: string | null;
+};
+
+/** One Etappe of a Forschungsvorhaben (parallel session roadmap). */
+export type ParallelStage = {
+  id: string;
+  session_id: string;
+  name: string;
+  goal: string;
+  status: "offen" | "aktiv" | "abgeschlossen";
+  position: number;
+  review_markdown?: string | null;
+  review_payload?: Answer | null;
   created_timestamp?: string | null;
   updated_timestamp?: string | null;
 };
@@ -514,6 +557,7 @@ export type ParallelSession = {
   synthesis_markdown?: string | null;
   synthesis_payload?: Answer | null;
   variants: ParallelVariant[];
+  stages?: ParallelStage[];
   followups?: ParallelFollowup[];
   created_timestamp?: string | null;
   updated_timestamp?: string | null;
@@ -525,6 +569,7 @@ export type ParallelSessionSummary = {
   question: string;
   status: string;
   variant_count: number;
+  stage_count?: number;
   updated_timestamp?: string | null;
 };
 

@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, GitMerge, Loader2, Sparkles } from "lucide-react";
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  GitMerge,
+  GraduationCap,
+  History,
+  Loader2,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
-import type { Answer, ParallelSession, VerificationSource } from "../types";
+import type { Answer, ParallelSession, ParallelSessionSummary, VerificationSource } from "../types";
 import {
   AnswerText,
   bestEvidenceIndex,
@@ -12,16 +23,20 @@ import {
   sameCitation,
   verificationSourcesFor,
 } from "./AssistantPage";
+import { buildParallelSessionMarkdown, STAGE_STATUS_LABEL } from "./parallelHelpers";
+import { ProfessorReviewCard } from "./ProfessorReviewCard";
 
-/** Build the shared source pool for a Parallel session (overview + synthesis sources),
- * so variant citations resolve to openable sources with their evidence. */
+/** Build the shared source pool for a Parallel session (overview + synthesis + stage
+ * reviews), so variant citations resolve to openable sources with their evidence. */
 export function useParallelPool(session: ParallelSession): VerificationSource[] {
   const [pool, setPool] = useState<VerificationSource[]>([]);
   useEffect(() => {
     let cancelled = false;
-    const payloads = [session.overview_payload, session.synthesis_payload].filter(
-      Boolean,
-    ) as Answer[];
+    const payloads = [
+      session.overview_payload,
+      session.synthesis_payload,
+      ...(session.stages ?? []).map((stage) => stage.review_payload),
+    ].filter(Boolean) as Answer[];
     void Promise.all(payloads.map((payload) => verificationSourcesFor(payload).catch(() => [])))
       .then((lists) => {
         if (cancelled) return;
@@ -37,7 +52,7 @@ export function useParallelPool(session: ParallelSession): VerificationSource[] 
     return () => {
       cancelled = true;
     };
-  }, [session.overview_payload, session.synthesis_payload]);
+  }, [session]);
   return pool;
 }
 
@@ -191,9 +206,22 @@ export function ParallelResearchPanel({
     }
   }
 
+  /** Client-side export: the session payload already carries everything. */
+  function exportMarkdown() {
+    const markdown = buildParallelSessionMarkdown(session);
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `parallel-recherche-${session.id}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   const overviewAnswer = session.overview_payload;
   const synthesisAnswer = session.synthesis_payload;
   const followups = session.followups ?? [];
+  const stages = session.stages ?? [];
 
   return (
     <div className="parallel-panel">
@@ -207,16 +235,41 @@ export function ParallelResearchPanel({
         <div className="parallel-panel__head-actions">
           <button
             type="button"
+            className="button button-compact"
+            onClick={exportMarkdown}
+            title="Gesamte Recherche (Etappen, Varianten, Ergebnisse, Reviews) als Markdown-Datei exportieren"
+          >
+            <Download size={13} />
+            <span>Export</span>
+          </button>
+          <button
+            type="button"
             className="button button-compact button-primary"
             onClick={synthesize}
             disabled={busy || session.variants.length === 0}
-            title="Eingesendete Ergebnisse vergleichen und beste Variante bestimmen"
+            title="Professor-End-Review: das gesamte Vorhaben über alle Etappen auswerten"
           >
-            {busy ? <Loader2 size={13} className="spin" /> : <GitMerge size={13} />}
-            <span>Beste Variante analysieren</span>
+            {busy ? <Loader2 size={13} className="spin" /> : <GraduationCap size={13} />}
+            <span>End-Review</span>
           </button>
         </div>
       </header>
+
+      {stages.length > 0 ? (
+        <div className="parallel-roadmap" title="Etappen-Roadmap des Vorhabens">
+          {stages.map((stage, index) => (
+            <span
+              key={stage.id}
+              className={`parallel-roadmap__stage parallel-roadmap__stage--${stage.status}`}
+              title={stage.goal || stage.name}
+            >
+              <span className="parallel-roadmap__index">{index + 1}</span>
+              <span className="parallel-roadmap__name">{stage.name}</span>
+              <span className="parallel-roadmap__status">{STAGE_STATUS_LABEL[stage.status] ?? stage.status}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {overviewAnswer ? (
         <section className="parallel-overview">
@@ -265,17 +318,104 @@ export function ParallelResearchPanel({
       {synthesisAnswer ? (
         <section className="parallel-synthesis">
           <div className="parallel-synthesis__label">
-            <Sparkles size={13} /> Gesamtanalyse &amp; Empfehlung
+            <Sparkles size={13} /> End-Review &amp; Empfehlung
           </div>
-          <AnswerWithCitations answer={synthesisAnswer} onOpenCitation={onOpenCitation} />
+          <ProfessorReviewCard answer={synthesisAnswer} onOpenCitation={onOpenCitation} />
         </section>
       ) : null}
 
       <p className="parallel-panel__hint">
-        Die <strong>Methoden zum Ausprobieren</strong> und deine Ergebnisse findest du rechts im
-        Notizen-Tab <strong>„Ergebnisse"</strong>. Trag dort ein, was dein KI-Tool produziert hat —
-        danach hier <strong>„Beste Variante analysieren"</strong>.
+        Die <strong>Etappen mit den Methoden zum Ausprobieren</strong> und deine Ergebnisse findest
+        du rechts im Notizen-Tab <strong>„Ergebnisse"</strong>. Trag dort ein, was dein KI-Tool
+        produziert hat — danach hier <strong>„End-Review"</strong>.
       </p>
     </div>
+  );
+}
+
+/** Browser over the server-persisted parallel sessions of a project: reopen or delete
+ * earlier Forschungsvorhaben (they are stored in DuckDB, not just localStorage). */
+export function ParallelSessionBrowser({
+  projectId,
+  activeSessionId,
+  defaultOpen = false,
+  onOpen,
+}: {
+  projectId: string;
+  activeSessionId?: string;
+  defaultOpen?: boolean;
+  onOpen: (summary: ParallelSessionSummary) => void;
+}) {
+  const [sessions, setSessions] = useState<ParallelSessionSummary[]>([]);
+  const [open, setOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listParallelSessions(projectId)
+      .then((res) => {
+        if (!cancelled) setSessions(res.sessions);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, activeSessionId]);
+
+  async function remove(sessionId: string) {
+    await api.deleteParallelSession(sessionId).catch(() => {});
+    setSessions((prev) => prev.filter((item) => item.id !== sessionId));
+  }
+
+  const items = sessions.filter((item) => item.id !== activeSessionId);
+  if (!items.length) return null;
+
+  return (
+    <section className="parallel-session-browser">
+      <button
+        type="button"
+        className="parallel-session-browser__toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <History size={14} />
+        <span>Frühere Sessions ({items.length})</span>
+      </button>
+      {open ? (
+        <div className="parallel-session-browser__list">
+          {items.map((item) => (
+            <div key={item.id} className="parallel-session-browser__row">
+              <button
+                type="button"
+                className="parallel-session-browser__open"
+                onClick={() => onOpen(item)}
+                title="Session öffnen"
+              >
+                <strong>{item.question}</strong>
+                <span className="muted">
+                  {[
+                    item.status === "synthesized" ? "End-Review vorhanden" : item.status,
+                    `${item.variant_count} Varianten`,
+                    item.stage_count ? `${item.stage_count} Etappen` : "",
+                    item.updated_timestamp ? new Date(item.updated_timestamp).toLocaleString() : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="icon-button nav-delete-btn"
+                title="Session löschen"
+                onClick={() => void remove(item.id)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }

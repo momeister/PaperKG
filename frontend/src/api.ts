@@ -44,6 +44,7 @@ import type {
   PdfAnnotationRect,
   ParallelSession,
   ParallelSessionSummary,
+  ParallelStage,
   ParallelVariant,
   ParallelEntry,
   Project,
@@ -482,7 +483,7 @@ export const api = {
     request<{ deleted: boolean }>(`/parallel/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
   generateParallelVariants: (
     sessionId: string,
-    payload: { variant_count?: number; paper_ids?: string[]; provider?: string | null; model?: string | null },
+    payload: { variant_count?: number; stage_id?: string | null; paper_ids?: string[]; provider?: string | null; model?: string | null },
   ) =>
     request<{ session: ParallelSession }>(`/parallel/${encodeURIComponent(sessionId)}/generate`, {
       method: "POST",
@@ -490,9 +491,35 @@ export const api = {
     }),
   addParallelVariant: (
     sessionId: string,
-    payload: { name: string; approach?: string; rationale?: string; suggested_prompt?: string },
+    payload: { name: string; approach?: string; rationale?: string; suggested_prompt?: string; stage_id?: string | null },
   ) =>
     request<{ variant: ParallelVariant }>(`/parallel/${encodeURIComponent(sessionId)}/variants`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  addParallelStage: (
+    sessionId: string,
+    payload: { name?: string; goal?: string; propose?: boolean; paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ session: ParallelSession }>(`/parallel/${encodeURIComponent(sessionId)}/stages`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateParallelStage: (
+    stageId: string,
+    payload: Partial<{ name: string; goal: string; status: string; position: number }>,
+  ) =>
+    request<{ stage: ParallelStage; session: ParallelSession }>(`/parallel/stages/${encodeURIComponent(stageId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteParallelStage: (stageId: string) =>
+    request<{ deleted: boolean }>(`/parallel/stages/${encodeURIComponent(stageId)}`, { method: "DELETE" }),
+  reviewParallelStage: (
+    stageId: string,
+    payload: { paper_ids?: string[]; provider?: string | null; model?: string | null } = {},
+  ) =>
+    request<{ session: ParallelSession; answer: Answer }>(`/parallel/stages/${encodeURIComponent(stageId)}/review`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
