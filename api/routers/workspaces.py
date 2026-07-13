@@ -178,3 +178,28 @@ def workspace_git_diff(
         project = _require_code_project(db, project_id)
     root = workspace_manager.ensure_exists(project)
     return workspace_manager.git_diff(root, path)
+
+
+class WorkspaceSessionPayload(BaseModel):
+    payload: dict[str, Any]
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+@router.get("/workspace/sessions/{project_id}")
+def get_workspace_session(project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+    """Server-side workspace assistant session (chat history + verification payloads).
+
+    Sessions used to live only in localStorage, where large verification payloads
+    routinely blew the quota and the save silently failed — conversations vanished
+    on reload. DuckDB has no such limit.
+    """
+    with MetadataDB(metadata_db_path) as db:
+        session = db.get_workspace_session(project_id)
+    return session or {"project_id": project_id, "payload": {}, "updated_timestamp": None}
+
+
+@router.put("/workspace/sessions/{project_id}")
+def save_workspace_session(project_id: str, request: WorkspaceSessionPayload) -> dict[str, Any]:
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.save_workspace_session(project_id, request.payload)
+    return session

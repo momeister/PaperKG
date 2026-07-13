@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx  # noqa: F401  # pm.httpx.AsyncClient (papers/harvest/agent/grey-Router) + Test-Patch-Surface
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +37,6 @@ from query.auto_answer import auto_research_answer  # noqa: F401  # pm.auto_rese
 from query.research_tree import ResearchTreeRunner  # noqa: F401  # pm.ResearchTreeRunner (discovery-Router) + Test-Patch-Surface
 from query import guide_flow, screen_companion, self_drive
 from query.source_verifier import build_pdf_index, find_pdf_path
-from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text
 from storage.metadata_db import MetadataDB
 from storage.path_safety import PathSafetyError, ensure_safe_path
 from workspace import manager as workspace_manager  # noqa: F401  # pm.workspace_manager (routers) + test patch surface
@@ -106,6 +105,8 @@ from api.routers import discovery as _discovery_router  # noqa: E402
 app.include_router(_discovery_router.router)
 from api.routers import agent as _agent_router  # noqa: E402
 app.include_router(_agent_router.router)
+from api.routers import grey_sources as _grey_sources_router  # noqa: E402
+app.include_router(_grey_sources_router.router)
 from api.routers.harvest import (  # noqa: E402,F401  # Test-Patch-/Import-Surface + Discovery nutzt Suche/Normalizer
     _existing_library_keys,
     _normalize_core_work,
@@ -176,22 +177,6 @@ llm_router = LLMRouter.from_config_file("config.yaml")
 parser_router = ParserRouter()
 embedding_engine = EmbeddingEngine()
 extraction_pipeline = ExtractionPipeline(llm_router, embedding_engine=embedding_engine)
-
-
-class GreySourcePayload(BaseModel):
-    sources: list[dict[str, Any]]
-    query: str | None = None
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-
-
-class GreySourceFromUrlPayload(BaseModel):
-    url: str
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-
-
-class WorkspaceSessionPayload(BaseModel):
-    payload: dict[str, Any]
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
 class ExtractionParseRequest(BaseModel):
@@ -510,93 +495,6 @@ async def _companion_context(
 _SELF_DRIVE_STORE = self_drive.SelfDriveStore()
 _GUIDE_STORE = guide_flow.GuideStore()
 
-
-
-@app.get("/projects/{project_id}/grey-sources")
-def list_project_grey_sources(
-    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        items = db.list_grey_sources(project_id)
-    return {"project_id": project_id, "grey_sources": items}
-
-
-@app.post("/projects/{project_id}/grey-sources")
-def add_project_grey_sources(project_id: str, payload: GreySourcePayload) -> dict[str, Any]:
-    """Persist user-confirmed grey sources for a project (not added to the KG)."""
-    saved: list[dict[str, Any]] = []
-    with MetadataDB(payload.metadata_db_path) as db:
-        for source in payload.sources:
-            record = dict(source)
-            record.setdefault("query", payload.query)
-            saved.append(db.add_grey_source(project_id, record))
-    return {"project_id": project_id, "saved": saved}
-
-
-@app.post("/projects/{project_id}/grey-sources/from-url")
-async def add_grey_source_from_url(project_id: str, payload: GreySourceFromUrlPayload) -> dict[str, Any]:
-    """Fetch, sanitize, and save a single user-pasted URL as a grey source.
-
-    Mirrors the deep-research fetch path (sanitize_web_text) but skips the LLM
-    summarization step — title comes from a cheap <title>/<h1> regex heuristic so
-    pasting a link stays fast.
-    """
-    url = payload.url.strip()
-    if not re.match(r"^https?://", url):
-        raise HTTPException(status_code=400, detail="Nur http(s)-URLs werden unterstützt")
-    try:
-        async with httpx.AsyncClient(
-            timeout=20.0,
-            headers={"User-Agent": "ScienceKG/Phase5 (local)"},
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Konnte URL nicht laden: {exc}") from exc
-
-    raw_html = response.text
-    clean, flags = sanitize_web_text(raw_html, max_len=FULL_TEXT_MAX_LEN)
-    title = _infer_title_from_html(raw_html) or url
-    record = {
-        "url": url,
-        "title": title,
-        "summary": clean[:400],
-        "full_text": clean,
-        "injection_flags": flags,
-    }
-    with MetadataDB(payload.metadata_db_path) as db:
-        saved = db.add_grey_source(project_id, record)
-    return {"project_id": project_id, "saved": saved}
-
-
-@app.get("/workspace/sessions/{project_id}")
-def get_workspace_session(project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
-    """Server-side workspace assistant session (chat history + verification payloads).
-
-    Sessions used to live only in localStorage, where large verification payloads
-    routinely blew the quota and the save silently failed — conversations vanished
-    on reload. DuckDB has no such limit.
-    """
-    with MetadataDB(metadata_db_path) as db:
-        session = db.get_workspace_session(project_id)
-    return session or {"project_id": project_id, "payload": {}, "updated_timestamp": None}
-
-
-@app.put("/workspace/sessions/{project_id}")
-def save_workspace_session(project_id: str, request: WorkspaceSessionPayload) -> dict[str, Any]:
-    with MetadataDB(request.metadata_db_path) as db:
-        session = db.save_workspace_session(project_id, request.payload)
-    return session
-
-
-@app.delete("/grey-sources/{grey_id}")
-def delete_grey_source(grey_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
-    with MetadataDB(metadata_db_path) as db:
-        deleted = db.delete_grey_source(grey_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Grey source not found: {grey_id}")
-    return {"deleted": True, "id": grey_id}
 
 
 @app.get("/extraction/library")
