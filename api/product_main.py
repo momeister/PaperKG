@@ -53,7 +53,7 @@ from query.llm_router import LLMRouter
 from query.auto_harvester import ingest_paper_record
 from query.auto_answer import auto_research_answer
 from query.research_tree import ResearchTreeRunner, _extract_questions
-from query import screen_companion, self_drive
+from query import guide_flow, screen_companion, self_drive
 from query.web_research import run_deep_research
 from export import ExportOptions, build_export
 from query.source_verifier import build_pdf_index, find_pdf_path
@@ -118,6 +118,8 @@ from api.routers import pdf_annotations as _pdf_annotations_router  # noqa: E402
 app.include_router(_pdf_annotations_router.router)
 from api.routers import parallel as _parallel_router  # noqa: E402
 app.include_router(_parallel_router.router)
+from api.routers import companion as _companion_router  # noqa: E402
+app.include_router(_companion_router.router)
 
 
 @app.exception_handler(PathSafetyError)
@@ -327,55 +329,6 @@ class AgentObserveStopRequest(BaseModel):
     """Stop an active Assistent observation session."""
     session_id: str = Field(min_length=1, max_length=200)
     bridge_base: str | None = None
-
-
-class CompanionTurn(BaseModel):
-    """One prior Desktop-Companion chat turn (text only — screenshots are never replayed)."""
-    role: str = Field(min_length=1, max_length=20)
-    content: str = Field(default="", max_length=8000)
-
-
-class CompanionAskRequest(BaseModel):
-    """Free-form question about the screen or a snipped region — answer only, no pointing."""
-    question: str = Field(min_length=1, max_length=4000)
-    image_base64: str | None = None
-    history: list[CompanionTurn] = Field(default_factory=list)
-    region: bool = False
-    provider: str | None = None
-    model: str | None = None
-    # Quellen-Modus: ground the answer in local paper hits and/or a web search.
-    use_papers: bool = False
-    use_web: bool = False
-
-
-class CompanionGuideRequest(BaseModel):
-    """Question about a full screenshot; the model may return click-guidance steps."""
-    question: str = Field(min_length=1, max_length=4000)
-    image_base64: str = Field(min_length=1)
-    history: list[CompanionTurn] = Field(default_factory=list)
-    provider: str | None = None
-    model: str | None = None
-    # Quellen-Modus: ground the answer in local paper hits and/or a web search.
-    use_papers: bool = False
-    use_web: bool = False
-
-
-class SelfDriveStartRequest(BaseModel):
-    """Begin a native Selbst-Steuerung session (R7 skeleton)."""
-    goal: str = Field(min_length=1, max_length=2000)
-    monitor: int | None = None
-    provider: str | None = None
-    model: str | None = None
-
-
-class SelfDriveStepRequest(BaseModel):
-    """One planning round: current screenshot → next action."""
-    session_id: str = Field(min_length=1, max_length=64)
-    image_base64: str = Field(min_length=1)
-
-
-class SelfDriveStopRequest(BaseModel):
-    session_id: str = Field(min_length=1, max_length=64)
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -2022,139 +1975,13 @@ async def _companion_context(
     return blocks, sources
 
 
-@app.post("/companion/guide")
-async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
-    """Desktop-Companion: answer a question about the screenshot and optionally return
-    ordered click-guidance steps in **original screenshot pixels** (= physical monitor
-    pixels for full captures). The companion only points — it never drives input."""
-    params = _companion_llm_params(request.provider, request.model)
-    cfg = _load_companion_config()
-    if cfg.get("debug_capture"):
-        params["debug_dir"] = str(cfg.get("debug_dir") or "data/companion_debug")
-    history = [turn.model_dump() for turn in request.history]
-    context_blocks, sources = await _companion_context(
-        request.question, request.use_papers, request.use_web
-    )
-    try:
-        result = await asyncio.to_thread(
-            screen_companion.guide,
-            llm_router,
-            request.question,
-            request.image_base64,
-            history=history,
-            context_blocks=context_blocks or None,
-            **params,
-        )
-        result["sources"] = sources
-        return result
-    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
-        return {"answer": "", "found": False, "steps": [], "sources": [], "error": str(exc)}
-
-
-@app.post("/companion/ask")
-async def companion_ask(request: CompanionAskRequest) -> dict[str, Any]:
-    """Desktop-Companion: free-form screen Q&A without pointing — used for the
-    Bereich-erklären snips (``region=true``) and text-only follow-up questions."""
-    params = _companion_llm_params(request.provider, request.model)
-    history = [turn.model_dump() for turn in request.history]
-    context_blocks, sources = await _companion_context(
-        request.question, request.use_papers, request.use_web
-    )
-    try:
-        answer = await asyncio.to_thread(
-            screen_companion.ask,
-            llm_router,
-            request.question,
-            image_base64=request.image_base64,
-            history=history,
-            region=request.region,
-            context_blocks=context_blocks or None,
-            **params,
-        )
-        return {"answer": answer, "sources": sources}
-    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
-        return {"answer": "", "sources": [], "error": str(exc)}
-
-
-@app.get("/companion/config")
-def companion_config() -> dict[str, Any]:
-    """Companion defaults plus the selectable providers/models for the overlay picker.
-
-    Uses cached model options (``refresh=False``) so opening the overlay stays instant;
-    the picker can call ``POST /models/{provider}/discover`` for a live refresh."""
-    cfg = _load_companion_config()
-    return {
-        "provider": str(cfg.get("provider") or "").strip() or llm_router.default_provider,
-        "model": str(cfg.get("model") or "").strip(),
-        "language": str(cfg.get("language") or "de"),
-        "default_provider": llm_router.default_provider,
-        "providers": [
-            {"name": name, "models": llm_router.provider_model_options(name, refresh=False)}
-            for name in llm_router.available_providers()
-        ],
-    }
-
-
 # --------------------------------------------------------------------------- #
-# Native Selbst-Steuerung (R7 skeleton) — the brain; enigo (control.rs) = hands  #
+# Native Selbst-Steuerung (R7) — planner store; endpoints live in               #
+# api/routers/companion.py (referenced as pm._SELF_DRIVE_STORE at call time).   #
 # --------------------------------------------------------------------------- #
 
 _SELF_DRIVE_STORE = self_drive.SelfDriveStore()
-
-
-def _self_drive_config() -> dict[str, Any]:
-    """The ``companion.self_drive`` sub-block (enabled gate + step budget)."""
-    section = _load_companion_config().get("self_drive")
-    return section if isinstance(section, dict) else {}
-
-
-@app.post("/selfdrive/start")
-def self_drive_start(request: SelfDriveStartRequest) -> dict[str, Any]:
-    """Open a Selbst-Steuerung session. Gated on ``companion.self_drive.enabled``;
-    the native shell still requires an explicit arm + per-action confirmation."""
-    cfg = _self_drive_config()
-    if not bool(cfg.get("enabled", False)):
-        return {"error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."}
-    params = _companion_llm_params(request.provider, request.model)
-    session = _SELF_DRIVE_STORE.create(
-        goal=request.goal,
-        provider=params["provider"],
-        model=params["model"],
-        monitor=request.monitor,
-        max_steps=int(cfg.get("max_steps") or self_drive.DEFAULT_MAX_STEPS),
-    )
-    return {"session_id": session.session_id, "goal": session.goal, "max_steps": session.max_steps}
-
-
-@app.post("/selfdrive/step")
-async def self_drive_step(request: SelfDriveStepRequest) -> dict[str, Any]:
-    """Plan the next action for a session from the current screenshot. The frontend
-    executes the returned action (control.rs) and calls back with the next frame."""
-    if not bool(_self_drive_config().get("enabled", False)):
-        return {"error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."}
-    session = _SELF_DRIVE_STORE.get(request.session_id)
-    if session is None:
-        return {"error": "Unbekannte Sitzung."}
-    params = _companion_llm_params(session.provider, session.model)
-    try:
-        return await asyncio.to_thread(
-            self_drive.plan_step,
-            llm_router,
-            session,
-            request.image_base64,
-            max_pixels=params["max_pixels"],
-            history_turns=params["history_turns"],
-            max_tokens=params["max_tokens"] or self_drive.DEFAULT_MAX_TOKENS,
-            disable_thinking=params["disable_thinking"],
-        )
-    except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
-        return {"error": str(exc)}
-
-
-@app.post("/selfdrive/stop")
-def self_drive_stop(request: SelfDriveStopRequest) -> dict[str, Any]:
-    """Drop a session (idempotent)."""
-    return {"stopped": _SELF_DRIVE_STORE.drop(request.session_id)}
+_GUIDE_STORE = guide_flow.GuideStore()
 
 
 @app.post("/research/tree/export")
@@ -4448,4 +4275,6 @@ def _split_query_values(values: list[str] | None) -> list[str]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # No built-in auth unless SCIENCEKG_API_TOKEN is set — default to loopback so a
+    # direct `python api/product_main.py` run doesn't expose it to the whole LAN.
+    uvicorn.run(app, host="127.0.0.1", port=8000)

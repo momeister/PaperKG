@@ -21,10 +21,10 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use image::RgbaImage;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use xcap::Monitor;
 
-use crate::overlay::{CONTROL_BORDER_LABEL, OVERLAY_LABEL, POINTER_LABEL, SNIP_LABEL};
+use crate::overlay::{OVERLAY_LABEL, POINTER_LABEL, SNIP_LABEL};
 
 /// How long to give the compositor to actually unmap a freshly hidden window
 /// before capturing (only needed on the no-WDA fallback path).
@@ -275,20 +275,19 @@ pub fn snip_start_impl(app: &AppHandle, monitor: Option<u32>) -> Result<(), Stri
         .map_err(|_| "Snip-Status nicht verfügbar".to_string())? = Some(image);
 
     // The always-on-top chat card would float over the frozen frame and fight the
-    // marquee for z-order; it comes back with the result (or on cancel).
-    if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
+    // marquee for z-order; it comes back with the result (or on cancel). Ensuring
+    // it here (hidden) also pre-warms the chat window for a tray-initiated snip,
+    // so it is already loading while the user drags the region.
+    if let Ok(window) = crate::overlay::ensure_window(app, OVERLAY_LABEL) {
         let _ = window.hide();
     }
-    let window = app
-        .get_webview_window(SNIP_LABEL)
-        .ok_or("Snip-Fenster nicht verfügbar")?;
+    let window = crate::overlay::ensure_window(app, SNIP_LABEL)?;
     // The frozen frame belongs to one specific monitor — the marquee window must
     // sit exactly on it or the crop coordinates would map to the wrong screen.
     crate::overlay::fit_window_to_monitor(&window, info.x, info.y, info.width, info.height);
     let _ = window.show();
     let _ = window.set_focus();
-    app.emit_to(SNIP_LABEL, "snip://begin", payload)
-        .map_err(|err| err.to_string())
+    crate::overlay::emit_or_queue(app, SNIP_LABEL, "snip://begin", payload)
 }
 
 fn close_snip_window(app: &AppHandle, state: &CaptureState) {
@@ -298,7 +297,7 @@ fn close_snip_window(app: &AppHandle, state: &CaptureState) {
     if let Some(window) = app.get_webview_window(SNIP_LABEL) {
         let _ = window.hide();
     }
-    if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
+    if let Ok(window) = crate::overlay::ensure_window(app, OVERLAY_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -330,7 +329,10 @@ pub fn snip_finish(
     let crop_h = (height.max(1.0) as u32).min(img_h - y0);
     let region = image::imageops::crop_imm(&image, x0, y0, crop_w, crop_h).to_image();
 
-    app.emit_to(
+    // Queued if the (just pre-warmed) chat window is still loading — the snipped
+    // region must survive the lazy creation.
+    crate::overlay::emit_or_queue(
+        &app,
         OVERLAY_LABEL,
         "snip://result",
         SnipResultPayload {
@@ -339,7 +341,6 @@ pub fn snip_finish(
             height: crop_h,
         },
     )
-    .map_err(|err| err.to_string())
 }
 
 /// Abort the region selection (Esc / too-small drag) — restores the chat overlay.
@@ -358,8 +359,9 @@ pub fn cursor_position(app: AppHandle) -> Result<CursorPosition, String> {
 
 /// Exclude a window from screen captures so it never contaminates what the VLM sees.
 /// Windows-only (`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, Win10 2004+);
-/// returns whether the exclusion actually took effect.
-fn exclude_from_capture(window: &tauri::WebviewWindow) -> bool {
+/// returns whether the exclusion actually took effect. Applied per window right
+/// after its lazy creation (`overlay::ensure_window`).
+pub(crate) fn exclude_from_capture(window: &tauri::WebviewWindow) -> bool {
     #[cfg(windows)]
     {
         use windows::Win32::UI::WindowsAndMessaging::{
@@ -377,20 +379,10 @@ fn exclude_from_capture(window: &tauri::WebviewWindow) -> bool {
     }
 }
 
-/// Apply capture-exclusion to all companion overlay windows at startup. Only the chat
-/// overlay's result is remembered (`wda_ok`) — it decides whether `grab_primary` needs
-/// the hide/restore fallback; the pointer ring is hidden during captures regardless.
-pub fn setup_capture_exclusion(app: &AppHandle) {
+/// Remember whether WDA exclusion took effect for the chat overlay — it decides
+/// whether `grab_screen` needs the hide/restore fallback; the pointer ring is hidden
+/// during captures regardless. Called by `overlay::ensure_window`.
+pub(crate) fn note_overlay_wda(app: &AppHandle, ok: bool) {
     let state = app.state::<CaptureState>();
-    for label in [OVERLAY_LABEL, CONTROL_BORDER_LABEL, POINTER_LABEL, SNIP_LABEL] {
-        if let Some(window) = app.get_webview_window(label) {
-            let ok = exclude_from_capture(&window);
-            if label == OVERLAY_LABEL {
-                state.wda_ok.store(ok, Ordering::SeqCst);
-            }
-            if !ok {
-                log::warn!("WDA_EXCLUDEFROMCAPTURE not applied for '{label}' window");
-            }
-        }
-    }
+    state.wda_ok.store(ok, Ordering::SeqCst);
 }

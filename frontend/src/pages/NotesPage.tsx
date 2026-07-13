@@ -223,7 +223,7 @@ type EditorViewportSnapshot = {
 };
 
 type NotesSurfaceProps = {
-  variant?: "page" | "workspace";
+  variant?: "page" | "workspace" | "overlay";
   controlledNoteId?: string;
   requestedCitationId?: string;
   onActiveNoteChange?: (noteId: string) => void;
@@ -246,9 +246,12 @@ export function NotesSurface({
   actionsRef
 }: NotesSurfaceProps = {}) {
   const { activeProject, provider, model } = useAppState();
-  const embedded = variant === "workspace";
+  const embedded = variant !== "page";
   const scopedProjectId = noteProjectId(activeProject);
   const scopeLabel = projectScopeLabel(activeProject);
+  // Namespaced separately so the overlay's compact panel defaults don't inherit
+  // (or clobber) whatever the standalone/workspace Notes view left collapsed/expanded.
+  const uiKeyPrefix = variant === "overlay" ? `${scopedProjectId}.overlay` : scopedProjectId;
   const queryClient = useQueryClient();
   const [activeNoteId, setActiveNoteId] = useState<string>("");
   const [title, setTitle] = useState("");
@@ -274,14 +277,14 @@ export function NotesSurface({
   const [inlineThreadId, setInlineThreadId] = useState("");
   const [hoverThreadId, setHoverThreadId] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [notesListOpen, setNotesListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
-  const [contextOpen, setContextOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
-  const [notePdfOpen, setNotePdfOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
-  const [citationListOpen, setCitationListOpen] = useState(() => loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
+  const [notesListOpen, setNotesListOpen] = useState(() => loadBooleanUiState(`${uiKeyPrefix}.notesListOpen`, true));
+  const [contextOpen, setContextOpen] = useState(() => loadBooleanUiState(`${uiKeyPrefix}.contextOpen`, variant !== "overlay"));
+  const [notePdfOpen, setNotePdfOpen] = useState(() => loadBooleanUiState(`${uiKeyPrefix}.notePdfOpen`, true));
+  const [citationListOpen, setCitationListOpen] = useState(() => loadBooleanUiState(`${uiKeyPrefix}.citationListOpen`, true));
   const [spellcheckEnabled, setSpellcheckEnabled] = useState(() => loadBooleanUiState("spellcheckEnabled", true));
   // N-Marker (KI-Thread-Anker) im Editor ein-/ausblendbar.
   const [threadAnchorsVisible, setThreadAnchorsVisible] = useState(() => loadBooleanUiState("threadAnchorsVisible", true));
-  const [contextWidth, setContextWidth] = useState(() => loadNumberUiState(`${scopedProjectId}.contextWidth`, 430));
+  const [contextWidth, setContextWidth] = useState(() => loadNumberUiState(`${uiKeyPrefix}.contextWidth`, 430));
   const [activeThreadId, setActiveThreadId] = useState("");
   const [locatedThreadId, setLocatedThreadId] = useState("");
   const [threadMetaById, setThreadMetaById] = useState<Record<string, ThreadAnchorMeta>>({});
@@ -776,12 +779,12 @@ export function NotesSurface({
   }, [activeNoteId, onActiveNoteChange]);
 
   useEffect(() => {
-    setNotesListOpen(loadBooleanUiState(`${scopedProjectId}.notesListOpen`, true));
-    setContextOpen(loadBooleanUiState(`${scopedProjectId}.contextOpen`, true));
-    setNotePdfOpen(loadBooleanUiState(`${scopedProjectId}.notePdfOpen`, true));
-    setCitationListOpen(loadBooleanUiState(`${scopedProjectId}.citationListOpen`, true));
-    setContextWidth(loadNumberUiState(`${scopedProjectId}.contextWidth`, 430));
-  }, [scopedProjectId]);
+    setNotesListOpen(loadBooleanUiState(`${uiKeyPrefix}.notesListOpen`, true));
+    setContextOpen(loadBooleanUiState(`${uiKeyPrefix}.contextOpen`, variant !== "overlay"));
+    setNotePdfOpen(loadBooleanUiState(`${uiKeyPrefix}.notePdfOpen`, true));
+    setCitationListOpen(loadBooleanUiState(`${uiKeyPrefix}.citationListOpen`, true));
+    setContextWidth(loadNumberUiState(`${uiKeyPrefix}.contextWidth`, 430));
+  }, [uiKeyPrefix, variant]);
 
   useEffect(() => {
     if (!activeNoteId) {
@@ -792,24 +795,24 @@ export function NotesSurface({
   }, [activeNoteId, scopedProjectId]);
 
   useEffect(() => {
-    saveBooleanUiState(`${scopedProjectId}.notesListOpen`, notesListOpen);
-  }, [notesListOpen, scopedProjectId]);
+    saveBooleanUiState(`${uiKeyPrefix}.notesListOpen`, notesListOpen);
+  }, [notesListOpen, uiKeyPrefix]);
 
   useEffect(() => {
-    saveBooleanUiState(`${scopedProjectId}.contextOpen`, contextOpen);
-  }, [contextOpen, scopedProjectId]);
+    saveBooleanUiState(`${uiKeyPrefix}.contextOpen`, contextOpen);
+  }, [contextOpen, uiKeyPrefix]);
 
   useEffect(() => {
-    saveBooleanUiState(`${scopedProjectId}.notePdfOpen`, notePdfOpen);
-  }, [notePdfOpen, scopedProjectId]);
+    saveBooleanUiState(`${uiKeyPrefix}.notePdfOpen`, notePdfOpen);
+  }, [notePdfOpen, uiKeyPrefix]);
 
   useEffect(() => {
-    saveBooleanUiState(`${scopedProjectId}.citationListOpen`, citationListOpen);
-  }, [citationListOpen, scopedProjectId]);
+    saveBooleanUiState(`${uiKeyPrefix}.citationListOpen`, citationListOpen);
+  }, [citationListOpen, uiKeyPrefix]);
 
   useEffect(() => {
-    saveNumberUiState(`${scopedProjectId}.contextWidth`, contextWidth);
-  }, [contextWidth, scopedProjectId]);
+    saveNumberUiState(`${uiKeyPrefix}.contextWidth`, contextWidth);
+  }, [contextWidth, uiKeyPrefix]);
 
   useEffect(() => {
     if (!activeNoteId) {
@@ -1458,7 +1461,11 @@ export function NotesSurface({
     setInsertPreview({ index: insertionPointForThread(thread), content: threadInsertionContent(message.content) });
   }
 
-  const workspaceColumns = `${notesListOpen ? "minmax(230px, 0.32fr)" : "46px"} minmax(360px, 1fr) 6px ${contextOpen ? `minmax(320px, ${contextWidth}px)` : "46px"}`;
+  // Overlay's window size is app-controlled (fixed, not user-resizable), so its context
+  // column uses a fixed literal instead of the shared, user-dragged contextWidth — that
+  // width was tuned for the much wider standalone/workspace layouts and could overflow.
+  const contextColumnWidth = variant === "overlay" ? "280px" : `minmax(320px, ${contextWidth}px)`;
+  const workspaceColumns = `${notesListOpen ? "minmax(230px, 0.32fr)" : "46px"} minmax(360px, 1fr) 6px ${contextOpen ? contextColumnWidth : "46px"}`;
 
   function startContextResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (!contextOpen) {
@@ -2043,7 +2050,12 @@ export function NotesSurface({
   } as CSSProperties;
   const showEditor = editorMode === "edit" || editorMode === "split";
   const showPreview = editorMode === "preview" || editorMode === "split";
-  const pageClassName = embedded ? `page notes-page notes-page--embedded ${historyOpen ? "notes-page--embedded-history" : ""}` : "page notes-page";
+  const pageClassName =
+    variant === "overlay"
+      ? "page notes-page notes-page--overlay"
+      : embedded
+        ? `page notes-page notes-page--embedded ${historyOpen ? "notes-page--embedded-history" : ""}`
+        : "page notes-page";
 
   useEffect(() => {
     if (!actionsRef) {
@@ -2179,7 +2191,10 @@ export function NotesSurface({
       {notesQuery.isError ? <div className="inline-error">Notizen konnten nicht geladen werden: {formatError(notesQuery.error)}</div> : null}
       {saveNote.isError ? <div className="inline-error">Autosave fehlgeschlagen: {formatError(saveNote.error)}</div> : null}
 
-      <div className={`notes-workspace ${notesListOpen ? "" : "notes-workspace--left-collapsed"} ${contextOpen ? "" : "notes-workspace--right-collapsed"}`} style={{ gridTemplateColumns: workspaceColumns }}>
+      <div
+        className={`notes-workspace ${notesListOpen ? "" : "notes-workspace--left-collapsed"} ${contextOpen ? "" : "notes-workspace--right-collapsed"}`}
+        style={{ gridTemplateColumns: workspaceColumns, "--overlay-grid-columns": workspaceColumns } as CSSProperties}
+      >
         <aside className={`panel notes-list-panel ${notesListOpen ? "" : "notes-list-panel--collapsed"}`}>
           {notesListOpen ? (
             <>

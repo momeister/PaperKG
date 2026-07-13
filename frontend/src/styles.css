@@ -1809,6 +1809,42 @@ h1 {
   border-radius: 0;
 }
 
+/* Overlay's compact Notizen tab: unlike --embedded, the note list and context
+   panel stay reachable (just narrow/collapsed by default) — only page chrome
+   is stripped. Sized by the flex-column ancestor (.overlay-notes-view), not a
+   percentage-height chain, same pattern as .notes-side-panel__body. Two-class
+   selectors here deliberately out-specificity the single-class
+   @media (max-width: 1040px) narrow-viewport rules further below. */
+.notes-page--overlay {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  gap: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.notes-page--overlay > .page-title {
+  display: none;
+}
+
+.notes-page--overlay .note-editor-shell {
+  min-height: 0;
+}
+
+/* The overlay always runs narrower than 1040px, so the narrow-viewport rule below
+   (`.notes-workspace { grid-template-columns: 1fr !important }`) always fires and
+   would otherwise stack list/editor/context vertically instead of side-by-side.
+   Only !important can beat !important, and a fixed value can't track the JS-driven
+   column template — so the value is threaded through as a custom property instead
+   (set alongside the inline style, see workspaceColumns in NotesPage.tsx). Higher
+   selector specificity here (two classes) wins over the narrow-viewport rule's one
+   class regardless of source order. */
+.notes-page--overlay .notes-workspace {
+  grid-template-columns: var(--overlay-grid-columns) !important;
+}
+
 .workspace-page {
   display: grid;
   min-height: 0;
@@ -8920,6 +8956,145 @@ button.parallel-cite {
   padding: 2px 2px 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
+.overlay-notes-view {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+.overlay-notes-project-select {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e6e8ec;
+  padding: 4px 6px;
+  font-size: 11px;
+  color-scheme: dark;
+}
+.overlay-notes-project-select option {
+  background: #161a21;
+  color: #e6e8ec;
+}
+.overlay-notes-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.overlay-notes-toolbar .overlay-notes-note-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.overlay-notes-title-input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e6e8ec;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.overlay-notes-title-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.overlay-notes-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.overlay-notes-textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e6e8ec;
+  padding: 8px;
+  font: 13px/1.5 inherit;
+}
+.overlay-notes-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.overlay-notes-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px;
+}
+.overlay-notes-view .markdown-preview {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #e6e8ec;
+}
+.overlay-notes-ai-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px;
+}
+.overlay-notes-ai-selection {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #aeb4bf;
+}
+.overlay-notes-ai-preview {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  max-height: 30vh;
+  overflow: auto;
+}
+.overlay-notes-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #aeb4bf;
+}
+.overlay-notes-status {
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.overlay-notes-resize-handle {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  border-radius: 4px;
+}
+.overlay-notes-resize-handle::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.35) 1px, transparent 1px);
+  background-size: 3px 3px;
+  background-position: bottom right;
+}
+.overlay-notes-resize-handle:hover::after {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.7) 1px, transparent 1px);
+}
 .overlay-close {
   margin-left: auto;
   display: inline-flex;
@@ -9379,6 +9554,15 @@ button.parallel-cite {
   font-size: 12px;
   margin: 0 0 6px;
 }
+.overlay-selfdrive-sensitive {
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+/* Suspense-Fallback der code-gesplitteten Routen (Chunk lädt lokal in ms). */
+.page-loading {
+  padding: 32px;
+  opacity: 0.6;
+}
 .overlay-snip-chip {
   display: flex;
   align-items: center;
@@ -9401,6 +9585,147 @@ button.parallel-cite {
   color: inherit;
   cursor: pointer;
   padding: 0;
+}
+
+/* AI-Cursor overlay rework (R7): minimalist chat shell — header actions, gear
+   popover, slide-in session list and the small system lines in the stream. */
+.overlay-head-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.overlay-head-actions .overlay-close {
+  margin-left: 0;
+}
+.overlay-gear {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.overlay-gear select {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e6e8ec;
+  padding: 4px 6px;
+  font-size: 11px;
+  color-scheme: dark;
+}
+.overlay-gear select option {
+  background: #161a21;
+  color: #e6e8ec;
+}
+.overlay-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 11.5px;
+}
+.overlay-session-list__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.overlay-session-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.overlay-session-list__item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.overlay-session-list__item--active {
+  background: rgba(88, 166, 255, 0.12);
+}
+.overlay-session-list__item > button:not(.overlay-session-list__label) {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: rgba(230, 232, 236, 0.55);
+  cursor: pointer;
+  padding: 2px;
+}
+.overlay-session-list__item > button:not(.overlay-session-list__label):hover {
+  color: #e6e8ec;
+}
+.overlay-session-list__label {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 2px 0;
+}
+.overlay-session-list__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overlay-session-list__count {
+  font-size: 10px;
+  opacity: 0.6;
+}
+.overlay-session-list__edit {
+  flex: 1;
+  display: inline-flex;
+  gap: 4px;
+}
+.overlay-session-list__edit input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 11.5px;
+  padding: 2px 6px;
+}
+.overlay-session-list__edit button {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+.overlay-chat-system {
+  align-self: center;
+  font-size: 10.5px;
+  color: rgba(230, 232, 236, 0.6);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.overlay-chat-system--warn {
+  color: #ffb86b;
+  background: rgba(255, 184, 107, 0.1);
 }
 
 /* ----------------------------------------------------------------------- */

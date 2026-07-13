@@ -43,4 +43,5 @@ enigo = "0.6"
 [target.'cfg(windows)'.dependencies]
 # Hide the companion overlay windows from screen captures (WDA_EXCLUDEFROMCAPTURE).
 # Version matches tauri's, so `window.hwnd()` returns exactly this crate's HWND.
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# KeyboardAndMouse: GetAsyncKeyState polling for the guided-mode click watcher (R7).
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }

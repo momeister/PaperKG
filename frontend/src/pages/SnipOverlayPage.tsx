@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { isTauri, nativeInvoke, nativeListen } from "../native";
+import { isTauri, nativeInvoke, nativeListen, signalWindowReady } from "../native";
 import type { SnipBeginPayload } from "../types";
 
 // Desktop-Companion "Bereich erklären" (R6) — the Snipping-Tool-like region selector.
@@ -27,16 +27,28 @@ export function SnipOverlayPage() {
     };
   }, []);
 
+  // The window is created lazily on the first snip — the shell queues the initial
+  // `snip://begin` until we signal readiness after the listener is registered.
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
-    nativeListen<SnipBeginPayload>("snip://begin", (payload) => {
-      setFrame(payload);
-      setStart(null);
-      setCurrent(null);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+    void (async () => {
+      const off = await nativeListen<SnipBeginPayload>("snip://begin", (payload) => {
+        setFrame(payload);
+        setStart(null);
+        setCurrent(null);
+      });
+      if (disposed) {
+        off();
+        return;
+      }
+      unlisten = off;
+      await signalWindowReady();
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   const cancel = useCallback(() => {

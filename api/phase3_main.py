@@ -323,4 +323,5 @@ async def get_batch_items(job_id: str) -> dict[str, list[dict[str, Any]]]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # No built-in auth — default to loopback so a direct run doesn't expose it to the LAN.
+    uvicorn.run(app, host="127.0.0.1", port=8000)

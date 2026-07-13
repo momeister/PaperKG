@@ -970,6 +970,7 @@ export const guideCompanion = (payload: {
   model?: string | null;
   use_papers?: boolean;
   use_web?: boolean;
+  session_id?: string | null;
 }) =>
   request<CompanionGuideResult>("/companion/guide", {
     method: "POST",
@@ -987,6 +988,7 @@ export const askCompanion = (payload: {
   model?: string | null;
   use_papers?: boolean;
   use_web?: boolean;
+  session_id?: string | null;
 }) =>
   request<CompanionAskResult>("/companion/ask", {
     method: "POST",
@@ -996,20 +998,93 @@ export const askCompanion = (payload: {
 /** GET /companion/config: companion defaults + selectable vision providers/models. */
 export const getCompanionConfig = () => request<CompanionConfigInfo>("/companion/config");
 
+/** Companion/Selbst-Steuerung sessions: durable chat + step log (DuckDB). */
+export const listCompanionSessions = (kind?: "companion" | "selfdrive") =>
+  request<{ sessions: import("./types").CompanionSessionSummary[] }>(
+    `/companion/sessions${kind ? `?kind=${kind}` : ""}`,
+  );
+
+export const getCompanionSession = (sessionId: string) =>
+  request<import("./types").CompanionSessionDetail>(`/companion/sessions/${sessionId}`);
+
+export const createCompanionSession = (payload: {
+  kind: "companion" | "selfdrive";
+  title?: string;
+  goal?: string;
+  provider?: string | null;
+  model?: string | null;
+  monitor?: number | null;
+}) =>
+  request<import("./types").CompanionSessionDetail>("/companion/sessions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateCompanionSession = (sessionId: string, payload: { title?: string; status?: string }) =>
+  request<import("./types").CompanionSessionDetail>(`/companion/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
+export const deleteCompanionSession = (sessionId: string) =>
+  request<{ deleted: boolean }>(`/companion/sessions/${sessionId}`, { method: "DELETE" });
+
+/** Incremental guided sequences (auto-advance): start → step (per screenshot) → stop. */
+export const startGuide = (payload: {
+  goal: string;
+  provider?: string | null;
+  model?: string | null;
+  monitor?: number | null;
+  use_papers?: boolean;
+  use_web?: boolean;
+  session_id?: string | null;
+}) =>
+  request<import("./types").GuideStartResult>("/companion/guide/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const stepGuide = (payload: {
+  guide_id: string;
+  image_base64: string;
+  event: "start" | "click" | "skip";
+  click_x?: number | null;
+  click_y?: number | null;
+}) =>
+  request<import("./types").GuideStepResult>("/companion/guide/step", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const stopGuide = (payload: { guide_id: string }) =>
+  request<{ stopped: boolean }>("/companion/guide/stop", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
 /** POST /selfdrive/start: open a native Selbst-Steuerung session (R7). Gated on
- * companion.self_drive.enabled; the shell still needs an explicit arm + per-action
- * confirmation. */
+ * companion.self_drive.enabled; the shell still needs an explicit arm (autopilot
+ * or per-action confirmation). */
 export const startSelfDrive = (payload: {
   goal: string;
   monitor?: number | null;
   provider?: string | null;
   model?: string | null;
+  session_id?: string | null;
 }) =>
   request<SelfDriveStartResult>("/selfdrive/start", { method: "POST", body: JSON.stringify(payload) });
 
-/** POST /selfdrive/step: plan the next action from the current screenshot. */
+/** POST /selfdrive/step: plan the next action from the current screenshot
+ * (verify → stall-check → plan → refine pipeline; lookups resolve server-side). */
 export const stepSelfDrive = (payload: { session_id: string; image_base64: string }) =>
   request<SelfDriveStepResult>("/selfdrive/step", { method: "POST", body: JSON.stringify(payload) });
+
+/** POST /selfdrive/answer: reply to an `ask` action; resume via /selfdrive/step. */
+export const answerSelfDrive = (payload: { session_id: string; answer: string }) =>
+  request<{ ok?: boolean; error?: string }>("/selfdrive/answer", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 /** POST /selfdrive/stop: drop a session (idempotent). */
 export const stopSelfDrive = (payload: { session_id: string }) =>

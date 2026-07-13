@@ -452,6 +452,34 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Desktop-Companion / Selbst-Steuerung (R7): durable chat + step log so the
+        # overlay can list, reopen and continue sessions across app restarts. ``kind``
+        # discriminates the two modes; the in-flight planner state (history, pending
+        # expectation) stays in the in-memory stores — only the transcript persists.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS companion_sessions (
+                id VARCHAR PRIMARY KEY,
+                kind VARCHAR NOT NULL,
+                title VARCHAR,
+                goal VARCHAR,
+                status VARCHAR DEFAULT 'active',
+                provider VARCHAR,
+                model VARCHAR,
+                monitor INTEGER,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS companion_messages (
+                id VARCHAR PRIMARY KEY,
+                session_id VARCHAR NOT NULL,
+                role VARCHAR NOT NULL,
+                content VARCHAR,
+                payload JSON,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         # Code-Werkstatt: registered coding-project folders on disk. ``kind`` is
         # 'managed' (created + git-init'd by us under the workspaces base dir) or
         # 'external' (an existing folder the user opened). Only the *registration*
@@ -571,6 +599,8 @@ class SchemaMixin(_Base):
         self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_artifacts_run ON analysis_artifacts(run_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_pdf_annotations_paper ON pdf_annotations(paper_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_companion_sessions_kind ON companion_sessions(kind)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_companion_messages_session ON companion_messages(session_id)")
 
     def _backfill_parallel_stages(self) -> None:
         """Adopt pre-stage variants: every session with stage-less variants and no stage

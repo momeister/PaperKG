@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -26,22 +26,30 @@ import { api, API_BASE_URL } from "./api";
 import { AppStateContext, clampFontScale, FONT_SCALE_STEP } from "./state";
 import type { LlmParams, Theme } from "./state";
 import { Status } from "./components/Status";
-import { BenchmarksPage } from "./pages/BenchmarksPage";
-import { ExtractionPage } from "./pages/ExtractionPage";
-import { GraphPage } from "./pages/GraphPage";
-import { ImportPage } from "./pages/ImportPage";
-import { JobsPage } from "./pages/JobsPage";
-import { LibraryPage } from "./pages/LibraryPage";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { QualityPage } from "./pages/QualityPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { WorkspacePage } from "./pages/WorkspacePage";
-import { WorkstationPage } from "./pages/WorkstationPage";
-import { JupyterPage } from "./pages/JupyterPage";
-import { OverlayPage } from "./pages/OverlayPage";
+// The overlay-family pages stay statically imported: they render in the four extra
+// Tauri windows (early returns below, never through <Routes>) and must appear
+// instantly — the control border/pointer ring can't wait for a chunk fetch.
+import { OverlayPage } from "./pages/overlay/OverlayPage";
 import { ControlBorderPage } from "./pages/ControlBorderPage";
 import { PointerOverlayPage } from "./pages/PointerOverlayPage";
 import { SnipOverlayPage } from "./pages/SnipOverlayPage";
+
+// Every main-shell page is code-split: five webviews parse the entry chunk (main
+// window + the lazily created overlay windows), so the heavyweights — Monaco+xterm
+// (WorkstationPage), pdf.js (Library/Workspace), @xyflow (GraphPage) — must not sit
+// in it. Fan-noise fix, together with the lazy window creation in the Tauri shell.
+const BenchmarksPage = lazy(() => import("./pages/BenchmarksPage").then((m) => ({ default: m.BenchmarksPage })));
+const ExtractionPage = lazy(() => import("./pages/ExtractionPage").then((m) => ({ default: m.ExtractionPage })));
+const GraphPage = lazy(() => import("./pages/GraphPage").then((m) => ({ default: m.GraphPage })));
+const ImportPage = lazy(() => import("./pages/ImportPage").then((m) => ({ default: m.ImportPage })));
+const JobsPage = lazy(() => import("./pages/JobsPage").then((m) => ({ default: m.JobsPage })));
+const LibraryPage = lazy(() => import("./pages/LibraryPage").then((m) => ({ default: m.LibraryPage })));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
+const QualityPage = lazy(() => import("./pages/QualityPage").then((m) => ({ default: m.QualityPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const WorkspacePage = lazy(() => import("./pages/WorkspacePage").then((m) => ({ default: m.WorkspacePage })));
+const WorkstationPage = lazy(() => import("./pages/WorkstationPage").then((m) => ({ default: m.WorkstationPage })));
+const JupyterPage = lazy(() => import("./pages/JupyterPage").then((m) => ({ default: m.JupyterPage })));
 
 const navigation = [
   { to: "/projects", label: "Projekte", icon: Briefcase },
@@ -203,9 +211,14 @@ export default function App() {
     });
   }
 
-  // Overlay window: no sidebar/topbar — just the compact AI-Cursor.
+  // Overlay window: no sidebar/topbar — just the compact AI-Cursor. Wrapped in
+  // AppStateContext so the embedded Notizen tab (NotesSurface) can use useAppState().
   if (isOverlay) {
-    return <OverlayPage />;
+    return (
+      <AppStateContext.Provider value={state}>
+        <OverlayPage />
+      </AppStateContext.Provider>
+    );
   }
   // Control-border window: no sidebar/topbar — just the full-screen click-through frame.
   if (isControlBorder) {
@@ -386,27 +399,29 @@ export default function App() {
             </div>
           </header>
 
-          <Routes>
-            <Route path="/" element={<Navigate to="/projects" replace />} />
-            <Route path="/projects" element={<ProjectsPage />} />
-            <Route path="/import" element={<ImportPage />} />
-            <Route path="/extraction" element={<ExtractionPage />} />
-            <Route path="/library" element={<LibraryPage />} />
-            <Route path="/assistant" element={<Navigate to="/workspace" replace />} />
-            <Route path="/notes" element={<Navigate to="/workspace" replace />} />
-            <Route path="/workspace" element={<WorkspacePage />} />
-            <Route path="/werkstatt" element={<WorkstationPage />} />
-            <Route path="/jupyter" element={<JupyterPage />} />
-            <Route path="/overlay" element={<OverlayPage />} />
-            <Route path="/control-border" element={<ControlBorderPage />} />
-            <Route path="/pointer" element={<PointerOverlayPage />} />
-            <Route path="/snip" element={<SnipOverlayPage />} />
-            <Route path="/graph" element={<GraphPage />} />
-            <Route path="/quality" element={<QualityPage />} />
-            <Route path="/benchmarks" element={<BenchmarksPage />} />
-            <Route path="/jobs" element={<JobsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Routes>
+          <Suspense fallback={<div className="page-loading">Lade…</div>}>
+            <Routes>
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/import" element={<ImportPage />} />
+              <Route path="/extraction" element={<ExtractionPage />} />
+              <Route path="/library" element={<LibraryPage />} />
+              <Route path="/assistant" element={<Navigate to="/workspace" replace />} />
+              <Route path="/notes" element={<Navigate to="/workspace" replace />} />
+              <Route path="/workspace" element={<WorkspacePage />} />
+              <Route path="/werkstatt" element={<WorkstationPage />} />
+              <Route path="/jupyter" element={<JupyterPage />} />
+              <Route path="/overlay" element={<OverlayPage />} />
+              <Route path="/control-border" element={<ControlBorderPage />} />
+              <Route path="/pointer" element={<PointerOverlayPage />} />
+              <Route path="/snip" element={<SnipOverlayPage />} />
+              <Route path="/graph" element={<GraphPage />} />
+              <Route path="/quality" element={<QualityPage />} />
+              <Route path="/benchmarks" element={<BenchmarksPage />} />
+              <Route path="/jobs" element={<JobsPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Routes>
+          </Suspense>
         </main>
       </div>
     </AppStateContext.Provider>

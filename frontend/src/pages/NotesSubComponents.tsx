@@ -41,7 +41,6 @@ import {
 import { api, API_BASE_URL } from "../api";
 import { colorVarsForPaperId, evidenceColorVars } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
-import { PdfPane } from "../components/PdfPane";
 import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
 import { downloadMarkdownFile } from "../download";
 import { noteProjectId, projectScopeLabel } from "../projectScope";

@@ -29,6 +29,7 @@ use tauri_plugin_opener::OpenerExt;
 
 mod agent_bridge;
 mod capture;
+mod click_watch;
 mod control;
 mod jupyter;
 mod overlay;
@@ -201,9 +202,12 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .manage(jupyter::JupyterState::default())
         .manage(agent_bridge::AgentBridgeState::default())
+        .manage(overlay::OverlayInit(init_script.clone()))
+        .manage(overlay::OverlayReady::default())
         .manage(overlay::PointerState::default())
         .manage(capture::CaptureState::default())
         .manage(control::ControlState::default())
+        .manage(click_watch::ClickWatchState::default())
         .invoke_handler(tauri::generate_handler![
             open_external,
             terminal::terminal_spawn,
@@ -213,6 +217,8 @@ pub fn run() {
             overlay::overlay_hide,
             overlay::overlay_toggle,
             overlay::overlay_dispatch_task,
+            overlay::overlay_resize,
+            overlay::overlay_window_ready,
             overlay::control_border_show,
             overlay::control_border_hide,
             overlay::pointer_show,
@@ -230,6 +236,8 @@ pub fn run() {
             control::control_type,
             control::control_key,
             control::control_scroll,
+            click_watch::click_watch_start,
+            click_watch::click_watch_stop,
             jupyter::jupyter_start,
             jupyter::jupyter_stop,
             agent_bridge::agent_bridge_ensure,
@@ -284,16 +292,12 @@ pub fn run() {
                 .initialization_script(&init_script)
                 .build()?;
 
-            // AI-Cursor overlay (R1): hidden second window (shares the backend
-            // origin via the same init script) + system-tray toggle.
-            overlay::build_overlay(app.handle(), &init_script)?;
-            overlay::build_control_border(app.handle(), &init_script)?;
-            overlay::build_pointer_overlay(app.handle(), &init_script)?;
-            overlay::build_snip_overlay(app.handle(), &init_script)?;
+            // The four overlay-family windows (chat, control border, pointer, snip)
+            // are NOT built here: each is a full WebView2 process, and five webviews
+            // at launch produced constant background load. They are created lazily
+            // on first use (`overlay::ensure_window`); WDA capture-exclusion is
+            // applied there per window. Only the tray exists from the start.
             overlay::setup_tray(app.handle())?;
-            // Desktop Companion (R6): keep the companion's own windows out of its
-            // screenshots (WDA where available; capture falls back to hide/restore).
-            capture::setup_capture_exclusion(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

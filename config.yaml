@@ -427,14 +427,64 @@ companion:
   # data/companion_debug/ — so sieht man sofort, ob das Modell falsch zeigt oder die
   # Rueckskalierung. Im Normalbetrieb aus lassen (Screenshots landen sonst auf Platte).
   debug_capture: false
-  # Native Selbst-Steuerung (R7, experimentell): die KI plant pro Screenshot EINE
-  # Aktion, die nativ (enigo, control.rs) echte Maus/Tastatur bedient. Standardmaessig
-  # AUS. enabled gilt nur als Freigabe des Backend-Planers; im Overlay muss zusaetzlich
-  # pro Sitzung "aktiviert" werden und jede Aktion einzeln bestaetigt (Bestaetigungs-
-  # modus). Not-Aus jederzeit per Ctrl+Shift+Q. max_steps begrenzt das Schrittbudget.
+  # Zoom-Refine (R7): zweistufiges Grounding gegen unpraezise lokale VLMs. Nach dem
+  # groben Punkt auf dem Vollbild wird ein Ausschnitt (crop_px, aus dem ORIGINAL in
+  # voller Aufloesung) um den Punkt vergroessert (zoom) und das Modell einmal nach-
+  # gefragt. Kostet einen zweiten VLM-Call pro Klick/Zeiger-Schritt.
+  refine:
+    enabled: true
+    crop_px: 448
+    zoom: 3.0
+    max_tokens: 300
+  # Verifikation (R7): nach jeder ausgefuehrten Aktion (bzw. jedem Nutzer-Klick im
+  # gefuehrten Modus) prueft ein VLM-Call den Nachher-Screenshot gegen die erwartete
+  # Wirkung; Fehlschlaege gehen als explizites Feedback in die Planungs-History.
+  # settle_ms = Wartezeit nach der Aktion, bevor der Nachher-Screenshot entsteht.
+  # pixel_diff_threshold: mittlere Graustufen-Differenz, unter der der Bildschirm
+  # als "unveraendert" gilt (billiger Vorab-Check ohne VLM).
+  verify:
+    enabled: true
+    settle_ms: 800
+    pixel_diff_threshold: 1.5
+    max_tokens: 400
+  # Gefuehrter Modus (R7): Schritt-fuer-Schritt-Anleitung mit Auto-Advance — der
+  # native Klick-Watcher meldet den Nutzer-Klick, nach click_settle_ms entsteht der
+  # naechste Screenshot und der naechste Zeiger-Schritt wird geplant.
+  guide:
+    max_steps: 10
+    click_settle_ms: 700
+  # Native Selbst-Steuerung (R7): die KI plant pro Screenshot EINE Aktion, die nativ
+  # (enigo, control.rs) echte Maus/Tastatur bedient. Standardmaessig AUS. enabled gilt
+  # nur als Freigabe des Backend-Planers; im Overlay muss zusaetzlich pro Sitzung
+  # "aktiviert" werden. autopilot: Aktionen laufen ohne Einzel-Bestaetigung durch
+  # (im Overlay abschaltbar -> Bestaetigungsmodus). Not-Aus jederzeit per Ctrl+Shift+Q.
+  # max_steps begrenzt das Schrittbudget; nach max_consecutive_failures fehlge-
+  # schlagenen Aktionen in Folge fragt die KI den Nutzer statt weiterzuprobieren.
+  # lookup: erlaubt dem Planer eine Recherche-Aktion (Web/Paper), wenn ihm Wissen
+  # fehlt — Ergebnisse fliessen als Kontext in den naechsten Planungsschritt.
+  # mouse_abort_px: bewegt der NUTZER die Maus waehrend einer armierten Sitzung um
+  # mehr als diesen Abstand (physische Pixel) vom erwarteten Punkt, greift der
+  # Maus-Ruck-Not-Aus. action_timeout_ms/step_timeout_ms: harte Deadlines pro
+  # enigo-Aktion (Rust) bzw. pro Capture→Plan→Ausfuehren-Runde (Overlay-Loop).
+  # sensitive: geplante Aktionen auf sensible Ziele (Passwortfelder, "Kaufen"-
+  # Buttons, Loeschen/Zahlung) verlangen auch im Autopilot eine Einzel-Bestaetigung;
+  # keywords erweitert die eingebaute DE+EN-Liste.
   self_drive:
-    enabled: false
+    enabled: true
     max_steps: 15
+    autopilot: true
+    max_consecutive_failures: 3
+    mouse_abort_px: 150
+    action_timeout_ms: 5000
+    step_timeout_ms: 120000
+    sensitive:
+      enabled: true
+      keywords: []
+    lookup:
+      enabled: true
+      use_web: true
+      use_papers: false
+      max_per_session: 3
 
 # Analyse-Werkstatt (WP1): reproduzierbare, lokale Ausführung KI-geschriebener
 # Python-Analyse-Skripte. Jeder Lauf ist ein git-versionierter Ordner im verwalteten

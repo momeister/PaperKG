@@ -111,7 +111,9 @@ Legende: ⬜ offen · 🟡 in Arbeit · ✅ fertig & verifiziert
 | R6.1 | Companion-Nachbesserung: Live-Modell-Discovery + lesbares Dropdown (`color-scheme:dark` + `option{}`); Thinking-Modelle (`max_tokens`-Headroom, `/no_think` für Qwen, Budget-erschöpft→klarer Fehler statt Denkprotokoll); **0-1000-Grounding-Kontrakt** statt Sent-Frame-Pixel (Ursache des konstant falschen Rings) + Zeig-Entscheidungsregel (nur bei Wo/Wie-Fragen) + Debug-Dumps (`companion.debug_capture`) | ✅ (Code; Geräte-Verifikation offen) | `frontend/src/pages/OverlayPage.tsx`, `frontend/src/styles.css`, `query/screen_companion.py`, `query/llm_router.py`, `api/product_main.py`, `tests/test_companion_api.py` |
 | R6.2 | Multi-Monitor: `list_monitors` + `target_monitor` (Default Monitor unter Cursor, sonst Picker-Id), `CaptureResult`/`SnipBegin` tragen Monitor-Origin/-Name, Pointer-/Snip-Fenster werden auf den Zielmonitor gesetzt, DPR-unabhängige Skalierung (`monitor_width/innerWidth`), Overlay-Picker + Anzeige des aktiven Bildschirms | ✅ (Code; Geräte-Verifikation offen) | `src-tauri/src/capture.rs`, `src-tauri/src/overlay.rs`, `frontend/src/pages/{OverlayPage,PointerOverlayPage,SnipOverlayPage}.tsx`, `frontend/src/pointerMath.ts` |
 | R6.3 | Quellen-Modus: Companion-Antworten optional mit lokalen Papern (`HybridRetriever`, `[arxiv:...]`-Zitate) und/oder Websuche (`run_web_search`, sanitisiert, Untrusted-Data-Regel) belegen; Toggle-Chips + Quellenliste im Overlay; best-effort (Ausfall bricht Antwort nicht) | ✅ (Code; Geräte-Verifikation offen) | `query/screen_companion.py`, `api/product_main.py`, `frontend/src/pages/OverlayPage.tsx` |
-| R7   | **Native Selbst-Steuerung** (enigo statt UI-TARS-Bridge): Backend-Planer (`query/self_drive.py`, 1 Aktion/Screenshot, 0-1000-Koordinaten), native Aktions-Commands (`control.rs`, armed-gated), `/selfdrive/*`-Endpoints, Overlay-**Bestätigungsmodus** (jede Aktion einzeln), Not-Aus `Ctrl+Shift+Q`. Design + Skeleton — noch kein autonomer Loop | 🟡 Skeleton (Design + Gerüst; autonomer Loop + Maus-Ruck-Not-Aus offen) | `src-tauri/src/control.rs`, `query/self_drive.py`, `api/product_main.py`, `frontend/src/pages/OverlayPage.tsx`, dieses Dokument (Abschnitt „R7") |
+| R7   | **Native Selbst-Steuerung** (enigo statt UI-TARS-Bridge): Backend-Planer (`query/self_drive.py`, 1 Aktion/Screenshot, 0-1000-Koordinaten), native Aktions-Commands (`control.rs`, armed-gated), `/selfdrive/*`-Endpoints, Overlay-**Bestätigungsmodus** (jede Aktion einzeln), Not-Aus `Ctrl+Shift+Q`. Design + Skeleton — noch kein autonomer Loop | ✅ (durch R7.1 zum Autopilot ausgebaut) | `src-tauri/src/control.rs`, `query/self_drive.py`, `api/routers/companion.py`, `frontend/src/pages/overlay/`, dieses Dokument (Abschnitt „R7") |
+| R7.1 | **R7-Rework: Autopilot + Verify-Pipeline + geführter Modus + Sessions.** Planner wird Pipeline (Verify des Nachher-Screenshots gegen `expectation` + Fehler-Feedback in die History, Stall-Detection → erzwungene Rückfrage, `lookup`-Recherche-Aktion, `ask`-Rückfrage); **Zoom-Refine** (2-stufiges Grounding auf Original-Crop, `query/screen_grounding.py`) für Klick- und Zeiger-Punkte; **Autopilot** (Default, Bestätigung bleibt Schalter, Pause/Weiter); **geführter Companion-Modus** (`query/guide_flow.py` + globaler Klick-Watcher `click_watch.rs`: Ring zeigt, Nutzer klickt, auto-advance + Klick-Verifikation); **DuckDB-Sessions** (`companion_sessions`/`companion_messages`, Session-Liste/Umbenennen/Löschen im minimalistischen Chat-Overlay); Companion/Selfdrive-Routen nach `api/routers/companion.py` extrahiert | ✅ (Code; Geräte-Verifikation offen) | `query/{screen_grounding,self_drive,guide_flow}.py`, `api/routers/companion.py`, `storage/metadata_db/companion.py`, `src-tauri/src/{click_watch,control}.rs`, `frontend/src/pages/overlay/`, `tests/test_{screen_grounding,self_drive,guide_flow,companion_sessions}.py` |
+| R7.2 | **Sicherheits-Trio + Performance.** Maus-Ruck-Not-Aus (Pre-Action-Check + 30-ms-Watcher, Anker-Buchführung, Overlay-Ausnahme), Aktions-/Schritt-Timeouts (Rust-Worker-Deadline + Overlay-Deadline, Not-Aus mit `reason`-Payload, Session-Status in DuckDB), Absicherung sensibler Ziele (`classify_sensitive`, DE+EN-Keywords, Autopilot-Downgrade + Warn-Confirm); **Lärm-Fix**: die 4 Overlay-Fenster entstehen lazy per `ensure_window` (Event-Queue bis `overlay_window_ready`) statt beim Start, alle Haupt-Shell-Seiten sind code-gesplittet (`React.lazy`, Entry-Chunk ohne Monaco/pdf.js/xterm/xyflow), toter `PdfPane`-Import aus `NotesSubComponents` entfernt | ✅ (Code; Geräte-Verifikation offen) | `src-tauri/src/{control,overlay,capture,lib}.rs`, `query/self_drive.py`, `api/routers/companion.py`, `frontend/src/{App.tsx,native.ts}`, `frontend/src/pages/overlay/`, `config.yaml`, `tests/test_self_drive.py` |
 
 ## R7 — Native Selbst-Steuerung: Design + Skeleton
 
@@ -145,14 +147,85 @@ Legacy-Bridge-Modus bleibt daneben bestehen.
 **Skeleton-Umfang (umgesetzt).** `enigo`-Dependency; `control.rs` mit armed-gated Commands
 (`self_drive_arm/disarm`, `control_move/click/type/key/scroll`, `emergency_stop` + Hotkey-Registrierung);
 `query/self_drive.py` (Planer + Action-Grammar + In-Memory-`SelfDriveStore`); `/selfdrive/{start,step,stop}`;
-Overlay-Tab-Umschalter „Nativ (experimentell)" ↔ „UI-TARS-Bridge (Legacy)" mit Bestätigungspanel;
+Overlay-Tab-Umschalter „Nativ" ↔ „UI-TARS-Bridge (Legacy)" mit Bestätigungspanel;
 `companion.self_drive`-Config; Tests `tests/test_self_drive.py` (Action-Parsing, Koord-Skalierung,
 Schrittbudget, Endpoint-Stubs).
 
-**Offene Folgearbeit (bewusst später).** Autonomer Loop (Aktionen ohne Einzelbestätigung, mit
-Sicherheits-Heuristiken); **Maus-Ruck-Not-Aus** (User bewegt Maus >150 px während einer Aktion → Abbruch);
-Aktions-Timeouts + Wiederholungserkennung; Absicherung sensibler Ziele (Passwortfelder, „Kaufen"-Buttons);
-Geräte-Verifikation über mehrere Monitore/DPI.
+### R7.1 — Rework: Autopilot, Verify-Pipeline, geführter Modus, Sessions
+
+**Planner-Pipeline (`query/self_drive.py`).** `plan_step` ist jetzt pro Screenshot:
+1. **Verify**: der eingehende Screenshot ist zugleich das Nachher-Bild der letzten Aktion.
+   Billiger Pixel-Diff (`companion.verify.pixel_diff_threshold`, „Bildschirm unverändert" ohne
+   VLM-Call) + ein Verify-VLM-Call (`screen_grounding.verify_expectation`, Describe-then-Judge
+   gegen Ja-Bias) gegen die vom Planer angesagte `expectation`. Fehlschläge landen als explizites
+   deutsches Feedback in der History („…hat NICHT funktioniert — anderes Element/anderer Weg") —
+   damit lokale Modelle merken, dass sie falsch geklickt haben, statt sich zu wundern.
+2. **Stall-Detection**: 3× dieselbe Klick-Position oder `max_consecutive_failures` verifizierte
+   Fehlschläge in Folge → erzwungene `ask`-Rückfrage an den Nutzer (ohne VLM-Call); zweiter Stall
+   → terminales `fail`. Antworten laufen über `POST /selfdrive/answer`.
+3. **Plan**: Aktions-Grammar erweitert um `label` (Pflicht bei click/move — füttert Refine + Verify),
+   `expectation`, `lookup` (Recherche, wenn Wissen fehlt) und `ask` (Nutzer-Entscheidung).
+   `lookup` löst der Endpoint auf (`_companion_context` → Web/Paper, sanitisiert + Untrusted-Data-
+   Framing) und plant auf demselben Frame neu — budgetiert (`lookup.max_per_session`).
+4. **Zoom-Refine** (`query/screen_grounding.py`): zweistufiges Grounding — Crop (`refine.crop_px`,
+   aus dem **Original in voller Auflösung**) um den groben Punkt, hochskaliert (`refine.zoom`),
+   ein Nachfrage-Call auf 0-1000-Raster über den Ausschnitt → deutlich präzisere Klicks mit
+   kleinen lokalen VLMs. Degradiert bei Parse-Fehlern auf den groben Punkt.
+
+**Autopilot (Frontend `useSelfDriveLoop`).** Default an (`companion.self_drive.autopilot`):
+plan → ausführen → `verify.settle_ms` warten → neu planen, ohne Einzelbestätigung. Schalter
+„Autopilot" im Panel stellt den Bestätigungsmodus (Ausführen/Überspringen) wieder her; Pause/Weiter
+mitten im Loop; Not-Aus `Ctrl+Shift+Q` disarmt in Rust (inkl. Klick-Watcher-Stopp) und bricht
+beide Loops im Overlay ab.
+
+**Geführter Companion-Modus (`query/guide_flow.py` + `src-tauri/src/click_watch.rs`).**
+„Schritt für Schritt"-Chip: pro Screenshot genau EIN Zeiger-Schritt
+(`/companion/guide/{start,step,stop}`); der globale Klick-Watcher (30-ms-`GetAsyncKeyState`-Polling,
+Release-Edge, `companion://click` mit `on_overlay`-Filter) meldet den echten Nutzer-Klick →
+`click_settle_ms` warten → frischer Screenshot mit `event:"click"` + Klick-Koordinaten → Backend
+verifiziert die Wirkung des Klicks (gleiches Verify wie oben, guidance-Feedback) und plant den
+nächsten Ring — komplett automatisch bis `done`. `step: null` = reiner Hinweis-Schritt („scrolle
+nach unten"). Der alte One-Shot-`/companion/guide` bleibt für „Wo ist X?"-Einzelzeiger.
+
+**Sessions + minimalistisches Chat-Overlay.** DuckDB-Tabellen `companion_sessions` +
+`companion_messages` (`storage/metadata_db/companion.py`): Chat-/Step-Transkripte überleben den
+Neustart; Session-CRUD unter `/companion/sessions*`. Das Overlay (`frontend/src/pages/overlay/`)
+ist jetzt ein Chat-Shell mit Kopfzeile (Session-Titel, Session-Liste, „Neue Session", Zahnrad-
+Popover für Provider/Modell/Monitor/Quellen), einem gemeinsamen Eingabefeld (Companion-Frage,
+geführtes Ziel, Selbst-Steuerungs-Ziel oder Antwort auf eine Rückfrage) und System-Zeilen für
+Aktionen/Prüfungen im Stream. In-Flight-Planner-State bleibt im Speicher — nach Backend-Neustart
+ist eine wiedergeöffnete Session reiner Verlauf („neu starten"-Pfad).
+
+**Routen-Extraktion.** `/companion/*` + `/selfdrive/*` leben jetzt in `api/routers/companion.py`
+(Muster `api/routers/parallel.py`); die patchbaren Singletons (`llm_router`,
+`_COMPANION_CONFIG_CACHE`, `_companion_context`, `_SELF_DRIVE_STORE`, `_GUIDE_STORE`) bleiben in
+`product_main` und werden zur Laufzeit als `pm.<name>` aufgelöst — bestehende Monkeypatch-Tests
+unverändert.
+
+**Sicherheits-Trio (R7.2, umgesetzt).** Drei zuvor aufgeschobene Schutzmechanismen sind jetzt drin:
+
+- **Maus-Ruck-Not-Aus** (`src-tauri/src/control.rs`): bewegt der *Nutzer* die Maus >
+  `companion.self_drive.mouse_abort_px` (Default 150 px) vom erwarteten Punkt, stoppt alles.
+  Zwei Mechanismen: ein race-freier Pre-Action-Check vor jeder `control_*`-Ausführung (Cursor
+  weit weg vom letzten synthetischen Anker → Abbruch statt Ausführung) plus ein 30-ms-Watcher-
+  Thread, der während laufender Aktionen wacht. Cursor-Positionen auf der Chat-Karte sind
+  ausgenommen („Ausführen" klicken ist Interaktion, keine Übernahme). Zwei-Anker-Buchführung
+  (aktueller + voriger Zielpunkt) deckt das Sampling-Race zwischen Bookkeeping und `SendInput` ab.
+- **Aktions-Timeouts**: jede enigo-Aktion läuft auf einem Worker-Thread mit harter Deadline
+  (`action_timeout_ms`, Default 5 s) — Ablauf löst den Not-Aus aus. Der Overlay-Loop hat
+  zusätzlich eine Schritt-Deadline (`step_timeout_ms`, Default 120 s) über Capture+Planung.
+  Das `selfdrive://emergency-stop`-Event trägt jetzt `{ reason: "hotkey"|"mouse"|"timeout" }`;
+  das Overlay zeigt die passende Meldung und persistiert den Session-Status (`stopped`/`done`/
+  `failed`) in DuckDB.
+- **Absicherung sensibler Ziele** (`query/self_drive.py::classify_sensitive`): geplante Aktionen,
+  deren Label/Eingabetext/Begründung Passwort-/Zahlungs-/Kauf-/Lösch-Schlüsselwörter (DE+EN,
+  Wortgrenzen-Regex, erweiterbar via `companion.self_drive.sensitive.keywords`) treffen, kommen
+  mit `sensitive: true` + Begründung zurück — der Autopilot degradiert für genau diese Aktion in
+  den Bestätigungsmodus (Warnzeile im `SelfDrivePanel`).
+
+**Offene Folgearbeit (bewusst später).** Klick-Watcher für Nicht-Windows (`device_query`);
+Geräte-Verifikation über mehrere Monitore/DPI (Autopilot, geführter Modus, Refine-Treffsicherheit,
+Maus-Ruck-Not-Aus).
 
 ## Verifikation M1 (Stand)
 

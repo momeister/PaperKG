@@ -1,0 +1,497 @@
+// Minimal Notizen tab for the AI-Cursor overlay: a plain title + textarea editor instead
+// of the full desktop NotesSurface (toolbar/citation panel/highlight-layer/thread anchors)
+// that used to be crammed into this small floating window. Images (paste/drop) and a
+// one-shot "AI adjust selection" action stay available — everything else is dropped.
+
+import { useEffect, useRef, useState } from "react";
+import type {
+  ClipboardEvent as ReactClipboardEvent,
+  DragEvent as ReactDragEvent,
+  PointerEvent as ReactPointerEvent
+} from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Eye, EyeOff, ImagePlus, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
+
+import { api } from "../../api";
+import { isTauri, nativeInvoke } from "../../native";
+import { noteProjectId } from "../../projectScope";
+import { useAppState } from "../../state";
+import type { Note } from "../../types";
+import { MarkdownPreview } from "../NotesSubComponents";
+import {
+  absoluteUrl,
+  formatError,
+  isUntitledNoteTitle,
+  noteTitleForSave,
+  shortText,
+  suggestNoteTitle,
+  withPreservedCitationLinks
+} from "../notesHelpers";
+import { clampNotesSize, loadOverlayNotesSize, saveOverlayNotesSize, type OverlaySize } from "./overlayNotesSize";
+
+type SelectionState = { start: number; end: number; text: string };
+
+export function OverlayNotesPanel() {
+  const { activeProject, setActiveProject, provider, model } = useAppState();
+  const queryClient = useQueryClient();
+  const scopedProjectId = noteProjectId(activeProject);
+
+  const [activeNoteId, setActiveNoteId] = useState("");
+  const [title, setTitle] = useState("");
+  const [markdown, setMarkdown] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
+  const [selection, setSelection] = useState<SelectionState | null>(null);
+  const [aiInstruction, setAiInstruction] = useState("");
+
+  const dirtyRef = useRef(false);
+  const markdownRef = useRef("");
+  const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
+  const loadedNoteIdRef = useRef("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const sizeRef = useRef<OverlaySize>(loadOverlayNotesSize());
+
+  function setDirtyState(value: boolean) {
+    dirtyRef.current = value;
+    setDirty(value);
+  }
+
+  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
+  const projects = projectsQuery.data?.projects ?? [];
+
+  const notesQuery = useQuery({
+    queryKey: ["notes", scopedProjectId],
+    queryFn: () => api.listNotes(scopedProjectId)
+  });
+  const notes: Note[] = notesQuery.data?.items ?? [];
+
+  const noteQuery = useQuery({
+    queryKey: ["note", activeNoteId],
+    queryFn: () => api.getNote(activeNoteId),
+    enabled: Boolean(activeNoteId)
+  });
+  const currentNote = noteQuery.data?.note;
+
+  const createNote = useMutation({
+    mutationFn: () => api.createNote(scopedProjectId, { title: "Neue Notiz", markdown: "# Neue Notiz\n\n" }),
+    onSuccess: ({ note }) => {
+      loadedNoteIdRef.current = note.id;
+      setActiveNoteId(note.id);
+      setTitle(note.title);
+      setMarkdown(note.markdown);
+      setDirtyState(false);
+      setSelection(null);
+      setAiInstruction("");
+      aiEdit.reset();
+      queryClient.setQueryData(["note", note.id], { note });
+      queryClient.invalidateQueries({ queryKey: ["notes", scopedProjectId] });
+    }
+  });
+
+  const deleteNoteMutation = useMutation({
+    mutationFn: (noteId: string) => api.deleteNote(noteId),
+    onSuccess: (_data, noteId) => {
+      if (activeNoteId === noteId) {
+        loadedNoteIdRef.current = "";
+        setActiveNoteId("");
+        setTitle("");
+        setMarkdown("");
+        setDirtyState(false);
+        setSelection(null);
+        setAiInstruction("");
+        aiEdit.reset();
+      }
+      queryClient.invalidateQueries({ queryKey: ["notes", scopedProjectId] });
+    }
+  });
+
+  const saveNote = useMutation({
+    mutationFn: (payload: { noteId: string; title: string; markdown: string }) =>
+      api.updateNote(payload.noteId, { title: payload.title, markdown: payload.markdown }),
+    onSuccess: ({ note }, variables) => {
+      const latest = latestDraftRef.current;
+      if (latest.noteId === note.id && latest.title === variables.title && latest.markdown === variables.markdown) {
+        setDirtyState(false);
+      }
+      queryClient.setQueryData(["note", note.id], { note });
+      queryClient.invalidateQueries({ queryKey: ["notes", scopedProjectId] });
+    }
+  });
+
+  const uploadAsset = useMutation({
+    mutationFn: (file: File) => api.uploadNoteAsset(activeNoteId, file),
+    onSuccess: ({ asset }) => {
+      insertAtCaret(`![${asset.filename}](${absoluteUrl(asset.url)})`);
+      queryClient.invalidateQueries({ queryKey: ["note", activeNoteId] });
+    }
+  });
+
+  const aiEdit = useMutation({
+    mutationFn: () =>
+      api.noteAiEdit(activeNoteId, {
+        selected_text: selection?.text ?? "",
+        instruction: aiInstruction,
+        provider,
+        model,
+        use_kg_evidence: true
+      })
+  });
+
+  // Project switch: this window has no PDF/citation panel to keep in sync — just drop
+  // whatever was open and let the "select first note" effect below pick a fresh one.
+  useEffect(() => {
+    loadedNoteIdRef.current = "";
+    setActiveNoteId("");
+    setTitle("");
+    setMarkdown("");
+    setDirtyState(false);
+  }, [scopedProjectId]);
+
+  useEffect(() => {
+    if (!activeNoteId && notes[0]) {
+      setActiveNoteId(notes[0].id);
+    }
+  }, [activeNoteId, notes]);
+
+  useEffect(() => {
+    if (!currentNote) return;
+    const switchedNote = loadedNoteIdRef.current !== currentNote.id;
+    if (dirtyRef.current) return;
+    if (!switchedNote && title === currentNote.title && markdown === currentNote.markdown) return;
+    loadedNoteIdRef.current = currentNote.id;
+    setTitle(currentNote.title);
+    setMarkdown(currentNote.markdown);
+    setDirtyState(false);
+    if (switchedNote) {
+      setSelection(null);
+      setAiInstruction("");
+      aiEdit.reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentNote?.id, currentNote?.markdown, currentNote?.title, currentNote?.updated_timestamp, dirty, markdown, title]);
+
+  useEffect(() => {
+    markdownRef.current = markdown;
+    latestDraftRef.current = { noteId: activeNoteId, title, markdown };
+  }, [activeNoteId, markdown, title]);
+
+  // Autosave — same 1400ms debounce as the full Notes editor.
+  useEffect(() => {
+    if (!activeNoteId || !dirty || saveNote.isPending) return;
+    const nextTitle = noteTitleForSave(title, markdown);
+    if (nextTitle !== title) setTitle(nextTitle);
+    const handle = window.setTimeout(() => {
+      saveNote.mutate({ noteId: activeNoteId, title: nextTitle, markdown });
+    }, 1400);
+    return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNoteId, dirty, markdown, saveNote.isPending, title]);
+
+  useEffect(() => {
+    if (!activeNoteId || dirty || !isUntitledNoteTitle(title)) return;
+    const suggestion = suggestNoteTitle(markdown);
+    if (suggestion && suggestion !== title) {
+      setTitle(suggestion);
+      setDirtyState(true);
+    }
+  }, [activeNoteId, dirty, markdown, title]);
+
+  // Flush an unsaved edit if the tab is switched away inside the debounce window.
+  useEffect(() => {
+    return () => {
+      const draft = latestDraftRef.current;
+      if (dirtyRef.current && draft.noteId) {
+        void api.updateNote(draft.noteId, { title: draft.title, markdown: draft.markdown }).catch(() => {});
+      }
+    };
+  }, []);
+
+  function insertAtCaret(snippet: string) {
+    const node = textareaRef.current;
+    const fallback = markdownRef.current.length;
+    const start = node?.selectionStart ?? fallback;
+    const end = node?.selectionEnd ?? fallback;
+    const base = markdownRef.current;
+    const next = `${base.slice(0, start)}${snippet}${base.slice(end)}`;
+    markdownRef.current = next;
+    setMarkdown(next);
+    setDirtyState(true);
+    requestAnimationFrame(() => {
+      if (!node) return;
+      const caret = start + snippet.length;
+      node.focus();
+      node.setSelectionRange(caret, caret);
+    });
+  }
+
+  function captureSelection() {
+    const node = textareaRef.current;
+    if (!node) return;
+    if (node.selectionStart === node.selectionEnd) {
+      setSelection(null);
+      return;
+    }
+    setSelection({ start: node.selectionStart, end: node.selectionEnd, text: markdown.slice(node.selectionStart, node.selectionEnd) });
+    aiEdit.reset();
+  }
+
+  function handlePaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (!files.length || !activeNoteId) return;
+    event.preventDefault();
+    for (const file of files) uploadAsset.mutate(file);
+  }
+
+  function handleDragOver(event: ReactDragEvent<HTMLTextAreaElement>) {
+    if (event.dataTransfer.types.includes("Files")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function handleDrop(event: ReactDragEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.dataTransfer.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (!files.length || !activeNoteId) return;
+    event.preventDefault();
+    for (const file of files) uploadAsset.mutate(file);
+  }
+
+  function applyAiEdit() {
+    if (!selection || !aiEdit.data) return;
+    const base = markdownRef.current;
+    const replaced = withPreservedCitationLinks(base.slice(selection.start, selection.end), aiEdit.data.replacement_text);
+    const next = `${base.slice(0, selection.start)}${replaced}${base.slice(selection.end)}`;
+    markdownRef.current = next;
+    setMarkdown(next);
+    setDirtyState(true);
+    setSelection(null);
+    setAiInstruction("");
+    aiEdit.reset();
+  }
+
+  function discardAiEdit() {
+    aiEdit.reset();
+    setAiInstruction("");
+  }
+
+  function startNotesResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const start = sizeRef.current;
+    let frame: number | null = null;
+    let latest = start;
+    const move = (moveEvent: PointerEvent) => {
+      latest = clampNotesSize({
+        width: start.width + (moveEvent.clientX - startX),
+        height: start.height + (moveEvent.clientY - startY)
+      });
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        void nativeInvoke("overlay_resize", latest);
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      sizeRef.current = latest;
+      saveOverlayNotesSize(latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  const saveStatus = saveNote.isPending
+    ? "Speichert…"
+    : saveNote.isError
+      ? `Fehler: ${formatError(saveNote.error)}`
+      : dirty
+        ? "Ungespeichert"
+        : activeNoteId
+          ? "Gespeichert"
+          : "";
+
+  return (
+    <div className="overlay-notes-view">
+      <select
+        className="overlay-notes-project-select"
+        aria-label="Projekt"
+        value={activeProject ?? ""}
+        onChange={(event) => setActiveProject(event.target.value || undefined)}
+      >
+        <option value="">Alle Papers</option>
+        {projects.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.name}
+          </option>
+        ))}
+      </select>
+
+      <div className="overlay-notes-toolbar">
+        <select
+          className="overlay-notes-project-select overlay-notes-note-select"
+          aria-label="Notiz"
+          value={activeNoteId}
+          onChange={(event) => setActiveNoteId(event.target.value)}
+        >
+          {!notes.length ? <option value="">Keine Notizen</option> : null}
+          {notes.map((note) => (
+            <option key={note.id} value={note.id}>
+              {note.title || "Ohne Titel"}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="overlay-close"
+          title="Neue Notiz"
+          aria-label="Neue Notiz"
+          disabled={createNote.isPending}
+          onClick={() => createNote.mutate()}
+        >
+          <Plus size={15} />
+        </button>
+        <button
+          type="button"
+          className="overlay-close"
+          title="Notiz löschen"
+          aria-label="Notiz löschen"
+          disabled={!activeNoteId || deleteNoteMutation.isPending}
+          onClick={() => activeNoteId && deleteNoteMutation.mutate(activeNoteId)}
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
+
+      <input
+        className="overlay-notes-title-input"
+        value={title}
+        placeholder="Titel"
+        disabled={!activeNoteId}
+        onChange={(event) => {
+          setTitle(event.target.value);
+          setDirtyState(true);
+        }}
+      />
+
+      <div className="overlay-notes-editor">
+        {!activeNoteId ? (
+          <p className="overlay-muted">{notesQuery.isLoading ? "Lade Notizen…" : "Keine Notiz gewählt."}</p>
+        ) : editorMode === "edit" ? (
+          <textarea
+            ref={textareaRef}
+            className="overlay-notes-textarea"
+            value={markdown}
+            placeholder="Schreib los…"
+            onChange={(event) => {
+              setMarkdown(event.target.value);
+              setDirtyState(true);
+            }}
+            onSelect={captureSelection}
+            onMouseUp={captureSelection}
+            onKeyUp={captureSelection}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          />
+        ) : (
+          <div className="overlay-notes-preview">
+            <MarkdownPreview markdown={markdown} citations={currentNote?.citations ?? []} onCitationClick={() => {}} editable={false} />
+          </div>
+        )}
+      </div>
+
+      {selection && activeNoteId ? (
+        <div className="overlay-notes-ai-panel">
+          <div className="overlay-notes-ai-selection">
+            <Sparkles size={13} />
+            <span>{shortText(selection.text, 140)}</span>
+          </div>
+          {!aiEdit.data ? (
+            <div className="overlay-chat-input">
+              <input
+                value={aiInstruction}
+                placeholder="Wie soll die Auswahl angepasst werden?"
+                onChange={(event) => setAiInstruction(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && aiInstruction.trim() && !aiEdit.isPending) {
+                    event.preventDefault();
+                    aiEdit.mutate();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="button button-primary button-compact"
+                disabled={!aiInstruction.trim() || aiEdit.isPending}
+                onClick={() => aiEdit.mutate()}
+              >
+                {aiEdit.isPending ? <Loader2 size={14} className="overlay-spin" /> : <Sparkles size={14} />}
+                Anwenden
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="overlay-notes-ai-preview">{aiEdit.data.replacement_text}</div>
+              <div className="button-row">
+                <button type="button" className="button button-primary button-compact" onClick={applyAiEdit}>
+                  <Check size={13} /> Ersetzen
+                </button>
+                <button type="button" className="button button-compact" onClick={discardAiEdit}>
+                  <X size={13} /> Verwerfen
+                </button>
+              </div>
+            </>
+          )}
+          {aiEdit.isError ? <div className="inline-error">{formatError(aiEdit.error)}</div> : null}
+        </div>
+      ) : null}
+
+      <div className="overlay-notes-footer">
+        <button
+          type="button"
+          className="overlay-close"
+          title={editorMode === "edit" ? "Vorschau" : "Bearbeiten"}
+          aria-label={editorMode === "edit" ? "Vorschau" : "Bearbeiten"}
+          disabled={!activeNoteId}
+          onClick={() => setEditorMode((mode) => (mode === "edit" ? "preview" : "edit"))}
+        >
+          {editorMode === "edit" ? <Eye size={15} /> : <EyeOff size={15} />}
+        </button>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) uploadAsset.mutate(file);
+            event.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="overlay-close"
+          title="Bild einfügen"
+          aria-label="Bild einfügen"
+          disabled={!activeNoteId}
+          onClick={() => imageInputRef.current?.click()}
+        >
+          <ImagePlus size={15} />
+        </button>
+        <span className="overlay-notes-status">{saveStatus}</span>
+      </div>
+
+      {isTauri() ? (
+        <div
+          className="overlay-notes-resize-handle"
+          role="separator"
+          aria-label="Fenstergröße anpassen"
+          onPointerDown={startNotesResize}
+        />
+      ) : null}
+    </div>
+  );
+}

@@ -13,8 +13,17 @@
 // Two further full-monitor, click-through windows built here: the "AI has control" border
 // (Selbst-Steuerung takeover signal) and the pointer overlay (Assistent's "zeig mir" —
 // highlights a grounded screen point, never dispatches input).
+//
+// All four overlay-family windows are created **lazily** via `ensure_window` (first
+// hotkey/tray/feature use), not at startup — each one is a full WebView2 process
+// parsing the whole frontend bundle, and five webviews at launch made fans audible
+// while Task Manager looked idle. Events destined for a window that is still loading
+// are queued (`emit_or_queue`) and drained once its page signals readiness
+// (`overlay_window_ready`).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -28,6 +37,105 @@ pub(crate) const OVERLAY_LABEL: &str = "overlay";
 pub(crate) const CONTROL_BORDER_LABEL: &str = "control-border";
 pub(crate) const POINTER_LABEL: &str = "pointer";
 pub(crate) const SNIP_LABEL: &str = "snip";
+
+/// Init script shared by all lazily created overlay windows (`window.__API_BASE__`
+/// injection) — managed in setup, read by `ensure_window`.
+pub struct OverlayInit(pub String);
+
+#[derive(Default)]
+struct ReadyState {
+    ready: bool,
+    queue: Vec<(String, serde_json::Value)>,
+}
+
+/// Per-label ready/queue bookkeeping: `emit_to` against a window whose page has not
+/// registered its JS listeners yet silently drops the event, so the first
+/// `overlay://task` / `pointer://show` / `snip://begin` / `snip://result` after a
+/// lazy creation is queued here instead. Windows are only ever hidden, never
+/// destroyed — once ready, always ready.
+#[derive(Default)]
+pub struct OverlayReady(Mutex<HashMap<String, ReadyState>>);
+
+/// Get the window with this label, building it on first use. Deliberately lock-free
+/// around the build: a mutex held on a command thread while `build()` dispatches to
+/// the main thread could deadlock; Tauri's label uniqueness is the atomicity
+/// guarantee (a concurrent loser falls back to `get_webview_window`).
+pub(crate) fn ensure_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+    let init = app
+        .try_state::<OverlayInit>()
+        .map(|state| state.0.clone())
+        .ok_or("Overlay-Init nicht verfügbar")?;
+    let built = match label {
+        OVERLAY_LABEL => build_overlay(app, &init),
+        CONTROL_BORDER_LABEL => build_control_border(app, &init),
+        POINTER_LABEL => build_pointer_overlay(app, &init),
+        SNIP_LABEL => build_snip_overlay(app, &init),
+        other => return Err(format!("Unbekanntes Overlay-Fenster: {other}")),
+    };
+    if let Err(err) = built {
+        // A concurrent creator (double hotkey press) may have won the label race.
+        if let Some(window) = app.get_webview_window(label) {
+            return Ok(window);
+        }
+        return Err(err.to_string());
+    }
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| format!("Fenster '{label}' konnte nicht erzeugt werden"))?;
+    // Companion windows must never contaminate the companion's own screenshots —
+    // WDA exclusion has to be applied per window right after creation.
+    let wda = crate::capture::exclude_from_capture(&window);
+    if label == OVERLAY_LABEL {
+        crate::capture::note_overlay_wda(app, wda);
+    }
+    if !wda {
+        log::warn!("WDA_EXCLUDEFROMCAPTURE not applied for '{label}' window");
+    }
+    Ok(window)
+}
+
+/// Emit to an overlay window, queueing while its page is still loading. Never use
+/// this for `selfdrive://emergency-stop`: if the overlay page does not exist, no
+/// loop is running, and a stale stop delivered later would abort the wrong run.
+pub(crate) fn emit_or_queue<T: serde::Serialize + Clone>(
+    app: &AppHandle,
+    label: &str,
+    event: &str,
+    payload: T,
+) -> Result<(), String> {
+    if let Some(ready) = app.try_state::<OverlayReady>() {
+        if let Ok(mut map) = ready.0.lock() {
+            let entry = map.entry(label.to_string()).or_default();
+            if !entry.ready {
+                let value = serde_json::to_value(&payload).map_err(|err| err.to_string())?;
+                entry.queue.push((event.to_string(), value));
+                return Ok(());
+            }
+        }
+    }
+    app.emit_to(label, event, payload).map_err(|err| err.to_string())
+}
+
+/// Called by an overlay page once its event listeners are live (`signalWindowReady`
+/// in native.ts): marks the window ready and drains any queued events. The label is
+/// taken from the calling window itself, not from a spoofable argument.
+#[tauri::command]
+pub fn overlay_window_ready(app: AppHandle, window: tauri::Window) {
+    let label = window.label().to_string();
+    let queued: Vec<(String, serde_json::Value)> = {
+        let Some(ready) = app.try_state::<OverlayReady>() else { return };
+        let Ok(mut map) = ready.0.lock() else { return };
+        let entry = map.entry(label.clone()).or_default();
+        entry.ready = true;
+        std::mem::take(&mut entry.queue)
+    };
+    for (event, payload) in queued {
+        let _ = app.emit_to(label.as_str(), event.as_str(), payload);
+    }
+}
 
 /// A compiled task brief pushed into the overlay so it shows up pre-loaded — the
 /// overlay only acts on it once the user clicks "Starten" inside the window.
@@ -60,16 +168,40 @@ pub fn build_overlay(app: &AppHandle, init_script: &str) -> SetupResult {
     Ok(())
 }
 
-/// Show the overlay if hidden, hide it if visible. Called from the global hotkey
-/// and the tray menu.
+/// Whether a physical desktop point lies inside a *visible* window with this label.
+/// Used to exempt clicks/cursor positions on the companion chat card from the
+/// guided-mode click watcher and the Selbst-Steuerung mouse-jerk stop.
+pub(crate) fn point_on_window(app: &AppHandle, label: &str, x: f64, y: f64) -> bool {
+    let Some(window) = app.get_webview_window(label) else {
+        return false;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return false;
+    }
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return false;
+    };
+    x >= position.x as f64
+        && x < position.x as f64 + size.width as f64
+        && y >= position.y as f64
+        && y < position.y as f64 + size.height as f64
+}
+
+/// Show the overlay if hidden (building it on first use), hide it if visible.
+/// Called from the global hotkey and the tray menu.
 pub fn toggle_overlay(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
-        } else {
+            return;
+        }
+    }
+    match ensure_window(app, OVERLAY_LABEL) {
+        Ok(window) => {
             let _ = window.show();
             let _ = window.set_focus();
         }
+        Err(err) => log::warn!("AI-Cursor-Fenster konnte nicht erzeugt werden: {err}"),
     }
 }
 
@@ -87,6 +219,19 @@ pub fn overlay_toggle(app: AppHandle) {
     toggle_overlay(&app);
 }
 
+/// Resize the overlay window — used when the frontend switches between the compact
+/// Companion/Selbst-Steuerung view and the wider Notizen tab. Logical size, consistent
+/// with the `.inner_size(420.0, 540.0)` the window was originally built with.
+#[tauri::command]
+pub fn overlay_resize(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window(OVERLAY_LABEL)
+        .ok_or("Overlay-Fenster nicht verfügbar")?;
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|err| err.to_string())
+}
+
 /// Show + focus the overlay and push a pre-compiled task brief into it — the missing
 /// link between "An AI-Cursor übergeben" and the overlay actually doing something.
 /// Nothing executes until the user clicks "Starten" inside the overlay itself.
@@ -98,17 +243,15 @@ pub fn overlay_dispatch_task(
     mode: String,
     variant_id: Option<String>,
 ) -> Result<(), String> {
-    let window = app
-        .get_webview_window(OVERLAY_LABEL)
-        .ok_or("Overlay-Fenster nicht verfügbar")?;
+    let window = ensure_window(&app, OVERLAY_LABEL)?;
     let _ = window.show();
     let _ = window.set_focus();
-    app.emit_to(
+    emit_or_queue(
+        &app,
         OVERLAY_LABEL,
         "overlay://task",
         OverlayTaskPayload { task, goal, mode, variant_id },
     )
-    .map_err(|err| err.to_string())
 }
 
 /// Build the hidden "AI has control" border window: a full-monitor, click-through,
@@ -144,11 +287,16 @@ pub fn build_control_border(app: &AppHandle, init_script: &str) -> SetupResult {
     Ok(())
 }
 
-/// Show the "AI has control" border — called when a Selbst-Steuerung run starts.
+/// Show the "AI has control" border (building it on first use) — called when a
+/// Selbst-Steuerung run starts. The page is static JSX with no event listeners,
+/// so no ready handshake is needed.
 #[tauri::command]
 pub fn control_border_show(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(CONTROL_BORDER_LABEL) {
-        let _ = window.show();
+    match ensure_window(&app, CONTROL_BORDER_LABEL) {
+        Ok(window) => {
+            let _ = window.show();
+        }
+        Err(err) => log::warn!("Kontrollrahmen konnte nicht erzeugt werden: {err}"),
     }
 }
 
@@ -255,9 +403,7 @@ pub fn pointer_show(
     monitor_width: Option<f64>,
     monitor_height: Option<f64>,
 ) -> Result<(), String> {
-    let window = app
-        .get_webview_window(POINTER_LABEL)
-        .ok_or("Zeiger-Fenster nicht verfügbar")?;
+    let window = ensure_window(&app, POINTER_LABEL)?;
     // Multi-monitor: the capture tells us which monitor the point lives on — move the
     // ring window there before showing (build-time bounds cover only the primary).
     if let (Some(ox), Some(oy), Some(mw), Some(mh)) = (origin_x, origin_y, monitor_width, monitor_height)
@@ -265,12 +411,12 @@ pub fn pointer_show(
         fit_window_to_monitor(&window, ox as i32, oy as i32, mw as u32, mh as u32);
     }
     let _ = window.show();
-    app.emit_to(
+    emit_or_queue(
+        &app,
         POINTER_LABEL,
         "pointer://show",
         PointerShowPayload { x, y, label, space, origin_x, origin_y, monitor_width },
-    )
-    .map_err(|err| err.to_string())?;
+    )?;
 
     let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
     let app_for_timer = app.clone();

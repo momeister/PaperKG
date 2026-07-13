@@ -715,22 +715,45 @@ export type CompanionAskResult = { answer: string; sources?: CompanionSource[]; 
 
 /** One planned Selbst-Steuerung action (R7). Coordinates are original-screenshot
  * pixels; the overlay converts them to physical desktop pixels via the capture's
- * monitor origin before calling the control.rs command. */
+ * monitor origin before calling the control.rs command. `lookup` is resolved
+ * server-side (research injected + re-planned); `ask` pauses the loop for a user
+ * reply (POST /selfdrive/answer). */
 export type SelfDriveAction = {
-  type: "click" | "double_click" | "type" | "key" | "scroll" | "move" | "wait" | "done" | "fail";
+  type:
+    | "click"
+    | "double_click"
+    | "type"
+    | "key"
+    | "scroll"
+    | "move"
+    | "wait"
+    | "lookup"
+    | "ask"
+    | "done"
+    | "fail";
   x?: number;
   y?: number;
+  label?: string;
   text?: string;
   keys?: string;
   dx?: number;
   dy?: number;
+  query?: string;
+  question?: string;
+  /** Sensitive-target safeguard: true forces per-action confirmation even in autopilot. */
+  sensitive?: boolean;
+  sensitive_reason?: string;
 };
+
+/** Verify verdict for the previous action (advisory feedback, never a hard gate). */
+export type SelfDriveVerification = { ok: boolean; note?: string };
 
 /** POST /selfdrive/start result. */
 export type SelfDriveStartResult = {
   session_id?: string;
   goal?: string;
   max_steps?: number;
+  autopilot?: boolean;
   error?: string;
 };
 
@@ -738,20 +761,88 @@ export type SelfDriveStartResult = {
 export type SelfDriveStepResult = {
   thought?: string;
   action?: SelfDriveAction;
+  expectation?: string;
+  verification?: SelfDriveVerification | null;
+  refined?: boolean;
   done?: boolean;
   step?: number;
   max_steps?: number;
   error?: string;
 };
 
-/** GET /companion/config: defaults + selectable vision providers for the picker. */
+/** GET /companion/config: defaults + selectable vision providers for the picker,
+ * plus everything the overlay loops need (self-drive autopilot, guide settle). */
 export type CompanionConfigInfo = {
   provider: string;
   model: string;
   language: string;
   default_provider: string;
   providers: { name: string; models: string[] }[];
+  self_drive?: {
+    enabled: boolean;
+    autopilot: boolean;
+    max_steps: number;
+    settle_ms: number;
+    mouse_abort_px?: number;
+    action_timeout_ms?: number;
+    step_timeout_ms?: number;
+  };
+  guide?: { max_steps: number; click_settle_ms: number };
 };
+
+/** One durable companion/selfdrive session (DuckDB `companion_sessions`). */
+export type CompanionSessionSummary = {
+  id: string;
+  kind: "companion" | "selfdrive";
+  title?: string | null;
+  goal?: string | null;
+  status?: string | null;
+  message_count?: number;
+  created_timestamp?: string;
+  updated_timestamp?: string;
+};
+
+/** One persisted transcript row. `payload` carries structured extras (steps,
+ * actions, sources, verification) depending on `role`. */
+export type CompanionSessionMessage = {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant" | "action" | "verification" | "system";
+  content?: string | null;
+  payload?: Record<string, unknown> | null;
+  created_timestamp?: string;
+};
+
+export type CompanionSessionDetail = CompanionSessionSummary & {
+  messages: CompanionSessionMessage[];
+  error?: string;
+};
+
+/** POST /companion/guide/start result. */
+export type GuideStartResult = {
+  guide_id?: string;
+  max_steps?: number;
+  click_settle_ms?: number;
+  settle_ms?: number;
+  error?: string;
+};
+
+/** POST /companion/guide/step result: the next user-executed guidance step. */
+export type GuideStepResult = {
+  instruction?: string;
+  step?: CompanionStep | null;
+  expectation?: string;
+  verification?: SelfDriveVerification | null;
+  done?: boolean;
+  step_index?: number;
+  max_steps?: number;
+  error?: string;
+};
+
+/** Payload of the native `companion://click` event (guided mode): the user's real
+ * click in physical virtual-desktop pixels; `on_overlay` marks clicks on the chat
+ * card itself (UI interaction, not a guided step). */
+export type CompanionClickPayload = { x: number; y: number; on_overlay: boolean };
 
 /** Result of the native `capture_screen` command — physical monitor pixels.
  * `origin_x`/`origin_y` locate the captured monitor in the virtual desktop so the

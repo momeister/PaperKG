@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { isTauri, nativeInvoke, nativeListen } from "../native";
+import { isTauri, nativeInvoke, nativeListen, signalWindowReady } from "../native";
 import { dodgeOffset, physicalToCss, physicalToViewport } from "../pointerMath";
 import type { PointerShowPayload } from "../types";
 
@@ -34,22 +34,29 @@ export function PointerOverlayPage() {
     };
   }, []);
 
+  // The window is created lazily on the first pointer_show — the shell queues that
+  // event until we signal readiness *after* both listeners are registered.
   useEffect(() => {
-    let unlistenShow: (() => void) | undefined;
-    let unlistenHide: (() => void) | undefined;
-    nativeListen<PointerShowPayload>("pointer://show", (payload) => {
-      setPoint(payload);
-      setVisible(true);
-      setDodge({ dx: 0, dy: 0, active: false });
-    }).then((fn) => {
-      unlistenShow = fn;
-    });
-    nativeListen<unknown>("pointer://hide", () => setVisible(false)).then((fn) => {
-      unlistenHide = fn;
-    });
+    let disposed = false;
+    const unlisteners: (() => void)[] = [];
+    void (async () => {
+      const offShow = await nativeListen<PointerShowPayload>("pointer://show", (payload) => {
+        setPoint(payload);
+        setVisible(true);
+        setDodge({ dx: 0, dy: 0, active: false });
+      });
+      const offHide = await nativeListen<unknown>("pointer://hide", () => setVisible(false));
+      if (disposed) {
+        offShow();
+        offHide();
+        return;
+      }
+      unlisteners.push(offShow, offHide);
+      await signalWindowReady();
+    })();
     return () => {
-      unlistenShow?.();
-      unlistenHide?.();
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
     };
   }, []);
 

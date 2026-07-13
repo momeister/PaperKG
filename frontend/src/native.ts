@@ -40,6 +40,16 @@ export async function nativeListen<T>(
   return listen<T>(event, (e) => handler(e.payload));
 }
 
+/**
+ * Tell the shell this overlay window's event listeners are live. Lazily created
+ * windows (overlay/pointer/snip) get events queued in Rust until this fires —
+ * call it only *after* the listeners that consume queued events are registered.
+ */
+export async function signalWindowReady(): Promise<void> {
+  if (!isTauri()) return;
+  await nativeInvoke("overlay_window_ready").catch(() => {});
+}
+
 /** Open a URL in the OS default application (browser / PDF viewer). */
 export async function openExternal(target: string): Promise<void> {
   const invoke = tauriInvoke();
