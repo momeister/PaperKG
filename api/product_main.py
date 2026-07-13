@@ -105,6 +105,10 @@ from api.routers import grey_sources as _grey_sources_router  # noqa: E402
 app.include_router(_grey_sources_router.router)
 from api.routers import extraction as _extraction_router  # noqa: E402
 app.include_router(_extraction_router.router)
+from api.routers import models_meta as _models_meta_router  # noqa: E402
+app.include_router(_models_meta_router.router)
+from api.routers import tools as _tools_router  # noqa: E402
+app.include_router(_tools_router.router)
 from api.routers.extraction import (  # noqa: E402,F401  # pm-Surface fuer harvest/discovery + graph-explorer
     _latest_successful_extractions,
     _parse_pdf_for_extraction,
@@ -241,28 +245,6 @@ class HealthRepairRequest(BaseModel):
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
     initialize_graph_fallback: bool = True
     reindex_embeddings: bool = True
-
-
-class RewriteRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=20000)
-    instruction: str = Field(default="Schreibe den Text klarer und wissenschaftlich um.", min_length=1, max_length=500)
-    provider: str | None = None
-    model: str | None = None
-
-
-class ClaimCheckRequest(BaseModel):
-    """Nachcheck: stützt die zitierte Quelle diese konkrete Aussage wirklich?"""
-
-    statement: str = Field(min_length=1, max_length=4000)
-    paper_ids: list[str] = Field(min_length=1, max_length=4)
-    titles: dict[str, str] = Field(default_factory=dict)
-    evidence_texts: dict[str, str] = Field(default_factory=dict)
-    provider: str | None = None
-    model: str | None = None
-    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-    pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
-    # Bei unsicherem Urteil das ganze Paper nachprüfen (statt nur die Belegstelle).
-    escalate_whole_paper: bool = True
 
 
 class NotePayload(BaseModel):
@@ -438,95 +420,6 @@ async def _companion_context(
 _SELF_DRIVE_STORE = self_drive.SelfDriveStore()
 _GUIDE_STORE = guide_flow.GuideStore()
 
-
-
-@app.get("/models/providers")
-def model_providers() -> dict[str, Any]:
-    return {
-        "default_provider": llm_router.default_provider,
-        "providers": [_provider_view(provider) for provider in llm_router.available_providers()],
-    }
-
-
-@app.post("/models/{provider}/discover")
-def discover_models(provider: str) -> dict[str, Any]:
-    _ensure_provider(provider)
-    return {"provider": provider, "models": llm_router.provider_model_options(provider, refresh=True)}
-
-
-@app.post("/models/{provider}/check")
-def check_model_provider(provider: str, model: str | None = None) -> dict[str, Any]:
-    _ensure_provider(provider)
-    cfg = llm_router.provider_config(provider)
-    ok, error = llm_router.check_provider_auth(provider=provider, model=model, timeout_seconds=min(cfg.timeout_seconds, 30.0))
-    return {"provider": provider, "model": model or llm_router.provider_default_model(provider), "ok": ok, "error": error}
-
-
-@app.post("/tools/rewrite")
-def rewrite_text(request: RewriteRequest) -> dict[str, Any]:
-    overrides: dict[str, Any] = {
-        "temperature": 0.15,
-        "top_p": 0.9,
-        "max_tokens": min(1800, max(300, len(request.text) // 2 + 300)),
-    }
-    if request.model:
-        overrides["model"] = request.model
-    try:
-        text = llm_router.chat(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "Du bist ein praeziser wissenschaftlicher Schreibassistent. "
-                        "Schreibe nur den gegebenen Text um, fuege keine neuen Fakten, "
-                        "Quellen oder Zitate hinzu und erhalte vorhandene Zitationsmarker."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Aufgabe: {request.instruction}\n\nText:\n{request.text}",
-                },
-            ],
-            provider=request.provider,
-            overrides=overrides,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Rewrite failed: {exc}") from exc
-    return {"text": str(text or "").strip(), "model": overrides.get("model") or llm_router.provider_default_model(request.provider)}
-
-
-@app.post("/assistant/claim-check")
-async def assistant_claim_check(request: ClaimCheckRequest) -> dict[str, Any]:
-    """Prüft eine markierte/zitierte Aussage gegen ihre Quelle(n) (PDF → Abstract → Grau).
-
-    Pro Quelle ein Urteil (gestützt / teilweise / nicht gestützt / nicht beurteilbar)
-    mit wörtlichen Belegzitaten. LLM-Aufruf läuft blockierend → Thread.
-    """
-    from query.claim_checker import check_claim
-
-    seen: set[str] = set()
-    checks: list[dict[str, Any]] = []
-    for raw_paper_id in request.paper_ids:
-        pid = str(raw_paper_id or "").strip()
-        if not pid or pid in seen:
-            continue
-        seen.add(pid)
-        checks.append(
-            await asyncio.to_thread(
-                check_claim,
-                llm_router,
-                statement=request.statement,
-                paper_id=pid,
-                title=request.titles.get(pid, ""),
-                evidence_text=request.evidence_texts.get(pid, ""),
-                provider=request.provider,
-                model=request.model,
-                pdf_base_dir=request.pdf_base_dir,
-                metadata_db_path=request.metadata_db_path,
-                escalate_whole_paper=request.escalate_whole_paper,
-            )
-        )
-    return {"statement": request.statement, "checks": checks}
 
 
 @app.get("/projects/{project_id}/notes")
@@ -1426,30 +1319,6 @@ def _safe_asset_filename(filename: str) -> str:
     if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}:
         suffix = ".png"
     return f"{stem[:80]}{suffix}"
-
-
-def _provider_view(provider: str) -> dict[str, Any]:
-    cfg = llm_router.provider_config(provider)
-    settings = llm_router.provider_settings(provider)
-    return {
-        "name": provider,
-        "provider_type": cfg.provider_type,
-        "base_url": cfg.base_url,
-        "default_model": settings.model,
-        "models": llm_router.provider_model_options(provider, refresh=False),
-        "settings": {
-            "temperature": settings.temperature,
-            "top_p": settings.top_p,
-            "max_tokens": settings.max_tokens,
-            "context_size": settings.context_size,
-        },
-        "auth_configured": bool(cfg.api_key),
-    }
-
-
-def _ensure_provider(provider: str) -> None:
-    if provider not in llm_router.available_providers():
-        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
 
 
 def _iter_labeled_items(value: Any) -> list[dict[str, Any]]:
