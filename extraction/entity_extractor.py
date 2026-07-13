@@ -896,8 +896,8 @@ Paper text: {paper_text}"""
         self.llm = llm_router
         self.quality_db_path = quality_db_path
 
-    @staticmethod
-    def _build_extraction_text(paper_text: str, max_chars: int = 60000) -> str:
+    @classmethod
+    def _build_extraction_text(cls, paper_text: str, max_chars: int = 60000) -> str:
         """
         Build a bounded paper text that preserves full-paper coverage.
 
@@ -905,7 +905,7 @@ Paper text: {paper_text}"""
         algorithm mentions from long surveys. This keeps much more text while
         still staying below a 32k-token context for typical parsed papers.
         """
-        text = EntityExtractor._clean_extraction_source_text(paper_text)
+        text = cls._clean_extraction_source_text(paper_text)
         if len(text) <= max_chars:
             return text
 
@@ -948,8 +948,8 @@ Paper text: {paper_text}"""
         excerpts.append(text[-tail_chars:].strip())
         return "\n\n---\n\n".join(item for item in excerpts if item)[:max_chars]
 
-    @staticmethod
-    def _build_extraction_chunks(
+    @classmethod
+    def _build_extraction_chunks(cls, 
         paper_text: str,
         context_size: int = 32768,
         max_chunk_chars: int | None = None,
@@ -963,11 +963,11 @@ Paper text: {paper_text}"""
         when it fits into context. Chunking structural extraction keeps each
         call focused and guarantees a fresh message list per chunk/paper.
         """
-        text = EntityExtractor._clean_extraction_source_text(paper_text)
+        text = cls._clean_extraction_source_text(paper_text)
         if not text:
             return [""]
 
-        budget = max_chunk_chars or EntityExtractor._chunk_char_budget(context_size)
+        budget = max_chunk_chars or cls._chunk_char_budget(context_size)
         if len(text) <= budget:
             return [text]
 
@@ -2115,8 +2115,8 @@ Paper text: {paper_text}"""
                 score += 1
         return score
 
-    @staticmethod
-    def _parse_json_robust(raw_text: str, default: dict[str, Any]) -> ParsedLLMResponse:
+    @classmethod
+    def _parse_json_robust(cls, raw_text: str, default: dict[str, Any]) -> ParsedLLMResponse:
         """
         Parse model JSON with clean, trimmed, and partial fallbacks.
 
@@ -2125,7 +2125,7 @@ Paper text: {paper_text}"""
         2. Trim from first "{" to last "}".
         3. Partial reconstruction from obvious top-level scalar and array keys.
         """
-        raw = EntityExtractor._sanitize_json_text(raw_text)
+        raw = cls._sanitize_json_text(raw_text)
         if not raw:
             return ParsedLLMResponse(data=dict(default), parse_quality="partial", raw_text=raw_text)
 
@@ -2149,7 +2149,7 @@ Paper text: {paper_text}"""
 
         partial = dict(default)
         for key in partial:
-            value = EntityExtractor._extract_partial_json_value(raw, key)
+            value = cls._extract_partial_json_value(raw, key)
             if value is not None:
                 partial[key] = value
         for key in ("paper_type", "language_detected"):
@@ -2168,10 +2168,10 @@ Paper text: {paper_text}"""
             raw = fenced.group(1).strip()
         return raw
 
-    @staticmethod
-    def _parse_json_array_robust(raw_text: str) -> ParsedLLMResponse:
+    @classmethod
+    def _parse_json_array_robust(cls, raw_text: str) -> ParsedLLMResponse:
         """Parse a model response expected to be a JSON array."""
-        raw = EntityExtractor._sanitize_json_text(raw_text)
+        raw = cls._sanitize_json_text(raw_text)
         if not raw:
             return ParsedLLMResponse(data=[], parse_quality="partial", raw_text=raw_text)
 
@@ -2835,15 +2835,15 @@ Paper text: {paper_text}"""
                 return concept
         return None
 
-    @staticmethod
-    def _append_alias(concept: dict[str, Any], alias: str) -> None:
+    @classmethod
+    def _append_alias(cls, concept: dict[str, Any], alias: str) -> None:
         aliases = concept.get("aliases")
         if not isinstance(aliases, list):
             aliases = []
             concept["aliases"] = aliases
-        clean_alias = EntityExtractor._clean_label(alias)
-        seen = {EntityExtractor._normalize_label(str(item)) for item in aliases}
-        if clean_alias and EntityExtractor._normalize_label(clean_alias) not in seen:
+        clean_alias = cls._clean_label(alias)
+        seen = {cls._normalize_label(str(item)) for item in aliases}
+        if clean_alias and cls._normalize_label(clean_alias) not in seen:
             aliases.append(clean_alias)
 
     @staticmethod
@@ -3163,10 +3163,10 @@ Paper text: {paper_text}"""
         paper_type = str(value or "research").strip().lower()
         return paper_type if paper_type in {"research", "survey", "theoretical", "benchmark"} else "research"
 
-    @staticmethod
-    def _detect_paper_type(text: str) -> str | None:
+    @classmethod
+    def _detect_paper_type(cls, text: str) -> str | None:
         sample = (text or "")[:12000].lower()
-        title = EntityExtractor._paper_title_from_text(text).lower()
+        title = cls._paper_title_from_text(text).lower()
         benchmark_markers = (
             "benchmark",
             "benchmark task",
@@ -3208,15 +3208,15 @@ Paper text: {paper_text}"""
             return "survey"
         return paper_type
 
-    @staticmethod
-    def _paper_title_from_text(text: str) -> str:
+    @classmethod
+    def _paper_title_from_text(cls, text: str) -> str:
         """Best-effort title extraction from the parsed paper header."""
         for raw_line in (text or "").splitlines()[:30]:
             line = re.sub(r"\s+", " ", raw_line).strip(" #\t")
             if not line:
                 continue
             lowered = line.lower()
-            if EntityExtractor._is_header_noise_title_line(line):
+            if cls._is_header_noise_title_line(line):
                 continue
             if lowered in {"abstract", "introduction"}:
                 continue
@@ -3350,8 +3350,8 @@ Paper text: {paper_text}"""
             return "LLM extraction failed for every extraction call; no KG-safe entities were produced."
         return "LLM extraction failed before usable JSON could be produced."
 
-    @staticmethod
-    def _call_diagnostics(
+    @classmethod
+    def _call_diagnostics(cls, 
         structural_calls: list[ParsedLLMResponse],
         semantic: ParsedLLMResponse,
         claims_pass: ParsedLLMResponse | None,
@@ -3375,7 +3375,7 @@ Paper text: {paper_text}"""
                 else None,
             }
             if call.parse_quality in {"partial", "failed"}:
-                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(call.raw_text)
+                row["raw_excerpt"] = cls._diagnostic_excerpt(call.raw_text)
             diagnostics.append(row)
         if concepts_retry is not None:
             row = {
@@ -3386,7 +3386,7 @@ Paper text: {paper_text}"""
                 "tokens_used": concepts_retry.tokens_used,
             }
             if concepts_retry.parse_quality in {"partial", "failed"}:
-                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(concepts_retry.raw_text)
+                row["raw_excerpt"] = cls._diagnostic_excerpt(concepts_retry.raw_text)
             diagnostics.append(row)
         if methods_retry is not None:
             row = {
@@ -3397,7 +3397,7 @@ Paper text: {paper_text}"""
                 "tokens_used": methods_retry.tokens_used,
             }
             if methods_retry.parse_quality in {"partial", "failed"}:
-                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(methods_retry.raw_text)
+                row["raw_excerpt"] = cls._diagnostic_excerpt(methods_retry.raw_text)
             diagnostics.append(row)
         if semantic_retry is not None:
             row = {
@@ -3408,7 +3408,7 @@ Paper text: {paper_text}"""
                 "tokens_used": semantic_retry.tokens_used,
             }
             if semantic_retry.parse_quality in {"partial", "failed"}:
-                row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(semantic_retry.raw_text)
+                row["raw_excerpt"] = cls._diagnostic_excerpt(semantic_retry.raw_text)
             diagnostics.append(row)
         semantic_keys = {
             "paper_type",
@@ -3428,7 +3428,7 @@ Paper text: {paper_text}"""
             "tokens_used": semantic.tokens_used,
         }
         if semantic.parse_quality in {"partial", "failed"}:
-            semantic_row["raw_excerpt"] = EntityExtractor._diagnostic_excerpt(semantic.raw_text)
+            semantic_row["raw_excerpt"] = cls._diagnostic_excerpt(semantic.raw_text)
         diagnostics.append(semantic_row)
         if claims_pass is not None:
             diagnostics.append(
@@ -4081,12 +4081,12 @@ Paper text: {paper_text}"""
                 context = fallback
         return context
 
-    @staticmethod
-    def _clean_label(label: str) -> str:
+    @classmethod
+    def _clean_label(cls, label: str) -> str:
         cleaned = re.sub(r"\s+", " ", normalize_scientific_text(label)).strip(" .,:;[]{}")
         cleaned = cleaned.replace("---PAGE BREAK---", " ").replace("---Page Break---", " ")
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;[]{}")
-        cleaned = EntityExtractor._repair_label_fragments(cleaned)
+        cleaned = cls._repair_label_fragments(cleaned)
         if cleaned.count("(") < cleaned.count(")"):
             cleaned = cleaned.rstrip(")")
         if cleaned.count(")") < cleaned.count("(") and ")" in str(label or ""):
