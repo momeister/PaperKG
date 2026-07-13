@@ -25,7 +25,6 @@ from harvester.core_client import CoreApiKeyMissing, CoreClient, CoreConfig
 from harvester.crossref_client import CrossrefClient, CrossrefConfig
 from harvester.doaj_client import DoajClient, DoajConfig
 from harvester.europepmc_client import EuropePMCClient, EuropePMCConfig
-from harvester.oa_resolver import resolve_oa_pdf_url
 from harvester.openalex_client import OpenAlexClient
 from harvester.semantic_scholar_client import SemanticScholarClient
 from harvester.url_guard import is_safe_public_url
@@ -333,15 +332,6 @@ def _crossref_mailto() -> str | None:
     section = _harvester_section("crossref")
     env_name = section.get("mailto_env") or "CROSSREF_MAILTO"
     return os.getenv(env_name) or section.get("mailto") or _unpaywall_email()
-
-
-async def _resolve_oa_pdf_url(doi: str | None, client: httpx.AsyncClient | None = None) -> str | None:
-    """Resolve an open-access PDF URL for a DOI via Unpaywall (best-effort).
-
-    Delegates to the shared ``harvester.oa_resolver`` so the same logic backs the
-    auto-harvester's on-demand PDF acquisition.
-    """
-    return await resolve_oa_pdf_url(doi)
 
 
 async def _run_harvest_search(query: str, sources: list[str], max_results: int) -> tuple[list[dict[str, Any]], list[str]]:

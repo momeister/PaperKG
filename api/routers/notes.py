@@ -15,8 +15,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import api.product_main as pm  # patchable llm_router + geteilte Helfer
-from query.hybrid_retriever import HybridRetriever
-from query.kg_retriever import KGRetriever
 from storage.metadata_db import MetadataDB
 from storage.path_safety import ensure_safe_path
 
@@ -489,7 +487,7 @@ def _note_excerpt(markdown: str) -> str:
 def _note_evidence_payload(request: NoteAiEditRequest) -> dict[str, Any]:
     if not _instruction_needs_evidence(request.instruction):
         return {}
-    retriever = HybridRetriever(KGRetriever(metadata_db_path=request.metadata_db_path, graph_db_path=request.graph_db_path))
+    retriever = pm._parallel_retriever(request.metadata_db_path, request.graph_db_path)
     hits = retriever.search(f"{request.selected_text} {request.instruction}", limit=6)
     sources: dict[str, dict[str, Any]] = {}
     evidence: list[dict[str, Any]] = []
