@@ -522,7 +522,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.getByRole("button", { name: "Preview" }).click();
   const previewBlock = page.locator(".editable-preview-block").first();
   await previewBlock.fill("Direkt in Preview");
-  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(editor).toHaveValue("- Direkt in Preview");
   const formattedMarkdown =
     '**Bold** ==Mark== <span style="color:#2563eb">Blue</span> Quelle: [Z2 - Grounding Clinical AI Competency](sciencekg://citation/cite-clinical)';
@@ -531,14 +531,14 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(page.locator(".markdown-preview strong", { hasText: "Bold" })).toBeVisible();
   await expect(page.locator(".markdown-preview mark", { hasText: "Mark" })).toBeVisible();
   await expect(page.locator(".citation-link", { hasText: "Z2 - Grounding Clinical AI Competency" })).toBeVisible();
-  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(editor).toHaveValue(formattedMarkdown);
   await page.getByRole("button", { name: "Split" }).click();
   await expect(editor).toBeVisible();
   await expect(page.locator(".markdown-preview", { hasText: "Z2 - Grounding Clinical AI Competency" })).toBeVisible();
   await editor.fill(`${formattedMarkdown}\n\nLive Split`);
   await expect(page.locator(".markdown-preview", { hasText: "Live Split" })).toBeVisible();
-  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.getByRole("button", { name: "Fett" })).toBeVisible();
   const spellButton = page.getByRole("button", { name: "Rechtschreibkontrolle ausschalten" });
   await expect(spellButton).toHaveAttribute("aria-pressed", "true");
@@ -546,7 +546,10 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(page.getByRole("button", { name: "Rechtschreibkontrolle einschalten" })).toHaveAttribute("aria-pressed", "false");
 
   await page.getByRole("link", { name: /Import/ }).click();
-  await page.locator('input[type="file"]').setInputFiles({
+  // Race-Fix: erst warten, bis die Import-Seite gemountet ist — sonst matcht der
+  // Locator das noch gemountete versteckte Notes-Bild-Input statt der PDF-Dropzone.
+  await expect(page.getByRole("heading", { name: "Import" })).toBeVisible();
+  await page.locator('.drop-zone input[type="file"]').setInputFiles({
     name: "tiny.pdf",
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-1.4\n")
@@ -556,17 +559,20 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.getByRole("link", { name: /Extraktion/ }).click();
   await expect(page.getByRole("heading", { name: "Extraktion" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Ausführen/ }).first()).toHaveClass(/active/);
-  await page.getByLabel("PDF").selectOption("library/p1.pdf");
+  // Einzelextraktion ist inzwischen ein zuklappbares Panel; Option-Values des
+  // PDF-Selects sind paper_ids (nicht mehr pdf_paths).
+  await page.getByRole("button", { name: "Einzelextraktion" }).click();
+  await page.locator(".extraction-input-panel").getByRole("combobox", { name: "PDF", exact: true }).selectOption("p1");
   await page.getByRole("button", { name: "Parsen" }).click();
   await expect(page.getByPlaceholder("Paper-Text")).toHaveValue(/Graph Transformer methods/);
   await page.locator(".extraction-input-panel").getByRole("button", { name: "Ausführen" }).click();
   await expect(page.locator(".extraction-result-panel")).toContainText("Graph Transformer");
   await expect(page.locator(".extraction-result-panel")).toContainText("Attention");
-  await page.getByRole("button", { name: /PDFs/ }).click();
+  await page.getByRole("button", { name: "PDFs", exact: true }).click();
   await expect(page.locator(".extraction-library-table")).toContainText("Graph Transformer for Science");
   await page.getByRole("button", { name: /Ausführen/ }).first().click();
   await page.locator(".extraction-batch-panel .extraction-library-table input[type='checkbox']").first().check();
-  await page.getByRole("button", { name: "Auswahl ausführen" }).click();
+  await page.locator(".extraction-batch-panel").getByRole("button", { name: "Ausführen", exact: true }).click();
   await expect(page.locator(".status-strip", { hasText: "1/1" })).toBeVisible();
   await page.getByRole("button", { name: /Vokabular/ }).click();
   await page.getByLabel("Canonical Label").fill("Citation Network");
@@ -611,7 +617,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   expect(await evidenceColor(workspacePdf.locator(".pdf-highlight--active").first())).toBe(workspaceCitationColor);
   await expect.poll(() => globalNote?.markdown ?? "").toContain("Workspace Alpha");
 
-  await workspaceNav.getByRole("button", { name: /PDFs/ }).click();
+  await workspaceNav.getByRole("button", { name: /^PDFs/ }).click();
   expect(pageErrors).toEqual([]);
   await expect(workspaceNav.locator(".workspace-paper-row", { hasText: "AI based Clinical Decision Support" })).toBeVisible();
   const graphPdfRow = workspaceNav.locator(".workspace-paper-row", { hasText: "Graph Transformer for Science" });
@@ -621,7 +627,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(workspacePdf).toContainText("Graph Transformer for Science");
   await graphPdfRow.locator(".workspace-paper-select").click();
   await workspaceAssistant.getByRole("button", { name: "Auswahl" }).click();
-  await workspaceAssistant.getByPlaceholder("Frage an den lokalen KG").fill("What connects graph transformers and citations?");
+  await workspaceAssistant.getByPlaceholder("Frage stellen — / für Befehle, @ für Papers").fill("What connects graph transformers and citations?");
   await workspaceAssistant.getByRole("button", { name: "Senden" }).click();
   await expect(workspaceAssistant.locator(".answer-text")).toContainText("Graph Transformer evidence is grounded");
   expect(lastAnswerPayload?.paper_ids).toEqual(["p1"]);
@@ -642,7 +648,9 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(workspaceAssistant.locator(".evidence-dock:not(.evidence-dock--collapsed)")).toBeVisible();
   await expect(workspaceAssistant.locator(".evidence-row.list-row--active", { hasText: "Graph Transformer evidence" })).toBeVisible();
   await expect(workspacePdf).toContainText("Graph Transformer for Science");
-  await expect(workspacePdf.locator(".excerpt-panel")).toHaveCount(0);
+  // Die "Aktive Textstelle"-Leiste rendert inzwischen immer bei aktiver Evidenz
+  // (auch wenn das PDF selbst angezeigt wird) — frueher war sie nur ein Fallback.
+  await expect(workspacePdf.locator(".excerpt-panel")).toContainText("Graph Transformer evidence");
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).hover();
   await expect(workspaceNotes.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).click();
@@ -675,10 +683,12 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   expect(afterPdfInsertViewport.selectionStart).toBeGreaterThan(beforePdfInsertViewport.cursor);
   expect(afterPdfInsertViewport.selectionStart).toBe(afterPdfInsertViewport.selectionEnd);
 
-  await workspaceNav.getByRole("button", { name: /PDFs/ }).click();
+  await workspaceNav.getByRole("button", { name: /^PDFs/ }).click();
+  // Der Assistant-Nachweis bleibt aktiv, bis eine Zitat-Zeile geklickt wird
+  // (frueher wurde die Notiz-Zitation automatisch aktiv) — daher erst klicken.
+  await workspaceNav.locator(".note-citation-row", { hasText: "Z2" }).click();
   await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Z2");
   await expect(workspaceNav.locator(".workspace-active-source")).toContainText("Grounding Clinical AI Competency");
-  await workspaceNav.locator(".note-citation-row", { hasText: "Z2" }).click();
   const activeWorkspaceCitationRow = workspaceNav.locator(".note-citation-row--active", { hasText: "Z2" });
   await expect(activeWorkspaceCitationRow).toBeVisible();
   await expect(workspacePdf).toContainText("Grounding Clinical AI Competency");
@@ -721,8 +731,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await workspaceNotes.getByRole("button", { name: "Fragen" }).click();
   await expect(workspaceNotes.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
   await expect(workspaceNav.getByRole("button", { name: /KI-Notizen/ })).toHaveCount(0);
-  await workspaceAssistant.getByRole("button", { name: "Notiz-Assistent" }).click();
-  await expect(workspaceAssistant.getByRole("button", { name: "Notiz-Assistent" })).toHaveClass(/active/);
+  await workspaceAssistant.getByRole("button", { name: "Notizen", exact: true }).click();
+  await expect(workspaceAssistant.getByRole("button", { name: "Notizen", exact: true })).toHaveClass(/active/);
   await expect(workspaceAssistant.getByText("Grounded KG")).toHaveCount(0);
   const workspaceThread = workspaceAssistant.locator(".ai-thread-card", { hasText: "Arbeitsplatz erklaeren" }).first();
   await expect(workspaceThread).toBeVisible();
@@ -801,9 +811,9 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   expect(inlineNoteBox.x).toBeGreaterThanOrEqual(0);
   expect(inlineNoteBox.x + inlineNoteBox.width).toBeLessThanOrEqual(viewport.width + 1);
   await workspaceInlineNote.getByRole("button", { name: "KI-Notiz einklappen" }).click();
-  await workspaceAssistant.getByRole("button", { name: "PDF-Assistent" }).click();
-  await expect(workspaceAssistant.getByRole("button", { name: "PDF-Assistent" })).toHaveClass(/active/);
-  await workspaceAssistant.getByRole("button", { name: "Notiz-Assistent" }).click();
+  await workspaceAssistant.getByRole("button", { name: "PDF", exact: true }).click();
+  await expect(workspaceAssistant.getByRole("button", { name: "PDF", exact: true })).toHaveClass(/active/);
+  await workspaceAssistant.getByRole("button", { name: "Notizen", exact: true }).click();
   await expect(workspaceAssistant.locator(".workspace-notes-assistant-panel")).toContainText("Arbeitsplatz erklaeren");
   await expect(workspaceEditor).toBeVisible();
   await expect(workspaceNotes).toBeVisible();
@@ -837,8 +847,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.locator(".workspace-collapsed-pane", { hasText: "Navigator" }).getByRole("button").click();
   await expect(workspaceNav).toBeVisible();
 
-  await page.goto("/assistant");
-  await expect(page).toHaveURL(/\/workspace$/);
+  await page.goto("/#/assistant");
+  await expect(page).toHaveURL(/#\/workspace$/);
 
   await page.getByRole("link", { name: /Quality/ }).click();
   await expect(page.getByRole("heading", { name: "Quality" })).toBeVisible();
