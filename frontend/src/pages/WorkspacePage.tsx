@@ -110,6 +110,7 @@ import {
   verificationSourcesFor
 } from "./AssistantPage";
 import type { CitationInsertExtras, CitationMeta } from "./AssistantPage";
+import { ClarifyDialog } from "./ClarifyDialog";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
 import { AnalysisPanel } from "./AnalysisPanel";
@@ -140,6 +141,11 @@ import {
   normalizeWorkspacePaper,
   noteCitationEvidence,
   restoredActiveTurnFor,
+  clearApproximateOnLinks,
+  replaceStatementInAnswerText,
+  statementPattern,
+  stripCitationFromAnswerText,
+  updateEvidenceInSources,
   sameNotesSnapshot,
   saveWorkspaceBoolean,
   saveWorkspaceNumber,
@@ -2381,15 +2387,6 @@ export function WorkspacePage() {
     closeAnswerSelection();
   }
 
-  /** Whitespace- und Zitat-tolerantes Muster für eine Aussage aus dem Antworttext
-   *  (die Selektion/das Segment enthält keine [ ]-Brackets mehr, der Rohtext schon). */
-  function statementPattern(statement: string): RegExp | null {
-    const words = statement.split(/\s+/).filter(Boolean).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    if (!words.length) {
-      return null;
-    }
-    return new RegExp(words.join("(?:\\s+|\\s*\\[[^\\]]+\\]\\s*)+"));
-  }
 
   /** Nachcheck ergab "nicht gestützt": Satz + zugehörige Zitat-Brackets aus dem
    *  gespeicherten Antworttext entfernen. */
@@ -2590,85 +2587,9 @@ export function WorkspacePage() {
   // Reine String/Datentransformationen, damit sie auf die noch nicht in der History
   // liegende, frisch generierte Antwort angewendet werden können.
 
-  /** Entfernt nur das Zitat dieses Papers am Satz; bleibt kein Beleg übrig → Satz raus. */
-  function stripCitationFromAnswerText(
-    answerText: string,
-    paperId: string,
-    statement: string
-  ): { text: string; outcome: "citation" | "statement" | "none" } {
-    const base = statementPattern(cleanAnswerQuote(statement));
-    if (!base) {
-      return { text: answerText, outcome: "none" };
-    }
-    const combined = new RegExp(`(${base.source})((?:\\s*\\[[^\\]]+\\])+)`);
-    const match = combined.exec(answerText);
-    if (!match) {
-      return { text: answerText, outcome: "none" };
-    }
-    const brackets = match[2].match(/\[[^\]]+\]/g) ?? [];
-    const rebuilt = brackets.map((bracket) => {
-      const tokens = bracket.slice(1, -1).split(",").map((token) => token.trim()).filter(Boolean);
-      const kept = tokens.filter((token) => !token.includes(paperId));
-      if (kept.length === tokens.length) {
-        return bracket;
-      }
-      return kept.length ? `[${kept.join(", ")}]` : "";
-    });
-    if (rebuilt.join("") === brackets.join("")) {
-      return { text: answerText, outcome: "none" };
-    }
-    const keptBrackets = rebuilt.filter(Boolean);
-    if (keptBrackets.length > 0) {
-      return { text: answerText.replace(combined, `$1${keptBrackets.join("")}`), outcome: "citation" };
-    }
-    const withTail = new RegExp(`${base.source}(?:\\s*\\[[^\\]]+\\])*[.!?]?\\s*`);
-    return { text: answerText.replace(withTail, " ").replace(/ {2,}/g, " ").trim(), outcome: "statement" };
-  }
 
-  /** Ersetzt eine Aussage im Antworttext durch eine korrigierte Fassung (Marker bleiben). */
-  function replaceStatementInAnswerText(answerText: string, statement: string, replacement: string): string {
-    const pattern = statementPattern(cleanAnswerQuote(statement));
-    const clean = replacement.trim();
-    if (!pattern || !clean || !pattern.test(answerText)) {
-      return answerText;
-    }
-    return answerText.replace(pattern, clean.replace(/\$/g, "$$$$"));
-  }
 
-  /** Markiert die Zuordnung als geprüft (Warnzeichen verschwindet). */
-  function clearApproximateOnLinks(links: CitationLink[], paperId: string, evidenceIndex: number): CitationLink[] {
-    return links.map((link) =>
-      link.approximate && link.paper_id === paperId && (link.evidence_index == null || link.evidence_index === evidenceIndex)
-        ? { ...link, approximate: false }
-        : link
-    );
-  }
 
-  /** Setzt die verifizierte Belegstelle als Evidence des Zitats. */
-  function updateEvidenceInSources(
-    sources: VerificationSource[],
-    paperId: string,
-    evidenceIndex: number,
-    quotes: string[],
-    statement: string
-  ): VerificationSource[] {
-    const excerpt = quotes.join(" … ").trim();
-    if (!excerpt) {
-      return sources;
-    }
-    return sources.map((item) =>
-      item.paper_id !== paperId
-        ? item
-        : {
-            ...item,
-            evidence: item.evidence.map((entry, index) =>
-              index === evidenceIndex
-                ? { ...entry, pdf_excerpt: excerpt, reference_text: cleanAnswerQuote(statement) || entry.reference_text }
-                : entry
-            )
-          }
-    );
-  }
 
   /** "teilweise gestützt": Aussage per LLM auf das reduzieren, was die Quelle belegt. */
   async function reformulateForSource(
@@ -4454,80 +4375,14 @@ export function WorkspacePage() {
         </div>
       ) : null}
       {showClarifyDialog ? (
-        <div className="harvest-dialog-overlay">
-          <div
-            className="harvest-dialog-card clarify-dialog-card"
-            tabIndex={-1}
-            ref={(el) => {
-              if (el && !el.contains(document.activeElement)) el.focus();
-            }}
-            onKeyDown={(e) => {
-              const inInput = (e.target as HTMLElement).tagName === "INPUT";
-              if (e.key === "Enter") {
-                e.preventDefault();
-                finishClarify(false);
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                finishClarify(true);
-              } else if (!inInput && /^[1-9]$/.test(e.key)) {
-                const idx = Number(e.key) - 1;
-                if (idx < clarifyDirections.length) {
-                  e.preventDefault();
-                  toggleClarifyDirection(idx);
-                }
-              }
-            }}
-          >
-            <strong>In welche Richtung soll die Analyse gehen?</strong>
-            <p>
-              Wähle Schwerpunkte mit den Zahlentasten <kbd>1</kbd>–<kbd>9</kbd> oder per Klick,
-              ergänze optional eine eigene Richtung und starte mit <kbd>Enter</kbd>.
-            </p>
-            <div className="clarify-directions">
-              {clarifyDirections.map((dir, i) => {
-                const active = clarifySelected.includes(i);
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    className={`clarify-direction${active ? " clarify-direction--active" : ""}`}
-                    onClick={() => toggleClarifyDirection(i)}
-                  >
-                    <span className="clarify-direction-num">{i + 1}</span>
-                    <span className="clarify-direction-label">{dir}</span>
-                    {active ? <span className="clarify-direction-check">✓</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="clarify-question-block">
-              <label className="clarify-question-label">Eigene Richtung / Anmerkungen</label>
-              <input
-                type="text"
-                className="clarify-question-input"
-                placeholder="z.B. Fokus auf klinische Anwendungen, ab 2020, ..."
-                value={clarifyFreetext}
-                onChange={(e) => setClarifyFreetext(e.target.value)}
-              />
-            </div>
-            <div className="harvest-dialog-actions">
-              <button
-                type="button"
-                className="button button-primary button-compact"
-                onClick={() => finishClarify(false)}
-              >
-                Analyse starten
-              </button>
-              <button
-                type="button"
-                className="button button-compact"
-                onClick={() => finishClarify(true)}
-              >
-                Überspringen
-              </button>
-            </div>
-          </div>
-        </div>
+        <ClarifyDialog
+          directions={clarifyDirections}
+          selected={clarifySelected}
+          freetext={clarifyFreetext}
+          onToggleDirection={toggleClarifyDirection}
+          onFreetextChange={setClarifyFreetext}
+          onFinish={finishClarify}
+        />
       ) : null}
     </section>
   );

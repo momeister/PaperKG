@@ -1,6 +1,7 @@
 import { api } from "../api";
 import { isGreySourcePaperId } from "../citationColors";
 import { loadAssistantSession, turnBlocks } from "./AssistantPage";
+import { cleanAnswerQuote } from "./assistantHelpers";
 import type { AssistantTurn } from "./AssistantPage";
 import type {
   Answer, CitationLink, ClaimCheckResult, DeepResearchFinding, GreySource,
@@ -453,3 +454,97 @@ export function citationPoolFor(
   }
   return pool;
 }
+
+
+// ---- Vorab-Nachcheck: reine Antworttext-/Zitat-Transformationen (aus WorkspacePage) ----
+
+/** Whitespace- und Zitat-tolerantes Muster für eine Aussage aus dem Antworttext
+ *  (die Selektion/das Segment enthält keine [ ]-Brackets mehr, der Rohtext schon). */
+export function statementPattern(statement: string): RegExp | null {
+  const words = statement.split(/\s+/).filter(Boolean).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!words.length) {
+    return null;
+  }
+  return new RegExp(words.join("(?:\\s+|\\s*\\[[^\\]]+\\]\\s*)+"));
+}
+
+/** Entfernt nur das Zitat dieses Papers am Satz; bleibt kein Beleg übrig → Satz raus. */
+export function stripCitationFromAnswerText(
+  answerText: string,
+  paperId: string,
+  statement: string
+): { text: string; outcome: "citation" | "statement" | "none" } {
+  const base = statementPattern(cleanAnswerQuote(statement));
+  if (!base) {
+    return { text: answerText, outcome: "none" };
+  }
+  const combined = new RegExp(`(${base.source})((?:\\s*\\[[^\\]]+\\])+)`);
+  const match = combined.exec(answerText);
+  if (!match) {
+    return { text: answerText, outcome: "none" };
+  }
+  const brackets = match[2].match(/\[[^\]]+\]/g) ?? [];
+  const rebuilt = brackets.map((bracket) => {
+    const tokens = bracket.slice(1, -1).split(",").map((token) => token.trim()).filter(Boolean);
+    const kept = tokens.filter((token) => !token.includes(paperId));
+    if (kept.length === tokens.length) {
+      return bracket;
+    }
+    return kept.length ? `[${kept.join(", ")}]` : "";
+  });
+  if (rebuilt.join("") === brackets.join("")) {
+    return { text: answerText, outcome: "none" };
+  }
+  const keptBrackets = rebuilt.filter(Boolean);
+  if (keptBrackets.length > 0) {
+    return { text: answerText.replace(combined, `$1${keptBrackets.join("")}`), outcome: "citation" };
+  }
+  const withTail = new RegExp(`${base.source}(?:\\s*\\[[^\\]]+\\])*[.!?]?\\s*`);
+  return { text: answerText.replace(withTail, " ").replace(/ {2,}/g, " ").trim(), outcome: "statement" };
+}
+
+/** Ersetzt eine Aussage im Antworttext durch eine korrigierte Fassung (Marker bleiben). */
+export function replaceStatementInAnswerText(answerText: string, statement: string, replacement: string): string {
+  const pattern = statementPattern(cleanAnswerQuote(statement));
+  const clean = replacement.trim();
+  if (!pattern || !clean || !pattern.test(answerText)) {
+    return answerText;
+  }
+  return answerText.replace(pattern, clean.replace(/\$/g, "$$$$"));
+}
+
+/** Markiert die Zuordnung als geprüft (Warnzeichen verschwindet). */
+export function clearApproximateOnLinks(links: CitationLink[], paperId: string, evidenceIndex: number): CitationLink[] {
+  return links.map((link) =>
+    link.approximate && link.paper_id === paperId && (link.evidence_index == null || link.evidence_index === evidenceIndex)
+      ? { ...link, approximate: false }
+      : link
+  );
+}
+
+/** Setzt die verifizierte Belegstelle als Evidence des Zitats. */
+export function updateEvidenceInSources(
+  sources: VerificationSource[],
+  paperId: string,
+  evidenceIndex: number,
+  quotes: string[],
+  statement: string
+): VerificationSource[] {
+  const excerpt = quotes.join(" … ").trim();
+  if (!excerpt) {
+    return sources;
+  }
+  return sources.map((item) =>
+    item.paper_id !== paperId
+      ? item
+      : {
+          ...item,
+          evidence: item.evidence.map((entry, index) =>
+            index === evidenceIndex
+              ? { ...entry, pdf_excerpt: excerpt, reference_text: cleanAnswerQuote(statement) || entry.reference_text }
+              : entry
+          )
+        }
+  );
+}
+
