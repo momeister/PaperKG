@@ -64,7 +64,7 @@ export function JobsPage() {
           </div>
         </div>
         {(jobsQuery.data?.jobs ?? []).length ? (
-          <div className="data-table">
+          <div className="data-table jobs-table">
             <div className="data-row data-row--head">
               <span>Job</span>
               <span>Status</span>

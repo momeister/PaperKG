@@ -25,7 +25,7 @@ import { EmptyState } from "../components/EmptyState";
 import { NotesSidePanel } from "../components/NotesSidePanel";
 import { TerminalTabs } from "../components/TerminalTabs";
 import { PreviewPane, normalizePreviewUrl } from "../components/PreviewPane";
-import { useAppState } from "../state";
+import { THEME_META, useAppState } from "../state";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { isTauri } from "../native";
 import { languageForPath } from "../monaco-setup";
@@ -119,7 +119,7 @@ function DiffView({ diff }: { diff: string }) {
 }
 
 export function WorkstationPage() {
-  const { activeProject } = useAppState();
+  const { activeProject, theme } = useAppState();
   const queryClient = useQueryClient();
 
   const [projectId, setProjectId] = useState<string | null>(() => localStorage.getItem(SELECTED_KEY));
@@ -457,7 +457,7 @@ export function WorkstationPage() {
           {openPath ? (
             <Editor
               height="100%"
-              theme="vs-dark"
+              theme={THEME_META[theme].scheme === "dark" ? "vs-dark" : "light"}
               path={openPath}
               language={languageForPath(openPath)}
               value={editorValue}
