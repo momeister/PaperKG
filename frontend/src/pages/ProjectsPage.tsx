@@ -8,7 +8,7 @@ import { Status } from "../components/Status";
 import { useAppState } from "../state";
 import type { Project } from "../types";
 
-export function ProjectsPage() {
+export function ProjectsPage({ embedded = false }: { embedded?: boolean }) {
   const { activeProject, setActiveProject } = useAppState();
   const [query, setQuery] = useState("");
   const [name, setName] = useState("");
@@ -72,7 +72,7 @@ export function ProjectsPage() {
   const metrics = dashboardQuery.data?.metrics;
 
   return (
-    <section className="page">
+    <section className={embedded ? "research-stage-panel" : "page"}>
       <div className="page-title">
         <div>
           <span>Workspace</span>

@@ -4,26 +4,24 @@ import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
   BrainCircuit,
-  Briefcase,
   Code2,
   Columns3,
-  FileSearch,
-  FileText,
   FlaskConical,
   GitBranch,
-  Import,
   Library,
   Notebook,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Telescope
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "./api";
 import { MotionProvider } from "./motion";
 import { AppStateContext, clampFontScale, FONT_SCALE_STEP, normalizeTheme, THEME_META } from "./state";
 import type { LlmParams, Theme } from "./state";
+import { ConstellationMark } from "./components/ConstellationMark";
 import { Status } from "./components/Status";
 import { ThemePicker } from "./components/ThemePicker";
 // The overlay-family pages stay statically imported: they render in the four extra
@@ -39,22 +37,18 @@ import { SnipOverlayPage } from "./pages/SnipOverlayPage";
 // (WorkstationPage), pdf.js (Library/Workspace), @xyflow (GraphPage) — must not sit
 // in it. Fan-noise fix, together with the lazy window creation in the Tauri shell.
 const BenchmarksPage = lazy(() => import("./pages/BenchmarksPage").then((m) => ({ default: m.BenchmarksPage })));
-const ExtractionPage = lazy(() => import("./pages/ExtractionPage").then((m) => ({ default: m.ExtractionPage })));
 const GraphPage = lazy(() => import("./pages/GraphPage").then((m) => ({ default: m.GraphPage })));
-const ImportPage = lazy(() => import("./pages/ImportPage").then((m) => ({ default: m.ImportPage })));
 const JobsPage = lazy(() => import("./pages/JobsPage").then((m) => ({ default: m.JobsPage })));
 const LibraryPage = lazy(() => import("./pages/LibraryPage").then((m) => ({ default: m.LibraryPage })));
-const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const QualityPage = lazy(() => import("./pages/QualityPage").then((m) => ({ default: m.QualityPage })));
+const ResearchHubPage = lazy(() => import("./pages/ResearchHubPage").then((m) => ({ default: m.ResearchHubPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const WorkspacePage = lazy(() => import("./pages/WorkspacePage").then((m) => ({ default: m.WorkspacePage })));
 const WorkstationPage = lazy(() => import("./pages/WorkstationPage").then((m) => ({ default: m.WorkstationPage })));
 const JupyterPage = lazy(() => import("./pages/JupyterPage").then((m) => ({ default: m.JupyterPage })));
 
 const navigation = [
-  { to: "/projects", label: "Projekte", icon: Briefcase },
-  { to: "/import", label: "Import", icon: Import },
-  { to: "/extraction", label: "Extraktion", icon: FileSearch },
+  { to: "/forschung", label: "Forschung", icon: Telescope },
   { to: "/library", label: "Library", icon: Library },
   { to: "/workspace", label: "Arbeitsplatz", icon: Columns3 },
   { to: "/werkstatt", label: "Werkstatt", icon: Code2 },
@@ -243,7 +237,7 @@ export default function App() {
       <div className={`app-shell ${sidebarOpen ? "" : "app-shell--sidebar-collapsed"}`}>
         <aside className={`sidebar ${sidebarOpen ? "" : "sidebar--collapsed"}`}>
           <div className="brand">
-            <FileText size={22} />
+            <ConstellationMark size={24} />
             <div>
               <strong>ScienceKG</strong>
               <span>Phase 5</span>
@@ -398,10 +392,13 @@ export default function App() {
 
           <Suspense fallback={<div className="page-loading">Lade…</div>}>
             <Routes>
-              <Route path="/" element={<Navigate to="/projects" replace />} />
-              <Route path="/projects" element={<ProjectsPage />} />
-              <Route path="/import" element={<ImportPage />} />
-              <Route path="/extraction" element={<ExtractionPage />} />
+              <Route path="/" element={<Navigate to="/forschung" replace />} />
+              <Route path="/forschung" element={<ResearchHubPage />} />
+              <Route path="/forschung/:stage" element={<ResearchHubPage />} />
+              {/* Alt-Routen bleiben als Deep-Links auf die Hub-Stufen gültig. */}
+              <Route path="/projects" element={<Navigate to="/forschung/projekte" replace />} />
+              <Route path="/import" element={<Navigate to="/forschung/import" replace />} />
+              <Route path="/extraction" element={<Navigate to="/forschung/extraktion" replace />} />
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/assistant" element={<Navigate to="/workspace" replace />} />
               <Route path="/notes" element={<Navigate to="/workspace" replace />} />

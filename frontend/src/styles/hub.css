@@ -1,0 +1,163 @@
+/* ------------------------------------------------------------------------- */
+/* Forschung-Hub: Pipeline-Graph (Signature-Element) + eingebettete Stufen.   */
+/* Wird NACH styles.css geladen; nur Single-Class-Selektoren.                 */
+/* ------------------------------------------------------------------------- */
+
+.research-hub {
+  gap: 18px;
+}
+
+/* Eingebettete Stufe: wie .page, aber ohne eigenes Padding (liefert der Hub). */
+.research-stage-panel {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
+}
+
+.research-stage {
+  min-width: 0;
+}
+
+/* --- Pipeline-Rail -------------------------------------------------------- */
+
+.pipeline-graph {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  overflow-x: auto;
+}
+
+.pipeline-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 1 auto;
+  min-width: 168px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+
+.pipeline-node:hover {
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+
+.pipeline-node--active {
+  background: var(--surface-2);
+}
+
+.pipeline-node-ring {
+  position: absolute;
+  inset: -1px;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+
+.pipeline-node-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--muted);
+  transition:
+    background var(--dur-2) var(--ease-out),
+    color var(--dur-2) var(--ease-out);
+}
+
+.pipeline-node--active .pipeline-node-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pipeline-node-body {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.pipeline-node-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pipeline-node-value {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pipeline-node-hint {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+/* --- Kanten: fließender Datenstrom zwischen den Stufen -------------------- */
+
+.pipeline-edge {
+  flex: 1 1 48px;
+  min-width: 28px;
+  height: 12px;
+  align-self: center;
+}
+
+.pipeline-edge-base,
+.pipeline-edge-flow {
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-edge-base {
+  stroke: var(--line);
+}
+
+.pipeline-edge-flow {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-dasharray: 5 19;
+  opacity: 0;
+  transition: opacity var(--dur-3) var(--ease-out);
+}
+
+.pipeline-edge--active .pipeline-edge-flow {
+  opacity: 0.9;
+  animation: edge-flow 1.8s linear infinite;
+}
+
+@media (max-width: 900px) {
+  .pipeline-node {
+    min-width: 0;
+  }
+
+  .pipeline-node-hint {
+    display: none;
+  }
+}

@@ -15,6 +15,7 @@ import "./styles/tokens.css";
 import "./styles/themes.css";
 import "./styles/motion.css";
 import "./styles.css";
+import "./styles/hub.css";
 
 // In the native shell, route target=_blank / window.open to the OS browser.
 installNativeExternalLinks();

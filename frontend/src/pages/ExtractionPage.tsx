@@ -23,7 +23,7 @@ const modeOptions = [
   { value: "quick", label: "Quick" }
 ];
 
-export function ExtractionPage() {
+export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
   const { provider, model, activeProject } = useAppState();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<ExtractionTab>("run");
@@ -207,7 +207,7 @@ export function ExtractionPage() {
   const runningJob = pendingJobId ? jobsQuery.data?.jobs.find((j) => j.job_id === pendingJobId) : null;
 
   return (
-    <section className="page extraction-page">
+    <section className={`${embedded ? "research-stage-panel" : "page"} extraction-page`}>
       <div className="page-title">
         <div>
           <h1>Extraktion</h1>

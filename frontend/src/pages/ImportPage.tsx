@@ -87,7 +87,7 @@ function discoveryPhaseLabel(elapsed: number, maxN: number): string {
   return `Läuft noch … ${elapsed}s`;
 }
 
-export function ImportPage() {
+export function ImportPage({ embedded = false }: { embedded?: boolean }) {
   const { activeProject, provider } = useAppState();
   const navigate = useNavigate();
   const isRealProject = !!activeProject && !ALL_PAPERS_SCOPES.has(activeProject);
@@ -313,7 +313,7 @@ export function ImportPage() {
   }
 
   return (
-    <section className="page">
+    <section className={embedded ? "research-stage-panel" : "page"}>
       <div className="page-title">
         <div>
           <span>Harvest</span>
@@ -798,7 +798,7 @@ export function ImportPage() {
         error={download.error}
         totalPapers={download.variables?.papers.length ?? 0}
         scopeLabel={isRealProject ? `Projekt: ${activeProject}` : "Alle Papers (global)"}
-        onGoToExtraction={() => navigate("/extraction")}
+        onGoToExtraction={() => navigate("/forschung/extraktion")}
         dismissed={downloadDismissed}
         onDismiss={() => setDownloadDismissed(true)}
       />

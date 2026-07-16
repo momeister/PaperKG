@@ -545,8 +545,11 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await spellButton.click();
   await expect(page.getByRole("button", { name: "Rechtschreibkontrolle einschalten" })).toHaveAttribute("aria-pressed", "false");
 
-  await page.getByRole("link", { name: /Import/ }).click();
-  // Race-Fix: erst warten, bis die Import-Seite gemountet ist — sonst matcht der
+  // Import/Extraktion leben jetzt als Stufen im Forschung-Hub: Sidebar-Link
+  // "Forschung", dann der Pipeline-Knoten der Stufe.
+  await page.getByRole("link", { name: /Forschung/ }).click();
+  await page.getByRole("button", { name: "Stufe Import" }).click();
+  // Race-Fix: erst warten, bis die Import-Stufe gemountet ist — sonst matcht der
   // Locator das noch gemountete versteckte Notes-Bild-Input statt der PDF-Dropzone.
   await expect(page.getByRole("heading", { name: "Import" })).toBeVisible();
   await page.locator('.drop-zone input[type="file"]').setInputFiles({
@@ -556,7 +559,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   });
   await expect(page.getByText("success")).toBeVisible();
 
-  await page.getByRole("link", { name: /Extraktion/ }).click();
+  await page.getByRole("button", { name: "Stufe Extraktion" }).click();
   await expect(page.getByRole("heading", { name: "Extraktion" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Ausführen/ }).first()).toHaveClass(/active/);
   // Einzelextraktion ist inzwischen ein zuklappbares Panel; Option-Values des
