@@ -1238,9 +1238,9 @@ h1 {
   padding: 10px;
   border: 1px solid var(--evidence-border);
   border-left: 4px solid var(--evidence-color);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: 0 14px 34px rgba(19, 32, 45, 0.18);
+  box-shadow: var(--shadow-pop);
   color: var(--text);
   white-space: normal;
   pointer-events: auto;
@@ -1249,6 +1249,7 @@ h1 {
 .citation-hover-card--visible {
   display: grid;
   gap: 6px;
+  animation: pop-in var(--dur-1) var(--ease-out);
 }
 
 .citation-hover-card strong,
@@ -4402,9 +4403,16 @@ h1 {
   min-width: 0;
   max-width: 100%;
   min-height: 0;
-  border-left: 3px solid #9ca9b6;
+  border-left: 3px solid var(--muted);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(32, 43, 54, 0.04);
+  box-shadow: var(--shadow-soft);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+
+.ai-thread-card:hover {
+  box-shadow: var(--shadow-pop);
 }
 
 .ai-thread-card--anchored {
@@ -4422,7 +4430,7 @@ h1 {
 }
 
 .ai-thread-card--pinned {
-  border-left-color: #7c3aed;
+  border-left-color: var(--accent-2);
 }
 
 .ai-thread-topline {
@@ -4786,13 +4794,25 @@ h1 {
 }
 
 .split-handle {
-  background: #cdd5de;
+  background: var(--line);
   cursor: col-resize;
+  border-radius: var(--radius-full);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.split-handle:hover,
+.split-handle:active {
+  background: var(--accent);
 }
 
 .split-handle--idle {
   cursor: default;
-  background: #e4e9ef;
+  background: var(--surface-2);
+}
+
+.split-handle--idle:hover,
+.split-handle--idle:active {
+  background: var(--surface-2);
 }
 
 /* In-app PDF viewer modal (Library "Öffnen" → reuses PdfPane). */
@@ -10204,12 +10224,6 @@ button.parallel-cite {
   border-color: rgba(134, 168, 200, 0.45);
   background: rgba(37, 99, 168, 0.18);
   color: #8fc0ee;
-}
-:root[data-scheme="dark"] .split-handle {
-  background: var(--line);
-}
-:root[data-scheme="dark"] .split-handle--idle {
-  background: var(--surface-2);
 }
 :root[data-scheme="dark"] .status-strip--error {
   background: rgba(232, 115, 111, 0.15);
