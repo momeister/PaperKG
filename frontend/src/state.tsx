@@ -7,7 +7,38 @@ export type LlmParams = {
   context_size?: number;
 };
 
-export type Theme = "light" | "dark";
+/** Die vier wählbaren Theme-Presets (siehe styles/themes.css). */
+export const THEMES = ["observatorium", "tiefsee", "manuskript", "laborlicht"] as const;
+export type Theme = (typeof THEMES)[number];
+
+export type ThemeScheme = "dark" | "light";
+
+/** Anzeige-Metadaten pro Theme; `counterpart` ist das Ziel des Hell/Dunkel-
+ *  Schnellwechsels (behält den Charakter der Theme-Familie bei). */
+export const THEME_META: Record<Theme, { label: string; hint: string; scheme: ThemeScheme; counterpart: Theme }> = {
+  observatorium: { label: "Observatorium", hint: "Tiefes Blau, Periwinkle", scheme: "dark", counterpart: "manuskript" },
+  tiefsee: { label: "Tiefsee", hint: "Grün-Schiefer, Cyan", scheme: "dark", counterpart: "laborlicht" },
+  manuskript: { label: "Manuskript", hint: "Warmes Papier, Petrol", scheme: "light", counterpart: "observatorium" },
+  laborlicht: { label: "Laborlicht", hint: "Kühles Weiß, Blau", scheme: "light", counterpart: "tiefsee" }
+};
+
+/** Gespeicherte/übergebene Theme-Namen normalisieren; mappt die Alt-Werte
+ *  "dark"/"light" auf die neuen Standard-Presets. */
+export function normalizeTheme(value: string | null | undefined): Theme | null {
+  if (!value) {
+    return null;
+  }
+  if ((THEMES as readonly string[]).includes(value)) {
+    return value as Theme;
+  }
+  if (value === "dark") {
+    return "observatorium";
+  }
+  if (value === "light") {
+    return "manuskript";
+  }
+  return null;
+}
 
 export type AppState = {
   activeProject?: string;
@@ -19,6 +50,8 @@ export type AppState = {
   llmParams: LlmParams;
   setLlmParams: (params: LlmParams) => void;
   theme: Theme;
+  setTheme: (theme: Theme) => void;
+  /** Schneller Hell/Dunkel-Wechsel innerhalb der Theme-Familie. */
   toggleTheme: () => void;
   /** Globaler UI-Zoom (1 = 100%); skaliert das gesamte Programm. */
   fontScale: number;

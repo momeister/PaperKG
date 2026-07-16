@@ -3,10 +3,11 @@ import { CheckCircle2, RefreshCcw } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
 import { Status } from "../components/Status";
+import { ThemePicker } from "../components/ThemePicker";
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP, useAppState } from "../state";
 
 export function SettingsPage() {
-  const { provider, setProvider, model, setModel, fontScale, setFontScale } = useAppState();
+  const { provider, setProvider, model, setModel, fontScale, setFontScale, theme, setTheme } = useAppState();
   const queryClient = useQueryClient();
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders });
   const discover = useMutation({
@@ -63,6 +64,16 @@ export function SettingsPage() {
             <span className="muted">Skaliert das gesamte Programm (Text, Symbole, Layout).</span>
           </label>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <span>Darstellung</span>
+            <strong>Farbschema</strong>
+          </div>
+        </div>
+        <ThemePicker variant="inline" theme={theme} onSelect={setTheme} />
       </section>
 
       <div className="provider-grid">

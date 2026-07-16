@@ -1,0 +1,162 @@
+/* ------------------------------------------------------------------------- */
+/* Theme-Paletten. Jeder Block überschreibt NUR Custom Properties (+ color/   */
+/* color-scheme) — niemals Komponenten-Selektoren; die Aliases in styles.css  */
+/* (--surface-1, --accent-bg, --danger, …) lösen automatisch via var() auf.   */
+/*                                                                            */
+/* data-theme  = eines von: observatorium | tiefsee | manuskript | laborlicht */
+/* data-scheme = dark | light (für die wenigen Scheme-Selektoren in styles.css)*/
+/* Legacy-Werte "dark"/"light" bleiben als Alias-Selektoren gültig.           */
+/* ------------------------------------------------------------------------- */
+
+/* --- Observatorium — Standard-Nacht: tiefes Blau-Ink, Periwinkle, Amber --- */
+:root[data-theme="observatorium"],
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: #dfe4f7;
+  --app-bg: #0b1020;
+  --surface: #131a30;
+  --surface-2: #1a2242;
+  --surface-hover: #222c55;
+  --line: #262f52;
+  --text: #dfe4f7;
+  --muted: #94a0c8;
+  --blue: #8b9cf5;
+  --accent: #8b9cf5;
+  --accent-strong: #6d80e8;
+  --accent-contrast: #0f152e;
+  --accent-soft: #212b57;
+  --accent-2: #e0a458;
+  --accent-2-soft: rgba(224, 164, 88, 0.14);
+  --green: #4cc38a;
+  --amber: #e5b452;
+  --red: #f08a83;
+  --ink: #f1f4ff;
+  --shadow-soft: 0 1px 2px rgba(2, 5, 18, 0.5);
+  --shadow-pop: 0 14px 34px rgba(2, 5, 18, 0.65);
+  /* Belege/Zitat-Markierungen für dunklen Untergrund aufhellen */
+  --evidence-color: #6ea8fe;
+  --evidence-soft: rgba(110, 168, 254, 0.16);
+  --evidence-border: rgba(110, 168, 254, 0.42);
+  --sidebar-bg: #090d1c;
+  --sidebar-bg-2: #0d1226;
+  --sidebar-border: #1c2447;
+  --sidebar-text: #c7cfec;
+  --sidebar-muted: #8b94bd;
+  --sidebar-hover: #1a2140;
+  --sidebar-active: #232d58;
+  --sidebar-active-border: #3a4a8f;
+  --sidebar-brand: #f1f4ff;
+  --topbar-bg: #10162b;
+}
+
+/* --- Tiefsee — Nacht in Grün-Schiefer mit Cyan ---------------------------- */
+:root[data-theme="tiefsee"] {
+  color-scheme: dark;
+  color: #d8eae3;
+  --app-bg: #0a1514;
+  --surface: #10201d;
+  --surface-2: #162b27;
+  --surface-hover: #1c342f;
+  --line: #24433c;
+  --text: #d8eae3;
+  --muted: #8fb2a7;
+  --blue: #45c4d0;
+  --accent: #45c4d0;
+  --accent-strong: #2ba8b5;
+  --accent-contrast: #04262a;
+  --accent-soft: #123a3d;
+  --accent-2: #8fd0ab;
+  --accent-2-soft: rgba(143, 208, 171, 0.14);
+  --green: #46c489;
+  --amber: #dcb45a;
+  --red: #ee837a;
+  --ink: #eef8f3;
+  --shadow-soft: 0 1px 2px rgba(1, 10, 9, 0.5);
+  --shadow-pop: 0 14px 34px rgba(1, 10, 9, 0.65);
+  --evidence-color: #5fc9dc;
+  --evidence-soft: rgba(95, 201, 220, 0.16);
+  --evidence-border: rgba(95, 201, 220, 0.42);
+  --sidebar-bg: #071110;
+  --sidebar-bg-2: #0b1917;
+  --sidebar-border: #1a332e;
+  --sidebar-text: #c4dcd4;
+  --sidebar-muted: #85a59b;
+  --sidebar-hover: #142622;
+  --sidebar-active: #1b3530;
+  --sidebar-active-border: #2f5c52;
+  --sidebar-brand: #eef8f3;
+  --topbar-bg: #0e1c19;
+}
+
+/* --- Manuskript — Standard-Tag: warmes Grauweiß, Ink-Navy, Petrol --------- */
+:root[data-theme="manuskript"],
+:root[data-theme="light"] {
+  color-scheme: light;
+  color: #26323e;
+  --app-bg: #f2efe7;
+  --surface: #fcfbf7;
+  --surface-2: #f0ebe0;
+  --surface-hover: #e9e3d4;
+  --line: #dcd4c2;
+  --text: #26323e;
+  --muted: #67727e;
+  --blue: #14697b;
+  --accent: #14697b;
+  --accent-strong: #0f5666;
+  --accent-contrast: #ffffff;
+  --accent-soft: #dfecec;
+  --accent-2: #a86a24;
+  --accent-2-soft: rgba(168, 106, 36, 0.12);
+  --green: #147a52;
+  --amber: #92600a;
+  --red: #b03a33;
+  --ink: #19242f;
+  --shadow-soft: 0 1px 2px rgba(58, 48, 30, 0.08);
+  --shadow-pop: 0 12px 30px rgba(58, 48, 30, 0.18);
+  --sidebar-bg: #141e2a;
+  --sidebar-bg-2: #1c2836;
+  --sidebar-border: #0e161f;
+  --sidebar-text: #d3dbe6;
+  --sidebar-muted: #91a0b0;
+  --sidebar-hover: #263443;
+  --sidebar-active: #2d3e51;
+  --sidebar-active-border: #47617c;
+  --sidebar-brand: #f4f7fb;
+  --topbar-bg: #fcfbf7;
+}
+
+/* --- Laborlicht — kühles, klinisches Tag-Theme mit heller Sidebar --------- */
+:root[data-theme="laborlicht"] {
+  color-scheme: light;
+  color: #1f2933;
+  --app-bg: #edf1f6;
+  --surface: #ffffff;
+  --surface-2: #f2f5f9;
+  --surface-hover: #e9eef5;
+  --line: #d9e1ea;
+  --text: #1f2933;
+  --muted: #5b6675;
+  --blue: #2563eb;
+  --accent: #2563eb;
+  --accent-strong: #1d4fd7;
+  --accent-contrast: #ffffff;
+  --accent-soft: #e8effd;
+  --accent-2: #0e7490;
+  --accent-2-soft: rgba(14, 116, 144, 0.1);
+  --green: #15803d;
+  --amber: #9a6206;
+  --red: #b91c1c;
+  --ink: #16202b;
+  --shadow-soft: 0 1px 2px rgba(18, 27, 40, 0.06);
+  --shadow-pop: 0 12px 30px rgba(18, 27, 40, 0.16);
+  --sidebar-bg: #f8fafd;
+  --sidebar-bg-2: #eef2f8;
+  --sidebar-border: #dce4ee;
+  --sidebar-text: #3a4757;
+  --sidebar-muted: #75828f;
+  --sidebar-hover: #e5ebf4;
+  --sidebar-active: #dce8fb;
+  --sidebar-active-border: #b9cff2;
+  --sidebar-brand: #16202b;
+  --topbar-bg: #ffffff;
+}

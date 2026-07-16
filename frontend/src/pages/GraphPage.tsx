@@ -7,7 +7,7 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { MetricCard } from "../components/MetricCard";
 import GraphLayoutWorker from "../graphLayoutWorker?worker";
-import { useAppState } from "../state";
+import { THEME_META, useAppState } from "../state";
 import type { Point } from "../types";
 
 const edgeOptions = ["cites", "concept", "method", "similar"];
@@ -126,7 +126,7 @@ export function GraphPage() {
             fitView
             fitViewOptions={{ padding: 0.1 }}
             minZoom={0.02}
-            colorMode={theme}
+            colorMode={THEME_META[theme].scheme}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={22} size={1.4} />

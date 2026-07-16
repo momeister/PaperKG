@@ -13,19 +13,18 @@ import {
   GitBranch,
   Import,
   Library,
-  Moon,
   Notebook,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  SlidersHorizontal,
-  Sun
+  SlidersHorizontal
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "./api";
-import { AppStateContext, clampFontScale, FONT_SCALE_STEP } from "./state";
+import { AppStateContext, clampFontScale, FONT_SCALE_STEP, normalizeTheme, THEME_META } from "./state";
 import type { LlmParams, Theme } from "./state";
 import { Status } from "./components/Status";
+import { ThemePicker } from "./components/ThemePicker";
 // The overlay-family pages stay statically imported: they render in the four extra
 // Tauri windows (early returns below, never through <Routes>) and must appear
 // instantly — the control border/pointer ring can't wait for a chunk fetch.
@@ -80,14 +79,14 @@ function loadStoredLlmParams(): LlmParams {
 }
 
 function loadStoredTheme(): Theme {
-  const stored = localStorage.getItem("sciencekg.theme");
-  if (stored === "light" || stored === "dark") {
+  const stored = normalizeTheme(localStorage.getItem("sciencekg.theme"));
+  if (stored) {
     return stored;
   }
   if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-    return "dark";
+    return "observatorium";
   }
-  return "light";
+  return "manuskript";
 }
 
 function loadStoredFontScale(): number {
@@ -172,7 +171,11 @@ export default function App() {
   }, [llmParams]);
 
   useEffect(() => {
+    // data-theme wählt die Palette, data-scheme (dark/light) bedient die wenigen
+    // Scheme-Selektoren in styles.css. Schreibt normalisiert zurück — migriert
+    // damit auch alte "dark"/"light"-Werte aus localStorage.
     document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-scheme", THEME_META[theme].scheme);
     localStorage.setItem("sciencekg.theme", theme);
   }, [theme]);
 
@@ -184,7 +187,7 @@ export default function App() {
     localStorage.setItem("sciencekg.fontScale", String(fontScale));
   }, [fontScale]);
 
-  const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
+  const toggleTheme = () => setTheme((current) => THEME_META[current].counterpart);
   const setFontScale = (scale: number) => setFontScaleState(clampFontScale(scale));
   const adjustFontScale = (delta: number) => setFontScaleState((current) => clampFontScale(current + delta));
 
@@ -200,7 +203,7 @@ export default function App() {
     return Array.from(new Set(merged.filter(Boolean)));
   }, [discoveredModelsQuery.data?.models, selectedProvider, model]);
   const state = useMemo(
-    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, toggleTheme, fontScale, setFontScale }),
+    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, setTheme, toggleTheme, fontScale, setFontScale }),
     [activeProject, provider, model, llmParams, theme, fontScale]
   );
 
@@ -326,15 +329,7 @@ export default function App() {
                   <span className="font-scale-glyph font-scale-glyph--large">A</span>
                 </button>
               </span>
-              <button
-                className="icon-button theme-toggle"
-                type="button"
-                aria-label={theme === "dark" ? "Zum Tag-Modus wechseln" : "Zum Nacht-Modus wechseln"}
-                title={theme === "dark" ? "Tag-Modus" : "Nacht-Modus"}
-                onClick={toggleTheme}
-              >
-                {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-              </button>
+              <ThemePicker theme={theme} onSelect={setTheme} />
               <span className="llm-params-wrap">
                 <button
                   className={`icon-button ${paramsOpen || Object.values(llmParams).some((value) => value !== undefined) ? "icon-button--active" : ""}`}

@@ -5,6 +5,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import App from "./App";
 import { installNativeExternalLinks } from "./native";
+// Self-hosted Schriften (kein CDN — die App bleibt vollständig lokal).
+import "@fontsource-variable/inter";
+import "@fontsource-variable/bricolage-grotesque";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+// Token- und Theme-Schicht vor dem Komponenten-Stylesheet laden.
+import "./styles/tokens.css";
+import "./styles/themes.css";
+import "./styles/motion.css";
 import "./styles.css";
 
 // In the native shell, route target=_blank / window.open to the OS browser.
