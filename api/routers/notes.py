@@ -531,7 +531,14 @@ def _run_note_ai_chat(
                 "und duerfen niemals entfernt, gekuerzt oder umformuliert werden. Wenn du einen Satz oder ein "
                 "Zitat behaeltst, kuerzt oder umschreibst, uebernimm seinen sciencekg://-Link zeichengenau "
                 "(Linktext UND URL) an der passenden Stelle deiner Antwort. Auch Blockzitate (> ...) mit "
-                "solchen Links behalten ihre Quellenzeile."
+                "solchen Links behalten ihre Quellenzeile. "
+                "Der Editor stellt genau diesen Markdown-Umfang dar, sonst nichts: Ueberschriften # bis ###### "
+                "(je ein Leerzeichen danach), Listen mit - oder 1. (Verschachtelung ausschliesslich durch "
+                "Einrueckung mit Tabs oder Leerzeichen, keine Leerzeile zwischen Listenpunkten), einstufige "
+                "Blockzitate mit > , Fettschrift **x**, Kursiv *x*, Inline-Code `x`, Links [text](url), ein "
+                "Bild ![alt](url) als eigener Absatz, GFM-Pipe-Tabellen, Hervorhebung ==x==, sowie --- oder "
+                '<hr class="dashed"> als Trennlinie. Verwende KEINE Fenced-Code-Bloecke (```); nutze fuer Code '
+                "stattdessen Inline-Code. Erfinde keine anderen Markdown-Konstrukte."
             ),
         }
     ]

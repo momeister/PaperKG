@@ -3,14 +3,30 @@
 // that used to be crammed into this small floating window. Images (paste/drop) and a
 // one-shot "AI adjust selection" action stay available — everything else is dropped.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   ClipboardEvent as ReactClipboardEvent,
   DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Eye, EyeOff, ImagePlus, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Columns2,
+  Eye,
+  ImagePlus,
+  Loader2,
+  Minus,
+  Pencil,
+  Plus,
+  SeparatorHorizontal,
+  Sparkles,
+  Trash2,
+  X
+} from "lucide-react";
 
 import { api } from "../../api";
 import { isTauri, nativeInvoke } from "../../native";
@@ -20,11 +36,21 @@ import type { Note } from "../../types";
 import { MarkdownPreview } from "../NotesSubComponents";
 import {
   absoluteUrl,
+  applyTabIndent,
+  attachTextareaAutoSync,
+  clampSplitRatio,
+  continueMarkdownLine,
+  dividerSnippetForTextarea,
   formatError,
   isUntitledNoteTitle,
+  loadBooleanUiState,
+  loadNumberUiState,
   noteTitleForSave,
+  saveBooleanUiState,
+  saveNumberUiState,
   shortText,
   suggestNoteTitle,
+  toggleWrap,
   withPreservedCitationLinks
 } from "../notesHelpers";
 import { clampNotesSize, loadOverlayNotesSize, saveOverlayNotesSize, type OverlaySize } from "./overlayNotesSize";
@@ -40,9 +66,16 @@ export function OverlayNotesPanel() {
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
+  const [editorMode, setEditorMode] = useState<"edit" | "preview" | "split">("edit");
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const [aiInstruction, setAiInstruction] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(() => loadBooleanUiState("overlay.pickerOpen", true));
+  const [splitRatio, setSplitRatio] = useState(() => loadNumberUiState("overlay.splitRatio", 0.5));
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const [editorScrollTop, setEditorScrollTop] = useState(0);
+  const [editorScrollLeft, setEditorScrollLeft] = useState(0);
+  const previewRef = useRef<HTMLElement | null>(null);
+  const previewScrollRef = useRef({ top: 0, left: 0 });
 
   const dirtyRef = useRef(false);
   const markdownRef = useRef("");
@@ -138,6 +171,10 @@ export function OverlayNotesPanel() {
       })
   });
 
+  useEffect(() => {
+    saveBooleanUiState("overlay.pickerOpen", pickerOpen);
+  }, [pickerOpen]);
+
   // Project switch: this window has no PDF/citation panel to keep in sync — just drop
   // whatever was open and let the "select first note" effect below pick a fresh one.
   useEffect(() => {
@@ -225,6 +262,101 @@ export function OverlayNotesPanel() {
     });
   }
 
+  function applyOverlayWrap(before: string, after = before) {
+    const node = textareaRef.current;
+    const fallback = markdownRef.current.length;
+    const start = node?.selectionStart ?? fallback;
+    const end = node?.selectionEnd ?? fallback;
+    const result = toggleWrap(markdownRef.current, start, end, before, after);
+    markdownRef.current = result.next;
+    setMarkdown(result.next);
+    setDirtyState(true);
+    requestAnimationFrame(() => {
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(result.selStart, result.selEnd);
+    });
+  }
+
+  function handleOverlayEditorKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const node = textareaRef.current;
+      if (!node) return;
+      const result = applyTabIndent(markdownRef.current, node.selectionStart, node.selectionEnd, event.shiftKey);
+      if (!result) return;
+      markdownRef.current = result.next;
+      setMarkdown(result.next);
+      setDirtyState(true);
+      requestAnimationFrame(() => {
+        node.focus();
+        node.setSelectionRange(result.selStart, result.selEnd);
+      });
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      const node = textareaRef.current;
+      if (!node) return;
+      const result = continueMarkdownLine(markdownRef.current, node.selectionStart, node.selectionEnd);
+      if (!result) return;
+      event.preventDefault();
+      markdownRef.current = result.next;
+      setMarkdown(result.next);
+      setDirtyState(true);
+      requestAnimationFrame(() => {
+        node.focus();
+        node.setSelectionRange(result.selStart, result.selEnd);
+      });
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      const key = event.key.toLowerCase();
+      if (key === "b") {
+        event.preventDefault();
+        applyOverlayWrap("**");
+        return;
+      }
+      if (key === "i") {
+        event.preventDefault();
+        applyOverlayWrap("*");
+        return;
+      }
+      if (key === "e") {
+        event.preventDefault();
+        applyOverlayWrap("`");
+        return;
+      }
+      if (key === "k" && !event.shiftKey) {
+        event.preventDefault();
+        applyOverlayWrap("[", "](https://)");
+        return;
+      }
+    }
+  }
+
+  // Edit/Preview/Split each conditionally mount their pane, so switching modes remounts a
+  // fresh DOM node whose scroll resets to 0 — restore the last known offset instead of always
+  // jumping back to the top.
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    node.scrollTop = editorScrollTop;
+    node.scrollLeft = editorScrollLeft;
+    return attachTextareaAutoSync(node, () => markdownRef.current, (next) => {
+      markdownRef.current = next;
+      setMarkdown(next);
+      setDirtyState(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorMode]);
+
+  useLayoutEffect(() => {
+    const node = previewRef.current;
+    if (!node) return;
+    node.scrollTop = previewScrollRef.current.top;
+    node.scrollLeft = previewScrollRef.current.left;
+  }, [editorMode]);
+
   function captureSelection() {
     const node = textareaRef.current;
     if (!node) return;
@@ -303,6 +435,35 @@ export function OverlayNotesPanel() {
     window.addEventListener("pointerup", stop);
   }
 
+  function startSplitResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const container = splitContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    // Narrow overlay widths stack the panes into a column (styles.css, 560px breakpoint) —
+    // follow whichever axis is actually the split direction at drag-start.
+    const stacked = window.getComputedStyle(container).flexDirection === "column";
+    let frame: number | null = null;
+    let latest = splitRatio;
+    const move = (moveEvent: PointerEvent) => {
+      latest = stacked
+        ? clampSplitRatio((moveEvent.clientY - rect.top) / rect.height)
+        : clampSplitRatio((moveEvent.clientX - rect.left) / rect.width);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        setSplitRatio(latest);
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      saveNumberUiState("overlay.splitRatio", latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
   const saveStatus = saveNote.isPending
     ? "Speichert…"
     : saveNote.isError
@@ -313,57 +474,93 @@ export function OverlayNotesPanel() {
           ? "Gespeichert"
           : "";
 
+  const activeProjectLabel = activeProject ? projects.find((project) => project.id === activeProject)?.name ?? "Projekt" : "Alle Papers";
+  const activeNoteLabel = activeNoteId ? notes.find((note) => note.id === activeNoteId)?.title || "Ohne Titel" : "Keine Notiz";
+
   return (
     <div className="overlay-notes-view">
-      <select
-        className="overlay-notes-project-select"
-        aria-label="Projekt"
-        value={activeProject ?? ""}
-        onChange={(event) => setActiveProject(event.target.value || undefined)}
+      <button
+        type="button"
+        className="overlay-notes-picker-toggle"
+        onClick={() => setPickerOpen((current) => !current)}
+        aria-expanded={pickerOpen}
       >
-        <option value="">Alle Papers</option>
-        {projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))}
-      </select>
+        {pickerOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <span>{activeProjectLabel} · {activeNoteLabel}</span>
+      </button>
+      {pickerOpen ? (
+        <>
+          <select
+            className="overlay-notes-project-select"
+            aria-label="Projekt"
+            value={activeProject ?? ""}
+            onChange={(event) => setActiveProject(event.target.value || undefined)}
+          >
+            <option value="">Alle Papers</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
 
-      <div className="overlay-notes-toolbar">
-        <select
-          className="overlay-notes-project-select overlay-notes-note-select"
-          aria-label="Notiz"
-          value={activeNoteId}
-          onChange={(event) => setActiveNoteId(event.target.value)}
-        >
-          {!notes.length ? <option value="">Keine Notizen</option> : null}
-          {notes.map((note) => (
-            <option key={note.id} value={note.id}>
-              {note.title || "Ohne Titel"}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="overlay-close"
-          title="Neue Notiz"
-          aria-label="Neue Notiz"
-          disabled={createNote.isPending}
-          onClick={() => createNote.mutate()}
-        >
-          <Plus size={15} />
-        </button>
-        <button
-          type="button"
-          className="overlay-close"
-          title="Notiz löschen"
-          aria-label="Notiz löschen"
-          disabled={!activeNoteId || deleteNoteMutation.isPending}
-          onClick={() => activeNoteId && deleteNoteMutation.mutate(activeNoteId)}
-        >
-          <Trash2 size={15} />
-        </button>
-      </div>
+          <div className="overlay-notes-toolbar">
+            <select
+              className="overlay-notes-project-select overlay-notes-note-select"
+              aria-label="Notiz"
+              value={activeNoteId}
+              onChange={(event) => setActiveNoteId(event.target.value)}
+            >
+              {!notes.length ? <option value="">Keine Notizen</option> : null}
+              {notes.map((note) => (
+                <option key={note.id} value={note.id}>
+                  {note.title || "Ohne Titel"}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="overlay-close"
+              title="Neue Notiz"
+              aria-label="Neue Notiz"
+              disabled={createNote.isPending}
+              onClick={() => createNote.mutate()}
+            >
+              <Plus size={15} />
+            </button>
+            <button
+              type="button"
+              className="overlay-close"
+              title="Notiz löschen"
+              aria-label="Notiz löschen"
+              disabled={!activeNoteId || deleteNoteMutation.isPending}
+              onClick={() => activeNoteId && deleteNoteMutation.mutate(activeNoteId)}
+            >
+              <Trash2 size={15} />
+            </button>
+            <button
+              type="button"
+              className="overlay-close"
+              title="Durchgehende Trennlinie einfügen"
+              aria-label="Durchgehende Trennlinie einfügen"
+              disabled={!activeNoteId}
+              onClick={() => insertAtCaret(dividerSnippetForTextarea("solid", textareaRef.current))}
+            >
+              <SeparatorHorizontal size={15} />
+            </button>
+            <button
+              type="button"
+              className="overlay-close"
+              title="Gestrichelte Trennlinie einfügen"
+              aria-label="Gestrichelte Trennlinie einfügen"
+              disabled={!activeNoteId}
+              onClick={() => insertAtCaret(dividerSnippetForTextarea("dashed", textareaRef.current))}
+            >
+              <Minus size={15} />
+            </button>
+          </div>
+        </>
+      ) : null}
 
       <input
         className="overlay-notes-title-input"
@@ -376,30 +573,70 @@ export function OverlayNotesPanel() {
         }}
       />
 
-      <div className="overlay-notes-editor">
+      <div
+        className={`overlay-notes-editor ${editorMode === "split" ? "overlay-notes-editor--split" : ""}`}
+        ref={splitContainerRef}
+      >
         {!activeNoteId ? (
           <p className="overlay-muted">{notesQuery.isLoading ? "Lade Notizen…" : "Keine Notiz gewählt."}</p>
-        ) : editorMode === "edit" ? (
-          <textarea
-            ref={textareaRef}
-            className="overlay-notes-textarea"
-            value={markdown}
-            placeholder="Schreib los…"
-            onChange={(event) => {
-              setMarkdown(event.target.value);
-              setDirtyState(true);
-            }}
-            onSelect={captureSelection}
-            onMouseUp={captureSelection}
-            onKeyUp={captureSelection}
-            onPaste={handlePaste}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-          />
         ) : (
-          <div className="overlay-notes-preview">
-            <MarkdownPreview markdown={markdown} citations={currentNote?.citations ?? []} onCitationClick={() => {}} editable={false} />
-          </div>
+          <>
+            {editorMode === "edit" || editorMode === "split" ? (
+              <div
+                className="overlay-notes-editor-wrap"
+                style={editorMode === "split" ? { flex: `${splitRatio} 1 0%`, minWidth: 0 } : undefined}
+              >
+                <textarea
+                  ref={textareaRef}
+                  className="overlay-notes-textarea"
+                  value={markdown}
+                  placeholder="Schreib los…"
+                  onChange={(event) => {
+                    setMarkdown(event.target.value);
+                    setDirtyState(true);
+                  }}
+                  onSelect={captureSelection}
+                  onMouseUp={captureSelection}
+                  onKeyUp={captureSelection}
+                  onKeyDown={handleOverlayEditorKeyDown}
+                  onPaste={handlePaste}
+                  onDragOver={handleDragOver}
+                  onDrop={handleDrop}
+                  onScroll={(event) => {
+                    setEditorScrollTop(event.currentTarget.scrollTop);
+                    setEditorScrollLeft(event.currentTarget.scrollLeft);
+                  }}
+                />
+              </div>
+            ) : null}
+            {editorMode === "split" ? (
+              <div
+                className="split-handle overlay-notes-split-handle"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Aufteilung Editor/Vorschau anpassen"
+                onPointerDown={startSplitResize}
+                onDoubleClick={() => {
+                  setSplitRatio(0.5);
+                  saveNumberUiState("overlay.splitRatio", 0.5);
+                }}
+              />
+            ) : null}
+            {editorMode === "preview" || editorMode === "split" ? (
+              <div className="overlay-notes-preview" style={editorMode === "split" ? { flex: `${1 - splitRatio} 1 0%`, minWidth: 0 } : undefined}>
+                <MarkdownPreview
+                  previewRef={previewRef}
+                  markdown={markdown}
+                  citations={currentNote?.citations ?? []}
+                  onCitationClick={() => {}}
+                  editable={false}
+                  onScroll={(event) => {
+                    previewScrollRef.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft };
+                  }}
+                />
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -450,16 +687,41 @@ export function OverlayNotesPanel() {
       ) : null}
 
       <div className="overlay-notes-footer">
-        <button
-          type="button"
-          className="overlay-close"
-          title={editorMode === "edit" ? "Vorschau" : "Bearbeiten"}
-          aria-label={editorMode === "edit" ? "Vorschau" : "Bearbeiten"}
-          disabled={!activeNoteId}
-          onClick={() => setEditorMode((mode) => (mode === "edit" ? "preview" : "edit"))}
-        >
-          {editorMode === "edit" ? <Eye size={15} /> : <EyeOff size={15} />}
-        </button>
+        <div className="overlay-notes-mode-toggle">
+          <button
+            type="button"
+            className={editorMode === "edit" ? "active" : ""}
+            title="Bearbeiten"
+            aria-label="Bearbeiten"
+            aria-pressed={editorMode === "edit"}
+            disabled={!activeNoteId}
+            onClick={() => setEditorMode("edit")}
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            type="button"
+            className={editorMode === "preview" ? "active" : ""}
+            title="Vorschau"
+            aria-label="Vorschau"
+            aria-pressed={editorMode === "preview"}
+            disabled={!activeNoteId}
+            onClick={() => setEditorMode("preview")}
+          >
+            <Eye size={14} />
+          </button>
+          <button
+            type="button"
+            className={editorMode === "split" ? "active" : ""}
+            title="Geteilte Ansicht"
+            aria-label="Geteilte Ansicht"
+            aria-pressed={editorMode === "split"}
+            disabled={!activeNoteId}
+            onClick={() => setEditorMode("split")}
+          >
+            <Columns2 size={14} />
+          </button>
+        </div>
         <input
           ref={imageInputRef}
           type="file"

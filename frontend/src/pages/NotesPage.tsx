@@ -20,6 +20,7 @@ import {
   Languages,
   Link,
   List,
+  Minus,
   NotebookPen,
   PanelRightClose,
   PanelRightOpen,
@@ -27,6 +28,7 @@ import {
   Quote,
   Redo2,
   Search,
+  SeparatorHorizontal,
   MessageSquareText,
   SpellCheck2,
   Sparkles,
@@ -57,15 +59,21 @@ import {
 export * from "./notesHelpers";
 // Pure helpers live in ./notesHelpers; re-export for back-compat and import the used ones.
 import {
+  FORMAT_AS_MARKDOWN_INSTRUCTION,
   IMAGE_PREVIEW_HIDDEN_KEY,
   TABLE_PICKER_COLS,
   TABLE_PICKER_ROWS,
   THREAD_RANGE_TEXT_LIMIT,
   TRANSLATE_LANGUAGES,
   absoluteUrl,
+  applyTabIndent,
   assignMissingThreadMeta,
+  attachTextareaAutoSync,
   buildMarkdownTable,
   caretIndexFromPoint,
+  clampSplitRatio,
+  continueMarkdownLine as continueMarkdownLineAt,
+  dividerSnippetForTextarea,
   citationBadgeFromLabel,
   citationColorIndex,
   citationRefAtPosition,
@@ -80,7 +88,6 @@ import {
   loadBooleanUiState,
   loadNumberUiState,
   loadThreadMetaUiState,
-  markdownContinuation,
   noteTitleForSave,
   parseMarkdownCitationRefs,
   previewElementToMarkdown,
@@ -106,6 +113,7 @@ import {
   threadRangeUiState,
   threadResultRange,
   threadSizeStyle,
+  toggleWrap,
   withPreservedCitationLinks,
 } from "./notesHelpers";
 import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
@@ -267,6 +275,8 @@ export function NotesSurface({
   const [noteSearchIndex, setNoteSearchIndex] = useState(0);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [tableHover, setTableHover] = useState({ cols: 0, rows: 0 });
+  const [splitRatio, setSplitRatio] = useState(() => loadNumberUiState("editor.splitRatio", 0.5));
+  const splitGridRef = useRef<HTMLDivElement | null>(null);
   const [translateLanguage, setTranslateLanguage] = useState("Deutsch");
   const [aiPopoverBottomPadding, setAiPopoverBottomPadding] = useState(0);
   const [undoStack, setUndoStack] = useState<string[]>([]);
@@ -307,6 +317,7 @@ export function NotesSurface({
   const handledRequestedCitationIdRef = useRef("");
   const loadedNoteIdRef = useRef("");
   const previewRef = useRef<HTMLElement | null>(null);
+  const previewScrollRef = useRef({ top: 0, left: 0 });
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
   const markdownRef = useRef(markdown);
   const localThreadRangesRef = useRef<Record<string, ThreadStoredRange>>({});
@@ -833,6 +844,25 @@ export function NotesSurface({
     setInsertPreview(null);
   }, [activeNoteId, activeThreadId, editorMode, historyOpen]);
 
+  // Edit/Preview/Split each conditionally mount their pane, so switching modes remounts a
+  // fresh DOM node whose scroll resets to 0 — restore the last known offset instead of always
+  // jumping back to the top.
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    node.scrollTop = editorScrollTop;
+    node.scrollLeft = editorScrollLeft;
+    return attachTextareaAutoSync(node, () => markdownRef.current, (next) => updateMarkdown(next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorMode]);
+
+  useLayoutEffect(() => {
+    const node = previewRef.current;
+    if (!node) return;
+    node.scrollTop = previewScrollRef.current.top;
+    node.scrollLeft = previewScrollRef.current.left;
+  }, [editorMode]);
+
   useEffect(() => {
     if (!selectedCitation || !citationListOpen || historyOpen) {
       return;
@@ -1084,6 +1114,20 @@ export function NotesSurface({
   }
 
   function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const node = textareaRef.current;
+      if (!node) return;
+      const result = applyTabIndent(markdown, node.selectionStart, node.selectionEnd, event.shiftKey);
+      if (!result) return;
+      pushUndo();
+      updateMarkdown(result.next);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(result.selStart, result.selEnd);
+      });
+      return;
+    }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "k") {
       const next = captureSelection();
       if (next) {
@@ -1494,6 +1538,30 @@ export function NotesSurface({
     window.addEventListener("pointerup", stop);
   }
 
+  function startSplitResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const container = splitGridRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    let frame: number | null = null;
+    let latest = splitRatio;
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      latest = clampSplitRatio((moveEvent.clientX - rect.left) / rect.width);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        setSplitRatio(latest);
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      saveNumberUiState("editor.splitRatio", latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
   function insertAtSelection(value: string) {
     const node = textareaRef.current;
     const fallback = lastCursorRef.current ?? markdown.length;
@@ -1743,9 +1811,13 @@ export function NotesSurface({
     const node = textareaRef.current;
     const start = node?.selectionStart ?? markdown.length;
     const end = node?.selectionEnd ?? markdown.length;
-    const selected = markdown.slice(start, end) || "Text";
+    const result = toggleWrap(markdown, start, end, before, after);
     pushUndo();
-    updateMarkdown(`${markdown.slice(0, start)}${before}${selected}${after}${markdown.slice(end)}`);
+    updateMarkdown(result.next);
+    requestAnimationFrame(() => {
+      node?.focus();
+      node?.setSelectionRange(result.selStart, result.selEnd);
+    });
   }
 
   function applyLinePrefix(prefix: string) {
@@ -1762,20 +1834,16 @@ export function NotesSurface({
     if (!node) {
       return false;
     }
-    const start = node.selectionStart;
-    const end = node.selectionEnd;
-    const lineStart = markdown.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-    const currentLine = markdown.slice(lineStart, start);
-    const continuation = markdownContinuation(currentLine);
-    if (!continuation) {
+    const result = continueMarkdownLineAt(markdown, node.selectionStart, node.selectionEnd);
+    if (!result) {
       return false;
     }
-    if (continuation.removeCurrentPrefix) {
-      replaceTextareaRange(lineStart, end, "", 0);
-      return true;
-    }
-    const value = `\n${continuation.prefix}`;
-    replaceTextareaRange(start, end, value);
+    pushUndo();
+    updateMarkdown(result.next);
+    requestAnimationFrame(() => {
+      node.focus();
+      node.setSelectionRange(result.selStart, result.selEnd);
+    });
     return true;
   }
 
@@ -2349,6 +2417,24 @@ export function NotesSurface({
                     </div>
                   ) : null}
                 </span>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Durchgehende Trennlinie einfügen"
+                  title="Durchgehende Trennlinie einfügen"
+                  onClick={() => insertAtSelection(dividerSnippetForTextarea("solid", textareaRef.current))}
+                >
+                  <SeparatorHorizontal size={17} />
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Gestrichelte Trennlinie einfügen"
+                  title="Gestrichelte Trennlinie einfügen"
+                  onClick={() => insertAtSelection(dividerSnippetForTextarea("dashed", textareaRef.current))}
+                >
+                  <Minus size={17} />
+                </button>
                 <button className="icon-button" type="button" aria-label="Bild einfuegen" onClick={() => imageInputRef.current?.click()} disabled={!activeNoteId}>
                   <ImagePlus size={17} />
                 </button>
@@ -2418,7 +2504,11 @@ export function NotesSurface({
               </div>
               {askNote.isError ? <div className="inline-error">Notizfrage fehlgeschlagen: {formatError(askNote.error)}</div> : null}
 
-              <div className={`markdown-editor-grid markdown-editor-grid--${editorMode}`}>
+              <div
+                className={`markdown-editor-grid markdown-editor-grid--${editorMode}`}
+                ref={splitGridRef}
+                style={editorMode === "split" ? { gridTemplateColumns: `minmax(0, ${splitRatio}fr) 6px minmax(0, ${1 - splitRatio}fr)`, gap: 0 } : undefined}
+              >
                 {showEditor ? (
                   <div
                     className={`markdown-editor-wrap markdown-editor-wrap--highlighted ${selection ? "markdown-editor-wrap--selection-active" : ""}`}
@@ -2519,6 +2609,18 @@ export function NotesSurface({
                               >
                                 {aiEdit.isPending ? "Übersetzt…" : "Übersetzen"}
                               </button>
+                              <button
+                                className="button button-compact"
+                                type="button"
+                                disabled={aiEdit.isPending}
+                                title="Formatiert die Auswahl als sauberes Markdown, ohne den Inhalt zu ändern"
+                                onClick={() => {
+                                  pinSelectionForQuestion();
+                                  aiEdit.mutate(FORMAT_AS_MARKDOWN_INSTRUCTION);
+                                }}
+                              >
+                                Als Markdown formatieren
+                              </button>
                             </div>
                           </>
                         ) : null}
@@ -2557,9 +2659,22 @@ export function NotesSurface({
                     ) : null}
                   </div>
                 ) : null}
+                {editorMode === "split" ? (
+                  <div
+                    className="split-handle markdown-editor-split-handle"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Aufteilung Editor/Vorschau anpassen"
+                    onPointerDown={startSplitResize}
+                    onDoubleClick={() => {
+                      setSplitRatio(0.5);
+                      saveNumberUiState("editor.splitRatio", 0.5);
+                    }}
+                  />
+                ) : null}
                 {showPreview ? (
                   <MarkdownPreview
-                    previewRef={editorMode === "preview" ? previewRef : undefined}
+                    previewRef={previewRef}
                     markdown={markdown}
                     citations={citations}
                     activeCitationId={selectedCitation?.id ?? ""}
@@ -2568,6 +2683,9 @@ export function NotesSurface({
                     searchQuery={noteSearchQuery}
                     editable={editorMode === "preview"}
                     onBlockChange={editorMode === "preview" ? updatePreviewBlock : undefined}
+                    onScroll={(event) => {
+                      previewScrollRef.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft };
+                    }}
                   />
                 ) : null}
               </div>

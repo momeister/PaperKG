@@ -2,7 +2,7 @@
 // NotesPage.tsx. Re-imported by NotesPage; reference each other and notesHelpers.
 import { Fragment, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent, UIEvent as ReactUIEvent } from "react";
 import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -64,6 +64,7 @@ import {
   formatError,
   hiddenThreadMessageIds,
   isComplexPreviewBlock,
+  isDividerBlock,
   isUntitledNoteTitle,
   latestThreadAnswer,
   loadBooleanUiState,
@@ -71,6 +72,7 @@ import {
   loadThreadMetaUiState,
   markdownContinuation,
   noteTitleForSave,
+  parseListLines,
   parseMarkdownCitationRefs,
   previewElementToMarkdown,
   saveBooleanUiState,
@@ -672,7 +674,9 @@ export function MarkdownPreview({
   onCitationClick,
   searchQuery = "",
   editable = false,
-  onBlockChange
+  onBlockChange,
+  onScroll,
+  className = ""
 }: {
   previewRef?: RefObject<HTMLElement>;
   markdown: string;
@@ -683,12 +687,14 @@ export function MarkdownPreview({
   searchQuery?: string;
   editable?: boolean;
   onBlockChange?: (blockIndex: number, nextRaw: string, expectedRaw?: string) => void;
+  onScroll?: (event: ReactUIEvent<HTMLElement>) => void;
+  className?: string;
 }) {
   const citationById = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
   const citationColorById = useMemo(() => new Map(citations.map((citation, index) => [citation.id, citationColorIndex(citation, index)])), [citations]);
   const blocks = useMemo(() => splitMarkdownBlocks(markdown), [markdown]);
   return (
-    <article ref={previewRef} className={`markdown-preview ${editable ? "markdown-preview--editable" : ""}`}>
+    <article ref={previewRef} className={`markdown-preview ${editable ? "markdown-preview--editable" : ""} ${className}`.trim()} onScroll={onScroll}>
       {blocks.map((block, index) => {
         const rendered = renderBlock(block.raw, `${index}`, citationById, citationColorById, onCitationClick, activeCitationId ?? "", searchQuery, block.start, activeCitationRef ?? null);
         if (!editable || !rendered) {
@@ -748,11 +754,20 @@ export function renderBlock(
     const match = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed);
     return <img key={key} className="markdown-preview-image" alt={match?.[1] ?? ""} src={match?.[2]} />;
   }
-  if (trimmed.startsWith("# ")) {
-    return <h1 key={key}>{renderInline(trimmed.slice(2), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset + 2, activeCitationRef)}</h1>;
+  const dividerKind = isDividerBlock(trimmed);
+  if (dividerKind) {
+    return <hr key={key} className={`md-divider md-divider--${dividerKind}`} />;
   }
-  if (trimmed.startsWith("## ")) {
-    return <h2 key={key}>{renderInline(trimmed.slice(3), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset + 3, activeCitationRef)}</h2>;
+  const headingMatch = /^(#{1,6})\s(.*)$/.exec(trimmed);
+  if (headingMatch) {
+    const level = headingMatch[1].length;
+    const HeadingTag = `h${level}` as keyof JSX.IntrinsicElements;
+    const contentOffset = blockStart + trimOffset + level + 1;
+    return (
+      <HeadingTag key={key}>
+        {renderInline(headingMatch[2], citations, citationColorById, onCitationClick, activeCitationId, searchQuery, contentOffset, activeCitationRef)}
+      </HeadingTag>
+    );
   }
   if (trimmed.startsWith(">")) {
     return <blockquote key={key}>{renderInline(trimmed.replace(/^>\s?/gm, ""), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}</blockquote>;
@@ -774,16 +789,44 @@ export function renderBlock(
       </table>
     );
   }
-  if (/^- /m.test(trimmed)) {
-    return (
-      <ul key={key}>
-        {trimmed.split("\n").map((line, itemIndex) => (
-          <li key={`${key}-${itemIndex}`}>{renderInline(line.replace(/^- /, ""), citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}</li>
-        ))}
-      </ul>
-    );
+  if (/^(\s*)([-*+]|\d+[.)])\s+/m.test(trimmed)) {
+    const nodes = parseListLines(trimmed.split("\n"));
+    return renderListNodes(nodes, key, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, activeCitationRef);
   }
   return <p key={key}>{renderInline(trimmed, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset, activeCitationRef)}</p>;
+}
+
+
+/**
+ * Renders parseListLines' indentation tree as nested <ul>/<ol> — a sibling group's marker type
+ * (all lines sharing an indent level under the same parent) decides <ul> vs <ol> for that group.
+ */
+function renderListNodes(
+  nodes: ReturnType<typeof parseListLines>,
+  key: string,
+  citations: Map<string, NoteCitation>,
+  citationColorById: Map<string, number>,
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void,
+  activeCitationId: string,
+  searchQuery: string,
+  activeCitationRef: CitationMarkdownRef | null
+): ReactNode {
+  if (!nodes.length) {
+    return null;
+  }
+  const ListTag = nodes[0].ordered ? "ol" : "ul";
+  return (
+    <ListTag key={key}>
+      {nodes.map((node, itemIndex) => (
+        <li key={`${key}-${itemIndex}`}>
+          {renderInline(node.content, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}
+          {node.children.length
+            ? renderListNodes(node.children, `${key}-${itemIndex}`, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, activeCitationRef)
+            : null}
+        </li>
+      ))}
+    </ListTag>
+  );
 }
 
 

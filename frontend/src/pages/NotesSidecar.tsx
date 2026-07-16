@@ -1,5 +1,5 @@
 // NotesSidecar (Notiz-Seitenpanel des Assistenten) — aus AssistantPage.tsx extrahiert.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,6 +20,7 @@ import {
   List,
   ListChecks,
   Loader2,
+  Minus,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
@@ -27,6 +28,7 @@ import {
   PanelRightOpen,
   Quote,
   Send,
+  SeparatorHorizontal,
   ShieldCheck,
   Table2,
   WandSparkles,
@@ -44,6 +46,7 @@ import { downloadMarkdownFile } from "../download";
 import { noteProjectId } from "../projectScope";
 import { useAppState, useOptionalAppState } from "../state";
 import type { Answer, CitationLink, ClaimCheckResult, DeepResearchFinding, Note, ResearchNode, VerificationSource } from "../types";
+import { MarkdownPreview } from "./NotesSubComponents";
 import {
   loadAssistantSession,
   slimTurnForPersist,
@@ -54,6 +57,18 @@ import {
   noteTitleForSave,
   formatTurnTime,
 } from "./assistantSession";
+
+import {
+  applyTabIndent,
+  attachTextareaAutoSync,
+  clampSplitRatio,
+  continueMarkdownLine,
+  dividerSnippetForTextarea,
+  FORMAT_AS_MARKDOWN_INSTRUCTION,
+  loadNumberUiState,
+  saveNumberUiState,
+  toggleWrap
+} from "./notesHelpers";
 
 // Session/note persistence lives in ./assistantSession; re-export the public
 // surface so existing importers (WorkspacePage, tests) keep working unchanged.
@@ -153,23 +168,53 @@ export function NotesSidecar({
   verification: VerificationSource[];
   activeQuoteText: string;
 }) {
-  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
+  const [editorMode, setEditorMode] = useState<"edit" | "preview" | "split">("edit");
   const [selection, setSelection] = useState<NoteSelectionRange | null>(null);
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiPreview, setAiPreview] = useState("");
   const [aiError, setAiError] = useState("");
   const [isAskingSelection, setIsAskingSelection] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(() => loadNumberUiState("sidecar.splitRatio", 0.5));
+  const splitGridRef = useRef<HTMLDivElement | null>(null);
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [editorScrollLeft, setEditorScrollLeft] = useState(0);
   const noteEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLElement | null>(null);
+  const previewScrollRef = useRef({ top: 0, left: 0 });
 
   const selectionPreview = stripHighlightMarkers(selection?.text ?? "");
-  const highlightRanges = selection ? [{ start: selection.start, end: selection.end, className: "textarea-highlight-range--selection" }] : [];
+  const highlightRanges = selection
+    ? [{ start: selection.start, end: selection.end, className: "textarea-highlight-range--selection" }]
+    : [];
   const ghostInsertions =
     selection && aiPreview
       ? [{ index: selection.end, content: `\n\n${aiPreview}`, className: "textarea-ghost-insertion--ai" }]
       : [];
+
+  function startSplitResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const container = splitGridRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    let frame: number | null = null;
+    let latest = splitRatio;
+    const move = (moveEvent: PointerEvent) => {
+      latest = clampSplitRatio((moveEvent.clientX - rect.left) / rect.width);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        setSplitRatio(latest);
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      saveNumberUiState("sidecar.splitRatio", latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
 
   function captureSelection() {
     const node = noteEditorRef.current;
@@ -310,16 +355,31 @@ export function NotesSidecar({
     }
   }
 
+  async function formatSelectionAsMarkdown() {
+    if (!selection) {
+      return;
+    }
+    setIsAskingSelection(true);
+    setAiError("");
+    try {
+      const response = await askSelection(selection, FORMAT_AS_MARKDOWN_INSTRUCTION);
+      setAiPreview(response);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "KI-Formatierung fehlgeschlagen");
+    } finally {
+      setIsAskingSelection(false);
+    }
+  }
+
   function wrapSelection(before: string, after = before) {
     const node = noteEditorRef.current;
     const start = node?.selectionStart ?? notes.length;
     const end = node?.selectionEnd ?? notes.length;
-    const selected = notes.slice(start, end) || "Text";
-    const next = `${before}${selected}${after}`;
-    setNotes(`${notes.slice(0, start)}${next}${notes.slice(end)}`);
+    const result = toggleWrap(notes, start, end, before, after);
+    setNotes(result.next);
     requestAnimationFrame(() => {
       noteEditorRef.current?.focus();
-      noteEditorRef.current?.setSelectionRange(start + before.length, start + before.length + selected.length);
+      noteEditorRef.current?.setSelectionRange(result.selStart, result.selEnd);
     });
   }
 
@@ -331,6 +391,77 @@ export function NotesSidecar({
     const next = selected.split("\n").map((line) => `${prefix}${line}`).join("\n");
     setNotes(`${notes.slice(0, start)}${next}${notes.slice(end)}`);
   }
+
+  function handleNotesKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const node = noteEditorRef.current;
+      if (!node) return;
+      const result = applyTabIndent(notes, node.selectionStart, node.selectionEnd, event.shiftKey);
+      if (!result) return;
+      setNotes(result.next);
+      requestAnimationFrame(() => {
+        node.focus();
+        node.setSelectionRange(result.selStart, result.selEnd);
+      });
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      const node = noteEditorRef.current;
+      if (!node) return;
+      const result = continueMarkdownLine(notes, node.selectionStart, node.selectionEnd);
+      if (!result) return;
+      event.preventDefault();
+      setNotes(result.next);
+      requestAnimationFrame(() => {
+        node.focus();
+        node.setSelectionRange(result.selStart, result.selEnd);
+      });
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      const key = event.key.toLowerCase();
+      if (key === "b") {
+        event.preventDefault();
+        wrapSelection("**");
+        return;
+      }
+      if (key === "i") {
+        event.preventDefault();
+        wrapSelection("*");
+        return;
+      }
+      if (key === "e") {
+        event.preventDefault();
+        wrapSelection("`");
+        return;
+      }
+      if (key === "k" && !event.shiftKey) {
+        event.preventDefault();
+        wrapSelection("[", "](https://)");
+        return;
+      }
+    }
+  }
+
+  // Edit/Preview/Split each conditionally mount their pane, so switching modes remounts a
+  // fresh DOM node whose scroll resets to 0 — restore the last known offset instead of always
+  // jumping back to the top.
+  useLayoutEffect(() => {
+    const node = noteEditorRef.current;
+    if (!node) return;
+    node.scrollTop = editorScrollTop;
+    node.scrollLeft = editorScrollLeft;
+    return attachTextareaAutoSync(node, () => notes, setNotes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorMode]);
+
+  useLayoutEffect(() => {
+    const node = previewRef.current;
+    if (!node) return;
+    node.scrollTop = previewScrollRef.current.top;
+    node.scrollLeft = previewScrollRef.current.left;
+  }, [editorMode]);
 
   if (!open) {
     return (
@@ -387,6 +518,24 @@ export function NotesSidecar({
         <button className="icon-button" type="button" aria-label="Tabelle" onClick={() => insertAtCursor("\n\n| Spalte 1 | Spalte 2 |\n|---|---|\n| Wert | Wert |\n")}>
           <Table2 size={16} />
         </button>
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="Durchgehende Trennlinie einfügen"
+          title="Durchgehende Trennlinie einfügen"
+          onClick={() => insertAtCursor(dividerSnippetForTextarea("solid", noteEditorRef.current))}
+        >
+          <SeparatorHorizontal size={16} />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="Gestrichelte Trennlinie einfügen"
+          title="Gestrichelte Trennlinie einfügen"
+          onClick={() => insertAtCursor(dividerSnippetForTextarea("dashed", noteEditorRef.current))}
+        >
+          <Minus size={16} />
+        </button>
         <button className="icon-button" type="button" aria-label="Exportieren" onClick={() => downloadMarkdownFile(newNoteTitle, notes)} disabled={!notes.trim()}>
           <Download size={16} />
         </button>
@@ -396,6 +545,9 @@ export function NotesSidecar({
           </button>
           <button type="button" className={editorMode === "preview" ? "active" : ""} onClick={() => setEditorMode("preview")}>
             Preview
+          </button>
+          <button type="button" className={editorMode === "split" ? "active" : ""} onClick={() => setEditorMode("split")}>
+            Split
           </button>
         </div>
       </div>
@@ -408,7 +560,12 @@ export function NotesSidecar({
           <EvidenceVerificationBadge source={selectedSource} evidence={activeEvidence} />
         </div>
       ) : null}
-      {editorMode === "edit" ? (
+      <div
+        className={`markdown-editor-grid markdown-editor-grid--${editorMode}`}
+        ref={splitGridRef}
+        style={editorMode === "split" ? { gridTemplateColumns: `minmax(0, ${splitRatio}fr) 6px minmax(0, ${1 - splitRatio}fr)`, gap: 0 } : undefined}
+      >
+      {editorMode === "edit" || editorMode === "split" ? (
         <div className="notes-editor-wrap notes-editor-wrap--highlighted" ref={editorWrapRef}>
           <TextareaHighlightLayer text={notes} ranges={highlightRanges} insertions={ghostInsertions} scrollTop={editorScrollTop} scrollLeft={editorScrollLeft} />
           <textarea
@@ -418,6 +575,7 @@ export function NotesSidecar({
             onChange={(event) => setNotes(event.target.value)}
             onSelect={captureSelection}
             onPointerDown={clearEditorSelection}
+            onKeyDown={handleNotesKeyDown}
             onScroll={(event) => {
               setEditorScrollTop(event.currentTarget.scrollTop);
               setEditorScrollLeft(event.currentTarget.scrollLeft);
@@ -451,6 +609,18 @@ export function NotesSidecar({
                   >
                     Fragen
                   </button>
+                  <button
+                    className="button button-compact"
+                    type="button"
+                    disabled={isAskingSelection}
+                    title="Formatiert die Auswahl als sauberes Markdown, ohne den Inhalt zu ändern"
+                    onClick={() => {
+                      pinSelectionForQuestion();
+                      void formatSelectionAsMarkdown();
+                    }}
+                  >
+                    Als Markdown formatieren
+                  </button>
                 </div>
               ) : null}
               {aiError ? <div className="inline-error">{aiError}</div> : null}
@@ -477,9 +647,38 @@ export function NotesSidecar({
             </div>
           ) : null}
         </div>
-      ) : (
-        <AssistantMarkdownPreview markdown={notes} />
-      )}
+      ) : null}
+      {editorMode === "split" ? (
+        <div
+          className="split-handle markdown-editor-split-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Aufteilung Editor/Vorschau anpassen"
+          onPointerDown={startSplitResize}
+          onDoubleClick={() => {
+            setSplitRatio(0.5);
+            saveNumberUiState("sidecar.splitRatio", 0.5);
+          }}
+        />
+      ) : null}
+      {editorMode === "preview" || editorMode === "split" ? (
+        notes.trim() ? (
+          <MarkdownPreview
+            previewRef={previewRef}
+            markdown={notes}
+            citations={[]}
+            onCitationClick={() => {}}
+            editable={false}
+            className="notes-sidecar-preview"
+            onScroll={(event) => {
+              previewScrollRef.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft };
+            }}
+          />
+        ) : (
+          <article className="markdown-preview notes-sidecar-preview muted-row">Keine Notizen</article>
+        )
+      ) : null}
+      </div>
       <div className="note-target-row">
         <select aria-label="Zielnotiz" value={targetNoteId} onChange={(event) => setTargetNoteId(event.target.value)} disabled={!canSaveToProject}>
           <option value="">Neue Notiz</option>
@@ -533,64 +732,5 @@ export function NotesSidecar({
       {isRewriting || isAutosaving || noteStatus ? <span className="notes-status">{isRewriting ? "Umschreiben laeuft" : isAutosaving ? "Speichert" : noteStatus}</span> : null}
     </aside>
   );
-}
-
-function AssistantMarkdownPreview({ markdown }: { markdown: string }) {
-  const blocks = markdown.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-  if (!blocks.length) {
-    return <article className="markdown-preview notes-sidecar-preview muted-row">Keine Notizen</article>;
-  }
-  return (
-    <article className="markdown-preview notes-sidecar-preview">
-      {blocks.map((block, index) => {
-        if (block.startsWith("# ")) {
-          return <h1 key={index}>{renderAssistantInline(block.slice(2))}</h1>;
-        }
-        if (block.startsWith("## ")) {
-          return <h2 key={index}>{renderAssistantInline(block.slice(3))}</h2>;
-        }
-        if (block.startsWith(">")) {
-          return <blockquote key={index}>{renderAssistantInline(block.replace(/^>\s?/gm, ""))}</blockquote>;
-        }
-        if (/^- /m.test(block)) {
-          return (
-            <ul key={index}>
-              {block.split("\n").map((line, itemIndex) => (
-                <li key={itemIndex}>{renderAssistantInline(line.replace(/^- /, ""))}</li>
-              ))}
-            </ul>
-          );
-        }
-        return <p key={index}>{renderAssistantInline(block)}</p>;
-      })}
-    </article>
-  );
-}
-
-function renderAssistantInline(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|==[^=]+==|\[[^\]]+\]\([^)]+\))/g);
-  return parts.map((part, index) => {
-    const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
-    if (linkMatch) {
-      return (
-        <a key={`${part}-${index}`} href={linkMatch[2]} target="_blank" rel="noreferrer">
-          {linkMatch[1]}
-        </a>
-      );
-    }
-    if (/^\*\*[^*]+\*\*$/.test(part)) {
-      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
-    }
-    if (/^\*[^*]+\*$/.test(part)) {
-      return <em key={`${part}-${index}`}>{part.slice(1, -1)}</em>;
-    }
-    if (/^`[^`]+`$/.test(part)) {
-      return <code key={`${part}-${index}`}>{part.slice(1, -1)}</code>;
-    }
-    if (/^==[^=]+==$/.test(part)) {
-      return <mark key={`${part}-${index}`}>{part.slice(2, -2)}</mark>;
-    }
-    return <span key={`${part}-${index}`}>{part}</span>;
-  });
 }
 

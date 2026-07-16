@@ -90,6 +90,12 @@ export function caretIndexFromPoint(textarea: HTMLTextAreaElement, clientX: numb
 
 export const TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spanisch", "Italienisch", "Portugiesisch", "Niederländisch", "Polnisch", "Chinesisch", "Japanisch"];
 
+export const FORMAT_AS_MARKDOWN_INSTRUCTION =
+  "Formatiere den markierten Text als sauberes Markdown gemäß der unterstützten Syntax " +
+  "(Überschriften # bis ######, Listen mit - oder 1. inkl. Verschachtelung durch Einrückung, " +
+  "Blockzitate mit >, **fett**, *kursiv*, `code`, Links, Tabellen). Ändere den Inhalt inhaltlich " +
+  "nicht, nur die Formatierung. Zitatlinks bleiben unverändert.";
+
 
 export function buildMarkdownTable(cols: number, rows: number) {
   const safeCols = Math.max(1, cols);
@@ -108,11 +114,9 @@ export function previewElementToMarkdown(original: string, root: HTMLElement) {
   }
   const tag = directChild.tagName.toLowerCase();
   const originalTrimmed = original.trim();
-  if (tag === "h1") {
-    return `# ${firstLine(serializePreviewInline(directChild))}`;
-  }
-  if (tag === "h2") {
-    return `## ${firstLine(serializePreviewInline(directChild))}`;
+  const headingLevel = /^h([1-6])$/.exec(tag)?.[1];
+  if (headingLevel) {
+    return `${"#".repeat(Number(headingLevel))} ${firstLine(serializePreviewInline(directChild))}`;
   }
   if (tag === "blockquote") {
     return serializePreviewInline(directChild)
@@ -120,19 +124,51 @@ export function previewElementToMarkdown(original: string, root: HTMLElement) {
       .map((line) => `> ${line}`)
       .join("\n");
   }
-  if (tag === "ul") {
-    const items = Array.from(directChild.querySelectorAll(":scope > li"));
-    if (items.length) {
-      return items.map((item) => `- ${serializePreviewInline(item).replace(/^[-*+]\s+/, "")}`).join("\n");
+  if (tag === "ul" || tag === "ol") {
+    const hasItems = Array.from(directChild.children).some((child) => child.tagName === "LI");
+    if (hasItems) {
+      return serializeListContainer(directChild);
     }
   }
   if (tag === "p") {
     return serializePreviewInline(directChild).trimEnd();
   }
-  if (originalTrimmed.startsWith("# ") || originalTrimmed.startsWith("## ") || originalTrimmed.startsWith(">") || /^- /m.test(originalTrimmed)) {
+  if (
+    /^#{1,6}\s/.test(originalTrimmed) ||
+    originalTrimmed.startsWith(">") ||
+    /^(\s*)([-*+]|\d+[.)])\s+/m.test(originalTrimmed)
+  ) {
     return previewTextToMarkdown(original, root.innerText);
   }
   return serializePreviewInline(root).trimEnd();
+}
+
+
+/**
+ * Recursively serializes a <ul>/<ol> back to indented markdown: each <li>'s own inline content
+ * (excluding any nested <ul>/<ol> inside it) becomes one line, then nested lists render as
+ * further-indented lines beneath it — mirroring parseListLines' indentation-stack model.
+ */
+function serializeListContainer(container: Element, depth = 0): string {
+  const ordered = container.tagName.toLowerCase() === "ol";
+  const indent = "\t".repeat(depth);
+  const items = Array.from(container.children).filter((child) => child.tagName === "LI");
+  return items
+    .map((item, index) => {
+      const nestedLists = Array.from(item.children).filter((child) => child.tagName === "UL" || child.tagName === "OL");
+      const ownText = Array.from(item.childNodes)
+        .filter((child) => !(child instanceof HTMLElement && (child.tagName === "UL" || child.tagName === "OL")))
+        .map(serializePreviewNode)
+        .join("")
+        .replace(/ /g, " ")
+        .replace(/^(\s*)([-*+]|\d+[.)])\s+/, "")
+        .trim();
+      const marker = ordered ? `${index + 1}.` : "-";
+      const ownLine = `${indent}${marker} ${ownText}`;
+      const childLines = nestedLists.map((nested) => serializeListContainer(nested as Element, depth + 1)).join("\n");
+      return childLines ? `${ownLine}\n${childLines}` : ownLine;
+    })
+    .join("\n");
 }
 
 
@@ -951,6 +987,93 @@ export function markdownContinuation(line: string) {
 }
 
 
+export type ContinueLineResult = { next: string; selStart: number; selEnd: number };
+
+/**
+ * Enter inside a plain <textarea>: continue the current line's list/quote marker (and its
+ * indentation) onto the new line, or — on an already-empty marker line — strip the marker
+ * instead of adding another empty item. Returns null when the current line isn't a
+ * list/quote line, so callers fall back to the browser's default newline.
+ */
+export function continueMarkdownLine(value: string, selectionStart: number, selectionEnd: number): ContinueLineResult | null {
+  const lineStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+  const currentLine = value.slice(lineStart, selectionStart);
+  const continuation = markdownContinuation(currentLine);
+  if (!continuation) {
+    return null;
+  }
+  if (continuation.removeCurrentPrefix) {
+    const next = `${value.slice(0, lineStart)}${value.slice(selectionEnd)}`;
+    return { next, selStart: lineStart, selEnd: lineStart };
+  }
+  const insertion = `\n${continuation.prefix}`;
+  const next = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+  const caret = selectionStart + insertion.length;
+  return { next, selStart: caret, selEnd: caret };
+}
+
+
+export type ToggleWrapResult = { next: string; selStart: number; selEnd: number };
+
+/**
+ * Bold/italic/code/link shortcuts: toggle instead of always wrapping, so pressing Ctrl+B twice
+ * on the same text undoes it instead of nesting markers ("**text**" -> "****text****"). Checks
+ * both cases — markers inside the selection ("**bold**" fully selected) and markers just
+ * outside it (selecting "bold" inside "**bold**") — before falling back to wrapping.
+ */
+export function toggleWrap(value: string, start: number, end: number, before: string, after: string = before): ToggleWrapResult {
+  const selected = value.slice(start, end) || "Text";
+  if (selected.length >= before.length + after.length && selected.startsWith(before) && selected.endsWith(after)) {
+    const inner = selected.slice(before.length, selected.length - after.length);
+    const next = `${value.slice(0, start)}${inner}${value.slice(end)}`;
+    return { next, selStart: start, selEnd: start + inner.length };
+  }
+  const beforeSlice = value.slice(Math.max(0, start - before.length), start);
+  const afterSlice = value.slice(end, end + after.length);
+  if (before && beforeSlice === before && afterSlice === after) {
+    const outStart = start - before.length;
+    const next = `${value.slice(0, outStart)}${selected}${value.slice(end + after.length)}`;
+    return { next, selStart: outStart, selEnd: outStart + selected.length };
+  }
+  const next = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`;
+  return { next, selStart: start + before.length, selEnd: start + before.length + selected.length };
+}
+
+
+export type ListNode = { ordered: boolean; number?: number; content: string; children: ListNode[] };
+
+const LIST_LINE_PATTERN = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+
+/**
+ * Turns a flat run of list-marker lines into a nested tree by comparing each line's leading
+ * whitespace length against a stack of open ancestors — the same indentation Tab/Shift+Tab and
+ * markdownContinuation already produce while editing, just structured for rendering.
+ */
+export function parseListLines(lines: string[]): ListNode[] {
+  const root: ListNode[] = [];
+  const stack: { indent: number; children: ListNode[] }[] = [{ indent: -1, children: root }];
+  for (const line of lines) {
+    const match = LIST_LINE_PATTERN.exec(line);
+    if (!match) continue;
+    const indent = match[1].length;
+    const marker = match[2];
+    const ordered = /^\d/.test(marker);
+    const node: ListNode = {
+      ordered,
+      number: ordered ? Number(marker.slice(0, -1)) : undefined,
+      content: match[3],
+      children: []
+    };
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+    stack[stack.length - 1].children.push(node);
+    stack.push({ indent, children: node.children });
+  }
+  return root;
+}
+
+
 export function splitMarkdownBlocks(value: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   const pattern = /\S[\s\S]*?(?=\n{2,}|$)/g;
@@ -967,24 +1090,234 @@ export function splitMarkdownBlocks(value: string): MarkdownBlock[] {
 
 export function isComplexPreviewBlock(block: string) {
   const trimmed = block.trim();
-  return /^!\[[^\]]*\]\([^)]+\)$/.test(trimmed) || /^\|.+\|\n\|[-:|\s]+\|/.test(trimmed);
+  return (
+    /^!\[[^\]]*\]\([^)]+\)$/.test(trimmed) ||
+    /^\|.+\|\n\|[-:|\s]+\|/.test(trimmed) ||
+    isDividerBlock(trimmed) !== null
+  );
+}
+
+
+// Full-width divider between topic sections, written as literal fill characters ("____" /
+// "- - - -") sized to the editor's current width — so it already looks like a line in the raw
+// markdown, not only in the rendered preview, with no overlay/mirror trick involved.
+export type DividerKind = "solid" | "dashed";
+
+const DIVIDER_UNIT: Record<DividerKind, string> = { solid: "_", dashed: "- " };
+const DIVIDER_MIN_UNITS = 10;
+const DIVIDER_FALLBACK_UNITS: Record<DividerKind, number> = { solid: 40, dashed: 20 };
+
+let dividerMeasureCanvas: HTMLCanvasElement | null = null;
+
+function dividerUnitWidth(font: string, kind: DividerKind): number {
+  if (typeof document === "undefined") return 0;
+  dividerMeasureCanvas = dividerMeasureCanvas ?? document.createElement("canvas");
+  const ctx = dividerMeasureCanvas.getContext("2d");
+  if (!ctx) return 0;
+  ctx.font = font;
+  return ctx.measureText(DIVIDER_UNIT[kind]).width;
+}
+
+export function buildDividerLine(kind: DividerKind, unitCount: number): string {
+  const count = Math.max(DIVIDER_MIN_UNITS, Math.round(unitCount));
+  return kind === "solid" ? "_".repeat(count) : Array.from({ length: count }, () => "-").join(" ");
+}
+
+export function dividerLineForWidth(kind: DividerKind, font: string, widthPx: number): string {
+  const unit = dividerUnitWidth(font, kind);
+  const count = unit > 0 ? Math.floor(widthPx / unit) : DIVIDER_FALLBACK_UNITS[kind];
+  return buildDividerLine(kind, count);
+}
+
+function dividerTextareaMetrics(node: HTMLTextAreaElement) {
+  const style = window.getComputedStyle(node);
+  const paddingX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  return { font: style.font, widthPx: Math.max(0, node.clientWidth - paddingX) };
+}
+
+/** Builds an insertable divider snippet sized to `node`'s current width; falls back to a fixed
+ * length when no textarea is mounted yet (e.g. inserting from Preview-only mode). */
+export function dividerSnippetForTextarea(kind: DividerKind, node: HTMLTextAreaElement | null): string {
+  if (!node) return `\n\n${buildDividerLine(kind, DIVIDER_FALLBACK_UNITS[kind])}\n\n`;
+  const { font, widthPx } = dividerTextareaMetrics(node);
+  return `\n\n${dividerLineForWidth(kind, font, widthPx)}\n\n`;
+}
+
+export function isDividerBlock(trimmedBlock: string): DividerKind | null {
+  if (/^_{3,}$/.test(trimmedBlock)) return "solid";
+  if (/^-{3,}$/.test(trimmedBlock)) return "solid";
+  if (/^-(?: -)+$/.test(trimmedBlock)) return "dashed";
+  return null;
+}
+
+/**
+ * Re-fits every divider line already in the markdown to the textarea's current width. Called
+ * from a resize observer so a divider inserted at one pane width keeps touching both margins
+ * after the pane (or window) is resized. Returns null when nothing needs to change.
+ */
+export function resyncDividerLines(markdown: string, node: HTMLTextAreaElement): string | null {
+  if (!/[_-]/.test(markdown)) return null;
+  const { font, widthPx } = dividerTextareaMetrics(node);
+  if (widthPx <= 0) return null;
+  let changed = false;
+  const next = markdown
+    .split("\n")
+    .map((line) => {
+      const kind = isDividerBlock(line.trim());
+      if (!kind) return line;
+      const rebuilt = dividerLineForWidth(kind, font, widthPx);
+      if (rebuilt === line) return line;
+      changed = true;
+      return rebuilt;
+    })
+    .join("\n");
+  return changed ? next : null;
+}
+
+/**
+ * VS-Code-style "scroll past end" (padding-bottom so the last line can reach the pane's top)
+ * plus keeping divider lines fitted to width — both need to react to the same pane resizes
+ * (window resize, split-drag, overlay resize), so one ResizeObserver drives both.
+ */
+export function attachTextareaAutoSync(node: HTMLTextAreaElement, getValue: () => string, setValue: (next: string) => void): () => void {
+  const applyScrollPastEnd = () => {
+    const style = window.getComputedStyle(node);
+    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4 || 20;
+    node.style.paddingBottom = `${Math.max(0, node.clientHeight - lineHeight)}px`;
+  };
+  const applyDividerResync = () => {
+    const current = getValue();
+    const resynced = resyncDividerLines(current, node);
+    if (resynced === null) return;
+    const focused = document.activeElement === node;
+    const selStart = node.selectionStart;
+    const selEnd = node.selectionEnd;
+    const diff = textDiffWindow(current, resynced);
+    setValue(resynced);
+    if (focused && diff) {
+      const shift = (pos: number) => (diff.beforeEnd <= pos ? pos + diff.delta : diff.start >= pos ? pos : diff.start);
+      requestAnimationFrame(() => node.setSelectionRange(shift(selStart), shift(selEnd)));
+    }
+  };
+  let frame: number | null = null;
+  const run = () => {
+    if (frame !== null) return;
+    frame = window.requestAnimationFrame(() => {
+      frame = null;
+      applyScrollPastEnd();
+      applyDividerResync();
+    });
+  };
+  run();
+  const observer = new ResizeObserver(run);
+  observer.observe(node);
+  return () => {
+    observer.disconnect();
+    if (frame !== null) window.cancelAnimationFrame(frame);
+  };
+}
+
+// Draggable split-view gutter: keep the smaller pane from collapsing to nothing.
+export const SPLIT_RATIO_MIN = 0.2;
+export const SPLIT_RATIO_MAX = 0.8;
+
+export function clampSplitRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return 0.5;
+  return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, ratio));
+}
+
+
+export type TabIndentResult = { next: string; selStart: number; selEnd: number };
+
+/** Leading whitespace stripped by one outdent level: one tab, else up to 4 spaces. */
+function stripLeadingIndent(line: string): { stripped: string; removed: number } {
+  if (line.startsWith("\t")) return { stripped: line.slice(1), removed: 1 };
+  const spaceMatch = /^ {1,4}/.exec(line);
+  if (spaceMatch) return { stripped: line.slice(spaceMatch[0].length), removed: spaceMatch[0].length };
+  return { stripped: line, removed: 0 };
+}
+
+/**
+ * Tab/Shift+Tab inside a plain <textarea>: insert/remove indentation instead of the browser's
+ * default focus-cycling. Returns null when there's nothing to outdent — callers still call
+ * preventDefault() unconditionally on Tab so focus never escapes the textarea either way.
+ */
+export function applyTabIndent(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  outdent: boolean
+): TabIndentResult | null {
+  if (selectionStart === selectionEnd) {
+    const lineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+    const lineEnd = (() => {
+      const idx = value.indexOf("\n", selectionStart);
+      return idx === -1 ? value.length : idx;
+    })();
+    if (!outdent) {
+      // On a list line, Tab indents the whole line (moves the marker) regardless of where the
+      // caret sits inside it — a plain mid-line tab insert would leave the bullet in place.
+      if (LIST_LINE_PATTERN.test(value.slice(lineStart, lineEnd))) {
+        const next = `${value.slice(0, lineStart)}\t${value.slice(lineStart)}`;
+        const caret = selectionStart + 1;
+        return { next, selStart: caret, selEnd: caret };
+      }
+      const next = `${value.slice(0, selectionStart)}\t${value.slice(selectionStart)}`;
+      return { next, selStart: selectionStart + 1, selEnd: selectionStart + 1 };
+    }
+    const { stripped, removed } = stripLeadingIndent(value.slice(lineStart, lineEnd));
+    if (removed === 0) return null;
+    const next = `${value.slice(0, lineStart)}${stripped}${value.slice(lineEnd)}`;
+    const caret = Math.max(lineStart, selectionStart - removed);
+    return { next, selStart: caret, selEnd: caret };
+  }
+
+  const lineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+  const effectiveEnd = selectionEnd > selectionStart && value[selectionEnd - 1] === "\n" ? selectionEnd - 1 : selectionEnd;
+  const lineEndIdx = value.indexOf("\n", effectiveEnd);
+  const lineEnd = lineEndIdx === -1 ? value.length : lineEndIdx;
+  const lines = value.slice(lineStart, lineEnd).split("\n");
+
+  if (!outdent) {
+    const nextLines = lines.map((line) => `\t${line}`);
+    const next = `${value.slice(0, lineStart)}${nextLines.join("\n")}${value.slice(lineEnd)}`;
+    return { next, selStart: selectionStart + 1, selEnd: selectionEnd + lines.length };
+  }
+
+  let firstLineRemoved = 0;
+  let totalRemoved = 0;
+  const nextLines = lines.map((line, index) => {
+    const { stripped, removed } = stripLeadingIndent(line);
+    if (index === 0) firstLineRemoved = removed;
+    totalRemoved += removed;
+    return stripped;
+  });
+  if (totalRemoved === 0) return null;
+  const next = `${value.slice(0, lineStart)}${nextLines.join("\n")}${value.slice(lineEnd)}`;
+  const selStart = Math.max(lineStart, selectionStart - firstLineRemoved);
+  const selEnd = Math.max(selStart, selectionEnd - totalRemoved);
+  return { next, selStart, selEnd };
 }
 
 
 export function previewTextToMarkdown(original: string, editedText: string) {
   const text = editedText.replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trimEnd();
   const originalTrimmed = original.trim();
-  if (originalTrimmed.startsWith("# ")) {
-    return `# ${firstLine(text)}`;
-  }
-  if (originalTrimmed.startsWith("## ")) {
-    return `## ${firstLine(text)}`;
+  const headingLevel = /^(#{1,6})\s/.exec(originalTrimmed)?.[1]?.length;
+  if (headingLevel) {
+    return `${"#".repeat(headingLevel)} ${firstLine(text)}`;
   }
   if (originalTrimmed.startsWith(">")) {
     return text.split("\n").map((line) => `> ${line}`).join("\n");
   }
-  if (/^- /m.test(originalTrimmed)) {
-    return text.split("\n").filter(Boolean).map((line) => `- ${line.replace(/^[-*+]\s+/, "")}`).join("\n");
+  const listMarker = /^(\s*)([-*+]|\d+[.)])\s+/m.exec(originalTrimmed)?.[2];
+  if (listMarker) {
+    const ordered = /^\d/.test(listMarker);
+    return text
+      .split("\n")
+      .filter(Boolean)
+      .map((line, index) => `${ordered ? `${index + 1}.` : "-"} ${line.replace(/^(\s*)([-*+]|\d+[.)])\s+/, "")}`)
+      .join("\n");
   }
   return text;
 }
