@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -48,16 +48,16 @@ const WorkstationPage = lazy(() => import("./pages/WorkstationPage").then((m) =>
 const JupyterPage = lazy(() => import("./pages/JupyterPage").then((m) => ({ default: m.JupyterPage })));
 
 const navigation = [
-  { to: "/forschung", label: "Forschung", icon: Telescope },
-  { to: "/library", label: "Library", icon: Library },
-  { to: "/workspace", label: "Arbeitsplatz", icon: Columns3 },
-  { to: "/werkstatt", label: "Werkstatt", icon: Code2 },
-  { to: "/jupyter", label: "Jupyter", icon: Notebook },
-  { to: "/graph", label: "Graph", icon: GitBranch },
-  { to: "/quality", label: "Quality", icon: BarChart3 },
-  { to: "/benchmarks", label: "Benchmarks", icon: FlaskConical },
-  { to: "/jobs", label: "Jobs", icon: BrainCircuit },
-  { to: "/settings", label: "Settings", icon: Settings }
+  { to: "/forschung", label: "Forschung", icon: Telescope, group: "Erkunden" },
+  { to: "/library", label: "Library", icon: Library, group: "Erkunden" },
+  { to: "/workspace", label: "Arbeitsplatz", icon: Columns3, group: "Arbeiten" },
+  { to: "/werkstatt", label: "Werkstatt", icon: Code2, group: "Arbeiten" },
+  { to: "/jupyter", label: "Jupyter", icon: Notebook, group: "Arbeiten" },
+  { to: "/graph", label: "Graph", icon: GitBranch, group: "Analyse" },
+  { to: "/quality", label: "Quality", icon: BarChart3, group: "Analyse" },
+  { to: "/benchmarks", label: "Benchmarks", icon: FlaskConical, group: "Analyse" },
+  { to: "/jobs", label: "Jobs", icon: BrainCircuit, group: "Analyse" },
+  { to: "/settings", label: "Settings", icon: Settings, group: "System" }
 ];
 
 function loadStoredLlmParams(): LlmParams {
@@ -247,12 +247,18 @@ export default function App() {
             </button>
           </div>
           <nav>
-            {navigation.map((item) => (
-              <NavLink key={item.to} to={item.to}>
-                <item.icon size={18} />
-                <span>{item.label}</span>
-              </NavLink>
-            ))}
+            {navigation.map((item, index) => {
+              const startsGroup = index === 0 || navigation[index - 1].group !== item.group;
+              return (
+                <Fragment key={item.to}>
+                  {startsGroup ? <span className="sidebar-group-label">{item.group}</span> : null}
+                  <NavLink to={item.to}>
+                    <item.icon size={18} />
+                    <span>{item.label}</span>
+                  </NavLink>
+                </Fragment>
+              );
+            })}
           </nav>
         </aside>
 
@@ -280,7 +286,7 @@ export default function App() {
                   ))}
                 </select>
               </label>
-              <label>
+              <label className="topbar-model">
                 Modell
                 <select value={model ?? selectedProvider?.default_model ?? ""} onChange={(event) => setModel(event.target.value || undefined)}>
                   {modelOptions.map((item) => (
