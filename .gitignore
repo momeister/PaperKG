@@ -94,3 +94,6 @@ GRAPH_TREE.html
 config.local.yaml
 secrets.toml
 remember.txt
+
+# Playwright-Ausgaben
+frontend/test-results/
