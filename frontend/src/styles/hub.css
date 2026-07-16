@@ -5,6 +5,10 @@
 
 .research-hub {
   gap: 18px;
+  /* Auto-Rows würden sonst auf Min-Content fallen, sobald die eingebettete
+     Stufe höher als der Viewport ist — und die Pipeline-Rail (ein
+     Scroll-Container, Min-Content ≈ 0) auf wenige Pixel zusammendrücken. */
+  grid-auto-rows: max-content;
 }
 
 /* Eingebettete Stufe: wie .page, aber ohne eigenes Padding (liefert der Hub). */
@@ -22,6 +26,11 @@
 /* --- Pipeline-Rail -------------------------------------------------------- */
 
 .pipeline-graph {
+  /* Bleibt beim Scrollen der Stufe oben stehen: Navigation + Live-Zähler
+     sind im Hub immer erreichbar. */
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: stretch;
   gap: 8px;

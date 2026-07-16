@@ -505,12 +505,12 @@ h1 {
 .action-tile {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft);
 }
 
 .panel {
-  padding: 14px;
+  padding: 16px;
   min-width: 0;
 }
 
@@ -558,8 +558,16 @@ h1 {
   display: grid;
   gap: 5px;
   min-height: 82px;
-  padding: 12px;
-  border-left: 4px solid #8a95a3;
+  padding: 12px 14px;
+  border-left: 3px solid var(--muted);
+  transition:
+    transform var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+
+.metric-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-pop);
 }
 
 .metric-card span,
@@ -570,7 +578,9 @@ h1 {
 }
 
 .metric-card strong {
+  font-family: var(--font-display);
   font-size: 23px;
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
   overflow-wrap: anywhere;
 }
@@ -670,16 +680,54 @@ h1 {
   align-items: center;
   gap: 8px;
   min-width: 220px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
   color: var(--muted);
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+
+.search-field:focus-within {
+  border-color: var(--accent);
 }
 
 .search-field input {
   min-width: 0;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
 }
 
 .list {
   display: grid;
   gap: 8px;
+}
+
+/* Listen treten gestaffelt ein (nur beim Mounten; reduced-motion stoppt es). */
+.list > * {
+  animation: rise-in var(--dur-2) var(--ease-out) backwards;
+}
+
+.list > *:nth-child(2) {
+  animation-delay: 30ms;
+}
+
+.list > *:nth-child(3) {
+  animation-delay: 60ms;
+}
+
+.list > *:nth-child(4) {
+  animation-delay: 90ms;
+}
+
+.list > *:nth-child(5) {
+  animation-delay: 120ms;
+}
+
+.list > *:nth-child(n + 6) {
+  animation-delay: 150ms;
 }
 
 .list-row {
@@ -691,9 +739,12 @@ h1 {
   min-height: 50px;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
   text-align: left;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 
 .list-row strong,
@@ -786,6 +837,27 @@ h1 {
   gap: 8px;
 }
 
+/* Tabellenzeilen treten beim Mounten kurz gestaffelt ein. */
+.data-table > * {
+  animation: rise-in var(--dur-2) var(--ease-out) backwards;
+}
+
+.data-table > *:nth-child(2) {
+  animation-delay: 25ms;
+}
+
+.data-table > *:nth-child(3) {
+  animation-delay: 50ms;
+}
+
+.data-table > *:nth-child(4) {
+  animation-delay: 75ms;
+}
+
+.data-table > *:nth-child(n + 5) {
+  animation-delay: 100ms;
+}
+
 .warning-row,
 .inline-error {
   padding: 9px 10px;
@@ -834,13 +906,19 @@ h1 {
   min-height: 38px;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
+  transition:
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 
 .data-row {
   grid-template-columns: 28px minmax(220px, 2.2fr) 80px 120px 90px 110px;
 }
+
+/* Library-Spalten + Badges: siehe konsolidierten Block "Library: primary
+   source + grey sources" weiter unten. */
 
 .review-table .data-row {
   grid-template-columns: 28px minmax(180px, 1.4fr) minmax(180px, 1.2fr) minmax(140px, 1fr) 100px;
@@ -893,10 +971,19 @@ h1 {
   place-items: center;
   align-content: center;
   gap: 10px;
-  border: 1px dashed #9ca9b6;
-  border-radius: 8px;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   color: var(--muted);
+  transition:
+    border-color var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    color var(--dur-2) var(--ease-out);
+}
+
+.drop-zone:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .drop-zone input {
@@ -4718,6 +4805,7 @@ h1 {
   justify-content: center;
   padding: 24px;
   background: rgba(15, 23, 42, 0.55);
+  animation: fade-in var(--dur-2) var(--ease-out);
 }
 
 .pdf-modal {
@@ -4726,8 +4814,9 @@ h1 {
   height: min(900px, 92vh);
   overflow: hidden;
   background: var(--surface-2);
-  border-radius: 12px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.4);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  animation: pop-in var(--dur-2) var(--ease-out);
 }
 
 .pdf-modal .pdf-pane {
@@ -5269,28 +5358,48 @@ mark {
   flex-wrap: wrap;
 }
 
+/* Segmented Controls als zusammenhängende Pill-Gruppe: der aktive Knopf
+   liegt als "Thumb" auf der abgesenkten Schiene. */
+.segmented {
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
 .segmented button,
 .model-list button {
-  min-height: 30px;
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+
+.model-list button {
+  border-color: var(--line);
+  background: var(--surface);
 }
 
 .segmented button:hover,
 .model-list button:hover {
   color: var(--ink);
-  background: var(--surface-2);
+  background: var(--surface-hover);
 }
 
 .segmented button.active,
 .model-list button.active {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--surface));
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--surface));
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
   font-weight: 600;
 }
 
@@ -5568,6 +5677,18 @@ mark {
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+}
+
+/* Der Catch-all ".page-title div { display: grid }" würde diese Container
+   sonst vertikal stapeln — Flex explizit mit höherer Spezifität setzen. */
+.page-title .extraction-header-actions,
+.page-title .segmented,
+.panel-heading .segmented {
+  display: flex;
+}
+
+.page-title .extraction-overview-badge {
+  display: flex;
 }
 
 .extraction-page .page-title > div:first-child {
@@ -6299,40 +6420,55 @@ button.data-row {
 }
 
 /* Library: primary source + grey sources */
+/* 8 Spalten — Checkbox, Titel, Jahr, Quelle, PDF, Extraction, Stern, Löschen
+   (die alte 7er-Vorlage ließ den Löschen-Button in eine implizite Zeile
+   umbrechen). */
 .library-table .data-row {
-  grid-template-columns: 0.4fr 2.4fr 0.6fr 0.8fr 0.7fr 0.9fr 0.7fr;
+  grid-template-columns: 28px minmax(200px, 2.4fr) 52px minmax(80px, 0.7fr) minmax(96px, 0.8fr) minmax(92px, 0.8fr) 42px 42px;
   align-items: center;
 }
 
+.library-table .data-row:not(.data-row--head):hover {
+  background: var(--surface-hover);
+}
+
+.library-table .data-row:not(.data-row--head) > span:nth-child(3),
+.library-table .data-row:not(.data-row--head) > span:nth-child(4) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .library-table .data-row--primary {
-  border-color: rgba(250, 204, 21, 0.6);
-  background: rgba(250, 204, 21, 0.07);
+  border-color: color-mix(in srgb, var(--accent-2) 45%, var(--line));
+  background: var(--accent-2-soft);
 }
 
 .primary-badge {
   display: inline-block;
   margin-right: 0.4rem;
-  padding: 0.08rem 0.4rem;
-  border-radius: 999px;
+  padding: 0.08rem 0.5rem;
+  border-radius: var(--radius-full);
   font-size: 0.66rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #facc15;
-  border: 1px solid rgba(250, 204, 21, 0.5);
+  color: var(--accent-2);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, transparent);
+  background: var(--accent-2-soft);
 }
 
 .grey-badge {
   display: inline-block;
   margin-right: 0.5rem;
   padding: 0.08rem 0.45rem;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: 0.66rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #9aa3b2;
-  border: 1px dashed var(--border, #2a3142);
+  color: var(--muted);
+  border: 1px dashed var(--line);
 }
 
 .grey-source-card--library {

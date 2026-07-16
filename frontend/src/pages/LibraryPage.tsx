@@ -122,7 +122,9 @@ export function LibraryPage() {
               <span>Quelle</span>
               <span>PDF</span>
               <span>Extraction</span>
-              <span>Hauptquelle</span>
+              {/* Stern-/Löschen-Spalte: Buttons erklären sich per title;
+                  "Hauptquelle" passt nicht in die schmale Spalte. */}
+              <span />
               <span />
             </div>
             {papers.map((paper) => {
