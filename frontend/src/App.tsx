@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "./api";
+import { MotionProvider } from "./motion";
 import { AppStateContext, clampFontScale, FONT_SCALE_STEP, normalizeTheme, THEME_META } from "./state";
 import type { LlmParams, Theme } from "./state";
 import { Status } from "./components/Status";
@@ -238,6 +239,7 @@ export default function App() {
 
   return (
     <AppStateContext.Provider value={state}>
+      <MotionProvider>
       <div className={`app-shell ${sidebarOpen ? "" : "app-shell--sidebar-collapsed"}`}>
         <aside className={`sidebar ${sidebarOpen ? "" : "sidebar--collapsed"}`}>
           <div className="brand">
@@ -419,6 +421,7 @@ export default function App() {
           </Suspense>
         </main>
       </div>
+      </MotionProvider>
     </AppStateContext.Provider>
   );
 }
