@@ -5,6 +5,7 @@ module -> attribute access keeps test monkeypatches (base_dir) working.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -183,6 +184,14 @@ def workspace_git_diff(
 class WorkspaceSessionPayload(BaseModel):
     payload: dict[str, Any]
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    # Nur der ausdrueckliche "Session loeschen"-Pfad im Frontend darf eine
+    # nicht-leere Unterhaltung durch eine leere ersetzen.
+    force: bool = False
+
+
+class WorkspaceSessionRestore(BaseModel):
+    saved_at: datetime | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
 @router.get("/workspace/sessions/{project_id}")
@@ -201,5 +210,24 @@ def get_workspace_session(project_id: str, metadata_db_path: str = DEFAULT_METAD
 @router.put("/workspace/sessions/{project_id}")
 def save_workspace_session(project_id: str, request: WorkspaceSessionPayload) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
-        session = db.save_workspace_session(project_id, request.payload)
+        session = db.save_workspace_session(project_id, request.payload, force=request.force)
+    return session
+
+
+@router.get("/workspace/sessions/{project_id}/backups")
+def list_workspace_session_backups(
+    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
+    """Rolling backups of the previous session states, newest first."""
+    with MetadataDB(metadata_db_path) as db:
+        backups = db.list_workspace_session_backups(project_id)
+    return {"project_id": project_id, "backups": backups}
+
+
+@router.post("/workspace/sessions/{project_id}/restore")
+def restore_workspace_session(project_id: str, request: WorkspaceSessionRestore) -> dict[str, Any]:
+    with MetadataDB(request.metadata_db_path) as db:
+        session = db.restore_workspace_session(project_id, request.saved_at)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Keine Sicherung fuer diese Session vorhanden")
     return session

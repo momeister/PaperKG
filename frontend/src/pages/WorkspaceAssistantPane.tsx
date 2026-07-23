@@ -281,6 +281,7 @@ export interface WorkspaceAssistantPaneProps {
   runExtractionCommand: () => void;
   saveGreyMutation: { isPending: boolean; mutate: (finding: DeepResearchFinding) => void };
   saveResearchTreeToNotes: () => Promise<void>;
+  saveResearchTreeAsSource: () => Promise<{ paper_count: number }>;
   scopedProjectId: string;
   selectedGreyIds: string[];
   selectedPaperIds: string[];
@@ -427,6 +428,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     runExtractionCommand,
     saveGreyMutation,
     saveResearchTreeToNotes,
+    saveResearchTreeAsSource,
     scopedProjectId,
     selectedGreyIds,
     selectedPaperIds,
@@ -1008,6 +1010,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                 onCitationInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
                 onDrillDeeper={(nodeId, question) => drillDeeperInTree(nodeId, question)}
                 onSaveToNotes={() => void saveResearchTreeToNotes()}
+                onSaveAsSource={saveResearchTreeAsSource}
               />
             ) : null}
             {!parallelMode && !deepMode && autoProgress ? (

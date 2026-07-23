@@ -150,14 +150,27 @@ textarea:focus-visible,
   background: var(--sidebar-active);
 }
 
-.sidebar--collapsed .sidebar-toggle {
-  margin-left: 0;
+/* Eingeklappt bleiben in der 74px-Sidebar nur 46px Inhaltsbreite — Mark (24) +
+   Gap (10) + Umschalter (30) passen nicht nebeneinander und der Knopf ragte in
+   die Topbar. Deshalb dort untereinander statt nebeneinander. */
+.sidebar--collapsed .brand {
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 0 14px;
 }
 
-.brand div,
-.page-title div,
-.panel-heading div,
-.pane-heading div {
+.sidebar--collapsed .sidebar-toggle {
+  margin: 0 auto;
+}
+
+/* Nur der Überschriften-Block (klassenloses <div> mit Eyebrow + Titel) wird
+   gestapelt. Ein Catch-all ".page-title div" schlug mit seiner höheren
+   Spezifität jede Ein-Klassen-Regel (z. B. ".jupyter-toolbar { display:flex }")
+   und stapelte Aktionsleisten senkrecht. */
+.brand > div:not([class]),
+.page-title > div:not([class]),
+.panel-heading > div:not([class]),
+.pane-heading > div:not([class]) {
   display: grid;
   gap: 2px;
 }
@@ -170,10 +183,12 @@ textarea:focus-visible,
   color: var(--sidebar-brand);
 }
 
-.brand span,
-.page-title span,
-.panel-heading span,
-.pane-heading span {
+/* Wie oben: nur die Eyebrow-Zeile im Überschriften-Block, nicht jedes <span>
+   in danebenstehenden Buttons/Chips. */
+.brand > div:not([class]) > span,
+.page-title > div:not([class]) > span,
+.panel-heading > div:not([class]) > span,
+.pane-heading > div:not([class]) > span {
   color: var(--muted);
   font-size: 12px;
 }
@@ -2133,19 +2148,43 @@ h1 {
   margin-bottom: 0;
 }
 
-.workspace-nav-tabs {
+/* Eigenständige Kacheln statt Pill-Gruppe: als zusammenhängende .segmented-Schiene
+   waren die Grenzen zwischen den Tabs unsichtbar (inaktive Knöpfe sind dort
+   transparent). Die Schiene entfällt, jede Kachel bekommt Fläche + Rahmen. */
+/* Eigenständige Kacheln statt Pill-Gruppe: als zusammenhängende .segmented-Schiene
+   waren die Grenzen zwischen den Tabs unsichtbar (inaktive Knöpfe sind dort
+   transparent). Die Schiene entfällt, jede Kachel bekommt Fläche + Rahmen.
+   Die Selektoren führen ".segmented" mit, um die Basisregeln weiter unten in
+   der Datei bei gleicher Spezifität nicht zu verlieren. */
+.segmented.workspace-nav-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
-.workspace-nav-tabs button {
+.segmented.workspace-nav-tabs button {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
   min-height: 34px;
   padding: 6px 7px;
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.segmented.workspace-nav-tabs button:hover {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.segmented.workspace-nav-tabs button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .workspace-nav-tabs button span,
@@ -2155,8 +2194,49 @@ h1 {
   white-space: nowrap;
 }
 
-.workspace-nav-tabs button strong {
+.segmented.workspace-nav-tabs button strong {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
   font-size: 11px;
+}
+
+.segmented.workspace-nav-tabs button.active strong {
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
+/* Zugriff auf die Server-Sicherungen der KI-Sessions (siehe SessionBackupsPanel). */
+.session-restore-toggle {
+  margin-top: 8px;
+  width: 100%;
+  justify-content: center;
+}
+
+.session-restore-panel {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.session-restore-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-restore-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
 }
 
 .workspace-nav-tabs .workspace-nav-tab--wide {
@@ -2167,7 +2247,10 @@ h1 {
   display: flex;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  /* Sicherheitsventil: bei sehr vielen Abschnitten scrollt die Spalte, statt einzelne
+     Listen (z. B. Notizquellen) auf 0 px zusammenzudruecken. */
+  overflow-y: auto;
+  overflow-x: hidden;
   flex-direction: column;
   gap: 0;
 }
@@ -2208,14 +2291,18 @@ h1 {
 
 .workspace-nav-list {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 120px;
   min-width: 0;
   overflow: auto;
   align-content: start;
 }
 
+/* Kurzlisten (Notizquellen, graue Quellen) duerfen NICHT schrumpfen: mit `flex: 0 1 auto`
+   hat die lange Projekt-PDF-Liste daneben sie auf 0 px gequetscht - der Abschnitt sah dann
+   leer/kaputt aus, obwohl Eintraege vorhanden waren. */
 .workspace-nav-list--short {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  min-height: 96px;
   max-height: 220px;
 }
 
@@ -3444,6 +3531,53 @@ h1 {
   flex-wrap: wrap;
 }
 
+/* Überlauf-Menü der Toolbar (siehe NotesPage: "Weitere Werkzeuge"). */
+.markdown-more-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.markdown-more-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  gap: 4px;
+  min-width: 230px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+
+.markdown-more-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.markdown-more-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.markdown-more-row:not(:last-child) {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+/* Die Notizfrage steht jetzt als eigene Zeile unter der Toolbar. */
+.note-question-field--standalone {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
 .markdown-toolbar--compact {
   gap: 6px;
 }
@@ -4457,6 +4591,25 @@ h1 {
   white-space: nowrap;
 }
 
+.note-citation-row__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.note-citation-row__text--full {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: pre-wrap;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.note-citation-row--expanded {
+  background: var(--surface);
+}
+
 .note-citation-row--active {
   border-color: var(--evidence-color, #b88705);
   background: linear-gradient(90deg, color-mix(in srgb, var(--evidence-soft, #fff8dc) 82%, var(--surface)), var(--surface) 84%);
@@ -4943,34 +5096,76 @@ h1 {
   background: var(--surface-2);
 }
 
-/* In-app PDF viewer modal (Library "Öffnen" → reuses PdfPane). */
-.pdf-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(15, 23, 42, 0.55);
-  animation: fade-in var(--dur-2) var(--ease-out);
-}
-
-.pdf-modal {
-  display: flex;
-  width: min(1100px, 92vw);
-  height: min(900px, 92vh);
+/* In-app PDF-Lesespalte (Library "Öffnen" → nutzt PdfPane wieder).
+   Früher ein Modal — zu klein zum Lesen und es verdeckte die Trefferliste.
+   Jetzt rechts angedockt, per Handle in der Breite verstellbar (Breite steckt
+   in --library-pdf-width, gesetzt von LibraryPage). */
+.library-page--reading {
+  grid-template-columns: minmax(0, 1fr) 6px var(--library-pdf-width, 560px);
+  align-content: stretch;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
-  background: var(--surface-2);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-pop);
-  animation: pop-in var(--dur-2) var(--ease-out);
 }
 
-.pdf-modal .pdf-pane {
+/* Traegt die Seitenabschnitte — ohne eigenes Raster verlöre die Seite mit der
+   Lesespalte die Abstände zwischen Titel und Panels. */
+.library-main {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
+}
+
+.library-page--reading .library-main {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.library-pdf-handle {
+  align-self: stretch;
+}
+
+.library-pdf-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+/* Vollbild: aus dem Raster heraus über die ganze App legen. */
+.library-pdf-dock--full {
+  position: fixed;
+  inset: 12px;
+  z-index: 60;
+  box-shadow: var(--shadow-pop);
+}
+
+.library-pdf-dock-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 8px 0;
+}
+
+.library-pdf-dock .pdf-pane {
   flex: 1 1 auto;
+  min-height: 0;
   border-left: none;
   border-radius: 12px;
+}
+
+/* Aktionsgruppe in der PDF-Spalte für Papers ohne lokale Datei. */
+.library-pdf-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .pdf-pane {
@@ -5840,20 +6035,6 @@ mark {
   flex-shrink: 0;
 }
 
-/* Der Catch-all ".page-title div { display: grid }" würde diese Container
-   sonst vertikal stapeln — Flex explizit mit höherer Spezifität setzen. */
-.page-title .extraction-header-actions,
-.page-title .segmented,
-.panel-heading .segmented,
-.page-title .button-row,
-.panel-heading .button-row {
-  display: flex;
-}
-
-.page-title .extraction-overview-badge {
-  display: flex;
-}
-
 .extraction-page .page-title > div:first-child {
   flex: 1;
   min-width: 0;
@@ -6586,8 +6767,10 @@ button.data-row {
 /* 8 Spalten — Checkbox, Titel, Jahr, Quelle, PDF, Extraction, Stern, Löschen
    (die alte 7er-Vorlage ließ den Löschen-Button in eine implizite Zeile
    umbrechen). */
+/* PDF-Spalte breiter: sie traegt fuer Papers ohne lokale Datei jetzt
+   "Holen"/"Link"/Abstract statt nur eines Status-Chips. */
 .library-table .data-row {
-  grid-template-columns: 28px minmax(200px, 2.4fr) 52px minmax(80px, 0.7fr) minmax(96px, 0.8fr) minmax(92px, 0.8fr) 42px 42px;
+  grid-template-columns: 28px minmax(180px, 2.1fr) 52px minmax(80px, 0.6fr) minmax(190px, 1.1fr) minmax(92px, 0.7fr) 42px 42px;
   align-items: center;
 }
 
@@ -7276,12 +7459,20 @@ button.data-row {
   width: 100%;
   background: transparent;
   border: none;
-  padding: 8px 0 4px;
+  border-radius: 7px;
+  padding: 8px 7px 6px;
   cursor: pointer;
   color: var(--muted);
+  transition: background 120ms ease, color 120ms ease;
 }
 
-.workspace-nav-subheading--toggle:hover span {
+.workspace-nav-subheading--toggle:hover,
+.workspace-nav-subheading--toggle:focus-visible {
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+}
+
+.workspace-nav-subheading--toggle:hover span,
+.workspace-nav-subheading--toggle:focus-visible span {
   color: var(--ink);
 }
 
@@ -7289,6 +7480,11 @@ button.data-row {
   margin-left: auto;
   flex: 0 0 auto;
   color: var(--muted);
+  transition: transform 140ms ease, color 120ms ease;
+}
+
+.workspace-nav-subheading--toggle:hover svg {
+  color: var(--ink);
 }
 
 .workspace-nav-subheading--toggle strong {
@@ -8467,17 +8663,22 @@ button.parallel-cite {
 /* Code-Werkstatt (coding projects, file tree, Monaco editor, git diff)    */
 /* ----------------------------------------------------------------------- */
 
+/* Die Werkstatt hatte eine eigene, fest verdrahtete IDE-Dark-Palette und blieb
+   deshalb im Hell-Theme dunkel. Die --wk-*-Tokens leiten sich jetzt aus den
+   App-Tokens ab. Ausnahme ist das Terminal: dessen --wk-term-* stehen auf
+   .wk-term-pane[data-term] und folgen der eigenen Terminal-Einstellung. */
 .werkstatt-page {
-  --wk-bg: #1b1b20;
-  --wk-panel: #232329;
-  --wk-panel-head: #26262d;
-  --wk-border: #34343d;
-  --wk-text: #e4e4e7;
-  --wk-muted: #9a9aa6;
-  --wk-hover: #2d2d35;
-  --wk-input: #1e1e24;
-  --wk-accent: #6ea8fe;
-  --wk-accent-soft: rgba(110, 168, 254, 0.16);
+  --wk-bg: var(--app-bg);
+  --wk-panel: var(--surface);
+  --wk-panel-head: var(--surface-2);
+  --wk-border: var(--line);
+  --wk-text: var(--text);
+  --wk-muted: var(--muted);
+  --wk-hover: var(--surface-hover);
+  --wk-input: var(--surface-2);
+  --wk-accent: var(--accent);
+  --wk-accent-contrast: var(--accent-contrast);
+  --wk-accent-soft: var(--accent-soft);
   position: relative;
   padding: 10px 14px 14px;
   gap: 10px;
@@ -8557,7 +8758,7 @@ button.parallel-cite {
 }
 .wk-segmented button.active {
   background: var(--wk-accent);
-  color: #0b1220;
+  color: var(--wk-accent-contrast);
   font-weight: 600;
 }
 
@@ -8593,14 +8794,14 @@ button.parallel-cite {
   cursor: default;
 }
 .wk-iconbtn--danger:hover:not(:disabled) {
-  background: rgba(248, 81, 73, 0.18);
-  border-color: rgba(248, 81, 73, 0.5);
-  color: #ffa198;
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+  color: var(--red);
 }
 .wk-btn--primary {
   background: var(--wk-accent);
   border-color: var(--wk-accent);
-  color: #0b1220;
+  color: var(--wk-accent-contrast);
   font-weight: 600;
 }
 .wk-btn--primary:hover:not(:disabled) {
@@ -8740,28 +8941,62 @@ button.parallel-cite {
   background: var(--wk-accent);
 }
 
-/* Terminal pane + multi-terminal tabs. */
+/* Terminal pane + multi-terminal tabs.
+   data-term spiegelt die in der Werkstatt gewaehlte Terminal-Palette (siehe
+   components/terminalTheme.ts) — Kopfzeile und Tableiste muessen zur Shell
+   passen, nicht zum App-Theme, sonst klebt eine helle Leiste auf schwarzem Grund.
+   Die Werte sind absichtlich dieselben Literale wie in TERMINAL_PALETTES. */
+.wk-term-pane[data-term="dark"] {
+  --wk-term-bg: #14161a;
+  --wk-term-head: #1b1e24;
+  --wk-term-line: #2b3138;
+  --wk-term-text: #d9dee5;
+  --wk-term-muted: #8a929c;
+}
+.wk-term-pane[data-term="light"] {
+  --wk-term-bg: #fbfbfc;
+  --wk-term-head: #f1f2f5;
+  --wk-term-line: #dcdfe4;
+  --wk-term-text: #1f242b;
+  --wk-term-muted: #5f6874;
+}
 .wk-term-pane {
-  background: #1e1e1e;
+  background: var(--wk-term-bg);
+  color: var(--wk-term-text);
 }
 .wk-term-pane .wk-pane-head {
-  background: #232323;
-  border-bottom-color: #2c2c2c;
+  background: var(--wk-term-head);
+  border-bottom-color: var(--wk-term-line);
+  color: var(--wk-term-text);
+}
+.wk-term-pane .wk-pane-sub {
+  color: var(--wk-term-muted);
+}
+.wk-term-appearance {
+  margin-left: auto;
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid var(--wk-term-line);
+  border-radius: 6px;
+  background: var(--wk-term-bg);
+  color: var(--wk-term-muted);
+  font: inherit;
+  font-size: 11.5px;
 }
 .wk-term-tabs {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #1e1e1e;
+  background: var(--wk-term-bg);
 }
 .wk-term-tabbar {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 4px 6px;
-  border-bottom: 1px solid #2c2c2c;
-  background: #1a1a1a;
+  border-bottom: 1px solid var(--wk-term-line);
+  background: var(--wk-term-head);
   overflow-x: auto;
   flex: none;
 }
@@ -8771,19 +9006,19 @@ button.parallel-cite {
   gap: 6px;
   padding: 4px 8px;
   border-radius: 7px;
-  color: #b9b9b9;
+  color: var(--wk-term-muted);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
   border: 1px solid transparent;
 }
 .wk-term-tab:hover {
-  background: #2a2a2a;
+  background: color-mix(in srgb, var(--wk-term-text) 12%, var(--wk-term-bg));
 }
 .wk-term-tab.active {
-  background: #2d2d2d;
-  color: #fff;
-  border-color: #3a3a3a;
+  background: color-mix(in srgb, var(--wk-term-text) 12%, var(--wk-term-bg));
+  color: var(--wk-term-text);
+  border-color: var(--wk-term-line);
 }
 .wk-term-tab-close {
   display: inline-flex;
@@ -8796,7 +9031,7 @@ button.parallel-cite {
   opacity: 0.7;
 }
 .wk-term-tab-close:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--wk-term-text) 12%, var(--wk-term-bg));
   opacity: 1;
 }
 .wk-term-tab-add {
@@ -8805,14 +9040,14 @@ button.parallel-cite {
   justify-content: center;
   border: none;
   background: none;
-  color: #b9b9b9;
+  color: var(--wk-term-muted);
   cursor: pointer;
   padding: 4px;
   border-radius: 7px;
 }
 .wk-term-tab-add:hover {
-  background: #2a2a2a;
-  color: #fff;
+  background: color-mix(in srgb, var(--wk-term-text) 12%, var(--wk-term-bg));
+  color: var(--wk-term-text);
 }
 .wk-term-bodies {
   flex: 1;
@@ -8927,12 +9162,12 @@ button.parallel-cite {
   color: var(--wk-muted);
 }
 .werkstatt-page .werkstatt-diff--add {
-  background: rgba(63, 185, 80, 0.16);
-  color: #7ee787;
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
 }
 .werkstatt-page .werkstatt-diff--del {
-  background: rgba(248, 81, 73, 0.16);
-  color: #ffa198;
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
 }
 .werkstatt-page .werkstatt-diff--hunk {
   color: var(--wk-accent);
@@ -9003,32 +9238,9 @@ button.parallel-cite {
   min-height: 0;
 }
 
-.werkstatt-terminal-panel {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 42%;
-  min-height: 160px;
-  padding: 0;
-  overflow: hidden;
-  background: #1e1e1e;
-}
-.werkstatt-terminal-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid #2c2c2c;
-  color: #d4d4d4;
-}
-.werkstatt-terminal-head .muted {
-  margin-left: auto;
-  font-size: 11px;
-  color: #8a8a8a;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 50%;
-}
+/* (.werkstatt-terminal-panel/-head stammten aus dem alten Werkstatt-Layout und
+   hatten keine Nutzer mehr — entfernt, damit sie nicht bei jeder Theme-Runde
+   mitgepflegt werden muessen. Der Terminal-Rahmen ist jetzt .wk-term-pane.) */
 .werkstatt-terminal {
   flex: 1;
   min-height: 0;
@@ -9045,7 +9257,7 @@ button.parallel-cite {
   justify-content: center;
   text-align: center;
   padding: 18px;
-  color: #9aa0a6;
+  color: var(--wk-muted, var(--muted));
   font-size: 13px;
 }
 

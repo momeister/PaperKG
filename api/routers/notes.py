@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import api.product_main as pm  # patchable llm_router + geteilte Helfer
+from research.sanitize import FULL_TEXT_MAX_LEN
 from storage.metadata_db import MetadataDB
 from storage.path_safety import ensure_safe_path
 
@@ -75,6 +76,10 @@ class NoteAskRequest(BaseModel):
     use_kg_evidence: bool = True
 
 
+class NoteAsSourceRequest(BaseModel):
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
 class NoteAiThreadPatch(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     ui_state: dict[str, Any] | None = None
@@ -121,6 +126,47 @@ def patch_note(
     if note is None:
         raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
     return {"note": _note_view(note)}
+
+
+@router.post("/notes/{note_id}/as-source")
+def note_as_source(
+    note_id: str,
+    payload: NoteAsSourceRequest | None = None,
+) -> dict[str, Any]:
+    """Publish a note as a citable project source.
+
+    The snapshot is stored in ``grey_sources`` (``source_kind="note"``) so the whole
+    existing citation machinery — retrieval injection, ``grey::`` citation validation,
+    claim check, source verification, BibTeX export — works unchanged. The id is derived
+    from the note id, so pressing the button again refreshes the snapshot instead of
+    piling up duplicates.
+    """
+    request = payload or NoteAsSourceRequest()
+    with MetadataDB(request.metadata_db_path) as db:
+        note = db.get_note(note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
+        markdown = str(note.get("markdown") or "").strip()
+        if not markdown:
+            raise HTTPException(status_code=400, detail="Leere Notizen können nicht als Quelle gespeichert werden.")
+        citations = note.get("citations") or []
+        paper_ids: list[str] = []
+        for citation in citations:
+            pid = str(citation.get("paper_id") or "").strip()
+            if pid and pid not in paper_ids:
+                paper_ids.append(pid)
+        saved = db.add_grey_source(str(note.get("project_id") or ""), {
+            "id": f"grey_note_{note_id}",
+            "url": "",
+            "title": str(note.get("title") or "Notiz"),
+            "summary": _note_excerpt(markdown)[:400],
+            "full_text": markdown[:FULL_TEXT_MAX_LEN],
+            "query": "Notiz",
+            "source_kind": "note",
+            "origin_id": note_id,
+            "source_paper_ids": paper_ids,
+        })
+    return {"saved": saved}
 
 
 @router.delete("/notes/{note_id}")

@@ -17,6 +17,9 @@ from typing import Any
 from export.latex_builder import latex_escape
 
 _MAX_LABEL = 90
+_MAX_CHART_CHAPTERS = 12
+_MAX_TOP_SOURCES = 10
+_TREE_LABEL_LEN = 170
 
 
 def _short(text: str, limit: int = _MAX_LABEL) -> str:
@@ -24,10 +27,45 @@ def _short(text: str, limit: int = _MAX_LABEL) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _forest_label(text: str) -> str:
+def breakable_id(paper_id: str, chunk: int = 8) -> str:
+    """Typeset a source id so it can wrap inside a narrow table column.
+
+    ``semantic_scholar:16cb4a482d0e00fb63886…`` has no natural break point, so LaTeX pushed
+    it past the page margin. Break opportunities are inserted after the usual separators and
+    at least every ``chunk`` characters.
+    """
+    escaped = latex_escape(str(paper_id or ""))
+    out: list[str] = []
+    since_break = 0
+    index = 0
+    while index < len(escaped):
+        if escaped[index] == "\\":  # keep an escape sequence (\_, \&, …) intact
+            out.append(escaped[index:index + 2])
+            index += 2
+            since_break += 1
+        else:
+            out.append(escaped[index])
+            index += 1
+            since_break += 1
+        last = out[-1]
+        if last in (":", "/", ".", "-") or last == r"\_" or since_break >= chunk:
+            out.append(r"\allowbreak{}")
+            since_break = 0
+    return r"\texttt{" + "".join(out) + "}"
+
+
+def _forest_label(text: str, limit: int = _MAX_LABEL) -> str:
     # forest node content is delimited by [ ]; strip them, then LaTeX-escape.
-    cleaned = _short(text).replace("[", "(").replace("]", ")")
+    cleaned = _short(text, limit).replace("[", "(").replace("]", ")")
     return latex_escape(cleaned)
+
+
+def _tree_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Real question nodes only — the synthesis event rides along in the same list."""
+    return [
+        n for n in nodes
+        if str(n.get("status") or "") != "synthesis" and str(n.get("id") or "") != "synthesis"
+    ]
 
 
 def _children_map(nodes: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -39,52 +77,153 @@ def _children_map(nodes: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]
     return by_parent
 
 
-def research_tree_forest(nodes: list[dict[str, Any]], max_depth: int = 2) -> str:
-    """Return a ``figure`` with a ``forest`` diagram of the tree, or "" if unavailable."""
-    root = next((n for n in nodes if int(n.get("depth", 0)) == 0), None)
-    if not root or not any(n.get("id") for n in nodes):
+def research_tree_forest(nodes: list[dict[str, Any]], max_depth: int = 1) -> str:
+    """Return a landscape ``figure`` with a ``forest`` diagram of the tree, or "".
+
+    Only the chapter level is drawn by default: with every sub-question in the picture the
+    diagram grew far past the page, node labels overlapped and nothing was readable. The
+    complete structure is listed by :func:`outline_latex` instead. What is drawn is put on a
+    landscape page and scaled to the line width, so the figure can never overflow again.
+    """
+    tree_nodes = _tree_nodes(nodes)
+    root = next((n for n in tree_nodes if int(n.get("depth", 0)) == 0), None)
+    if not root or not any(n.get("id") for n in tree_nodes):
         return ""
-    by_parent = _children_map(nodes)
+    by_parent = _children_map(tree_nodes)
 
     def emit(node: dict[str, Any], depth: int) -> str:
-        label = _forest_label(node.get("question", ""))
+        label = _forest_label(node.get("question", ""), _TREE_LABEL_LEN)
         children = by_parent.get(str(node.get("id")), []) if depth < max_depth else []
         inner = "".join(emit(c, depth + 1) for c in children)
         return f"[{{{label}}}{inner}]"
 
     tree = emit(root, 0)
     return "\n".join([
+        r"\begin{landscape}",
         r"\begin{figure}[H]",
         r"\centering",
+        r"\resizebox{\linewidth}{!}{%",
         r"\begin{forest}",
+        # ``text width``/``align`` MUST travel via ``node options``: passed directly in
+        # ``for tree`` forest ignores them, the label is typeset as one long line and runs
+        # out of its box (that is why the diagram used to be an unreadable overlap).
+        # ``align=left`` and not ``flush left``: with the array package loaded TikZ parses
+        # the latter as a tabular preamble and aborts with "Illegal pream-token".
         r"for tree={draw, rounded corners, font=\footnotesize, grow=east,"
-        r" edge={->, >=latex}, anchor=west, align=left, text width=3.2cm,"
-        r" l sep=12mm, s sep=2mm}",
+        r" edge={->, >=latex}, anchor=west,"
+        r" node options={align=left, text width=5.4cm, inner sep=3pt},"
+        r" l sep=18mm, s sep=5mm}",
         tree,
-        r"\end{forest}",
-        r"\caption{Struktur der Tiefenanalyse: Forschungsfrage und untersuchte Teilfragen.}",
+        r"\end{forest}%",
+        r"}",
+        r"\caption{Struktur der Tiefenanalyse: Forschungsfrage und untersuchte Kapitel.}",
         r"\end{figure}",
+        r"\end{landscape}",
     ])
 
 
-def _chapter_of(node: dict[str, Any]) -> str:
-    depth = int(node.get("depth", 0))
-    if depth == 0:
+def outline_latex(nodes: list[dict[str, Any]]) -> str:
+    """Full chapter → sub-question outline as a nested list (always readable)."""
+    tree = _tree_nodes(nodes)
+    depth1 = [n for n in tree if int(n.get("depth", 0)) == 1]
+    if not depth1:
         return ""
-    return str(node.get("chapter_question") or node.get("question") or "")
+    chapters = chapter_map(nodes)
+    lines: list[str] = [
+        r"\subsection*{Gliederung der Teilfragen}",
+        r"\begin{enumerate}[leftmargin=*]",
+    ]
+    for d1 in depth1:
+        chapter = str(d1.get("question") or "")
+        lines.append(r"\item " + latex_escape(_short(chapter, 220)))
+        subs = [
+            n for n in tree
+            if int(n.get("depth", 0)) >= 2 and chapters.get(str(n.get("id") or "")) == chapter
+        ]
+        if subs:
+            lines.append(r"\begin{itemize}[leftmargin=*]")
+            lines.extend(r"\item " + latex_escape(_short(str(s.get("question") or ""), 220)) for s in subs)
+            lines.append(r"\end{itemize}")
+    lines.append(r"\end{enumerate}")
+    return "\n".join(lines)
+
+
+def chapter_map(nodes: list[dict[str, Any]]) -> dict[str, str]:
+    """Map every node id to the depth-1 ancestor ("chapter") it belongs to.
+
+    The tree events streamed to the frontend (and posted back for the export) carry no
+    ``chapter_question`` — that field only exists in the server-side node cache. Relying on
+    it made every sub-question its own "chapter", so the per-chapter chart exploded into
+    dozens of bars and the overview table always reported 0 sub-questions. The parent chain
+    is authoritative and always present, so it is walked here; ``chapter_question`` is only
+    a fallback for nodes whose parent is missing.
+    """
+    tree = _tree_nodes(nodes)
+    by_id = {str(n.get("id")): n for n in tree if n.get("id")}
+    chapters: dict[str, str] = {}
+    for node in tree:
+        node_id = str(node.get("id") or "")
+        if not node_id:
+            continue
+        current = node
+        seen: set[str] = set()
+        while current is not None:
+            current_id = str(current.get("id") or "")
+            if current_id in seen:  # defensive: never loop on a malformed tree
+                current = None
+                break
+            seen.add(current_id)
+            if int(current.get("depth", 0) or 0) == 1:
+                break
+            parent_id = str(current.get("parent_id") or "")
+            current = by_id.get(parent_id) if parent_id else None
+        if current is not None and int(current.get("depth", 0) or 0) == 1:
+            chapters[node_id] = str(current.get("question") or "")
+        else:
+            fallback = str(node.get("chapter_question") or "")
+            if fallback and int(node.get("depth", 0) or 0) > 0:
+                chapters[node_id] = fallback
+    return chapters
 
 
 def _sources_by_chapter(nodes: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Distinct source ids per chapter, accumulated over the chapter's whole subtree."""
+    chapters = chapter_map(nodes)
     by_chapter: dict[str, set[str]] = defaultdict(set)
-    for n in nodes:
-        chapter = _chapter_of(n)
+    for n in _tree_nodes(nodes):
+        chapter = chapters.get(str(n.get("id") or ""), "")
         if not chapter:
             continue
+        by_chapter.setdefault(chapter, set())
         for s in (n.get("answer") or {}).get("sources") or []:
             pid = str(s.get("paper_id") or "")
             if pid:
                 by_chapter[chapter].add(pid)
     return by_chapter
+
+
+def _top_sources(
+    nodes: list[dict[str, Any]], sources: list[dict[str, Any]]
+) -> list[tuple[str, int]]:
+    """(title, usage count) of the most frequently cited sources across all answers."""
+    titles = {
+        str(s.get("paper_id") or ""): str(s.get("title") or s.get("paper_id") or "")
+        for s in sources
+    }
+    usage: dict[str, int] = defaultdict(int)
+    for node in _tree_nodes(nodes):
+        used: set[str] = set()
+        for s in (node.get("answer") or {}).get("sources") or []:
+            pid = str(s.get("paper_id") or "")
+            if pid:
+                used.add(pid)
+                titles.setdefault(pid, str(s.get("title") or pid))
+        for pid in used:
+            usage[pid] += 1
+    ranked = sorted(usage.items(), key=lambda item: (-item[1], titles.get(item[0], item[0])))
+    return [(titles.get(pid, pid) or pid, count) for pid, count in ranked[:_MAX_TOP_SOURCES] if count > 1] or [
+        (titles.get(pid, pid) or pid, count) for pid, count in ranked[:_MAX_TOP_SOURCES]
+    ]
 
 
 def make_charts(
@@ -108,20 +247,52 @@ def make_charts(
 
     by_chapter = _sources_by_chapter(nodes)
     if by_chapter:
-        labels = [_short(c, 28) for c in by_chapter]
-        counts = [len(v) for v in by_chapter.values()]
+        # Kapitel-Fragen sind zu lang für eine y-Achse: auf K1…Kn kürzen und die Zuordnung
+        # in die Bildunterschrift schreiben. Höhe hart begrenzt, damit das Bild auf die
+        # Seite passt (früher wuchs es linear und lief über den Seitenrand hinaus).
+        ranked = sorted(by_chapter.items(), key=lambda item: len(item[1]), reverse=True)[:_MAX_CHART_CHAPTERS]
+        order = list(by_chapter)
+        keys = [f"K{order.index(chapter) + 1}" for chapter, _ in ranked]
+        counts = [len(sources) for _, sources in ranked]
+        legend = "; ".join(f"{key} = {_short(chapter, 60)}" for key, (chapter, _) in zip(keys, ranked))
         try:
-            fig, ax = plt.subplots(figsize=(7, max(2.2, 0.5 * len(labels) + 1)))
-            ax.barh(range(len(labels)), counts, color="#3b6ea5")
-            ax.set_yticks(range(len(labels)))
-            ax.set_yticklabels(labels, fontsize=8)
+            fig, ax = plt.subplots(figsize=(7, min(7.0, max(2.2, 0.34 * len(keys) + 1.2))))
+            bars = ax.barh(range(len(keys)), counts, color="#3b6ea5")
+            ax.bar_label(bars, padding=3, fontsize=8)
+            ax.set_yticks(range(len(keys)))
+            ax.set_yticklabels(keys, fontsize=9)
             ax.invert_yaxis()
+            ax.set_xlim(0, max(counts) * 1.15 + 0.5)
             ax.set_xlabel("Anzahl belegter Quellen")
             ax.set_title("Quellen pro Kapitel")
             fig.tight_layout()
             fig.savefig(workdir / "chart_sources.png", dpi=150)
             plt.close(fig)
-            out.append(("Anzahl der belegten Quellen je Kapitel.", "chart_sources.png"))
+            out.append((f"Anzahl der belegten Quellen je Kapitel. {legend}", "chart_sources.png"))
+        except Exception:
+            pass
+
+    top_sources = _top_sources(nodes, sources)
+    if top_sources:
+        try:
+            fig, ax = plt.subplots(figsize=(7, min(6.0, max(2.2, 0.4 * len(top_sources) + 1.2))))
+            labels = [_short(title, 46) for title, _ in top_sources]
+            counts = [count for _, count in top_sources]
+            bars = ax.barh(range(len(labels)), counts, color="#4a7f5c")
+            ax.bar_label(bars, padding=3, fontsize=8)
+            ax.set_yticks(range(len(labels)))
+            ax.set_yticklabels(labels, fontsize=7.5)
+            ax.invert_yaxis()
+            ax.set_xlim(0, max(counts) * 1.18 + 0.5)
+            ax.set_xlabel("Anzahl Teilfragen, die diese Quelle belegen")
+            ax.set_title("Meistgenutzte Quellen")
+            fig.tight_layout()
+            fig.savefig(workdir / "chart_top_sources.png", dpi=150)
+            plt.close(fig)
+            out.append((
+                "Quellen, die in den meisten Teilfragen als Beleg herangezogen wurden.",
+                "chart_top_sources.png",
+            ))
         except Exception:
             pass
 
@@ -161,32 +332,36 @@ def charts_latex(charts: list[tuple[str, str]]) -> str:
 
 def overview_table_latex(nodes: list[dict[str, Any]]) -> str:
     """Per-chapter overview: number of analysed sub-questions and distinct sources."""
-    depth1 = [n for n in nodes if int(n.get("depth", 0)) == 1]
+    tree = _tree_nodes(nodes)
+    depth1 = [n for n in tree if int(n.get("depth", 0)) == 1]
     if not depth1:
         return ""
     by_chapter = _sources_by_chapter(nodes)
+    chapters = chapter_map(nodes)
     subq_count: dict[str, int] = defaultdict(int)
-    for n in nodes:
+    for n in tree:
         if int(n.get("depth", 0)) >= 2:
-            subq_count[_chapter_of(n)] += 1
+            subq_count[chapters.get(str(n.get("id") or ""), "")] += 1
 
     rows: list[str] = []
-    for d1 in depth1:
+    for index, d1 in enumerate(depth1, start=1):
         chapter = str(d1.get("question") or "")
         rows.append(
-            f"{latex_escape(_short(chapter, 70))} & "
+            f"K{index} & {latex_escape(_short(chapter, 150))} & "
             f"{subq_count.get(chapter, 0)} & {len(by_chapter.get(chapter, set()))} \\\\"
         )
     return "\n".join([
-        r"\begin{longtable}{p{0.62\textwidth} r r}",
+        r"\begingroup\small",
+        r"\begin{longtable}{@{}l >{\raggedright\arraybackslash}p{0.58\textwidth} r r@{}}",
         r"\caption{Überblick der untersuchten Kapitel.}\\",
         r"\toprule",
-        r"\textbf{Kapitel} & \textbf{Teilfragen} & \textbf{Quellen} \\",
+        r"\textbf{\#} & \textbf{Kapitel} & \textbf{Teilfragen} & \textbf{Quellen} \\",
         r"\midrule",
         r"\endhead",
         *rows,
         r"\bottomrule",
         r"\end{longtable}",
+        r"\endgroup",
     ])
 
 
@@ -203,14 +378,16 @@ def sources_table_latex(sources: list[dict[str, Any]]) -> str:
             continue
         seen.add(pid)
         idx += 1
-        title = _short(str(s.get("title") or pid), 70)
+        title = _short(str(s.get("title") or pid), 80)
         year = s.get("year") or ""
         rows.append(
             f"{idx} & {latex_escape(title)} & {latex_escape(str(year))} & "
-            f"{latex_escape(pid)} \\\\"
+            f"{breakable_id(pid)} \\\\"
         )
     return "\n".join([
-        r"\begin{longtable}{r p{0.5\textwidth} c p{0.22\textwidth}}",
+        r"\begingroup\small",
+        r"\begin{longtable}{@{}r >{\raggedright\arraybackslash}p{0.44\textwidth} c"
+        r" >{\raggedright\arraybackslash}p{0.26\textwidth}@{}}",
         r"\caption{Übersicht der einbezogenen Quellen.}\\",
         r"\toprule",
         r"\# & \textbf{Titel} & \textbf{Jahr} & \textbf{ID} \\",
@@ -219,4 +396,5 @@ def sources_table_latex(sources: list[dict[str, Any]]) -> str:
         *rows,
         r"\bottomrule",
         r"\end{longtable}",
+        r"\endgroup",
     ])

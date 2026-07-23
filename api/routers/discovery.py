@@ -23,8 +23,9 @@ import api.product_main as pm  # patchable singletons + geteilte Helfer
 from api import phase4_main
 from api.routers.harvest import _existing_library_keys
 from api.routers.projects import _projects_path
-from export import ExportOptions, build_export
+from export import ExportOptions, aggregate_sources, build_export
 from query.discovery import analyze_paper, analyze_topic
+from research.sanitize import FULL_TEXT_MAX_LEN
 from query.research_tree import _extract_questions
 from query.web_research import run_deep_research
 from storage.metadata_db import MetadataDB
@@ -139,6 +140,17 @@ class ResearchTreeExportRequest(BaseModel):
     options: ResearchTreeExportOptions = Field(default_factory=ResearchTreeExportOptions)
     provider: str | None = None
     model: str | None = None
+
+
+class ResearchTreeAsSourceRequest(BaseModel):
+    """Store a finished Tiefenanalyse as a citable project source."""
+    project_id: str = Field(min_length=1, max_length=200)
+    root_question: str = Field(min_length=1, max_length=2000)
+    document: str = Field(min_length=1)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    session_id: str | None = Field(default=None, max_length=200)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
 class ResearchClarifyRequest(BaseModel):
@@ -446,6 +458,44 @@ async def research_tree_export(request: ResearchTreeExportRequest) -> Response:
             "X-Export-Warnings": json.dumps(result.warnings),
         },
     )
+
+
+@router.post("/research/tree/as-source")
+def research_tree_as_source(request: ResearchTreeAsSourceRequest) -> dict[str, Any]:
+    """Persist a finished Tiefenanalyse as a citable project source.
+
+    Stored like a grey source (``source_kind="analysis"``) so the synthesis text is
+    retrievable and citable as ``grey::…`` everywhere. ``source_paper_ids`` keeps the
+    papers the analysis was built from, so selecting the analysis can pull its own
+    sources into the context as well.
+    """
+    document = request.document.strip()
+    if not document:
+        raise HTTPException(status_code=400, detail="Keine Gesamtantwort zum Speichern vorhanden.")
+    used = aggregate_sources(request.nodes, request.sources)
+    paper_ids = [str(src.get("paper_id")) for src in used if src.get("paper_id")]
+    source_id = f"grey_analysis_{re.sub(r'[^A-Za-z0-9_-]+', '', request.session_id or uuid.uuid4().hex)[:60]}"
+    with MetadataDB(request.metadata_db_path) as db:
+        saved = db.add_grey_source(request.project_id, {
+            "id": source_id,
+            "url": "",
+            "title": f"Tiefenanalyse: {request.root_question.strip()[:160]}",
+            "summary": _plain_summary(document),
+            "full_text": document[:FULL_TEXT_MAX_LEN],
+            "query": request.root_question.strip()[:400],
+            "source_kind": "analysis",
+            "origin_id": request.session_id or "",
+            "source_paper_ids": paper_ids,
+        })
+    return {"saved": saved, "paper_count": len(paper_ids)}
+
+
+def _plain_summary(document: str, limit: int = 400) -> str:
+    """First readable paragraph of the synthesis, without Markdown noise/citations."""
+    text = re.sub(r"\[[^\]]+\]", " ", document)
+    text = re.sub(r"[#*_`>|]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
 
 
 _CLARIFY_SYSTEM = (

@@ -6,6 +6,6 @@ Public API:
 """
 from __future__ import annotations
 
-from export.builder import ExportOptions, ExportResult, build_export
+from export.builder import ExportOptions, ExportResult, aggregate_sources, build_export
 
-__all__ = ["build_export", "ExportOptions", "ExportResult"]
+__all__ = ["build_export", "aggregate_sources", "ExportOptions", "ExportResult"]

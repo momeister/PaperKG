@@ -79,9 +79,9 @@ function loadStoredTheme(): Theme {
     return stored;
   }
   if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-    return "observatorium";
+    return "nacht";
   }
-  return "manuskript";
+  return "tag";
 }
 
 function loadStoredFontScale(): number {

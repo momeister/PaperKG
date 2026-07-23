@@ -323,13 +323,26 @@ class SchemaMixin(_Base):
                 evidence JSON,
                 injection_flags JSON,
                 status VARCHAR DEFAULT 'saved',
+                source_kind VARCHAR DEFAULT 'web',
+                origin_id VARCHAR,
+                source_paper_ids JSON,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Migrate older grey_sources tables that predate full-article capture.
+        # Migrate older grey_sources tables that predate full-article capture, and the
+        # later "internal sources" kinds: notes and deep-analysis syntheses are stored in
+        # the same table so they are citable as ``grey::…`` without a second pipeline.
+        # ``source_kind`` is web | note | analysis, ``origin_id`` points back to the note /
+        # analysis, ``source_paper_ids`` holds the papers that source itself was built from.
         self._add_missing_columns(
             "grey_sources",
-            {"full_text": "TEXT", "evidence": "JSON"},
+            {
+                "full_text": "TEXT",
+                "evidence": "JSON",
+                "source_kind": "VARCHAR",
+                "origin_id": "VARCHAR",
+                "source_paper_ids": "JSON",
+            },
         )
         self._execute("CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)")
 
@@ -354,6 +367,20 @@ class SchemaMixin(_Base):
                 project_id VARCHAR PRIMARY KEY,
                 payload JSON,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Rollierende Sicherungen der Workspace-Sessions. `workspace_sessions` hat genau
+        # eine Zeile pro Projekt und wurde bedingungslos ueberschrieben — ein Client, der
+        # (z. B. nach einem fehlgeschlagenen GET beim Start) eine leere History schickte,
+        # loeschte die Unterhaltung unwiederbringlich. Jeder Schreibvorgang legt jetzt
+        # vorher den bisherigen Stand hier ab; die letzten Staende bleiben erhalten.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS workspace_session_backups (
+                project_id VARCHAR,
+                saved_at TIMESTAMP,
+                payload JSON,
+                turn_count INTEGER
             )
         """)
 

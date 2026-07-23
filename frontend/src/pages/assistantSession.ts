@@ -64,7 +64,17 @@ export function slimTurnForPersist(turn: AssistantTurn): AssistantTurn {
   return { ...turn, researchNodes: nodes };
 }
 
-export function saveAssistantSession(projectId: string, session: { history: AssistantTurn[]; activeTurnId: string }) {
+/**
+ * Persist the session. `allowEmpty` guards the single most destructive case: a
+ * client that boots with an empty history (localStorage cleared or quota-dropped)
+ * used to PUT `{history: []}` over a perfectly good server copy and wipe the
+ * conversation. Only the explicit "delete session" action passes it.
+ */
+export function saveAssistantSession(
+  projectId: string,
+  session: { history: AssistantTurn[]; activeTurnId: string },
+  options: { allowEmpty?: boolean } = {}
+) {
   const payload = {
     history: session.history.slice(-25).map(slimTurnForPersist),
     activeTurnId: session.activeTurnId,
@@ -81,34 +91,54 @@ export function saveAssistantSession(projectId: string, session: { history: Assi
   if (existing !== undefined) {
     window.clearTimeout(existing);
   }
+  if (!payload.history.length && !options.allowEmpty) {
+    // Nothing worth sending — and sending it would overwrite the server copy.
+    return;
+  }
   serverSessionSaveTimers.set(
     projectId,
     window.setTimeout(() => {
       serverSessionSaveTimers.delete(projectId);
-      api.saveWorkspaceSession(projectId, payload).catch(() => {
+      api.saveWorkspaceSession(projectId, payload, options.allowEmpty === true).catch(() => {
         // Offline backend: the localStorage cache above still covers reloads.
       });
     }, 1200)
   );
 }
 
-/** Authoritative session from the backend; resolves null when none exists or offline. */
-export async function fetchAssistantSession(projectId: string): Promise<AssistantSession | null> {
+/**
+ * Authoritative session from the backend.
+ *
+ * The status is deliberately three-valued: "empty" (backend answered, no session)
+ * and "error" (backend unreachable — e.g. the Tauri sidecar is still booting) used
+ * to collapse into the same `null`, so a failed request looked like "there is no
+ * session" and the caller happily persisted an empty one over it.
+ */
+export type AssistantSessionFetch =
+  | { status: "ok"; session: AssistantSession }
+  | { status: "empty"; session: null }
+  | { status: "error"; session: null };
+
+export async function fetchAssistantSession(projectId: string): Promise<AssistantSessionFetch> {
+  let result: Awaited<ReturnType<typeof api.getWorkspaceSession>>;
   try {
-    const result = await api.getWorkspaceSession(projectId);
-    const payload = (result.payload ?? {}) as Partial<AssistantSession>;
-    const history = Array.isArray(payload.history) ? payload.history : [];
-    if (!history.length) {
-      return null;
-    }
-    return {
+    result = await api.getWorkspaceSession(projectId);
+  } catch {
+    return { status: "error", session: null };
+  }
+  const payload = (result.payload ?? {}) as Partial<AssistantSession>;
+  const history = Array.isArray(payload.history) ? payload.history : [];
+  if (!history.length) {
+    return { status: "empty", session: null };
+  }
+  return {
+    status: "ok",
+    session: {
       history,
       activeTurnId: payload.activeTurnId || history[history.length - 1]?.id || "",
       savedAt: Number(payload.savedAt) || 0
-    };
-  } catch {
-    return null;
-  }
+    }
+  };
 }
 
 export function loadNotes(projectId: string) {

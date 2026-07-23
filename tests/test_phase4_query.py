@@ -1487,6 +1487,44 @@ def test_answer_includes_project_grey_with_paper_filter_when_flag_set() -> None:
         assert "[grey::g_project]" in prompt
 
 
+def test_answer_cites_note_and_analysis_sources_like_web_sources() -> None:
+    # Veroeffentlichte Notizen und gespeicherte Tiefenanalysen liegen als grey_sources mit
+    # source_kind note/analysis in derselben Tabelle — sie muessen den Antwortpfad genauso
+    # als zitierbare [grey::…]-Evidenz erreichen wie ein Web-Fund.
+    with _phase4_fixture() as db_path:
+        db = MetadataDB(db_path)
+        try:
+            db.add_grey_source("proj1", {
+                "id": "grey_note_n1", "url": "", "title": "Meine Notiz",
+                "full_text": "Graph transformers speed up retrieval in my own experiments.",
+                "source_kind": "note", "origin_id": "n1", "source_paper_ids": ["p1"],
+            })
+            db.add_grey_source("proj1", {
+                "id": "grey_analysis_a1", "url": "", "title": "Tiefenanalyse: Graph transformer",
+                "full_text": "Die Analyse fasst Befunde zu graph transformer retrieval zusammen.",
+                "source_kind": "analysis", "origin_id": "a1", "source_paper_ids": ["p1", "p2"],
+            })
+        finally:
+            db.close()
+
+        fake_llm = FakeLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+        responder.answer(
+            "What uses graph transformer?",
+            paper_ids=["p1"],
+            project_id="proj1",
+            grey_source_ids=["grey_note_n1", "grey_analysis_a1"],
+            metadata_db_path=db_path,
+        )
+
+        prompt = fake_llm.calls[0]["messages"][1]["content"]
+        assert "[grey::grey_note_n1]" in prompt
+        assert "[grey::grey_analysis_a1]" in prompt
+
+
 class ApproxRegionPdfLLMRouter(FakeLLMRouter):
     def chat(self, messages, provider=None, overrides=None) -> str:
         self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})

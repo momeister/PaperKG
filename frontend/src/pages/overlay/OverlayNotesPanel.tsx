@@ -200,7 +200,8 @@ export function OverlayNotesPanel() {
     if (!currentNote) return;
     const switchedNote = loadedNoteIdRef.current !== currentNote.id;
     if (dirtyRef.current) return;
-    if (!switchedNote && title === currentNote.title && markdown === currentNote.markdown) return;
+    // Trimmed: ein gerade getipptes Leerzeichen am Titelende darf kein Neuladen ausloesen.
+    if (!switchedNote && title.trim() === currentNote.title && markdown === currentNote.markdown) return;
     loadedNoteIdRef.current = currentNote.id;
     loadedServerMarkdownRef.current = currentNote.markdown;
     setTitle(currentNote.title);
@@ -231,8 +232,11 @@ export function OverlayNotesPanel() {
     ) {
       return;
     }
+    // Wie im Desktop-Editor: normalisierten Titel zurückschreiben, aber nicht, wenn sich
+    // beide nur durch ein gerade getipptes Leerzeichen am Ende unterscheiden — sonst frisst
+    // jeder Tastendruck das Leerzeichen und ein mehrteiliger Titel ist unmöglich.
     const nextTitle = noteTitleForSave(title, markdown);
-    if (nextTitle !== title) setTitle(nextTitle);
+    if (nextTitle !== title && nextTitle !== title.trim()) setTitle(nextTitle);
     const handle = window.setTimeout(() => {
       saveNote.mutate({ noteId: activeNoteId, title: nextTitle, markdown });
     }, 1400);

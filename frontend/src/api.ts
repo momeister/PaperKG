@@ -204,15 +204,43 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url })
     }),
+  /** Notiz als zitierbare Projektquelle veroeffentlichen (Snapshot, idempotent je Notiz). */
+  saveNoteAsSource: (noteId: string) =>
+    request<{ saved: GreySource }>(`/notes/${encodeURIComponent(noteId)}/as-source`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  /** Fertige Tiefenanalyse als zitierbare Projektquelle speichern (inkl. ihrer Quell-Paper). */
+  saveResearchTreeAsSource: (payload: {
+    project_id: string;
+    root_question: string;
+    document: string;
+    nodes: unknown[];
+    sources?: unknown[];
+    session_id?: string;
+  }) =>
+    request<{ saved: GreySource; paper_count: number }>("/research/tree/as-source", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   getWorkspaceSession: (projectId: string) =>
     request<{ project_id: string; payload: Record<string, unknown>; updated_timestamp?: string | null }>(
       `/workspace/sessions/${encodeURIComponent(projectId)}`
     ),
-  saveWorkspaceSession: (projectId: string, payload: Record<string, unknown>) =>
+  saveWorkspaceSession: (projectId: string, payload: Record<string, unknown>, force = false) =>
     request<{ project_id: string; payload: Record<string, unknown> }>(`/workspace/sessions/${encodeURIComponent(projectId)}`, {
       method: "PUT",
-      body: JSON.stringify({ payload })
+      body: JSON.stringify({ payload, force })
     }),
+  listWorkspaceSessionBackups: (projectId: string) =>
+    request<{ project_id: string; backups: { saved_at: string; turn_count: number }[] }>(
+      `/workspace/sessions/${encodeURIComponent(projectId)}/backups`
+    ),
+  restoreWorkspaceSession: (projectId: string, savedAt?: string) =>
+    request<{ project_id: string; payload: Record<string, unknown> }>(
+      `/workspace/sessions/${encodeURIComponent(projectId)}/restore`,
+      { method: "POST", body: JSON.stringify({ saved_at: savedAt ?? null }) }
+    ),
   deletePaper: (paperId: string) =>
     request<{ deleted: boolean; file_deleted: boolean; id: string }>(`/papers/${encodeURIComponent(paperId)}`, { method: "DELETE" }),
   deleteGreySource: (greyId: string) =>

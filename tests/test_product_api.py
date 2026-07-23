@@ -397,6 +397,71 @@ def test_grey_source_from_url_rejects_non_http_scheme(tmp_path) -> None:
     assert response.status_code == 400
 
 
+def test_note_as_source_publishes_citable_snapshot(tmp_path) -> None:
+    # Eine Notiz wird als grey_source (source_kind=note) abgelegt und ist danach wie jede
+    # andere Quelle ueber [grey::<id>] zitierbar — inklusive der Paper ihrer Zitate.
+    db_path = tmp_path / "metadata.duckdb"
+    with MetadataDB(str(db_path)) as db:
+        note = db.create_note(project_id="demo", title="Meine Notiz", markdown="# Befund\n\nWichtiger Text.")
+        db.add_note_citation(str(note["id"]), {"paper_id": "arxiv:1234.5678", "title": "Paper"})
+    client = TestClient(product_main.app)
+
+    response = client.post(
+        f"/notes/{note['id']}/as-source",
+        json={"metadata_db_path": str(db_path)},
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["saved"]
+    assert saved["id"] == f"grey_note_{note['id']}"
+    assert saved["source_kind"] == "note"
+    assert saved["source_paper_ids"] == ["arxiv:1234.5678"]
+    assert "Wichtiger Text" in saved["full_text"]
+
+    # Erneutes Speichern aktualisiert den Snapshot, statt eine zweite Quelle anzulegen.
+    with MetadataDB(str(db_path)) as db:
+        db.update_note(str(note["id"]), markdown="# Befund\n\nAktualisierter Text.")
+    again = client.post(f"/notes/{note['id']}/as-source", json={"metadata_db_path": str(db_path)})
+    assert again.status_code == 200
+    with MetadataDB(str(db_path)) as db:
+        stored = db.list_grey_sources("demo", kind="note")
+    assert len(stored) == 1
+    assert "Aktualisierter Text" in stored[0]["full_text"]
+
+
+def test_research_tree_as_source_keeps_used_papers(tmp_path) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    client = TestClient(product_main.app)
+
+    response = client.post(
+        "/research/tree/as-source",
+        json={
+            "project_id": "demo",
+            "root_question": "Wie lernt das Gehirn?",
+            "document": "## Kapitel\n\nBefund [arxiv:1].",
+            "nodes": [
+                {"id": "r", "parent_id": None, "depth": 0, "question": "Wie lernt das Gehirn?",
+                 "answer": {"sources": [{"paper_id": "arxiv:1", "title": "A"}]}},
+                {"id": "c", "parent_id": "r", "depth": 1, "question": "Kapitel",
+                 "answer": {"sources": [{"paper_id": "arxiv:2", "title": "B"}]}},
+            ],
+            "sources": [{"paper_id": "arxiv:1", "title": "A"}],
+            "session_id": "sess-1",
+            "metadata_db_path": str(db_path),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["paper_count"] == 2
+    saved = payload["saved"]
+    assert saved["source_kind"] == "analysis"
+    assert sorted(saved["source_paper_ids"]) == ["arxiv:1", "arxiv:2"]
+    assert saved["title"].startswith("Tiefenanalyse:")
+    with MetadataDB(str(db_path)) as db:
+        assert len(db.list_grey_sources("demo", kind="analysis")) == 1
+
+
 def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "metadata.duckdb"
     pdf_dir = tmp_path / "pdfs"
@@ -1059,3 +1124,74 @@ def test_auto_answer_streams_sse_events(tmp_path, monkeypatch) -> None:
     assert captured["question"] == "What is X?"
     assert captured["force"] is True
     assert captured["max_related_topics"] == 3
+
+
+def test_workspace_session_survives_an_empty_overwrite(tmp_path) -> None:
+    """An empty history must never replace a real conversation.
+
+    A client that booted before the backend was reachable used to fall back to an
+    empty localStorage session and PUT that over the server copy, destroying it.
+    """
+    db_path = tmp_path / "sessions.duckdb"
+    with MetadataDB(str(db_path)):
+        pass
+    client = TestClient(product_main.app)
+    project = "Hirn und LLM"
+    payload = {
+        "history": [{"id": "t1", "question": "Wie lernt das Gehirn?"}, {"id": "t2", "question": "Und LLMs?"}],
+        "activeTurnId": "t2",
+        "savedAt": 1,
+    }
+
+    saved = client.put(
+        f"/workspace/sessions/{project}",
+        json={"payload": payload, "metadata_db_path": str(db_path)},
+    )
+    assert saved.status_code == 200
+
+    wiped = client.put(
+        f"/workspace/sessions/{project}",
+        json={"payload": {"history": [], "activeTurnId": "", "savedAt": 2}, "metadata_db_path": str(db_path)},
+    )
+    assert wiped.status_code == 200
+    assert len(wiped.json()["payload"]["history"]) == 2
+
+    still_there = client.get(f"/workspace/sessions/{project}", params={"metadata_db_path": str(db_path)})
+    assert len(still_there.json()["payload"]["history"]) == 2
+
+
+def test_workspace_session_backups_can_be_listed_and_restored(tmp_path) -> None:
+    db_path = tmp_path / "sessions.duckdb"
+    with MetadataDB(str(db_path)):
+        pass
+    client = TestClient(product_main.app)
+    project = "Backup-Projekt"
+
+    def put(history, force=False):
+        return client.put(
+            f"/workspace/sessions/{project}",
+            json={
+                "payload": {"history": history, "activeTurnId": "", "savedAt": 1},
+                "metadata_db_path": str(db_path),
+                "force": force,
+            },
+        )
+
+    assert put([{"id": "a"}, {"id": "b"}]).status_code == 200
+    assert put([{"id": "c"}]).status_code == 200
+
+    backups = client.get(
+        f"/workspace/sessions/{project}/backups", params={"metadata_db_path": str(db_path)}
+    ).json()["backups"]
+    assert [entry["turn_count"] for entry in backups] == [2]
+
+    # The explicit delete path may empty the session — and is itself backed up.
+    assert put([], force=True).status_code == 200
+    assert client.get(f"/workspace/sessions/{project}", params={"metadata_db_path": str(db_path)}).json()["payload"]["history"] == []
+
+    restored = client.post(
+        f"/workspace/sessions/{project}/restore",
+        json={"saved_at": None, "metadata_db_path": str(db_path)},
+    )
+    assert restored.status_code == 200
+    assert [turn["id"] for turn in restored.json()["payload"]["history"]] == ["c"]

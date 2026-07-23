@@ -7,8 +7,10 @@ export type LlmParams = {
   context_size?: number;
 };
 
-/** Die vier wählbaren Theme-Presets (siehe styles/themes.css). */
-export const THEMES = ["observatorium", "tiefsee", "manuskript", "laborlicht"] as const;
+/** Die wählbaren Theme-Presets (siehe styles/themes.css). "tag"/"nacht" sind die
+ *  schlichten Standardthemes und stehen deshalb vorn; die vier charaktervolleren
+ *  Presets bleiben als Alternativen erhalten. */
+export const THEMES = ["tag", "nacht", "observatorium", "tiefsee", "manuskript", "laborlicht"] as const;
 export type Theme = (typeof THEMES)[number];
 
 export type ThemeScheme = "dark" | "light";
@@ -16,6 +18,8 @@ export type ThemeScheme = "dark" | "light";
 /** Anzeige-Metadaten pro Theme; `counterpart` ist das Ziel des Hell/Dunkel-
  *  Schnellwechsels (behält den Charakter der Theme-Familie bei). */
 export const THEME_META: Record<Theme, { label: string; hint: string; scheme: ThemeScheme; counterpart: Theme }> = {
+  tag: { label: "Tag", hint: "Neutral hell", scheme: "light", counterpart: "nacht" },
+  nacht: { label: "Nacht", hint: "Neutral dunkel", scheme: "dark", counterpart: "tag" },
   observatorium: { label: "Observatorium", hint: "Tiefes Blau, Periwinkle", scheme: "dark", counterpart: "manuskript" },
   tiefsee: { label: "Tiefsee", hint: "Grün-Schiefer, Cyan", scheme: "dark", counterpart: "laborlicht" },
   manuskript: { label: "Manuskript", hint: "Warmes Papier, Petrol", scheme: "light", counterpart: "observatorium" },

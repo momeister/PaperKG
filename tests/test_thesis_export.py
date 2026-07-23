@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 
-from export import ExportOptions, build_export
+from export import ExportOptions, build_export, figures
 from export.latex_builder import (
     CitationIndex,
     build_bibfile,
@@ -54,6 +54,85 @@ NODES = [
     {"id": "c1a", "parent_id": "c1", "question": "Unterfrage 1a", "depth": 2, "chapter_question": "Kapitel Eins",
      "answer": {"answer": "z", "sources": [SOURCES[1]]}},
 ]
+
+
+# A tree exactly as the frontend posts it: the SSE events carry no ``chapter_question``
+# (that field only exists server-side), and the synthesis event rides along in the list.
+POSTED_NODES = [
+    {"id": "r", "parent_id": None, "question": "Hauptfrage", "depth": 0, "status": "done",
+     "answer": {"answer": "x", "sources": [SOURCES[0]]}},
+    {"id": "c1", "parent_id": "r", "question": "Kapitel Eins", "depth": 1, "status": "done",
+     "answer": {"answer": "y", "sources": [SOURCES[0]]}},
+    {"id": "c1a", "parent_id": "c1", "question": "Unterfrage 1a", "depth": 2, "status": "done",
+     "answer": {"answer": "z", "sources": [SOURCES[1]]}},
+    {"id": "c1b", "parent_id": "c1a", "question": "Unterfrage 1b", "depth": 3, "status": "done",
+     "answer": {"answer": "z", "sources": [SOURCES[0]]}},
+    {"id": "synthesis", "parent_id": None, "question": "Hauptfrage", "depth": 0,
+     "status": "synthesis", "answer": None, "document": "## Kapitel Eins\n\nText."},
+]
+
+
+def test_chapter_map_uses_parent_chain_not_chapter_question() -> None:
+    # Without chapter_question every sub-question used to become its own "chapter".
+    chapters = figures.chapter_map(POSTED_NODES)
+    assert chapters["c1"] == "Kapitel Eins"
+    assert chapters["c1a"] == "Kapitel Eins"
+    assert chapters["c1b"] == "Kapitel Eins"  # depth 3 still belongs to the depth-1 chapter
+    assert "r" not in chapters  # the root question is no chapter
+    assert "synthesis" not in chapters  # the synthesis event is not a tree node
+
+
+def test_overview_table_counts_subquestions_and_accumulated_sources() -> None:
+    table = figures.overview_table_latex(POSTED_NODES)
+    row = next(line for line in table.splitlines() if "Kapitel Eins" in line and "&" in line)
+    cells = [cell.strip() for cell in row.rstrip("\\").split("&")]
+    assert cells[2] == "2"  # two sub-questions (depth >= 2) below the chapter
+    assert cells[3] == "2"  # distinct sources accumulated over the whole subtree
+    # p-columns wrap instead of running past the page margin.
+    assert r"\raggedright\arraybackslash" in table
+
+
+def test_sources_table_breaks_long_ids() -> None:
+    long_id = "semantic_scholar:16cb4a482d0e00fb63886abcdef0123456789"
+    table = figures.sources_table_latex([{"paper_id": long_id, "title": "T", "year": 2024}])
+    assert r"\allowbreak{}" in table
+    assert r"\texttt{" in table
+    assert r"\raggedright\arraybackslash" in table
+
+
+def test_breakable_id_keeps_escapes_intact() -> None:
+    out = figures.breakable_id("grey::grey_5dda6fe4")
+    assert r"\_" in out  # underscore stays escaped, never split into a lone backslash
+    assert "\\allow" in out
+    assert "grey" in out
+
+
+def test_research_tree_forest_is_landscape_and_scaled() -> None:
+    tree = figures.research_tree_forest(POSTED_NODES)
+    assert r"\begin{landscape}" in tree
+    assert r"\resizebox{\linewidth}{!}" in tree
+    # text width/align only wrap when passed through node options — set directly in
+    # "for tree" forest ignores them and the labels run out of their boxes.
+    assert "node options={align=left, text width=" in tree
+    assert "align=flush left" not in tree  # aborts compilation together with the array pkg
+    # Only the chapter level is drawn; deeper questions go into the outline instead.
+    assert "Kapitel Eins" in tree and "Unterfrage 1a" not in tree
+
+
+def test_outline_lists_chapters_with_subquestions() -> None:
+    outline = figures.outline_latex(POSTED_NODES)
+    assert "Kapitel Eins" in outline
+    assert "Unterfrage 1a" in outline and "Unterfrage 1b" in outline
+
+
+def test_build_latex_document_loads_landscape_packages() -> None:
+    tex = build_latex_document(
+        title="T", body_latex="Body", has_bibliography=False, use_forest=True,
+        use_graphics=False, use_landscape=True, appendix_blocks=[r"\begin{landscape}\end{landscape}"],
+    )
+    assert r"\usepackage{pdflscape}" in tex
+    assert r"\usepackage{graphicx}" in tex  # \resizebox needs it even without images
+    assert r"\usepackage{array}" in tex and r"\usepackage{enumitem}" in tex
 
 
 def test_markdown_to_latex_body_sections_and_citations() -> None:

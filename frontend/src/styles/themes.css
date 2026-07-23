@@ -3,10 +3,87 @@
 /* color-scheme) — niemals Komponenten-Selektoren; die Aliases in styles.css  */
 /* (--surface-1, --accent-bg, --danger, …) lösen automatisch via var() auf.   */
 /*                                                                            */
-/* data-theme  = eines von: observatorium | tiefsee | manuskript | laborlicht */
+/* data-theme  = tag | nacht | observatorium | tiefsee | manuskript | laborlicht */
 /* data-scheme = dark | light (für die wenigen Scheme-Selektoren in styles.css)*/
 /* Legacy-Werte "dark"/"light" bleiben als Alias-Selektoren gültig.           */
 /* ------------------------------------------------------------------------- */
+
+/* --- Tag — schlichtes Standard-Hell: neutrales Grau/Weiß, blauer Akzent ---- */
+/* Anders als "Manuskript"/"Laborlicht" ist hier auch die Sidebar hell: ein   */
+/* Hell-Theme mit dunkler Navigation las sich wie ein halb umgesetzter Wechsel.*/
+:root[data-theme="tag"] {
+  color-scheme: light;
+  color: #1f242b;
+  --app-bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eef0f3;
+  --surface-hover: #e5e8ed;
+  --line: #dbdfe6;
+  --text: #1f242b;
+  --muted: #5f6874;
+  --blue: #2f6feb;
+  --accent: #2f6feb;
+  --accent-strong: #1f57c6;
+  --accent-contrast: #ffffff;
+  --accent-soft: #e6eefc;
+  --accent-2: #0f766e;
+  --accent-2-soft: rgba(15, 118, 110, 0.11);
+  --green: #16794f;
+  --amber: #8a5c05;
+  --red: #b3322c;
+  --ink: #12171d;
+  --shadow-soft: 0 1px 2px rgba(20, 27, 38, 0.07);
+  --shadow-pop: 0 12px 30px rgba(20, 27, 38, 0.16);
+  --sidebar-bg: #ffffff;
+  --sidebar-bg-2: #f4f5f7;
+  --sidebar-border: #dbdfe6;
+  --sidebar-text: #39414c;
+  --sidebar-muted: #6d7682;
+  --sidebar-hover: #e9edf2;
+  --sidebar-active: #dfe8fb;
+  --sidebar-active-border: #b3c8f2;
+  --sidebar-brand: #12171d;
+  --topbar-bg: #ffffff;
+}
+
+/* --- Nacht — schlichtes Standard-Dunkel: neutrales Anthrazit, blauer Akzent */
+:root[data-theme="nacht"] {
+  color-scheme: dark;
+  color: #e3e6ea;
+  --app-bg: #14161a;
+  --surface: #1c1f24;
+  --surface-2: #23272d;
+  --surface-hover: #2b3037;
+  --line: #31363e;
+  --text: #e3e6ea;
+  --muted: #9aa3ae;
+  --blue: #6f9dff;
+  --accent: #6f9dff;
+  --accent-strong: #5686f0;
+  --accent-contrast: #0e1116;
+  --accent-soft: #23304a;
+  --accent-2: #59c8bd;
+  --accent-2-soft: rgba(89, 200, 189, 0.14);
+  --green: #4cc38a;
+  --amber: #e0b45a;
+  --red: #f08a83;
+  --ink: #f2f5f8;
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 14px 34px rgba(0, 0, 0, 0.6);
+  --evidence-color: #6ea8fe;
+  --evidence-soft: rgba(110, 168, 254, 0.16);
+  --evidence-border: rgba(110, 168, 254, 0.42);
+  --sidebar-bg: #101216;
+  --sidebar-bg-2: #16191e;
+  --sidebar-border: #262b33;
+  --sidebar-text: #ccd3db;
+  --sidebar-muted: #8b939e;
+  --sidebar-hover: #22262d;
+  --sidebar-active: #2b3340;
+  --sidebar-active-border: #46536a;
+  --sidebar-brand: #f2f5f8;
+  --topbar-bg: #191c21;
+}
 
 /* --- Observatorium — Standard-Nacht: tiefes Blau-Ink, Periwinkle, Amber --- */
 :root[data-theme="observatorium"],
@@ -113,15 +190,17 @@
   --ink: #19242f;
   --shadow-soft: 0 1px 2px rgba(58, 48, 30, 0.08);
   --shadow-pop: 0 12px 30px rgba(58, 48, 30, 0.18);
-  --sidebar-bg: #141e2a;
-  --sidebar-bg-2: #1c2836;
-  --sidebar-border: #0e161f;
-  --sidebar-text: #d3dbe6;
-  --sidebar-muted: #91a0b0;
-  --sidebar-hover: #263443;
-  --sidebar-active: #2d3e51;
-  --sidebar-active-border: #47617c;
-  --sidebar-brand: #f4f7fb;
+  /* Sidebar hell im Papier-Ton: die frueher dunkelblaue Navigation las sich in
+     einem Hell-Theme wie ein halb umgesetzter Wechsel. */
+  --sidebar-bg: #f7f4ec;
+  --sidebar-bg-2: #fcfbf7;
+  --sidebar-border: #dcd4c2;
+  --sidebar-text: #3c4550;
+  --sidebar-muted: #7b8490;
+  --sidebar-hover: #ece5d7;
+  --sidebar-active: #dfecec;
+  --sidebar-active-border: #a9cbcd;
+  --sidebar-brand: #19242f;
   --topbar-bg: #fcfbf7;
 }
 

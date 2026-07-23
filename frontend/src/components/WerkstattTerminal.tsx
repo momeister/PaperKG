@@ -1,9 +1,13 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
+import type { ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
 import { isTauri, nativeInvoke, nativeListen } from "../native";
+import { THEME_META, useOptionalAppState } from "../state";
+import type { TerminalAppearance } from "./terminalTheme";
+import { resolveTerminalScheme, TERMINAL_PALETTES } from "./terminalTheme";
 
 // Embedded PTY terminal (the "Agent" half of the Code-Werkstatt). Runs a real
 // shell in the project folder via the Rust portable-pty backend, so AI coding
@@ -20,12 +24,21 @@ import { isTauri, nativeInvoke, nativeListen } from "../native";
 export function WerkstattTerminal({
   cwd,
   active = true,
+  appearance = "auto",
   onOutput,
 }: {
   cwd: string;
   active?: boolean;
+  /** Terminal-Aussehen: dem App-Theme folgen oder fest hell/dunkel. */
+  appearance?: TerminalAppearance;
   onOutput?: (text: string) => void;
 }) {
+  const appTheme = useOptionalAppState()?.theme;
+  const appScheme = appTheme ? THEME_META[appTheme].scheme : "dark";
+  const palette: ITheme = TERMINAL_PALETTES[resolveTerminalScheme(appearance, appScheme)];
+  // Ohne Ref läge im Spawn-Effekt (Deps: nur `cwd`) eine veraltete Palette.
+  const paletteRef = useRef(palette);
+  paletteRef.current = palette;
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -41,7 +54,7 @@ export function WerkstattTerminal({
       fontSize: 13,
       fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
       cursorBlink: true,
-      theme: { background: "#1e1e1e" },
+      theme: paletteRef.current,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -115,6 +128,14 @@ export function WerkstattTerminal({
       termIdRef.current = null;
     };
   }, [cwd]);
+
+  // Theme-/Einstellungswechsel färbt das laufende Terminal um, ohne die PTY neu
+  // zu spawnen (der Effekt oben hängt bewusst weiterhin nur an `cwd`).
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = palette;
+  }, [palette]);
 
   // When this tab becomes visible again, re-fit (a hidden xterm has zero size)
   // and focus it.

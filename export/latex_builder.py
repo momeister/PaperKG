@@ -259,6 +259,7 @@ def build_latex_document(
     use_graphics: bool,
     appendix_blocks: Iterable[str] = (),
     unicode_engine: bool = False,
+    use_landscape: bool = False,
 ) -> str:
     """Assemble the full ``.tex`` source (preamble, title page, ToC, body, appendix).
 
@@ -288,6 +289,10 @@ def build_latex_document(
         r"\usepackage{microtype}",
         r"\usepackage{booktabs}",
         r"\usepackage{longtable}",
+        # array = >{\raggedright\arraybackslash} column prefixes (tables wrap instead of
+        # running past the margin); enumitem = compact outline lists.
+        r"\usepackage{array}",
+        r"\usepackage{enumitem}",
         r"\usepackage{float}",
         r"\usepackage[hidelinks]{hyperref}",
     ]
@@ -295,6 +300,12 @@ def build_latex_document(
         packages.append(r"\usepackage{graphicx}")
     if use_forest:
         packages.append(r"\usepackage{forest}")
+    if use_landscape:
+        # The research tree lives on its own landscape page and is scaled to the line
+        # width — \resizebox needs graphicx even when no image is included.
+        packages.append(r"\usepackage{pdflscape}")
+        if not use_graphics:
+            packages.append(r"\usepackage{graphicx}")
     if has_bibliography:
         packages.append(r"\usepackage[backend=bibtex,style=numeric,sorting=none]{biblatex}")
         packages.append(r"\addbibresource{refs.bib}")

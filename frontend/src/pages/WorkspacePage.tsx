@@ -86,6 +86,7 @@ import { ParallelResultsTab } from "./ParallelResultsTab";
 import {
   AnswerText,
   answerLimitFor,
+  bulletQuote,
   citationContext,
   citationMetasFor,
   citationSegmentFromParts,
@@ -206,6 +207,13 @@ export function WorkspacePage() {
   const scopeLabel = projectScopeLabel(activeProject);
   const queryClient = useQueryClient();
   const assistantScopeRef = useRef(scopedProjectId);
+  // Erst speichern, wenn die Server-Session gelesen wurde. Ohne dieses Gate schrieb
+  // ein Start vor erreichbarem Backend die (leere) localStorage-History zurueck und
+  // loeschte die Unterhaltung serverseitig.
+  const sessionHydratedRef = useRef(false);
+  const [sessionLoadFailed, setSessionLoadFailed] = useState(false);
+  // Nach einem Restore aus einer Sicherung die Hydrierung erneut anstoßen.
+  const [sessionReloadNonce, setSessionReloadNonce] = useState(0);
   const notesActionsRef = useRef<NotesSurfaceActions | null>(null);
   const pageRef = useRef<HTMLElement | null>(null);
   const pdfCitationResizeFrameRef = useRef<number | null>(null);
@@ -954,6 +962,8 @@ export function WorkspacePage() {
 
   useEffect(() => {
     assistantScopeRef.current = scopedProjectId;
+    sessionHydratedRef.current = false;
+    setSessionLoadFailed(false);
     const session = loadAssistantSession(scopedProjectId);
     setHistory(session.history);
     setActiveTurnId(session.activeTurnId);
@@ -978,43 +988,67 @@ export function WorkspacePage() {
     parallelSessionIdRef.current = "";
     setParallelMode(restoredActiveTurnFor(scopedProjectId)?.type === "parallel");
     // The backend copy is authoritative: localStorage drops large sessions silently
-    // (quota), so reloads must restore the conversation from the server.
+    // (quota), so reloads must restore the conversation from the server. Until that
+    // read has succeeded we must not write anything back (sessionHydratedRef) — an
+    // unreachable backend at boot otherwise looked like "no session" and the empty
+    // local state was persisted over the real one.
     let cancelled = false;
-    void fetchAssistantSession(scopedProjectId).then((server) => {
-      if (cancelled || !server || assistantScopeRef.current !== scopedProjectId) {
-        return;
-      }
-      if (!session.history.length || (server.savedAt ?? 0) >= (session.savedAt ?? 0)) {
-        setHistory(server.history);
-        setActiveTurnId(server.activeTurnId);
-        // Hydrate the deep-analysis view from the authoritative server copy: localStorage
-        // can silently drop the (large) research nodes on quota, so the live researchNodes
-        // state — initialised synchronously from localStorage — would otherwise stay empty
-        // even when the server has the full tree. This is what made reopened analyses blank.
-        const activeId = server.activeTurnId || server.history[server.history.length - 1]?.id;
-        const activeTurn = server.history.find((t) => t.id === activeId);
-        if (activeTurn?.type === "research_tree") {
-          const restoredNodes = activeTurn.researchNodes ?? [];
-          setDeepMode(true);
-          setResearchNodes(restoredNodes);
-          researchNodesRef.current = restoredNodes;
-          researchSessionIdRef.current = activeTurn.id;
-          if (!restoredNodes.length) hydrateResearchSessionFromServer(activeTurn.id);
-        } else if (activeTurn?.type === "parallel") {
-          setParallelMode(true);
-          parallelSessionIdRef.current = activeTurn.id;
-          hydrateParallelSessionFromServer(activeTurn.id);
+    let retryTimer = 0;
+    const hydrate = (attempt: number) => {
+      void fetchAssistantSession(scopedProjectId).then((result) => {
+        if (cancelled || assistantScopeRef.current !== scopedProjectId) {
+          return;
         }
-      }
-    });
+        if (result.status === "error") {
+          // Backend noch nicht erreichbar (z. B. Tauri-Sidecar bootet): erneut versuchen
+          // und bis dahin nichts speichern.
+          if (attempt < 3) {
+            retryTimer = window.setTimeout(() => hydrate(attempt + 1), 1000 * 3 ** attempt);
+          } else {
+            setSessionLoadFailed(true);
+          }
+          return;
+        }
+        sessionHydratedRef.current = true;
+        setSessionLoadFailed(false);
+        const server = result.session;
+        if (!server) {
+          return;
+        }
+        if (!session.history.length || (server.savedAt ?? 0) >= (session.savedAt ?? 0)) {
+          setHistory(server.history);
+          setActiveTurnId(server.activeTurnId);
+          // Hydrate the deep-analysis view from the authoritative server copy: localStorage
+          // can silently drop the (large) research nodes on quota, so the live researchNodes
+          // state — initialised synchronously from localStorage — would otherwise stay empty
+          // even when the server has the full tree. This is what made reopened analyses blank.
+          const activeId = server.activeTurnId || server.history[server.history.length - 1]?.id;
+          const activeTurn = server.history.find((t) => t.id === activeId);
+          if (activeTurn?.type === "research_tree") {
+            const restoredNodes = activeTurn.researchNodes ?? [];
+            setDeepMode(true);
+            setResearchNodes(restoredNodes);
+            researchNodesRef.current = restoredNodes;
+            researchSessionIdRef.current = activeTurn.id;
+            if (!restoredNodes.length) hydrateResearchSessionFromServer(activeTurn.id);
+          } else if (activeTurn?.type === "parallel") {
+            setParallelMode(true);
+            parallelSessionIdRef.current = activeTurn.id;
+            hydrateParallelSessionFromServer(activeTurn.id);
+          }
+        }
+      });
+    };
+    hydrate(0);
     return () => {
       cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopedProjectId]);
+  }, [scopedProjectId, sessionReloadNonce]);
 
   useEffect(() => {
-    if (assistantScopeRef.current === scopedProjectId) {
+    if (assistantScopeRef.current === scopedProjectId && sessionHydratedRef.current) {
       saveAssistantSession(scopedProjectId, { history, activeTurnId });
     }
   }, [activeTurnId, history, scopedProjectId]);
@@ -1104,7 +1138,7 @@ export function WorkspacePage() {
       pdf_excerpt: source.url,
       evidence_index: 0
     };
-    const markdown = `> ${quote.replace(/\n+/g, "\n> ")}\n\nQuelle: [Z1 - ${label}](sciencekg://citation/${citation.id}) (${source.url})`;
+    const markdown = `${bulletQuote(quote)}\n\nQuelle: [Z1 - ${label}](sciencekg://citation/${citation.id}) (${source.url})`;
     notesActionsRef.current?.clearInsertPreview();
     void appendToActiveNote(markdown, [citation]);
   }
@@ -1115,7 +1149,7 @@ export function WorkspacePage() {
       return;
     }
     const label = source.title || source.url;
-    notesActionsRef.current?.previewAppendMarkdown(`> ${quote.replace(/\n+/g, "\n> ")}\n\nQuelle: [Z1 - ${label}](sciencekg://citation/preview) (${source.url})`);
+    notesActionsRef.current?.previewAppendMarkdown(`${bulletQuote(quote)}\n\nQuelle: [Z1 - ${label}](sciencekg://citation/preview) (${source.url})`);
   }
 
   function verbosityInstruction(v: typeof verbosity) {
@@ -1970,6 +2004,43 @@ export function WorkspacePage() {
     await appendToActiveNote(markdown);
   }
 
+  /** Die fertige Tiefenanalyse als zitierbare Projektquelle ablegen — inklusive der
+   *  Paper, auf denen sie beruht (die landen in source_paper_ids und werden beim
+   *  Auswaehlen der Analyse mit in den Frage-Kontext gezogen). */
+  async function saveResearchTreeAsSource() {
+    const synthesisNode = researchNodes.find((n) => n.status === "synthesis");
+    const treeNodes = researchNodes.filter((n) => n.status !== "synthesis");
+    if (!synthesisNode?.document || !isRealProject) {
+      throw new Error(
+        !isRealProject
+          ? "Quellen lassen sich nur in einem echten Projekt speichern."
+          : "Es gibt noch keine Gesamtantwort zum Speichern."
+      );
+    }
+    const rootQuestion = treeNodes.find((n) => n.depth === 0)?.question ?? synthesisNode.question ?? "Tiefenanalyse";
+    const seen = new Set<string>();
+    const sources: VerificationSource[] = [];
+    for (const node of treeNodes) {
+      for (const source of node.verification ?? []) {
+        if (!seen.has(source.paper_id)) {
+          seen.add(source.paper_id);
+          sources.push(source);
+        }
+      }
+    }
+    const result = await api.saveResearchTreeAsSource({
+      project_id: activeProject as string,
+      root_question: rootQuestion,
+      document: synthesisNode.document,
+      nodes: researchNodes,
+      sources,
+      session_id: activeTurnId || undefined,
+    });
+    queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+    logAction("Analyse als Quelle gespeichert", `„${rootQuestion}" ist jetzt zitierbar (${result.paper_count} Quell-Paper).`);
+    return result;
+  }
+
   function openAssistantSource(source: VerificationSource | null, evidenceIndex = 0, quote = "", options: { openPdf?: boolean; syncPdfTarget?: boolean } = {}) {
     setSelectedAnswerQuote(null);
     if (!source) {
@@ -2326,7 +2397,7 @@ export function WorkspacePage() {
       citations.push(citation);
       entries.push({ source: meta.source, evidenceIndex: meta.evidenceIndex, citationId: String(citation.id) });
     }
-    const markdown = entries.length ? formatNoteQuoteMulti(quoteText, entries) : `> ${quoteText}`;
+    const markdown = entries.length ? formatNoteQuoteMulti(quoteText, entries) : bulletQuote(quoteText);
     return { markdown, citations };
   }
 
@@ -2754,7 +2825,25 @@ export function WorkspacePage() {
   }
 
   function toggleScopedGrey(greyId: string) {
-    setSelectedGreyIds((current) => (current.includes(greyId) ? current.filter((item) => item !== greyId) : [...current, greyId]));
+    const wasSelected = selectedGreyIds.includes(greyId);
+    setSelectedGreyIds((current) => (wasSelected ? current.filter((item) => item !== greyId) : [...current, greyId]));
+    // Eine Notiz-/Analyse-Quelle bringt die Paper mit, auf denen sie beruht: beim Anhaken
+    // kommen sie in die Auswahl, beim Abwaehlen wieder heraus — es sei denn, eine andere
+    // ausgewaehlte Quelle beansprucht sie ebenfalls.
+    const derived = (greySources.find((item) => item.id === greyId)?.source_paper_ids ?? []).filter(Boolean);
+    if (!derived.length) {
+      return;
+    }
+    if (!wasSelected) {
+      setSelectedPaperIds((papers) => Array.from(new Set([...papers, ...derived])));
+      return;
+    }
+    const stillClaimed = new Set(
+      greySources
+        .filter((item) => item.id !== greyId && selectedGreyIds.includes(item.id))
+        .flatMap((item) => item.source_paper_ids ?? [])
+    );
+    setSelectedPaperIds((papers) => papers.filter((paperId) => !derived.includes(paperId) || stillClaimed.has(paperId)));
   }
 
   async function appendToActiveNote(markdown: string, citations: Record<string, unknown>[] = []) {
@@ -2837,7 +2926,12 @@ export function WorkspacePage() {
     }
     setHistory((current) => {
       const next = current.filter((item) => item.id !== turnId);
-      saveAssistantSession(scopedProjectId, { history: next, activeTurnId: activeTurnId === turnId ? (next[0]?.id ?? "") : activeTurnId });
+      // Ausdrueckliches Loeschen darf als einziger Pfad eine leere History speichern.
+      saveAssistantSession(
+        scopedProjectId,
+        { history: next, activeTurnId: activeTurnId === turnId ? (next[0]?.id ?? "") : activeTurnId },
+        { allowEmpty: true }
+      );
       return next;
     });
     if (activeTurnId === turnId) {
@@ -3090,6 +3184,12 @@ export function WorkspacePage() {
               <span>Daten</span>
             </button>
           </div>
+          {sessionLoadFailed ? (
+            <div className="status-strip status-strip--error">
+              <strong>Sitzung nicht geladen</strong>
+              <span>Backend nicht erreichbar — es wird nichts gespeichert, bis die Verbindung steht.</span>
+            </div>
+          ) : null}
           <WorkspaceNavigatorBody
             tab={navigatorTab}
             query={navigatorQuery}
@@ -3110,6 +3210,8 @@ export function WorkspacePage() {
             pdfCitationListHeight={pdfCitationListHeight}
             sessions={history}
             activeSessionId={activeTurnId}
+            sessionProjectId={scopedProjectId}
+            onSessionRestored={() => setSessionReloadNonce((current) => current + 1)}
             onCreateNote={() => notesActionsRef.current?.createNote()}
             onSelectNote={(noteId) => {
               setControlledNoteId(noteId);
@@ -3385,6 +3487,7 @@ export function WorkspacePage() {
                 runExtractionCommand,
                 saveGreyMutation,
                 saveResearchTreeToNotes,
+                saveResearchTreeAsSource,
                 scopedProjectId,
                 selectedGreyIds,
                 selectedPaperIds,

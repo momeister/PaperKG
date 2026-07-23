@@ -505,6 +505,12 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(page.locator(".workspace-notes-pane")).toBeVisible();
   await page.getByRole("button", { name: "Neu" }).click();
   await expect(page.getByPlaceholder("Titel")).toHaveValue("Neue Notiz");
+  // Regression: Der Autosave hat den Titel bei jedem Tastendruck getrimmt — ein Leerzeichen
+  // verschwand sofort wieder und ein mehrteiliger Titel war unmoeglich.
+  const noteTitleInput = page.getByPlaceholder("Titel");
+  await noteTitleInput.fill("Meine");
+  await noteTitleInput.pressSequentially(" neue Notiz");
+  await expect(noteTitleInput).toHaveValue("Meine neue Notiz");
   const editor = page.getByPlaceholder("Markdown schreiben");
   await editor.fill("Alpha");
   await editor.press("Control+A");
@@ -520,8 +526,13 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await editor.press("Enter");
   await expect(editor).toHaveValue("- erster Punkt\n- ");
   await page.getByRole("button", { name: "Preview" }).click();
+  // Preview-Bearbeitung laeuft ueber einen Roh-Markdown-Editor: Doppelklick auf den Block
+  // oeffnet eine Textarea, Ctrl+Enter uebernimmt (verlustfrei, kein DOM-Serializer).
   const previewBlock = page.locator(".editable-preview-block").first();
-  await previewBlock.fill("Direkt in Preview");
+  await previewBlock.dblclick();
+  const blockEditor = page.locator("textarea.preview-block-editor");
+  await blockEditor.fill("- Direkt in Preview");
+  await blockEditor.press("Control+Enter");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(editor).toHaveValue("- Direkt in Preview");
   const formattedMarkdown =
@@ -540,10 +551,13 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(page.locator(".markdown-preview", { hasText: "Live Split" })).toBeVisible();
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.getByRole("button", { name: "Fett" })).toBeVisible();
+  // Selten gebrauchte Werkzeuge liegen im Ueberlauf-Menue der Toolbar.
+  await page.getByRole("button", { name: "Weitere Werkzeuge" }).click();
   const spellButton = page.getByRole("button", { name: "Rechtschreibkontrolle ausschalten" });
   await expect(spellButton).toHaveAttribute("aria-pressed", "true");
   await spellButton.click();
   await expect(page.getByRole("button", { name: "Rechtschreibkontrolle einschalten" })).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Escape");
 
   // Import/Extraktion leben jetzt als Stufen im Forschung-Hub: Sidebar-Link
   // "Forschung", dann der Pipeline-Knoten der Stufe.

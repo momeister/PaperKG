@@ -89,6 +89,12 @@ export type GreySource = {
   evidence?: string[];
   injection_flags: string[];
   status?: string;
+  /** "web" (Fund aus dem Netz), "note" (veroeffentlichte Notiz) oder "analysis" (Tiefenanalyse). */
+  source_kind?: string;
+  /** Notiz-/Session-ID, aus der die Quelle erzeugt wurde. */
+  origin_id?: string | null;
+  /** Paper, auf denen diese Quelle selbst beruht (Analyse/Notiz-Zitate). */
+  source_paper_ids?: string[];
   created_timestamp?: string;
 };
 
@@ -109,6 +115,7 @@ export type Paper = {
   year?: number | null;
   doi?: string | null;
   pdf_url?: string | null;
+  landing_page_url?: string | null;
   has_full_text?: boolean;
   latest_extraction_status?: string | null;
   project_ids?: string[];

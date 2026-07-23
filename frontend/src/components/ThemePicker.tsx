@@ -7,6 +7,8 @@ import type { Theme } from "../state";
 /** Reine Präsentation: drei Farbtupfer (Hintergrund/Fläche/Akzent) je Theme,
  *  damit die Karten ohne Theme-Wechsel eine Vorschau zeigen. */
 const THEME_SWATCHES: Record<Theme, [string, string, string]> = {
+  tag: ["#f4f5f7", "#ffffff", "#2f6feb"],
+  nacht: ["#14161a", "#1c1f24", "#6f9dff"],
   observatorium: ["#0b1020", "#131a30", "#8b9cf5"],
   tiefsee: ["#0a1514", "#10201d", "#45c4d0"],
   manuskript: ["#f2efe7", "#fcfbf7", "#14697b"],

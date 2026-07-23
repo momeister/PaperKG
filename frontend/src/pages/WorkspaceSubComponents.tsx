@@ -1,7 +1,7 @@
 // Standalone, prop-driven sub-components extracted from WorkspacePage.tsx (they
 // close over no parent state). Kept together because they reference each other
 // (navigator uses PaneHeading/CollapsedPane).
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChangeEvent,
   ClipboardEvent as ReactClipboardEvent,
@@ -28,6 +28,7 @@ import {
   GitBranch,
   GitMerge,
   Globe,
+  History,
   Link2,
   ListChecks,
   Database,
@@ -379,6 +380,14 @@ export function WorkspaceNotesAssistant({
 }
 
 
+/** Abschnitte der Quellen-Navigation, die aus ``grey_sources`` gespeist werden. */
+const GREY_SECTIONS = [
+  { kind: "web", key: "grey", label: "Graue Quellen", badge: "Grauquelle", deleteTitle: "Grauquelle löschen" },
+  { kind: "note", key: "grey-notes", label: "Notiz-Quellen", badge: "Notiz", deleteTitle: "Notiz-Quelle entfernen (Notiz bleibt erhalten)" },
+  { kind: "analysis", key: "grey-analyses", label: "Analyse-Quellen", badge: "Tiefenanalyse", deleteTitle: "Analyse-Quelle entfernen (Analyse bleibt erhalten)" },
+] as const;
+
+
 export function WorkspaceNavigatorBody({
   tab,
   query,
@@ -400,6 +409,8 @@ export function WorkspaceNavigatorBody({
   greySourceListHeight,
   sessions,
   activeSessionId,
+  sessionProjectId,
+  onSessionRestored,
   onCreateNote,
   onSelectNote,
   onOpenCitation,
@@ -440,6 +451,8 @@ export function WorkspaceNavigatorBody({
   greySourceListHeight: number;
   sessions: AssistantTurn[];
   activeSessionId: string;
+  sessionProjectId: string;
+  onSessionRestored: () => void;
   onCreateNote: () => void;
   onSelectNote: (noteId: string) => void;
   onOpenCitation: (citation: NoteCitation) => void;
@@ -462,6 +475,8 @@ export function WorkspaceNavigatorBody({
 }) {
   // Collapsible sections keep the PDFs tab tidy when many sources pile up.
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  // Eine aufgeklappte Notizquelle zeigt den vollen Beleg statt der einzeiligen Kurzfassung.
+  const [expandedCitationId, setExpandedCitationId] = useState("");
   const sectionCollapsed = (key: string) => collapsedSections[key] === true;
   const toggleSection = (key: string) => setCollapsedSections((current) => ({ ...current, [key]: !current[key] }));
   if (tab === "notes") {
@@ -559,32 +574,52 @@ export function WorkspaceNavigatorBody({
         {!sectionCollapsed("citations") ? (
           <>
             <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: pdfCitationListHeight }}>
-              {citations.map(({ citation, badge, title, evidence }, index) => (
-                <div
-                  className={`list-row note-citation-row workspace-nav-actionable-row ${activeCitationId === citation.id ? "note-citation-row--active list-row--active" : ""}`}
-                  key={citation.id}
-                  style={colorVarsForPaperId(citation.paper_id, Number(citation.evidence_index ?? index))}
-                >
-                  <button className="note-citation-row__body" type="button" onClick={() => onOpenCitation(citation)}>
-                    <span className="note-citation-row__title">
-                      <span className="citation-badge">{badge}</span>
-                      <strong>{title}</strong>
-                    </span>
-                    <span>{evidence || citation.paper_id}</span>
-                  </button>
-                  <button
-                    className="icon-button nav-delete-btn"
-                    type="button"
-                    title="Notizquelle löschen (Notiztext bleibt erhalten)"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDeleteCitation(citation);
-                    }}
+              {citations.map(({ citation, badge, title, evidence }, index) => {
+                const expanded = expandedCitationId === citation.id;
+                const fullText = citation.reference_text || citation.pdf_excerpt || evidence || citation.paper_id;
+                return (
+                  <div
+                    className={`list-row note-citation-row workspace-nav-actionable-row ${expanded ? "note-citation-row--expanded" : ""} ${activeCitationId === citation.id ? "note-citation-row--active list-row--active" : ""}`}
+                    key={citation.id}
+                    style={colorVarsForPaperId(citation.paper_id, Number(citation.evidence_index ?? index))}
                   >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
+                    <button className="note-citation-row__body" type="button" onClick={() => onOpenCitation(citation)}>
+                      <span className="note-citation-row__title">
+                        <span className="citation-badge">{badge}</span>
+                        <strong>{title}</strong>
+                      </span>
+                      <span className={expanded ? "note-citation-row__text note-citation-row__text--full" : "note-citation-row__text"}>
+                        {expanded ? fullText : evidence || citation.paper_id}
+                      </span>
+                    </button>
+                    <span className="workspace-row-actions" onClick={(event) => event.stopPropagation()}>
+                      <button
+                        className="icon-button nav-action-btn"
+                        type="button"
+                        title={expanded ? "Beleg einklappen" : "Vollen Beleg anzeigen"}
+                        aria-expanded={expanded}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setExpandedCitationId(expanded ? "" : citation.id);
+                        }}
+                      >
+                        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      </button>
+                      <button
+                        className="icon-button nav-delete-btn"
+                        type="button"
+                        title="Notizquelle löschen (Notiztext bleibt erhalten)"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteCitation(citation);
+                        }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
               {!citations.length ? <div className="muted-row">Keine Quellen in der aktiven Notiz</div> : null}
             </div>
             <div className="workspace-list-resize-handle" role="separator" aria-label="Notizquellen Hoehe anpassen" onPointerDown={onResizeCitationList} />
@@ -662,70 +697,81 @@ export function WorkspaceNavigatorBody({
           {!papers.length ? <EmptyState title={papersLoading ? "Lade PDFs" : "Keine PDFs"} /> : null}
         </div>
         ) : null}
-        {greySources.length ? (
-          <>
-            <button className="workspace-nav-subheading workspace-nav-subheading--toggle" type="button" onClick={() => toggleSection("grey")}>
-              <span>Graue Quellen</span>
-              <strong>{greySources.length}</strong>
-              {sectionCollapsed("grey") ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-            </button>
-            {!sectionCollapsed("grey") ? (
-            <>
-            <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: greySourceListHeight }}>
-              {greySources.map((source) => {
-                const isActiveGrey = pdfTarget?.kind === "grey" && pdfTarget.source.id === source.id;
-                const selectedForScope = selectedGreyIds.includes(source.id);
-                return (
-                  <div
-                    className={`list-row workspace-paper-row workspace-grey-row workspace-nav-actionable-row ${isActiveGrey ? "workspace-paper-row--active-source list-row--active" : ""}`}
-                    key={source.id}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Graue Quelle ${source.title || source.url} öffnen`}
-                    onClick={() => onOpenGrey(source)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        onOpenGrey(source);
-                      }
-                    }}
-                  >
-                    <label className="workspace-paper-select" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={selectedForScope}
-                        aria-label={`${source.title || source.url} auswaehlen`}
-                        onChange={() => onToggleScopedGrey(source.id)}
-                      />
-                    </label>
-                    <div className="workspace-paper-main" title={source.title || source.url}>
-                      <strong>{source.title || source.url}</strong>
-                      <span>
-                        <span className="grey-badge grey-badge--mini">Grauquelle</span>
-                        {source.url}
-                      </span>
-                    </div>
-                    {isRealProject ? (
-                      <span className="workspace-row-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-                        <button
-                          className="icon-button nav-delete-btn"
-                          type="button"
-                          title="Grauquelle löschen"
-                          onClick={() => onDeleteGrey(source.id)}
+        {/* Web-Funde, veroeffentlichte Notizen und gespeicherte Tiefenanalysen liegen in
+            derselben Tabelle (grey_sources) und sind alle als [grey::…] zitierbar — hier
+            werden sie nach Herkunft getrennt aufgelistet. */}
+        {GREY_SECTIONS.map(({ kind, key, label, badge, deleteTitle }) => {
+          const items = greySources.filter((source) => (source.source_kind || "web") === kind);
+          if (!items.length) {
+            return null;
+          }
+          return (
+            <Fragment key={key}>
+              <button className="workspace-nav-subheading workspace-nav-subheading--toggle" type="button" onClick={() => toggleSection(key)}>
+                <span>{label}</span>
+                <strong>{items.length}</strong>
+                {sectionCollapsed(key) ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+              </button>
+              {!sectionCollapsed(key) ? (
+                <>
+                  <div className="list workspace-nav-list workspace-nav-list--short" style={{ maxHeight: greySourceListHeight }}>
+                    {items.map((source) => {
+                      const isActiveGrey = pdfTarget?.kind === "grey" && pdfTarget.source.id === source.id;
+                      const selectedForScope = selectedGreyIds.includes(source.id);
+                      const derivedCount = source.source_paper_ids?.length ?? 0;
+                      const subtitle = source.url || (derivedCount ? `${derivedCount} zugrundeliegende Paper` : source.summary || "");
+                      return (
+                        <div
+                          className={`list-row workspace-paper-row workspace-grey-row workspace-nav-actionable-row ${isActiveGrey ? "workspace-paper-row--active-source list-row--active" : ""}`}
+                          key={source.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`${label} ${source.title || source.url} öffnen`}
+                          onClick={() => onOpenGrey(source)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              onOpenGrey(source);
+                            }
+                          }}
                         >
-                          <Trash2 size={12} />
-                        </button>
-                      </span>
-                    ) : null}
+                          <label className="workspace-paper-select" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedForScope}
+                              aria-label={`${source.title || source.url} auswaehlen`}
+                              onChange={() => onToggleScopedGrey(source.id)}
+                            />
+                          </label>
+                          <div className="workspace-paper-main" title={source.title || source.url}>
+                            <strong>{source.title || source.url}</strong>
+                            <span>
+                              <span className="grey-badge grey-badge--mini">{badge}</span>
+                              {subtitle}
+                            </span>
+                          </div>
+                          {isRealProject ? (
+                            <span className="workspace-row-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                              <button
+                                className="icon-button nav-delete-btn"
+                                type="button"
+                                title={deleteTitle}
+                                onClick={() => onDeleteGrey(source.id)}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
-            <div className="workspace-list-resize-handle" role="separator" aria-label="Graue Quellen Hoehe anpassen" onPointerDown={onResizeGreyList} />
-            </>
-            ) : null}
-          </>
-        ) : null}
+                  <div className="workspace-list-resize-handle" role="separator" aria-label={`${label} Hoehe anpassen`} onPointerDown={onResizeGreyList} />
+                </>
+              ) : null}
+            </Fragment>
+          );
+        })}
       </section>
     );
   }
@@ -773,8 +819,66 @@ export function WorkspaceNavigatorBody({
           );
         })}
         {!sessions.length ? <EmptyState title="Noch keine KI-Sessions" /> : null}
+        <SessionBackupsPanel projectId={sessionProjectId} onRestored={onSessionRestored} />
       </div>
     </section>
+  );
+}
+
+
+/** Zugriff auf die rollierenden Server-Sicherungen der Workspace-Session.
+ *  Sichtbares Gegenstueck zum Ueberschreibschutz im Backend: ging trotzdem etwas
+ *  verloren, laesst sich hier ein frueherer Stand zurueckholen. */
+function SessionBackupsPanel({ projectId, onRestored }: { projectId: string; onRestored: () => void }) {
+  const [open, setOpen] = useState(false);
+  const backupsQuery = useQuery({
+    queryKey: ["workspace-session-backups", projectId],
+    queryFn: () => api.listWorkspaceSessionBackups(projectId),
+    enabled: open && Boolean(projectId)
+  });
+  const restore = useMutation({
+    mutationFn: (savedAt: string) => api.restoreWorkspaceSession(projectId, savedAt),
+    onSuccess: () => {
+      setOpen(false);
+      onRestored();
+    }
+  });
+  const backups = backupsQuery.data?.backups ?? [];
+
+  if (!open) {
+    return (
+      <button className="button button-compact button-ghost session-restore-toggle" type="button" onClick={() => setOpen(true)}>
+        <History size={14} />
+        <span>Frühere Sitzung wiederherstellen</span>
+      </button>
+    );
+  }
+  return (
+    <div className="session-restore-panel">
+      <div className="session-restore-head">
+        <strong>Sicherungen</strong>
+        <button className="icon-button icon-button--compact" type="button" aria-label="Schließen" onClick={() => setOpen(false)}>
+          <X size={14} />
+        </button>
+      </div>
+      {backupsQuery.isLoading ? <span className="muted">Lade…</span> : null}
+      {!backupsQuery.isLoading && !backups.length ? (
+        <span className="muted">Keine Sicherungen vorhanden.</span>
+      ) : null}
+      {backups.map((backup) => (
+        <button
+          key={backup.saved_at}
+          className="button button-compact session-restore-row"
+          type="button"
+          disabled={restore.isPending}
+          onClick={() => restore.mutate(backup.saved_at)}
+        >
+          <span>{new Date(backup.saved_at).toLocaleString("de-DE")}</span>
+          <small>{backup.turn_count} Sitzungen</small>
+        </button>
+      ))}
+      {restore.isError ? <span className="inline-error">Wiederherstellen fehlgeschlagen.</span> : null}
+    </div>
   );
 }
 

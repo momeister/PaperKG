@@ -22,11 +22,12 @@ class GreySourcesMixin(_Base):
         now = datetime.now()
         flags = source.get("injection_flags") or []
         evidence = source.get("evidence") or []
+        paper_ids = [str(pid) for pid in (source.get("source_paper_ids") or []) if str(pid or "").strip()]
         self._execute("""
             INSERT INTO grey_sources
             (id, project_id, query, url, title, summary, raw_excerpt, full_text, evidence,
-             injection_flags, status, created_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             injection_flags, status, source_kind, origin_id, source_paper_ids, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 query = EXCLUDED.query,
                 url = EXCLUDED.url,
@@ -36,7 +37,10 @@ class GreySourcesMixin(_Base):
                 full_text = EXCLUDED.full_text,
                 evidence = EXCLUDED.evidence,
                 injection_flags = EXCLUDED.injection_flags,
-                status = EXCLUDED.status
+                status = EXCLUDED.status,
+                source_kind = EXCLUDED.source_kind,
+                origin_id = EXCLUDED.origin_id,
+                source_paper_ids = EXCLUDED.source_paper_ids
         """, [
             grey_id,
             str(project_id),
@@ -49,6 +53,9 @@ class GreySourcesMixin(_Base):
             json.dumps(evidence),
             json.dumps(flags),
             str(source.get("status") or "saved"),
+            str(source.get("source_kind") or "web"),
+            source.get("origin_id"),
+            json.dumps(paper_ids),
             now,
         ])
         return self.get_grey_source(grey_id) or {"id": grey_id}
@@ -60,7 +67,9 @@ class GreySourcesMixin(_Base):
         cols = [desc[0] for desc in self.conn.description]
         return self._decode_grey_source(dict(zip(cols, rows[0])))
 
-    def list_grey_sources(self, project_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+    def list_grey_sources(
+        self, project_id: str | None = None, limit: int = 500, kind: str | None = None
+    ) -> list[dict[str, Any]]:
         if project_id is None:
             rows = self._execute("""
                 SELECT * FROM grey_sources
@@ -75,7 +84,10 @@ class GreySourcesMixin(_Base):
                 LIMIT ?
             """, [str(project_id), limit]).fetchall()
         cols = [desc[0] for desc in self.conn.description]
-        return [self._decode_grey_source(dict(zip(cols, row))) for row in rows]
+        items = [self._decode_grey_source(dict(zip(cols, row))) for row in rows]
+        if kind:
+            items = [item for item in items if str(item.get("source_kind") or "web") == kind]
+        return items
 
     def delete_grey_source(self, grey_id: str) -> bool:
         if self.get_grey_source(grey_id) is None:
@@ -85,7 +97,7 @@ class GreySourcesMixin(_Base):
 
     @staticmethod
     def _decode_grey_source(row: dict[str, Any]) -> dict[str, Any]:
-        for field in ("injection_flags", "evidence"):
+        for field in ("injection_flags", "evidence", "source_paper_ids"):
             value = row.get(field)
             if isinstance(value, str):
                 try:
@@ -94,4 +106,5 @@ class GreySourcesMixin(_Base):
                     row[field] = []
             elif value is None:
                 row[field] = []
+        row["source_kind"] = str(row.get("source_kind") or "web")
         return row

@@ -5,6 +5,7 @@ import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from "reac
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bold,
+  BookmarkPlus,
   Code,
   ChevronDown,
   ChevronLeft,
@@ -23,6 +24,7 @@ import {
   List,
   ListTree,
   Minus,
+  MoreHorizontal,
   NotebookPen,
   PanelRightClose,
   PanelRightOpen,
@@ -276,6 +278,10 @@ export function NotesSurface({
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
   const [noteSearchIndex, setNoteSearchIndex] = useState(0);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
+  // Selten gebrauchte Werkzeuge liegen im Überlauf-Menü — die Toolbar brach sonst
+  // in der schmalen Workspace-Spalte auf drei Zeilen um.
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLSpanElement | null>(null);
   const [tableHover, setTableHover] = useState({ cols: 0, rows: 0 });
   const [splitRatio, setSplitRatio] = useState(() => loadNumberUiState("editor.splitRatio", 0.5));
   const splitGridRef = useRef<HTMLDivElement | null>(null);
@@ -392,6 +398,14 @@ export function NotesSurface({
       localThreadRangesRef.current = {};
       setLocalThreadRanges({});
       queryClient.invalidateQueries({ queryKey: ["notes"] });
+    }
+  });
+  // Notiz als zitierbare Projektquelle veroeffentlichen. Der Snapshot landet in den
+  // grey_sources (source_kind=note) und ist danach ueber [grey::…] zitierbar.
+  const publishNoteAsSource = useMutation({
+    mutationFn: () => api.saveNoteAsSource(activeNoteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["grey-sources"] });
     }
   });
   const deleteNoteById = useMutation({
@@ -807,6 +821,9 @@ export function NotesSurface({
     setActiveEditorCitationId("");
     setActiveEditorCitationRef(null);
     handledRequestedCitationIdRef.current = "";
+    // "Quelle aktuell" gilt nur fuer die Notiz, die gerade veroeffentlicht wurde.
+    publishNoteAsSource.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeNoteId]);
 
   useEffect(() => {
@@ -927,6 +944,30 @@ export function NotesSurface({
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [selection]);
 
+  // Überlauf-Menü der Toolbar schließt bei Klick daneben oder Escape.
+  useEffect(() => {
+    if (!moreMenuOpen) {
+      return;
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    // KeyboardEvent ist in dieser Datei der React-Typ — hier der DOM-Typ.
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMoreMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [moreMenuOpen]);
+
   useEffect(() => {
     if (!selection) {
       setAiPopoverBottomPadding(0);
@@ -980,7 +1021,10 @@ export function NotesSurface({
     if (dirtyRef.current) {
       return;
     }
-    if (!switchedNote && title === currentNote.title && markdown === currentNote.markdown) {
+    // Trimmed comparison: ein gerade getipptes Leerzeichen am Titelende darf kein Neuladen
+    // von Titel+Markdown auslösen (das würde den Editor auf einen älteren Query-Stand
+    // zurücksetzen und Getipptes verschlucken).
+    if (!switchedNote && title.trim() === currentNote.title && markdown === currentNote.markdown) {
       return;
     }
     loadedNoteIdRef.current = currentNote.id;
@@ -1016,7 +1060,12 @@ export function NotesSurface({
       return;
     }
     const nextTitle = noteTitleForSave(title, markdown);
-    if (nextTitle !== title) {
+    // Der normalisierte Titel wird weiterhin in den State zurückgeschrieben (der Editor
+    // bleibt mit dem gespeicherten Titel synchron, sonst lädt der Reload-Effekt unten die
+    // Notiz neu). Ausnahme: Wenn sich beide NUR durch abschließende Leerzeichen
+    // unterscheiden, bleibt die Eingabe stehen — sonst verschluckt jeder Tastendruck das
+    // gerade getippte Leerzeichen und man kann keinen mehrteiligen Titel schreiben.
+    if (nextTitle !== title && nextTitle !== title.trim()) {
       setTitle(nextTitle);
     }
     const handle = window.setTimeout(() => {
@@ -2366,6 +2415,9 @@ export function NotesSurface({
       {createNote.isError ? <div className="inline-error">Notiz konnte nicht angelegt werden: {formatError(createNote.error)}</div> : null}
       {notesQuery.isError ? <div className="inline-error">Notizen konnten nicht geladen werden: {formatError(notesQuery.error)}</div> : null}
       {saveNote.isError ? <div className="inline-error">Autosave fehlgeschlagen: {formatError(saveNote.error)}</div> : null}
+      {publishNoteAsSource.isError ? (
+        <div className="inline-error">Notiz konnte nicht als Quelle gespeichert werden: {formatError(publishNoteAsSource.error)}</div>
+      ) : null}
 
       <div
         className={`notes-workspace ${notesListOpen ? "" : "notes-workspace--left-collapsed"} ${contextOpen ? "" : "notes-workspace--right-collapsed"}`}
@@ -2419,6 +2471,17 @@ export function NotesSurface({
               <div className="note-editor-header">
                 <input className="note-title-input" value={title} onChange={(event) => updateTitle(event.target.value)} placeholder="Titel" />
                 <div className="button-row">
+                  <button
+                    className="button button-compact"
+                    type="button"
+                    disabled={!activeNoteId || !markdown.trim() || publishNoteAsSource.isPending}
+                    onClick={() => publishNoteAsSource.mutate()}
+                    title="Diese Notiz als zitierbare Quelle im Projekt bereitstellen (Snapshot, jederzeit aktualisierbar)"
+                    aria-label="Als Quelle"
+                  >
+                    <BookmarkPlus size={16} />
+                    <span>{publishNoteAsSource.isPending ? "Speichere…" : publishNoteAsSource.isSuccess ? "Quelle aktuell" : "Als Quelle"}</span>
+                  </button>
                   <button className="button button-compact" type="button" disabled={!activeNoteId || !markdown.trim()} onClick={exportCurrentNote} aria-label="Export">
                     <Download size={16} />
                     <span>Export</span>
@@ -2445,14 +2508,8 @@ export function NotesSurface({
                 <button className="icon-button" type="button" aria-label="Kursiv" onClick={() => applyWrap("*")}>
                   <Italic size={17} />
                 </button>
-                <button className="icon-button" type="button" aria-label="Zitat" onClick={() => applyLinePrefix("> ")}>
-                  <Quote size={17} />
-                </button>
                 <button className="icon-button" type="button" aria-label="Liste" onClick={() => applyLinePrefix("- ")}>
                   <List size={17} />
-                </button>
-                <button className="icon-button" type="button" aria-label="Code" onClick={() => applyWrap("`")}>
-                  <Code size={17} />
                 </button>
                 <button className="icon-button" type="button" aria-label="Link" onClick={() => applyWrap("[", "](https://)")}>
                   <Link size={17} />
@@ -2460,32 +2517,6 @@ export function NotesSurface({
                 <button className="icon-button" type="button" aria-label="Highlight" onClick={() => applyWrap("==")}>
                   <Highlighter size={17} />
                 </button>
-                <button
-                  className={`icon-button ${spellcheckEnabled ? "active" : ""}`}
-                  type="button"
-                  aria-label={spellcheckEnabled ? "Rechtschreibkontrolle ausschalten" : "Rechtschreibkontrolle einschalten"}
-                  aria-pressed={spellcheckEnabled}
-                  onClick={() => setSpellcheckEnabled((current) => !current)}
-                >
-                  <SpellCheck2 size={17} />
-                </button>
-                <button
-                  className={`icon-button ${threadAnchorsVisible ? "active" : ""}`}
-                  type="button"
-                  aria-label={threadAnchorsVisible ? "KI-Marker (N…) ausblenden" : "KI-Marker (N…) einblenden"}
-                  aria-pressed={threadAnchorsVisible}
-                  title={threadAnchorsVisible ? "KI-Marker (N…) ausblenden" : "KI-Marker (N…) einblenden"}
-                  onClick={() => setThreadAnchorsVisible((current) => !current)}
-                >
-                  <MessageSquareText size={17} />
-                </button>
-                <select aria-label="Textfarbe" onChange={(event) => event.target.value && applyWrap(`<span style="color:${event.target.value}">`, "</span>")} defaultValue="">
-                  <option value="">Farbe</option>
-                  <option value="#2563eb">Blau</option>
-                  <option value="#16865a">Gruen</option>
-                  <option value="#a76500">Amber</option>
-                  <option value="#ba3434">Rot</option>
-                </select>
                 <span className="table-builder-wrap">
                   <button
                     className={`icon-button ${tableMenuOpen ? "active" : ""}`}
@@ -2525,50 +2556,117 @@ export function NotesSurface({
                     </div>
                   ) : null}
                 </span>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="Durchgehende Trennlinie einfügen"
-                  title="Durchgehende Trennlinie einfügen"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => insertAtSelection(dividerSnippetForTextarea("solid", textareaRef.current))}
-                >
-                  <SeparatorHorizontal size={17} />
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="Gestrichelte Trennlinie einfügen"
-                  title="Gestrichelte Trennlinie einfügen"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => insertAtSelection(dividerSnippetForTextarea("dashed", textareaRef.current))}
-                >
-                  <Minus size={17} />
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="Einklappbaren Abschnitt einfügen"
-                  title="Einklappbaren Abschnitt einfügen (oder am Zeilenanfang „>“ + Leertaste)"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={insertToggleAtCursor}
-                >
-                  <ListTree size={17} />
-                </button>
                 <button className="icon-button" type="button" aria-label="Bild einfuegen" onClick={() => imageInputRef.current?.click()} disabled={!activeNoteId}>
                   <ImagePlus size={17} />
                 </button>
-                <button
-                  className={`icon-button ${imagePreviewHidden ? "icon-button--active" : ""}`}
-                  type="button"
-                  aria-pressed={imagePreviewHidden}
-                  aria-label={imagePreviewHidden ? "Bildvorschau im Editor einblenden" : "Bildvorschau im Editor ausblenden"}
-                  title={imagePreviewHidden ? "Bildvorschau im Editor einblenden" : "Bildvorschau im Editor ausblenden (verdeckt sonst den Text)"}
-                  onClick={toggleImagePreview}
-                >
-                  <ImageOff size={17} />
-                </button>
                 <input ref={imageInputRef} className="hidden-input" type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && uploadAsset.mutate(event.target.files[0])} />
+
+                {/* Überlauf: alles, was selten gebraucht wird. Die Toolbar passt dadurch
+                    auch in der schmalen Workspace-Spalte in eine Zeile. */}
+                <span className="markdown-more-wrap" ref={moreMenuRef}>
+                  <button
+                    className={`icon-button ${moreMenuOpen ? "icon-button--active" : ""}`}
+                    type="button"
+                    aria-label="Weitere Werkzeuge"
+                    title="Weitere Werkzeuge"
+                    aria-expanded={moreMenuOpen}
+                    onClick={() => setMoreMenuOpen((current) => !current)}
+                  >
+                    <MoreHorizontal size={17} />
+                  </button>
+                  {moreMenuOpen ? (
+                    <div className="markdown-more-popover pop-enter">
+                      <span className="markdown-more-label">Format</span>
+                      <div className="markdown-more-row">
+                        <button className="icon-button" type="button" aria-label="Zitat" title="Zitat" onClick={() => applyLinePrefix("> ")}>
+                          <Quote size={17} />
+                        </button>
+                        <button className="icon-button" type="button" aria-label="Code" title="Code" onClick={() => applyWrap("`")}>
+                          <Code size={17} />
+                        </button>
+                        <select
+                          aria-label="Textfarbe"
+                          onChange={(event) => event.target.value && applyWrap(`<span style="color:${event.target.value}">`, "</span>")}
+                          defaultValue=""
+                        >
+                          <option value="">Farbe</option>
+                          <option value="#2563eb">Blau</option>
+                          <option value="#16865a">Gruen</option>
+                          <option value="#a76500">Amber</option>
+                          <option value="#ba3434">Rot</option>
+                        </select>
+                      </div>
+
+                      <span className="markdown-more-label">Einfügen</span>
+                      <div className="markdown-more-row">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Durchgehende Trennlinie einfügen"
+                          title="Durchgehende Trennlinie einfügen"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => insertAtSelection(dividerSnippetForTextarea("solid", textareaRef.current))}
+                        >
+                          <SeparatorHorizontal size={17} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Gestrichelte Trennlinie einfügen"
+                          title="Gestrichelte Trennlinie einfügen"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => insertAtSelection(dividerSnippetForTextarea("dashed", textareaRef.current))}
+                        >
+                          <Minus size={17} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Einklappbaren Abschnitt einfügen"
+                          title="Einklappbaren Abschnitt einfügen (oder am Zeilenanfang „>“ + Leertaste)"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={insertToggleAtCursor}
+                        >
+                          <ListTree size={17} />
+                        </button>
+                      </div>
+
+                      <span className="markdown-more-label">Ansicht</span>
+                      <div className="markdown-more-row">
+                        <button
+                          className={`icon-button ${spellcheckEnabled ? "active" : ""}`}
+                          type="button"
+                          aria-label={spellcheckEnabled ? "Rechtschreibkontrolle ausschalten" : "Rechtschreibkontrolle einschalten"}
+                          title={spellcheckEnabled ? "Rechtschreibkontrolle ausschalten" : "Rechtschreibkontrolle einschalten"}
+                          aria-pressed={spellcheckEnabled}
+                          onClick={() => setSpellcheckEnabled((current) => !current)}
+                        >
+                          <SpellCheck2 size={17} />
+                        </button>
+                        <button
+                          className={`icon-button ${threadAnchorsVisible ? "active" : ""}`}
+                          type="button"
+                          aria-label={threadAnchorsVisible ? "KI-Marker (N…) ausblenden" : "KI-Marker (N…) einblenden"}
+                          aria-pressed={threadAnchorsVisible}
+                          title={threadAnchorsVisible ? "KI-Marker (N…) ausblenden" : "KI-Marker (N…) einblenden"}
+                          onClick={() => setThreadAnchorsVisible((current) => !current)}
+                        >
+                          <MessageSquareText size={17} />
+                        </button>
+                        <button
+                          className={`icon-button ${imagePreviewHidden ? "icon-button--active" : ""}`}
+                          type="button"
+                          aria-pressed={imagePreviewHidden}
+                          aria-label={imagePreviewHidden ? "Bildvorschau im Editor einblenden" : "Bildvorschau im Editor ausblenden"}
+                          title={imagePreviewHidden ? "Bildvorschau im Editor einblenden" : "Bildvorschau im Editor ausblenden (verdeckt sonst den Text)"}
+                          onClick={toggleImagePreview}
+                        >
+                          <ImageOff size={17} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </span>
                 <div className="segmented markdown-mode-toggle">
                   <button type="button" className={editorMode === "edit" ? "active" : ""} onClick={() => switchEditorMode("edit")}>
                     Edit
@@ -2634,30 +2732,33 @@ export function NotesSurface({
                     <ChevronDown size={14} />
                   </button>
                 </label>
-                <label className="note-question-field">
-                  <Sparkles size={15} />
-                  <input
-                    value={noteQuestion}
-                    onChange={(event) => setNoteQuestion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        askWholeNote();
-                      }
-                    }}
-                    placeholder="Ganze Notiz fragen"
-                  />
-                  <button
-                    className="button button-compact"
-                    type="button"
-                    aria-label="Ganze Notiz"
-                    onClick={askWholeNote}
-                    disabled={!noteQuestion.trim() || askNote.isPending || !activeNoteId}
-                  >
-                    Notiz
-                  </button>
-                </label>
               </div>
+
+              {/* Die Notizfrage ist ein KI-Control und stand nur historisch in der
+                  Formatier-Toolbar — dort war sie der breiteste Umbruch-Verursacher. */}
+              <label className="note-question-field note-question-field--standalone">
+                <Sparkles size={15} />
+                <input
+                  value={noteQuestion}
+                  onChange={(event) => setNoteQuestion(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      askWholeNote();
+                    }
+                  }}
+                  placeholder="Ganze Notiz fragen"
+                />
+                <button
+                  className="button button-compact"
+                  type="button"
+                  aria-label="Ganze Notiz"
+                  onClick={askWholeNote}
+                  disabled={!noteQuestion.trim() || askNote.isPending || !activeNoteId}
+                >
+                  Notiz
+                </button>
+              </label>
               {askNote.isError ? <div className="inline-error">Notizfrage fehlgeschlagen: {formatError(askNote.error)}</div> : null}
 
               <div

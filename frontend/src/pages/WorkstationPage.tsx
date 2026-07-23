@@ -24,6 +24,14 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { NotesSidePanel } from "../components/NotesSidePanel";
 import { TerminalTabs } from "../components/TerminalTabs";
+import type { TerminalAppearance } from "../components/terminalTheme";
+import {
+  loadTerminalAppearance,
+  resolveTerminalScheme,
+  TERMINAL_APPEARANCE_LABEL,
+  TERMINAL_APPEARANCES,
+  TERMINAL_APPEARANCE_STORAGE_KEY
+} from "../components/terminalTheme";
 import { PreviewPane, normalizePreviewUrl } from "../components/PreviewPane";
 import { THEME_META, useAppState } from "../state";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
@@ -131,6 +139,9 @@ export function WorkstationPage() {
   const [savedValue, setSavedValue] = useState<string>("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [resultTab, setResultTab] = useState<"changes" | "diff">("changes");
+  // Terminal-Aussehen ist bewusst getrennt vom App-Theme einstellbar — viele
+  // arbeiten auch in einer hellen Oberflaeche lieber in einer dunklen Shell.
+  const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearance>(loadTerminalAppearance);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showOpenFolder, setShowOpenFolder] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -189,6 +200,11 @@ export function WorkstationPage() {
   useEffect(() => {
     localStorage.setItem(NOTES_KEY, notesOpen ? "1" : "0");
   }, [notesOpen]);
+  useEffect(() => {
+    localStorage.setItem(TERMINAL_APPEARANCE_STORAGE_KEY, terminalAppearance);
+  }, [terminalAppearance]);
+
+  const terminalScheme = resolveTerminalScheme(terminalAppearance, THEME_META[theme].scheme);
 
   const activeCodeProject: CodeProject | undefined = projects.find((p) => p.id === projectId);
 
@@ -540,15 +556,30 @@ export function WorkstationPage() {
 
   function renderTerminalPane() {
     return (
-      <div className="wk-pane wk-term-pane">
+      // data-term faerbt die Pane-Chrome (Kopf, Tableiste) passend zur gewaehlten
+      // Terminal-Palette — sonst klebte eine helle Leiste ueber einer dunklen Shell.
+      <div className="wk-pane wk-term-pane" data-term={terminalScheme}>
         <div className="wk-pane-head">
           <TerminalSquare size={14} />
           <strong className="wk-pane-title">Terminal</strong>
           <span className="wk-pane-sub" title={path}>
             {path}
           </span>
+          <select
+            className="wk-term-appearance"
+            aria-label="Terminal-Aussehen"
+            title="Terminal-Aussehen"
+            value={terminalAppearance}
+            onChange={(event) => setTerminalAppearance(event.target.value as TerminalAppearance)}
+          >
+            {TERMINAL_APPEARANCES.map((item) => (
+              <option key={item} value={item}>
+                {TERMINAL_APPEARANCE_LABEL[item]}
+              </option>
+            ))}
+          </select>
         </div>
-        <TerminalTabs key={path} cwd={path} onOutput={handleTerminalOutput} />
+        <TerminalTabs key={path} cwd={path} appearance={terminalAppearance} onOutput={handleTerminalOutput} />
       </div>
     );
   }

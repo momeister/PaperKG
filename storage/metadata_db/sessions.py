@@ -35,7 +35,33 @@ class SessionsMixin(_Base):
             "updated_timestamp": rows[0][1],
         }
 
-    def save_workspace_session(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    WORKSPACE_SESSION_BACKUPS_KEPT = 20
+
+    @staticmethod
+    def _workspace_turn_count(payload: Any) -> int:
+        history = (payload or {}).get("history") if isinstance(payload, dict) else None
+        return len(history) if isinstance(history, list) else 0
+
+    def save_workspace_session(
+        self, project_id: str, payload: dict[str, Any], force: bool = False
+    ) -> dict[str, Any]:
+        """Persist the workspace session, keeping a rolling backup of the previous state.
+
+        Refuses to replace a non-empty conversation with an empty one unless ``force`` is
+        set: a client that boots before the backend is reachable used to fall back to an
+        empty history and then wrote that over the server copy, destroying the session.
+        The explicit "delete session" path passes ``force=True``.
+        """
+        current = self.get_workspace_session(project_id)
+        previous_turns = self._workspace_turn_count(current.get("payload") if current else None)
+        incoming_turns = self._workspace_turn_count(payload)
+
+        if not force and incoming_turns == 0 and previous_turns > 0:
+            return current or {"project_id": str(project_id), "payload": {}}
+
+        if current and previous_turns > 0:
+            self._backup_workspace_session(project_id, current, previous_turns)
+
         self._execute("""
             INSERT INTO workspace_sessions (project_id, payload, updated_timestamp)
             VALUES (?, ?, ?)
@@ -44,6 +70,60 @@ class SessionsMixin(_Base):
                 updated_timestamp = EXCLUDED.updated_timestamp
         """, [str(project_id), json.dumps(payload or {}), datetime.now()])
         return self.get_workspace_session(project_id) or {"project_id": str(project_id), "payload": {}}
+
+    def _backup_workspace_session(
+        self, project_id: str, session: dict[str, Any], turn_count: int
+    ) -> None:
+        saved_at = session.get("updated_timestamp") or datetime.now()
+        self._execute(
+            "INSERT INTO workspace_session_backups (project_id, saved_at, payload, turn_count)"
+            " VALUES (?, ?, ?, ?)",
+            [str(project_id), saved_at, json.dumps(session.get("payload") or {}), int(turn_count)],
+        )
+        self._execute(
+            """
+            DELETE FROM workspace_session_backups
+            WHERE project_id = ? AND saved_at NOT IN (
+                SELECT saved_at FROM workspace_session_backups
+                WHERE project_id = ? ORDER BY saved_at DESC LIMIT ?
+            )
+            """,
+            [str(project_id), str(project_id), self.WORKSPACE_SESSION_BACKUPS_KEPT],
+        )
+
+    def list_workspace_session_backups(self, project_id: str) -> list[dict[str, Any]]:
+        rows = self._execute(
+            "SELECT saved_at, turn_count FROM workspace_session_backups"
+            " WHERE project_id = ? ORDER BY saved_at DESC",
+            [str(project_id)],
+        ).fetchall()
+        return [{"saved_at": row[0], "turn_count": int(row[1] or 0)} for row in rows]
+
+    def restore_workspace_session(self, project_id: str, saved_at: Any = None) -> dict[str, Any] | None:
+        """Write a backup back into ``workspace_sessions`` (newest one when no timestamp)."""
+        if saved_at is None:
+            rows = self._execute(
+                "SELECT payload FROM workspace_session_backups WHERE project_id = ?"
+                " ORDER BY saved_at DESC LIMIT 1",
+                [str(project_id)],
+            ).fetchall()
+        else:
+            rows = self._execute(
+                "SELECT payload FROM workspace_session_backups WHERE project_id = ? AND saved_at = ?"
+                " ORDER BY saved_at DESC LIMIT 1",
+                [str(project_id), saved_at],
+            ).fetchall()
+        if not rows:
+            return None
+        payload = rows[0][0]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(payload, dict):
+            return None
+        return self.save_workspace_session(project_id, payload, force=True)
 
     # ------------------------------------------------------------------ #
     # Deep-research (Tiefensuche) sessions                                 #

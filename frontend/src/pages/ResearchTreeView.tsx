@@ -33,6 +33,7 @@ import {
   Link2,
   ListChecks,
   Database,
+  BookmarkPlus,
   FlaskConical,
   Loader2,
   Maximize2,
@@ -170,6 +171,7 @@ export function ResearchTreeView({
   onCitationInsertPreviewClear,
   onDrillDeeper,
   onSaveToNotes,
+  onSaveAsSource,
 }: {
   nodes: ResearchNode[];
   loading: boolean;
@@ -182,6 +184,8 @@ export function ResearchTreeView({
   onCitationInsertPreviewClear: () => void;
   onDrillDeeper: (nodeId: string, question: string) => void;
   onSaveToNotes: () => void;
+  /** Speichert die Gesamtantwort als zitierbare Projektquelle (inkl. ihrer Quell-Paper). */
+  onSaveAsSource?: () => Promise<{ paper_count: number }>;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"tree" | "synthesis">("tree");
@@ -195,6 +199,7 @@ export function ResearchTreeView({
   });
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<{ kind: "error" | "warn" | "ok"; text: string } | null>(null);
+  const [sourceState, setSourceState] = useState<{ status: "idle" | "saving" | "ok" | "error"; text: string }>({ status: "idle", text: "" });
 
   const treeNodes = nodes.filter((n) => n.status !== "synthesis");
   const synthesisNode = nodes.find((n) => n.status === "synthesis");
@@ -241,6 +246,17 @@ export function ResearchTreeView({
       setExportMsg({ kind: "error", text: e instanceof Error ? e.message : "Export fehlgeschlagen" });
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleSaveAsSource() {
+    if (!onSaveAsSource || sourceState.status === "saving") return;
+    setSourceState({ status: "saving", text: "" });
+    try {
+      const result = await onSaveAsSource();
+      setSourceState({ status: "ok", text: `Als Quelle gespeichert (${result.paper_count} Quell-Paper)` });
+    } catch (e) {
+      setSourceState({ status: "error", text: e instanceof Error ? e.message : "Speichern fehlgeschlagen" });
     }
   }
 
@@ -534,6 +550,24 @@ export function ResearchTreeView({
             <NotebookPen size={12} />
             <span>In Notiz</span>
           </button>
+        ) : null}
+        {synthesisNode?.document && onSaveAsSource ? (
+          <button
+            type="button"
+            className="icon-button"
+            style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "3px" }}
+            onClick={() => void handleSaveAsSource()}
+            disabled={sourceState.status === "saving"}
+            title="Diese Tiefenanalyse als zitierbare Projektquelle speichern — samt der Paper, auf denen sie beruht"
+          >
+            <BookmarkPlus size={12} />
+            <span>
+              {sourceState.status === "saving" ? "Speichere…" : sourceState.status === "ok" ? "Quelle gespeichert" : "Als Quelle"}
+            </span>
+          </button>
+        ) : null}
+        {sourceState.status === "error" ? (
+          <span className="muted-row" style={{ fontSize: 11, color: "var(--danger, #b00020)" }}>{sourceState.text}</span>
         ) : null}
         {synthesisNode?.document ? (
           <div style={{ position: "relative" }}>

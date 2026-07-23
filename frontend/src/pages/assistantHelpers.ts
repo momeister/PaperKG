@@ -98,10 +98,20 @@ export function citationGroupToken(citationIds: string[]): string {
 }
 
 
+/**
+ * Übernommene Zitate werden als Listenpunkt eingefügt, nicht als ``>``-Blockquote:
+ * ``>`` ist im Editor der Auslöser für Notion-Toggles (siehe insertToggleSkeleton), ein
+ * eingefügtes Zitat soll aber ein normaler Aufzählungspunkt bleiben. Folgezeilen werden um
+ * zwei Leerzeichen eingerückt, damit ein mehrzeiliges Zitat EIN Listenpunkt bleibt.
+ */
+export function bulletQuote(text: string, token = ""): string {
+  const body = text.replace(/\n+/g, "\n  ");
+  return token ? `- ${body} ${token}` : `- ${body}`;
+}
+
+
 export function formatNoteQuote(quote: string, _source: VerificationSource, _evidenceIndex: number, citationId: string) {
-  const text = cleanCitationText(quote);
-  const token = citationGroupToken([citationId]);
-  return token ? `> ${text} ${token}` : `> ${text}`;
+  return bulletQuote(cleanCitationText(quote), citationGroupToken([citationId]));
 }
 
 /** Wie formatNoteQuote, aber mit ALLEN Quellen des Satzes im Sammel-Chip. */
@@ -111,9 +121,7 @@ export function formatNoteQuoteMulti(
   quote: string,
   entries: Array<{ source: VerificationSource; evidenceIndex: number; citationId: string }>
 ) {
-  const text = cleanCitationText(quote);
-  const token = citationGroupToken(entries.map((entry) => entry.citationId));
-  return token ? `> ${text} ${token}` : `> ${text}`;
+  return bulletQuote(cleanCitationText(quote), citationGroupToken(entries.map((entry) => entry.citationId)));
 }
 
 

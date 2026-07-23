@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Plus, TerminalSquare, X } from "lucide-react";
 
 import { WerkstattTerminal } from "./WerkstattTerminal";
+import type { TerminalAppearance } from "./terminalTheme";
 import { isTauri } from "../native";
 
 // Mehrere parallele Terminals in einer Tab-Leiste. Das Rust-Backend
@@ -12,7 +13,15 @@ import { isTauri } from "../native";
 
 type TermTab = { key: string; title: string };
 
-export function TerminalTabs({ cwd, onOutput }: { cwd: string; onOutput?: (text: string) => void }) {
+export function TerminalTabs({
+  cwd,
+  appearance = "auto",
+  onOutput
+}: {
+  cwd: string;
+  appearance?: TerminalAppearance;
+  onOutput?: (text: string) => void;
+}) {
   const counter = useRef(1);
   const [tabs, setTabs] = useState<TermTab[]>(() => [{ key: "t1", title: "Terminal 1" }]);
   const [active, setActive] = useState("t1");
@@ -79,7 +88,7 @@ export function TerminalTabs({ cwd, onOutput }: { cwd: string; onOutput?: (text:
             className="wk-term-body"
             style={{ display: tab.key === active ? "flex" : "none" }}
           >
-            <WerkstattTerminal cwd={cwd} active={tab.key === active} onOutput={onOutput} />
+            <WerkstattTerminal cwd={cwd} active={tab.key === active} appearance={appearance} onOutput={onOutput} />
           </div>
         ))}
       </div>

@@ -1,34 +1,87 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FileText, Globe, Plus, Search, Star, Trash2 } from "lucide-react";
+import { DownloadCloud, ExternalLink, FileText, Globe, Maximize2, Minimize2, Plus, Search, Star, Trash2 } from "lucide-react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
 import { useAppState } from "../state";
-import type { GreySource } from "../types";
+import type { GreySource, Paper } from "../types";
 
 const ALL_PAPERS_SCOPES = new Set(["", "__all_papers__"]);
 
+const PDF_DOCK_MIN_WIDTH = 380;
+const PDF_DOCK_STORAGE_KEY = "sciencekg.library.pdfWidth";
+
+function loadPdfDockWidth(): number {
+  const stored = Number(localStorage.getItem(PDF_DOCK_STORAGE_KEY));
+  return Number.isFinite(stored) && stored >= PDF_DOCK_MIN_WIDTH ? stored : 560;
+}
+
+/** Link zur Originalquelle nach derselben Regel wie `/paper/meta` im Backend
+ *  (api/routers/papers.py): Landing-Page → DOI → direkter PDF-Link. */
+export function externalPaperUrl(paper: Paper): string | null {
+  const landing = (paper.landing_page_url ?? "").trim();
+  if (landing) return landing;
+  const doi = (paper.doi ?? "").trim();
+  if (doi) return `https://doi.org/${doi}`;
+  const pdfUrl = (paper.pdf_url ?? "").trim();
+  return /^https?:\/\//i.test(pdfUrl) ? pdfUrl : null;
+}
+
 export function LibraryPage() {
-  const { activeProject } = useAppState();
+  const { activeProject, provider, model } = useAppState();
   const isRealProject = !!activeProject && !ALL_PAPERS_SCOPES.has(activeProject);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [openGrey, setOpenGrey] = useState<string | null>(null);
-  const [pdfView, setPdfView] = useState<{ url: string; title: string } | null>(null);
+  // Angedockte Lesespalte statt Modal: das Overlay war für längeres Lesen zu klein
+  // und verdeckte die Trefferliste.
+  const [pdfView, setPdfView] = useState<{ url: string | null; title: string; paperId: string } | null>(null);
+  const [pdfWidth, setPdfWidth] = useState(loadPdfDockWidth);
+  const [pdfFullscreen, setPdfFullscreen] = useState(false);
+  const pageRef = useRef<HTMLElement | null>(null);
   const queryClient = useQueryClient();
 
-  // Close the in-app PDF viewer with Escape.
+  // Close the in-app PDF viewer with Escape (Vollbild zuerst).
   useEffect(() => {
     if (!pdfView) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPdfView(null);
+      if (event.key !== "Escape") return;
+      if (pdfFullscreen) setPdfFullscreen(false);
+      else setPdfView(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pdfView]);
+  }, [pdfView, pdfFullscreen]);
+
+  useEffect(() => {
+    localStorage.setItem(PDF_DOCK_STORAGE_KEY, String(pdfWidth));
+  }, [pdfWidth]);
+
+  // Wie in WorkspacePage: während des Drags direkt am DOM, State erst bei pointerup —
+  // sonst rendert die (lange) Tabelle pro Frame neu.
+  const startPdfResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const page = pageRef.current;
+    if (!page) return;
+    const maxWidth = Math.max(PDF_DOCK_MIN_WIDTH, page.getBoundingClientRect().width * 0.75);
+    let next = pdfWidth;
+    const onMove = (moveEvent: PointerEvent) => {
+      const fromRight = page.getBoundingClientRect().right - moveEvent.clientX;
+      next = Math.min(maxWidth, Math.max(PDF_DOCK_MIN_WIDTH, fromRight));
+      page.style.setProperty("--library-pdf-width", `${next}px`);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setPdfWidth(next);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [pdfWidth]);
 
   const papersQuery = useQuery({
     queryKey: ["papers", query, activeProject],
@@ -71,6 +124,17 @@ export function LibraryPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["grey-sources"] })
   });
 
+  // "PDF holen": lädt das Open-Access-PDF nach (Endpunkt löst notfalls über die DOI
+  // auf) und hängt es ans Projekt — statt die Zeile nur mit "false" abzuwerten.
+  const ingestPdf = useMutation({
+    mutationFn: (paperId: string) =>
+      api.paperIngest({ paper_id: paperId, project_id: isRealProject ? activeProject : null, provider, model }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["papers"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    }
+  });
+
   const allSelected = useMemo(() => new Set(selected), [selected]);
 
   const papers = useMemo(() => {
@@ -92,7 +156,12 @@ export function LibraryPage() {
   }
 
   return (
-    <section className="page">
+    <section
+      className={`page library-page ${pdfView ? "library-page--reading" : ""}`}
+      ref={pageRef}
+      style={{ "--library-pdf-width": `${pdfWidth}px` } as React.CSSProperties}
+    >
+      <div className="library-main">
       <div className="page-title">
         <div>
           <span>Paper</span>
@@ -146,7 +215,8 @@ export function LibraryPage() {
                       onClick={() =>
                         setPdfView({
                           url: api.paperPdfUrl(paper.id, paper.title || ""),
-                          title: paper.title || paper.id
+                          title: paper.title || paper.id,
+                          paperId: paper.id
                         })
                       }
                     >
@@ -154,7 +224,14 @@ export function LibraryPage() {
                       <span>Öffnen</span>
                     </button>
                   ) : (
-                    <Status value="false" />
+                    <PaperWithoutPdfActions
+                      paper={paper}
+                      pending={ingestPdf.isPending && ingestPdf.variables === paper.id}
+                      onFetch={() => ingestPdf.mutate(paper.id)}
+                      onPreview={() =>
+                        setPdfView({ url: null, title: paper.title || paper.id, paperId: paper.id })
+                      }
+                    />
                   )}
                   <Status value={paper.latest_extraction_status ?? "missing"} />
                   <button
@@ -218,14 +295,95 @@ export function LibraryPage() {
         </section>
       ) : null}
 
+      </div>
+
       {pdfView ? (
-        <div className="pdf-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setPdfView(null)}>
-          <div className="pdf-modal" onClick={(event) => event.stopPropagation()}>
-            <PdfPane url={pdfView.url} title={pdfView.title} onCollapse={() => setPdfView(null)} />
-          </div>
-        </div>
+        <>
+          <div
+            className="split-handle library-pdf-handle"
+            role="separator"
+            aria-label="PDF Breite anpassen"
+            onPointerDown={startPdfResize}
+          />
+          <aside className={`library-pdf-dock ${pdfFullscreen ? "library-pdf-dock--full" : ""}`}>
+            <div className="library-pdf-dock-bar">
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={pdfFullscreen ? "Vollbild verlassen" : "Vollbild"}
+                title={pdfFullscreen ? "Vollbild verlassen" : "Vollbild"}
+                onClick={() => setPdfFullscreen((current) => !current)}
+              >
+                {pdfFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
+            </div>
+            <PdfPane
+              url={pdfView.url}
+              title={pdfView.title}
+              metaPaperId={pdfView.paperId}
+              onCollapse={() => {
+                setPdfFullscreen(false);
+                setPdfView(null);
+              }}
+            />
+          </aside>
+        </>
       ) : null}
     </section>
+  );
+}
+
+/** PDF-Spalte für Papers ohne lokale Datei: die Zeile zeigte bisher nur "false",
+ *  obwohl fast immer ein DOI-/Landing-Link vorhanden ist und der Volltext per
+ *  `/paper/ingest` nachgeladen werden kann. */
+function PaperWithoutPdfActions({
+  paper,
+  pending,
+  onFetch,
+  onPreview
+}: {
+  paper: Paper;
+  pending: boolean;
+  onFetch: () => void;
+  onPreview: () => void;
+}) {
+  const external = externalPaperUrl(paper);
+  if (!external) {
+    return <Status value="false" />;
+  }
+  return (
+    <span className="library-pdf-actions">
+      <button
+        className="button button-compact button-ghost"
+        type="button"
+        title="PDF nachladen (Open Access, ggf. über die DOI aufgelöst)"
+        disabled={pending}
+        onClick={onFetch}
+      >
+        <DownloadCloud size={14} />
+        <span>{pending ? "Lade…" : "Holen"}</span>
+      </button>
+      <a
+        className="button button-compact button-ghost"
+        href={external}
+        target="_blank"
+        rel="noreferrer"
+        title="Originalquelle im Browser öffnen"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <ExternalLink size={14} />
+        <span>Link</span>
+      </a>
+      <button
+        className="icon-button icon-button--compact"
+        type="button"
+        title="Abstract + Quelle in der Lesespalte anzeigen"
+        aria-label="Abstract anzeigen"
+        onClick={onPreview}
+      >
+        <FileText size={14} />
+      </button>
+    </span>
   );
 }
 

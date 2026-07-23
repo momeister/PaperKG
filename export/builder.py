@@ -55,8 +55,8 @@ def _safe_stem(text: str, fallback: str = "tiefenanalyse") -> str:
     return (stem[:60] or fallback)
 
 
-def _aggregate_sources(
-    nodes: list[dict[str, Any]], explicit: list[dict[str, Any]] | None
+def aggregate_sources(
+    nodes: list[dict[str, Any]], explicit: list[dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
     """Merge sources from the posted list and every node answer, de-duped by paper_id.
 
@@ -127,7 +127,7 @@ def build_export(
 
     opts = options or ExportOptions()
     nodes = nodes or []
-    all_sources = _aggregate_sources(nodes, sources)
+    all_sources = aggregate_sources(nodes, sources)
     warnings: list[str] = []
 
     export_id = uuid.uuid4().hex[:12]
@@ -150,6 +150,11 @@ def build_export(
         tree = figures.research_tree_forest(nodes)
         if tree:
             appendix.append(tree)
+        # The diagram only shows the chapter level; the full structure follows as an
+        # outline so nothing is lost to the depth limit or the scaling.
+        outline = figures.outline_latex(nodes)
+        if outline:
+            appendix.append(outline)
 
     if opts.charts:
         charts = figures.make_charts(nodes, all_sources, work_dir)
@@ -194,6 +199,7 @@ def build_export(
         body_latex=body_latex,
         has_bibliography=has_bib,
         use_forest=opts.tikz_tree and any(r"\begin{forest}" in b for b in appendix),
+        use_landscape=any(r"\begin{landscape}" in b for b in appendix),
         use_graphics=bool(image_files),
         appendix_blocks=appendix,
         unicode_engine=engine_is_unicode(engine),
