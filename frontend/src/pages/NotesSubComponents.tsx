@@ -72,10 +72,14 @@ import {
   loadThreadMetaUiState,
   markdownContinuation,
   noteTitleForSave,
+  normalizeAssetUrl,
   parseListLines,
   parseMarkdownCitationRefs,
+  parseToggleBlock,
   previewElementToMarkdown,
   saveBooleanUiState,
+  segmentBlockLines,
+  setToggleOpen,
   saveNumberUiState,
   saveThreadMetaUiState,
   seedThreadRanges,
@@ -99,6 +103,7 @@ import {
   threadSizeStyle,
   withPreservedCitationLinks,
 } from "./notesHelpers";
+import type { BlockSegment, ToggleBlock } from "./notesHelpers";
 import { decodeCitationId, encodeCitationId } from "./assistantHelpers";
 import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
 
@@ -676,6 +681,7 @@ export function MarkdownPreview({
   editable = false,
   onBlockChange,
   onScroll,
+  highlightBlockIndices,
   className = ""
 }: {
   previewRef?: RefObject<HTMLElement>;
@@ -688,48 +694,190 @@ export function MarkdownPreview({
   editable?: boolean;
   onBlockChange?: (blockIndex: number, nextRaw: string, expectedRaw?: string) => void;
   onScroll?: (event: ReactUIEvent<HTMLElement>) => void;
+  highlightBlockIndices?: Set<number>;
   className?: string;
 }) {
   const citationById = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
   const citationColorById = useMemo(() => new Map(citations.map((citation, index) => [citation.id, citationColorIndex(citation, index)])), [citations]);
   const blocks = useMemo(() => splitMarkdownBlocks(markdown), [markdown]);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // Leaving edit when the block list shrinks past the active index avoids a dangling editor.
+  useEffect(() => {
+    if (editingIndex !== null && editingIndex >= blocks.length) {
+      setEditingIndex(null);
+    }
+  }, [blocks.length, editingIndex]);
   return (
     <article ref={previewRef} className={`markdown-preview ${editable ? "markdown-preview--editable" : ""} ${className}`.trim()} onScroll={onScroll}>
       {blocks.map((block, index) => {
-        const rendered = renderBlock(block.raw, `${index}`, citationById, citationColorById, onCitationClick, activeCitationId ?? "", searchQuery, block.start, activeCitationRef ?? null);
-        if (!editable || !rendered) {
+        // In editable modes a toggle's summary click flips + / - in the stored fence via onBlockChange,
+        // so the collapsed/expanded state persists in the markdown (survives reload, like Notion).
+        const onToggle = editable && onBlockChange
+          ? (nextOpen: boolean) => onBlockChange(index, setToggleOpen(block.raw, nextOpen), block.raw)
+          : undefined;
+        const rendered = renderBlock(block.raw, `${index}`, citationById, citationColorById, onCitationClick, activeCitationId ?? "", searchQuery, block.start, activeCitationRef ?? null, onToggle);
+        if (!editable) {
           return rendered;
         }
-        const canEditBlock = !isComplexPreviewBlock(block.raw);
+        if (editingIndex === index) {
+          // Raw-markdown textarea for this block: lossless (no DOM→markdown serialization), same
+          // content as Edit mode. Replaces the old contentEditable path that silently dropped text.
+          return (
+            <PreviewBlockEditor
+              key={`edit-${index}`}
+              raw={block.raw}
+              onCommit={(next) => {
+                setEditingIndex(null);
+                if (next !== block.raw) {
+                  onBlockChange?.(index, next, block.raw);
+                }
+              }}
+              onCancel={() => setEditingIndex(null)}
+            />
+          );
+        }
+        const selected = highlightBlockIndices?.has(index) ?? false;
         return (
           <div
             key={`editable-${index}`}
             data-preview-block-index={index}
-            className={`editable-preview-block ${canEditBlock ? "" : "editable-preview-block--readonly"}`}
-            contentEditable={canEditBlock}
-            suppressContentEditableWarning
-            onBlur={(event) => {
-              if (canEditBlock) {
-                const nextRaw = previewElementToMarkdown(block.raw, event.currentTarget);
-                if (nextRaw === block.raw) {
-                  return;
-                }
-                window.setTimeout(() => {
-                  onBlockChange?.(index, nextRaw, block.raw);
-                }, 0);
+            className={`editable-preview-block${selected ? " editable-preview-block--selected" : ""}`}
+            role="button"
+            tabIndex={0}
+            onDoubleClick={(event) => {
+              if (shouldStartBlockEdit(event.target)) {
+                setEditingIndex(index);
               }
             }}
             onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && ["b", "i", "e", "k"].includes(event.key.toLowerCase())) {
+              if ((event.key === "Enter" || event.key === "F2") && event.target === event.currentTarget) {
                 event.preventDefault();
+                setEditingIndex(index);
               }
             }}
           >
-            {rendered}
+            {rendered ?? <span className="editable-preview-block__empty">Leerer Abschnitt – klicken zum Bearbeiten</span>}
           </div>
         );
       })}
     </article>
+  );
+}
+
+
+// A double-click starts editing — but not when it lands on interactive content (links, citation
+// chips, toggle summaries) that has its own behaviour.
+function shouldStartBlockEdit(target: EventTarget): boolean {
+  if (!(target instanceof Element)) return true;
+  return !target.closest("a, button, summary, input, textarea, select, label, .md-toggle__summary");
+}
+
+
+function PreviewBlockEditor({ raw, onCommit, onCancel }: { raw: string; onCommit: (next: string) => void; onCancel: () => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const doneRef = useRef(false);
+  const commit = (value: string) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCommit(value);
+  };
+  const cancel = () => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCancel();
+  };
+  const autosize = (node: HTMLTextAreaElement) => {
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  };
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    node.focus();
+    node.setSelectionRange(node.value.length, node.value.length);
+    autosize(node);
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      className="preview-block-editor"
+      defaultValue={raw}
+      spellCheck={false}
+      onInput={(event) => autosize(event.currentTarget)}
+      onBlur={(event) => commit(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancel();
+        } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          commit(event.currentTarget.value);
+        }
+      }}
+    />
+  );
+}
+
+
+// Notion-style collapsible section. Local open state drives the display and always toggles (also in
+// read-only previews); when a persist callback is provided the +/- marker is written back so the
+// state round-trips through the stored markdown.
+function ToggleDisclosure({
+  toggle,
+  blockKey,
+  citations,
+  citationColorById,
+  onCitationClick,
+  activeCitationId,
+  searchQuery,
+  activeCitationRef,
+  onToggle
+}: {
+  toggle: ToggleBlock;
+  blockKey: string;
+  citations: Map<string, NoteCitation>;
+  citationColorById: Map<string, number>;
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void;
+  activeCitationId: string;
+  searchQuery: string;
+  activeCitationRef: CitationMarkdownRef | null;
+  onToggle?: (nextOpen: boolean) => void;
+}) {
+  const [open, setOpen] = useState(toggle.open);
+  useEffect(() => {
+    setOpen(toggle.open);
+  }, [toggle.open]);
+  const bodyBlocks = useMemo(() => splitMarkdownBlocks(toggle.body), [toggle.body]);
+  return (
+    <div className={`md-toggle ${open ? "md-toggle--open" : "md-toggle--closed"}`}>
+      <button
+        type="button"
+        className="md-toggle__summary"
+        aria-expanded={open}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          onToggle?.(next);
+        }}
+      >
+        <ChevronRight size={16} className="md-toggle__chevron" />
+        <span className="md-toggle__title">
+          {toggle.title
+            ? renderInline(toggle.title, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)
+            : <span className="md-toggle__placeholder">Ohne Titel</span>}
+        </span>
+      </button>
+      {open ? (
+        <div className="md-toggle__body">
+          {bodyBlocks.length
+            ? bodyBlocks.map((child, childIndex) =>
+                renderBlock(child.raw, `${blockKey}-b${childIndex}`, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, child.start, activeCitationRef)
+              )
+            : <p className="md-toggle__empty">Leerer Abschnitt</p>}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -743,7 +891,8 @@ export function renderBlock(
   activeCitationId = "",
   searchQuery = "",
   blockStart = 0,
-  activeCitationRef: CitationMarkdownRef | null = null
+  activeCitationRef: CitationMarkdownRef | null = null,
+  onToggle?: (nextOpen: boolean) => void
 ) {
   const trimmed = block.trim();
   if (!trimmed) {
@@ -752,7 +901,25 @@ export function renderBlock(
   const trimOffset = Math.max(0, block.indexOf(trimmed));
   if (/^!\[[^\]]*\]\([^)]+\)$/.test(trimmed)) {
     const match = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed);
-    return <img key={key} className="markdown-preview-image" alt={match?.[1] ?? ""} src={match?.[2]} />;
+    // Resolve via the current API base at render time (relative or stale-port asset URL → live URL).
+    return <img key={key} className="markdown-preview-image" alt={match?.[1] ?? ""} src={absoluteUrl(normalizeAssetUrl(match?.[2] ?? ""))} />;
+  }
+  const toggle = parseToggleBlock(trimmed);
+  if (toggle) {
+    return (
+      <ToggleDisclosure
+        key={key}
+        blockKey={key}
+        toggle={toggle}
+        citations={citations}
+        citationColorById={citationColorById}
+        onCitationClick={onCitationClick}
+        activeCitationId={activeCitationId}
+        searchQuery={searchQuery}
+        activeCitationRef={activeCitationRef}
+        onToggle={onToggle}
+      />
+    );
   }
   const dividerKind = isDividerBlock(trimmed);
   if (dividerKind) {
@@ -789,11 +956,46 @@ export function renderBlock(
       </table>
     );
   }
-  if (/^(\s*)([-*+]|\d+[.)])\s+/m.test(trimmed)) {
-    const nodes = parseListLines(trimmed.split("\n"));
-    return renderListNodes(nodes, key, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, activeCitationRef);
+  // Mixed content: a block can hold text, list lines and divider lines separated only by single
+  // newlines. Segment into consecutive type-pure runs so text above a list/divider is never dropped
+  // (the old "whole block = list" path silently discarded every non-list line, incl. the dashed
+  // divider "- - - -", which matches the list marker).
+  const segments = segmentBlockLines(trimmed.split("\n"));
+  const onlyText = segments.length === 1 && segments[0].type === "text";
+  if (!onlyText) {
+    return (
+      <Fragment key={key}>
+        {segments.map((segment, segmentIndex) =>
+          renderBlockSegment(segment, `${key}-s${segmentIndex}`, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, activeCitationRef)
+        )}
+      </Fragment>
+    );
   }
   return <p key={key}>{renderInline(trimmed, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, blockStart + trimOffset, activeCitationRef)}</p>;
+}
+
+
+function renderBlockSegment(
+  segment: BlockSegment,
+  key: string,
+  citations: Map<string, NoteCitation>,
+  citationColorById: Map<string, number>,
+  onCitationClick: (citation: NoteCitation, ref?: CitationMarkdownRef | null) => void,
+  activeCitationId: string,
+  searchQuery: string,
+  activeCitationRef: CitationMarkdownRef | null
+): ReactNode {
+  if (segment.type === "divider") {
+    return <hr key={key} className={`md-divider md-divider--${segment.kind}`} />;
+  }
+  if (segment.type === "list") {
+    return renderListNodes(parseListLines(segment.lines), key, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, activeCitationRef);
+  }
+  const text = segment.lines.join("\n").trim();
+  if (!text) {
+    return null;
+  }
+  return <p key={key}>{renderInline(text, citations, citationColorById, onCitationClick, activeCitationId, searchQuery, null, activeCitationRef)}</p>;
 }
 
 

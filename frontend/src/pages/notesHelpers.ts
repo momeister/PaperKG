@@ -93,8 +93,95 @@ export const TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Span
 export const FORMAT_AS_MARKDOWN_INSTRUCTION =
   "Formatiere den markierten Text als sauberes Markdown gemäß der unterstützten Syntax " +
   "(Überschriften # bis ######, Listen mit - oder 1. inkl. Verschachtelung durch Einrückung, " +
-  "Blockzitate mit >, **fett**, *kursiv*, `code`, Links, Tabellen). Ändere den Inhalt inhaltlich " +
+  "Blockzitate mit >, **fett**, *kursiv*, `code`, Links, Tabellen, Trennlinien als ____ oder - - - -, " +
+  "einklappbare Abschnitte als ':::toggle+ Titel' … ':::'). Ändere den Inhalt inhaltlich " +
   "nicht, nur die Formatierung. Zitatlinks bleiben unverändert.";
+
+
+// --- Einklappbare Abschnitte (Notion-Toggles) --------------------------------------------
+// Gespeichert als Fence-Block, damit Zustand + Body verlustfrei im Markdown round-trippen:
+//   :::toggle+ Titel        (+ = offen, - = eingeklappt)
+//   Body-Markdown (mehrere Blöcke erlaubt)
+//   :::
+export type ToggleBlock = { open: boolean; title: string; body: string };
+
+const TOGGLE_OPEN_PATTERN = /^:::toggle([+-])?\s?(.*)$/;
+const TOGGLE_CLOSE_PATTERN = /^:::\s*$/;
+
+export function isToggleOpenLine(line: string): boolean {
+  return TOGGLE_OPEN_PATTERN.test(line.trim());
+}
+
+export function parseToggleBlock(raw: string): ToggleBlock | null {
+  const lines = raw.split("\n");
+  const match = TOGGLE_OPEN_PATTERN.exec((lines[0] ?? "").trim());
+  if (!match) return null;
+  let end = lines.length;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (TOGGLE_CLOSE_PATTERN.test(lines[index].trim())) {
+      end = index;
+      break;
+    }
+  }
+  return { open: match[1] !== "-", title: match[2].trim(), body: lines.slice(1, end).join("\n") };
+}
+
+export function setToggleOpen(raw: string, open: boolean): string {
+  return raw.replace(/^(\s*):::toggle[+-]?/, `$1:::toggle${open ? "+" : "-"}`);
+}
+
+/** Fresh toggle skeleton for the toolbar button / autoformat; the caret is placed after the marker. */
+export function toggleSnippet(title = ""): string {
+  return `:::toggle+ ${title}\n\n:::`;
+}
+
+
+// --- Block-Segmentierung -----------------------------------------------------------------
+// Ein Markdown-Block (durch Leerzeilen getrennt) kann Text, Listenzeilen und Trennlinien mischen
+// (einzelne \n, keine Leerzeile). Früher wurde ein solcher Block komplett als Liste gerendert und
+// alle Nicht-Listen-Zeilen (inkl. Text darüber) still verworfen. segmentBlockLines zerlegt ihn in
+// aufeinanderfolgende, typreine Runs, die renderBlock der Reihe nach ausgibt.
+export type BlockSegment =
+  | { type: "divider"; kind: DividerKind }
+  | { type: "list"; lines: string[] }
+  | { type: "text"; lines: string[] };
+
+export function segmentBlockLines(lines: string[]): BlockSegment[] {
+  const segments: BlockSegment[] = [];
+  let textRun: string[] = [];
+  let listRun: string[] = [];
+  const flushText = () => {
+    if (textRun.length) {
+      segments.push({ type: "text", lines: textRun });
+      textRun = [];
+    }
+  };
+  const flushList = () => {
+    if (listRun.length) {
+      segments.push({ type: "list", lines: listRun });
+      listRun = [];
+    }
+  };
+  for (const line of lines) {
+    const dividerKind = isDividerBlock(line.trim());
+    if (dividerKind) {
+      flushText();
+      flushList();
+      segments.push({ type: "divider", kind: dividerKind });
+      continue;
+    }
+    if (LIST_LINE_PATTERN.test(line)) {
+      flushText();
+      listRun.push(line);
+      continue;
+    }
+    flushList();
+    textRun.push(line);
+  }
+  flushText();
+  flushList();
+  return segments;
+}
 
 
 export function buildMarkdownTable(cols: number, rows: number) {
@@ -227,10 +314,22 @@ export function serializePreviewNode(node: Node): string {
 
 
 export function absoluteUrl(value: string) {
-  if (/^https?:\/\//.test(value)) {
+  if (/^(https?:|data:|blob:)/.test(value)) {
     return value;
   }
   return `${API_BASE_URL}${value}`;
+}
+
+
+// Strip a baked-in localhost origin (with its ephemeral Tauri port) from asset URLs. Older notes
+// stored `![](http://127.0.0.1:<port>/notes/assets/...)`; that port changes every app launch, so
+// after a restart the URL 404s and the image vanishes. Reducing it to the relative path lets
+// absoluteUrl() re-attach the *current* API_BASE_URL at render time — the file on disk is intact.
+export function normalizeAssetUrl(value: string): string {
+  return value.replace(
+    /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?=\/(?:notes\/assets|note_assets|companion|assets)\/)/i,
+    ""
+  );
 }
 
 
@@ -1075,14 +1174,48 @@ export function parseListLines(lines: string[]): ListNode[] {
 
 
 export function splitMarkdownBlocks(value: string): MarkdownBlock[] {
+  // Line-based scan (was a single lazy regex). Normal blocks still break on blank lines, but a
+  // ':::toggle …' fence is kept as ONE block through its blank lines up to the closing ':::', so
+  // a collapsible section's multi-block body round-trips and edits/citations keep exact offsets.
   const blocks: MarkdownBlock[] = [];
-  const pattern = /\S[\s\S]*?(?=\n{2,}|$)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(value)) !== null) {
-    blocks.push({ raw: match[0], start: match.index, end: match.index + match[0].length });
-    if (match.index === pattern.lastIndex) {
-      pattern.lastIndex += 1;
+  const lines = value.split("\n");
+  const lineOffset: number[] = [];
+  let acc = 0;
+  for (const line of lines) {
+    lineOffset.push(acc);
+    acc += line.length + 1; // + the "\n" that split removed
+  }
+  const pushBlock = (startLine: number, endLine: number) => {
+    const first = lines[startLine];
+    const lead = first.length - first.trimStart().length; // mirror old regex's \S start
+    const start = lineOffset[startLine] + lead;
+    const end = lineOffset[endLine] + lines[endLine].length;
+    if (end > start) {
+      blocks.push({ raw: value.slice(start, end), start, end });
     }
+  };
+  let index = 0;
+  while (index < lines.length) {
+    if (lines[index].trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (isToggleOpenLine(lines[index])) {
+      let close = index + 1;
+      while (close < lines.length && !TOGGLE_CLOSE_PATTERN.test(lines[close].trim())) {
+        close += 1;
+      }
+      const endLine = close < lines.length ? close : lines.length - 1;
+      pushBlock(index, endLine);
+      index = endLine + 1;
+      continue;
+    }
+    let end = index;
+    while (end < lines.length && lines[end].trim() !== "") {
+      end += 1;
+    }
+    pushBlock(index, end - 1);
+    index = end;
   }
   return blocks;
 }

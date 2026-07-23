@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  ChevronsUp,
   Download,
   FilePlus2,
   Globe,
@@ -20,6 +21,7 @@ import {
   Languages,
   Link,
   List,
+  ListTree,
   Minus,
   NotebookPen,
   PanelRightClose,
@@ -316,6 +318,10 @@ export function NotesSurface({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const handledRequestedCitationIdRef = useRef("");
   const loadedNoteIdRef = useRef("");
+  // Last markdown known to be on the server for the active note — used to refuse an autosave that
+  // would wipe a note with content down to empty while the editor isn't even focused (defense against
+  // a background/programmatic empty overwrite silently losing a section).
+  const loadedServerMarkdownRef = useRef("");
   const previewRef = useRef<HTMLElement | null>(null);
   const previewScrollRef = useRef({ top: 0, left: 0 });
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
@@ -369,6 +375,7 @@ export function NotesSurface({
       if (latest.noteId === note.id && latest.title === variables.title && latest.markdown === variables.markdown) {
         setDirtyState(false);
       }
+      loadedServerMarkdownRef.current = note.markdown;
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
       persistLocalThreadRanges();
@@ -609,7 +616,10 @@ export function NotesSurface({
   const uploadAsset = useMutation({
     mutationFn: (file: File) => api.uploadNoteAsset(activeNoteId, file),
     onSuccess: ({ asset }) => {
-      insertAtSelection(`![${asset.filename}](${absoluteUrl(asset.url)})`);
+      // Store the RELATIVE asset path (not absoluteUrl). The absolute form baked in the current
+      // Tauri port, which changes every launch — after a restart the image 404'd. The renderer
+      // re-attaches the live API base at display time (absoluteUrl(normalizeAssetUrl(...))).
+      insertAtSelection(`![${asset.filename}](${asset.url})`);
       queryClient.invalidateQueries({ queryKey: ["note", activeNoteId] });
     }
   });
@@ -620,6 +630,20 @@ export function NotesSurface({
   const threads = threadsQuery.data?.items ?? [];
   const displayedThreads = useMemo(() => sortPinnedThreads(threads), [threads]);
   const citationRefs = useMemo(() => parseMarkdownCitationRefs(markdown), [markdown]);
+  // Split-mode selection mirror: which preview blocks the editor selection spans (block-level; a
+  // char-exact mirror across raw↔rendered markdown isn't feasible). Highlighted in the preview pane.
+  const selectionBlockIndices = useMemo(() => {
+    if (!selection || editorMode !== "split") {
+      return undefined;
+    }
+    const set = new Set<number>();
+    splitMarkdownBlocks(markdown).forEach((block, index) => {
+      if (block.start < selection.end && block.end > selection.start) {
+        set.add(index);
+      }
+    });
+    return set.size ? set : undefined;
+  }, [selection, markdown, editorMode]);
   const citationLookup = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
   const citationRows = useMemo(
     () =>
@@ -960,6 +984,7 @@ export function NotesSurface({
       return;
     }
     loadedNoteIdRef.current = currentNote.id;
+    loadedServerMarkdownRef.current = currentNote.markdown;
     setTitle(currentNote.title);
     setMarkdown(currentNote.markdown);
     setDirtyState(false);
@@ -978,6 +1003,16 @@ export function NotesSurface({
 
   useEffect(() => {
     if (!activeNoteId || !dirty || saveNote.isPending) {
+      return;
+    }
+    // Refuse to persist an empty note over a non-empty one unless the editor is focused (i.e. the
+    // user is actively clearing it). Guards against a background/programmatic empty state wiping
+    // content — the exact "section suddenly blank" symptom.
+    if (
+      markdown.trim() === "" &&
+      loadedServerMarkdownRef.current.trim() !== "" &&
+      document.activeElement !== textareaRef.current
+    ) {
       return;
     }
     const nextTitle = noteTitleForSave(title, markdown);
@@ -1163,6 +1198,20 @@ export function NotesSurface({
         event.preventDefault();
         applyWrap("[", "](https://)");
         return;
+      }
+    }
+    if (event.key === " ") {
+      // Notion trigger: ">" + space at the start of an (otherwise empty) line becomes a collapsible
+      // section. Stored ">"-blockquotes are untouched — only this live keystroke is repurposed.
+      const node = textareaRef.current;
+      if (node && node.selectionStart === node.selectionEnd) {
+        const caret = node.selectionStart;
+        const lineStart = markdown.lastIndexOf("\n", caret - 1) + 1;
+        if (markdown.slice(lineStart, caret) === ">") {
+          event.preventDefault();
+          insertToggleSkeleton(lineStart, caret);
+          return;
+        }
       }
     }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -1571,13 +1620,57 @@ export function NotesSurface({
   }
 
   function insertAtRange(start: number, end: number, value: string) {
+    // Preserve the scroll position: without this, focus()+setSelectionRange scrolls the caret into
+    // view, and if the textarea had lost focus (toolbar button click) selectionStart was 0, so a
+    // divider inserted "at the cursor" jumped the whole pane to the top.
+    const scrollTop = textareaRef.current?.scrollTop ?? null;
     pushUndo();
     updateMarkdown(`${markdown.slice(0, start)}${value}${markdown.slice(end)}`);
     lastCursorRef.current = start + value.length;
     requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(start + value.length, start + value.length);
+      const node = textareaRef.current;
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(start + value.length, start + value.length);
+      if (scrollTop !== null) {
+        node.scrollTop = scrollTop;
+        setEditorScrollTop(node.scrollTop);
+      }
     });
+  }
+
+  // Insert a Notion-style collapsible section, replacing markdown[replaceStart..replaceEnd]. Ensures
+  // blank-line separation so it becomes its own block, and drops the caret right after the marker so
+  // the user types the title immediately. Shared by the toolbar button and the ">"+space autoformat.
+  function insertToggleSkeleton(replaceStart: number, replaceEnd: number) {
+    const before = markdown.slice(0, replaceStart);
+    const after = markdown.slice(replaceEnd);
+    const marker = ":::toggle+ ";
+    const body = `${marker}\n\n:::`;
+    const lead = before && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
+    const trail = after && !after.startsWith("\n\n") ? (after.startsWith("\n") ? "\n" : "\n\n") : "";
+    const caret = before.length + lead.length + marker.length;
+    const scrollTop = textareaRef.current?.scrollTop ?? null;
+    pushUndo();
+    updateMarkdown(`${before}${lead}${body}${trail}${after}`);
+    lastCursorRef.current = caret;
+    requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(caret, caret);
+      if (scrollTop !== null) {
+        node.scrollTop = scrollTop;
+        setEditorScrollTop(node.scrollTop);
+      }
+    });
+  }
+
+  function insertToggleAtCursor() {
+    const node = textareaRef.current;
+    const start = node?.selectionStart ?? lastCursorRef.current ?? markdown.length;
+    const end = node?.selectionEnd ?? start;
+    insertToggleSkeleton(start, end);
   }
 
   function insertThreadAnswer(thread: NoteAiThread, answer: string) {
@@ -1848,64 +1941,30 @@ export function NotesSurface({
   }
 
   function switchEditorMode(mode: EditorMode) {
-    if (editorMode === "preview" && mode !== "preview") {
-      flushPreviewEdits();
-    }
+    // No preview flush needed anymore: editable-preview blocks are raw <textarea>s that commit on
+    // blur, so leaving Preview/Split (which blurs the open editor) already persists the edit.
     setEditorMode(mode);
   }
 
-  function flushPreviewEdits() {
-    const root = previewRef.current;
-    if (!root) {
-      return;
-    }
-    const blocks = splitMarkdownBlocks(markdown);
-    const edits = Array.from(root.querySelectorAll<HTMLElement>("[data-preview-block-index]"))
-      .map((node) => {
-        const blockIndex = Number(node.dataset.previewBlockIndex);
-        const block = blocks[blockIndex];
-        if (!block || isComplexPreviewBlock(block.raw)) {
-          return null;
-        }
-        const nextRaw = previewElementToMarkdown(block.raw, node);
-        if (nextRaw === block.raw) {
-          return null;
-        }
-        return { blockIndex, nextRaw };
-      })
-      .filter((edit): edit is { blockIndex: number; nextRaw: string } => Boolean(edit));
-    if (!edits.length) {
-      return;
-    }
-    let nextMarkdown = markdown;
-    let offset = 0;
-    for (const edit of edits) {
-      const block = blocks[edit.blockIndex];
-      if (!block) {
-        continue;
-      }
-      const start = block.start + offset;
-      const end = block.end + offset;
-      if (nextMarkdown.slice(start, end) === edit.nextRaw) {
-        continue;
-      }
-      nextMarkdown = `${nextMarkdown.slice(0, start)}${edit.nextRaw}${nextMarkdown.slice(end)}`;
-      offset += edit.nextRaw.length - block.raw.length;
-    }
-    if (nextMarkdown !== markdown) {
-      pushUndo();
-      updateMarkdown(nextMarkdown);
-    }
-  }
-
+  // Commit a raw-markdown edit made in the Preview/Split panes. Writes nextRaw over the block at
+  // block.start..block.end (lossless — no DOM serialization). Relocates by expectedRaw if the block
+  // index shifted, and appends when the index is past the end (blockIndex === blocks.length).
   function updatePreviewBlock(blockIndex: number, nextRaw: string, expectedRaw?: string) {
     const currentMarkdown = markdownRef.current;
     const blocks = splitMarkdownBlocks(currentMarkdown);
-    const block = blocks[blockIndex];
-    if (!block) {
-      return;
+    let block: MarkdownBlock | undefined = blocks[blockIndex];
+    if (block && expectedRaw !== undefined && block.raw !== expectedRaw) {
+      block = blocks.find((candidate) => candidate.raw === expectedRaw);
     }
-    if (expectedRaw !== undefined && block.raw !== expectedRaw) {
+    if (!block) {
+      if (expectedRaw === "" && nextRaw.trim()) {
+        const base = currentMarkdown.replace(/\s+$/, "");
+        const nextMarkdown = base ? `${base}\n\n${nextRaw}` : nextRaw;
+        if (nextMarkdown !== currentMarkdown) {
+          pushUndo();
+          updateMarkdown(nextMarkdown);
+        }
+      }
       return;
     }
     const nextMarkdown = `${currentMarkdown.slice(0, block.start)}${nextRaw}${currentMarkdown.slice(block.end)}`;
@@ -1913,6 +1972,55 @@ export function NotesSurface({
       pushUndo();
       updateMarkdown(nextMarkdown);
     }
+  }
+
+  // --- Preview/Split-Navigation: nach oben + zwischen Editor und Vorschau springen ---
+  function scrollPanesToTop() {
+    if (previewRef.current) {
+      previewRef.current.scrollTop = 0;
+    }
+    const node = textareaRef.current;
+    if (node) {
+      node.scrollTop = 0;
+      setEditorScrollTop(0);
+    }
+  }
+
+  function jumpPreviewToEditor() {
+    const node = textareaRef.current;
+    const preview = previewRef.current;
+    if (!node || !preview) return;
+    // Align by what is *visible*, not the caret: take the character at the editor's top-left visible
+    // corner (the topmost word) and scroll the preview to the block that contains it.
+    const rect = node.getBoundingClientRect();
+    const topOffset = caretIndexFromPoint(node, rect.left + 6, rect.top + 6) ?? 0;
+    const blocks = splitMarkdownBlocks(markdownRef.current);
+    let target = 0;
+    for (let index = 0; index < blocks.length; index += 1) {
+      if (blocks[index].start <= topOffset) target = index;
+      else break;
+    }
+    preview.querySelector<HTMLElement>(`[data-preview-block-index="${target}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+
+  function jumpEditorToPreview() {
+    const node = textareaRef.current;
+    const preview = previewRef.current;
+    if (!node || !preview) return;
+    const previewTop = preview.getBoundingClientRect().top;
+    const wrappers = Array.from(preview.querySelectorAll<HTMLElement>("[data-preview-block-index]"));
+    let topIndex = 0;
+    for (const wrapper of wrappers) {
+      if (wrapper.getBoundingClientRect().bottom >= previewTop + 1) {
+        topIndex = Number(wrapper.dataset.previewBlockIndex);
+        break;
+      }
+    }
+    const block = splitMarkdownBlocks(markdownRef.current)[topIndex];
+    if (!block) return;
+    node.scrollTop = estimatedTextareaScrollTop(markdownRef.current, block.start, node);
+    setEditorScrollTop(node.scrollTop);
+    node.focus();
   }
 
   function undo() {
@@ -2422,6 +2530,7 @@ export function NotesSurface({
                   type="button"
                   aria-label="Durchgehende Trennlinie einfügen"
                   title="Durchgehende Trennlinie einfügen"
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => insertAtSelection(dividerSnippetForTextarea("solid", textareaRef.current))}
                 >
                   <SeparatorHorizontal size={17} />
@@ -2431,9 +2540,20 @@ export function NotesSurface({
                   type="button"
                   aria-label="Gestrichelte Trennlinie einfügen"
                   title="Gestrichelte Trennlinie einfügen"
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => insertAtSelection(dividerSnippetForTextarea("dashed", textareaRef.current))}
                 >
                   <Minus size={17} />
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Einklappbaren Abschnitt einfügen"
+                  title="Einklappbaren Abschnitt einfügen (oder am Zeilenanfang „>“ + Leertaste)"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={insertToggleAtCursor}
+                >
+                  <ListTree size={17} />
                 </button>
                 <button className="icon-button" type="button" aria-label="Bild einfuegen" onClick={() => imageInputRef.current?.click()} disabled={!activeNoteId}>
                   <ImagePlus size={17} />
@@ -2460,6 +2580,42 @@ export function NotesSurface({
                     Split
                   </button>
                 </div>
+                {editorMode !== "edit" ? (
+                  <div className="markdown-view-nav">
+                    <button
+                      className="icon-button icon-button--compact"
+                      type="button"
+                      aria-label="Nach oben scrollen"
+                      title="Nach oben scrollen"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={scrollPanesToTop}
+                    >
+                      <ChevronsUp size={16} />
+                    </button>
+                    {editorMode === "split" ? (
+                      <>
+                        <button
+                          className="button button-compact"
+                          type="button"
+                          title="Editor an die sichtbare Vorschau angleichen"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={jumpEditorToPreview}
+                        >
+                          Editor
+                        </button>
+                        <button
+                          className="button button-compact"
+                          type="button"
+                          title="Vorschau an den sichtbaren Editor angleichen"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={jumpPreviewToEditor}
+                        >
+                          Vorschau
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
                 <label className="note-search-field">
                   <Search size={15} />
                   <input
@@ -2681,8 +2837,9 @@ export function NotesSurface({
                     activeCitationRef={selectedCitationRef}
                     onCitationClick={openCitation}
                     searchQuery={noteSearchQuery}
-                    editable={editorMode === "preview"}
-                    onBlockChange={editorMode === "preview" ? updatePreviewBlock : undefined}
+                    editable
+                    onBlockChange={updatePreviewBlock}
+                    highlightBlockIndices={selectionBlockIndices}
                     onScroll={(event) => {
                       previewScrollRef.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft };
                     }}

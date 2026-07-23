@@ -536,8 +536,11 @@ def _run_note_ai_chat(
                 "(je ein Leerzeichen danach), Listen mit - oder 1. (Verschachtelung ausschliesslich durch "
                 "Einrueckung mit Tabs oder Leerzeichen, keine Leerzeile zwischen Listenpunkten), einstufige "
                 "Blockzitate mit > , Fettschrift **x**, Kursiv *x*, Inline-Code `x`, Links [text](url), ein "
-                "Bild ![alt](url) als eigener Absatz, GFM-Pipe-Tabellen, Hervorhebung ==x==, sowie --- oder "
-                '<hr class="dashed"> als Trennlinie. Verwende KEINE Fenced-Code-Bloecke (```); nutze fuer Code '
+                "Bild als eigener Absatz mit relativem Pfad ![alt](/notes/assets/<id>), GFM-Pipe-Tabellen, "
+                "Hervorhebung ==x==, Trennlinien als ____ (durchgehend) oder - - - - (gestrichelt), sowie "
+                "einklappbare Abschnitte im Fence-Format ':::toggle+ Titel' (offen) bzw. ':::toggle- Titel' "
+                "(eingeklappt) mit dem Inhalt in den Folgezeilen und einer Schlusszeile ':::'. "
+                "Verwende KEINE Fenced-Code-Bloecke (```) und keine Roh-HTML-Tags (etwa <hr>); nutze fuer Code "
                 "stattdessen Inline-Code. Erfinde keine anderen Markdown-Konstrukte."
             ),
         }

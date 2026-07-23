@@ -81,6 +81,8 @@ export function OverlayNotesPanel() {
   const markdownRef = useRef("");
   const latestDraftRef = useRef({ noteId: "", title: "", markdown: "" });
   const loadedNoteIdRef = useRef("");
+  // Last server markdown for the active note — guards against an empty overwrite wiping content.
+  const loadedServerMarkdownRef = useRef("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const sizeRef = useRef<OverlaySize>(loadOverlayNotesSize());
@@ -147,6 +149,7 @@ export function OverlayNotesPanel() {
       if (latest.noteId === note.id && latest.title === variables.title && latest.markdown === variables.markdown) {
         setDirtyState(false);
       }
+      loadedServerMarkdownRef.current = note.markdown;
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes", scopedProjectId] });
     }
@@ -155,7 +158,9 @@ export function OverlayNotesPanel() {
   const uploadAsset = useMutation({
     mutationFn: (file: File) => api.uploadNoteAsset(activeNoteId, file),
     onSuccess: ({ asset }) => {
-      insertAtCaret(`![${asset.filename}](${absoluteUrl(asset.url)})`);
+      // Relative asset path (not absoluteUrl) — the baked ephemeral Tauri port went stale on restart
+      // and the image vanished; the renderer re-attaches the live API base at display time.
+      insertAtCaret(`![${asset.filename}](${asset.url})`);
       queryClient.invalidateQueries({ queryKey: ["note", activeNoteId] });
     }
   });
@@ -197,6 +202,7 @@ export function OverlayNotesPanel() {
     if (dirtyRef.current) return;
     if (!switchedNote && title === currentNote.title && markdown === currentNote.markdown) return;
     loadedNoteIdRef.current = currentNote.id;
+    loadedServerMarkdownRef.current = currentNote.markdown;
     setTitle(currentNote.title);
     setMarkdown(currentNote.markdown);
     setDirtyState(false);
@@ -216,6 +222,15 @@ export function OverlayNotesPanel() {
   // Autosave — same 1400ms debounce as the full Notes editor.
   useEffect(() => {
     if (!activeNoteId || !dirty || saveNote.isPending) return;
+    // Never let a background/empty state overwrite a note that has content unless the editor is
+    // focused (i.e. the user is deliberately clearing it).
+    if (
+      markdown.trim() === "" &&
+      loadedServerMarkdownRef.current.trim() !== "" &&
+      document.activeElement !== textareaRef.current
+    ) {
+      return;
+    }
     const nextTitle = noteTitleForSave(title, markdown);
     if (nextTitle !== title) setTitle(nextTitle);
     const handle = window.setTimeout(() => {
@@ -234,10 +249,14 @@ export function OverlayNotesPanel() {
     }
   }, [activeNoteId, dirty, markdown, title]);
 
-  // Flush an unsaved edit if the tab is switched away inside the debounce window.
+  // Flush an unsaved edit if the tab is switched away inside the debounce window — but never flush an
+  // empty draft over a note that had content (that silent wipe is the reported "section went blank").
   useEffect(() => {
     return () => {
       const draft = latestDraftRef.current;
+      if (draft.markdown.trim() === "" && loadedServerMarkdownRef.current.trim() !== "") {
+        return;
+      }
       if (dirtyRef.current && draft.noteId) {
         void api.updateNote(draft.noteId, { title: draft.title, markdown: draft.markdown }).catch(() => {});
       }

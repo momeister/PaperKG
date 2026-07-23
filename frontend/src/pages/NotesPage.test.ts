@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  absoluteUrl,
   applyTabIndent,
   buildDividerLine,
   buildMarkdownTable,
@@ -8,9 +9,14 @@ import {
   continueMarkdownLine,
   dividerSnippetForTextarea,
   isDividerBlock,
+  normalizeAssetUrl,
   parseListLines,
   parseMarkdownCitationRefs,
+  parseToggleBlock,
   previewElementToMarkdown,
+  segmentBlockLines,
+  setToggleOpen,
+  splitMarkdownBlocks,
   toggleWrap,
   withPreservedCitationLinks
 } from "./NotesPage";
@@ -322,5 +328,68 @@ describe("previewElementToMarkdown headings and lists", () => {
     const root = document.createElement("div");
     root.innerHTML = "<ul><li>parent<ul><li>child</li></ul></li></ul>";
     expect(previewElementToMarkdown("- parent\n\t- child", root)).toBe("- parent\n\t- child");
+  });
+});
+
+describe("segmentBlockLines (text above list/divider is never dropped)", () => {
+  it("keeps text preceding a bullet list in the same block", () => {
+    const segments = segmentBlockLines(["Normaler Text", "- eins", "- zwei"]);
+    expect(segments.map((s) => s.type)).toEqual(["text", "list"]);
+    expect((segments[0] as { lines: string[] }).lines).toEqual(["Normaler Text"]);
+    expect((segments[1] as { lines: string[] }).lines).toEqual(["- eins", "- zwei"]);
+  });
+
+  it("splits a dashed divider out of a mixed text/list block", () => {
+    const segments = segmentBlockLines(["Text darüber", "- - - -", "- Punkt"]);
+    expect(segments.map((s) => s.type)).toEqual(["text", "divider", "list"]);
+    expect(segments[1]).toMatchObject({ type: "divider", kind: "dashed" });
+  });
+
+  it("treats a pure paragraph as a single text run", () => {
+    const segments = segmentBlockLines(["nur", "text"]);
+    expect(segments).toHaveLength(1);
+    expect(segments[0].type).toBe("text");
+  });
+});
+
+describe("collapsible toggle blocks", () => {
+  it("splitMarkdownBlocks keeps a toggle fence (incl. blank lines) as one block", () => {
+    const md = "Intro\n\n:::toggle+ Titel\n\nAbsatz eins\n\nAbsatz zwei\n:::\n\nOutro";
+    const blocks = splitMarkdownBlocks(md);
+    const toggle = blocks.find((b) => b.raw.startsWith(":::toggle"));
+    expect(toggle).toBeTruthy();
+    expect(toggle?.raw).toContain("Absatz eins");
+    expect(toggle?.raw).toContain("Absatz zwei");
+    expect(toggle?.raw.trimEnd().endsWith(":::")).toBe(true);
+    // offsets must round-trip: slicing the source by the block's range returns its raw text.
+    expect(md.slice(toggle!.start, toggle!.end)).toBe(toggle!.raw);
+  });
+
+  it("parseToggleBlock reads open state, title and body", () => {
+    const parsed = parseToggleBlock(":::toggle- Mein Titel\nZeile A\nZeile B\n:::");
+    expect(parsed).toEqual({ open: false, title: "Mein Titel", body: "Zeile A\nZeile B" });
+  });
+
+  it("setToggleOpen flips the marker without touching the rest", () => {
+    expect(setToggleOpen(":::toggle+ T\nx\n:::", false)).toBe(":::toggle- T\nx\n:::");
+    expect(setToggleOpen(":::toggle- T\nx\n:::", true)).toBe(":::toggle+ T\nx\n:::");
+  });
+});
+
+describe("asset URL resolution (images survive a restart)", () => {
+  it("strips a stale localhost origin+port from an asset URL", () => {
+    expect(normalizeAssetUrl("http://127.0.0.1:53821/notes/assets/abc123")).toBe("/notes/assets/abc123");
+    expect(normalizeAssetUrl("http://localhost:61140/notes/assets/xyz")).toBe("/notes/assets/xyz");
+  });
+
+  it("leaves relative asset paths and external/data URLs untouched", () => {
+    expect(normalizeAssetUrl("/notes/assets/abc")).toBe("/notes/assets/abc");
+    expect(normalizeAssetUrl("https://example.com/pic.png")).toBe("https://example.com/pic.png");
+    expect(normalizeAssetUrl("data:image/png;base64,AAAA")).toBe("data:image/png;base64,AAAA");
+  });
+
+  it("absoluteUrl passes data/blob/http through unchanged", () => {
+    expect(absoluteUrl("data:image/png;base64,AAAA")).toBe("data:image/png;base64,AAAA");
+    expect(absoluteUrl("https://example.com/x.png")).toBe("https://example.com/x.png");
   });
 });
