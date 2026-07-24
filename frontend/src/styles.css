@@ -72,6 +72,10 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--app-bg);
+  /* Kein Phantom-Scroll am Dokument: alle Panes scrollen intern. Verhindert die
+     minimale Fenster-Scrollbar, die bei aktivem UI-Zoom (documentElement.zoom) + 100vh
+     durch Sub-Pixel-Rundung entsteht — sichtbar u. a. sobald der PDF-Viewer rendert. */
+  overflow: hidden;
 }
 
 button,
@@ -3571,11 +3575,31 @@ h1 {
   margin-bottom: 4px;
 }
 
-/* Die Notizfrage steht jetzt als eigene Zeile unter der Toolbar. */
-.note-question-field--standalone {
-  display: flex;
+/* Die Notizfrage ist ein kompaktes Toolbar-Popover (✨-Button klappt es auf). */
+.note-question-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.note-question-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  gap: 6px;
+  width: min(360px, 78vw);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+
+.note-question-popover .note-question-field {
   width: 100%;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .markdown-toolbar--compact {
@@ -4227,6 +4251,10 @@ h1 {
   display: grid;
   align-content: start;
   gap: 4px;
+  /* Scroll-Runway wie im Editor: die letzte Zeile lässt sich bis nach oben scrollen
+     (nur im Notizen-Editor; eingebettete Read-only-Previews bleiben unverändert). */
+  padding-bottom: calc(18px + 68vh);
+  scroll-padding-bottom: 18px;
 }
 
 .editable-preview-block {
@@ -4387,10 +4415,33 @@ h1 {
   font-style: normal;
 }
 
+/* ==Markierung== in der Vorschau: fester Vordergrund, damit sie in ALLEN Themes
+   (v. a. dunklen) lesbar bleibt — sonst erbte der Text die helle Theme-Schrift
+   und verschwand auf dem hellen Highlight. */
+.markdown-preview mark {
+  background: #fde68a;
+  color: #241a00;
+  padding: 0 3px;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+:root[data-scheme="dark"] .markdown-preview mark {
+  background: #f4c95d;
+  color: #1c1400;
+}
+
 .markdown-preview-search-hit {
-  padding: 0 1px;
-  border-radius: 2px;
-  background: rgba(255, 230, 94, 0.5);
+  padding: 0 2px;
+  border-radius: 3px;
+  background: #ffc971;
+  color: #3a2200;
+}
+
+:root[data-scheme="dark"] .markdown-preview-search-hit {
+  background: #f0a93a;
+  color: #1c1200;
 }
 
 .markdown-preview table {
@@ -5439,6 +5490,39 @@ h1 {
   pointer-events: auto;
   box-shadow: 0 2px 8px rgba(32, 43, 54, 0.3);
   z-index: 5;
+}
+
+.pdf-annotation-menu {
+  position: absolute;
+  min-width: 200px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, rgba(32, 43, 54, 0.16));
+  box-shadow: 0 6px 20px rgba(32, 43, 54, 0.28);
+  pointer-events: auto;
+  z-index: 7;
+}
+
+.pdf-annotation-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text, inherit);
+  cursor: pointer;
+}
+
+.pdf-annotation-menu-item:hover,
+.pdf-annotation-menu-item:focus-visible {
+  background: var(--surface-muted, rgba(59, 109, 246, 0.12));
 }
 
 .pdf-annotation-popover {

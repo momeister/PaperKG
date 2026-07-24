@@ -794,11 +794,15 @@ function PdfPage({
         return;
       }
 
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-      setSize({ width: viewport.width, height: viewport.height });
+      // Ganzzahlige Layout-Maße: fraktionale pdf.js-Viewport-Breiten erzeugten sonst
+      // Sub-Pixel-Überläufe (mit-)verantwortlich für die Phantom-Scrollbar.
+      const pxWidth = Math.round(viewport.width);
+      const pxHeight = Math.round(viewport.height);
+      canvas.width = pxWidth;
+      canvas.height = pxHeight;
+      canvas.style.width = `${pxWidth}px`;
+      canvas.style.height = `${pxHeight}px`;
+      setSize({ width: pxWidth, height: pxHeight });
       if (cancelled) {
         return;
       }
@@ -942,6 +946,9 @@ function PdfAnnotations({
   const [saving, setSaving] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [openBody, setOpenBody] = useState("");
+  // Rechtsklick-Kontextmenü zum Anlegen einer Punkt-Notiz an genau dieser Stelle.
+  // x/y sind normiert (0..1), left/top Pixel relativ zur Surface (für die Menü-Position).
+  const [menu, setMenu] = useState<{ x: number; y: number; left: number; top: number } | null>(null);
 
   // Everything below autosaves (debounced) instead of using explicit Speichern/Abbrechen
   // buttons. These refs track in-flight timers/ids synchronously (not via state) because a
@@ -1084,13 +1091,46 @@ function PdfAnnotations({
       setPending(null);
     }
 
+    // Rechtsklick auf die Seite → Kontextmenü mit „Punkt-Notiz hier hinzufügen".
+    // Unabhängig vom Punkt-Modus, damit man ohne Umweg an der Stelle notieren kann.
+    function handleContextMenu(event: MouseEvent) {
+      if ((event.target as HTMLElement | null)?.closest(".pdf-annotation-layer")) return;
+      const surfaceEl = surfaceRef.current;
+      if (!surfaceEl) return;
+      const surfRect = surfaceEl.getBoundingClientRect();
+      const left = event.clientX - surfRect.left;
+      const top = event.clientY - surfRect.top;
+      const x = left / Math.max(1, surfRect.width);
+      const y = top / Math.max(1, surfRect.height);
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      event.preventDefault();
+      setMenu({ x, y, left, top });
+    }
+
     surface.addEventListener("mouseup", handleMouseUp);
     surface.addEventListener("click", handleClick);
+    surface.addEventListener("contextmenu", handleContextMenu);
     return () => {
       surface.removeEventListener("mouseup", handleMouseUp);
       surface.removeEventListener("click", handleClick);
+      surface.removeEventListener("contextmenu", handleContextMenu);
     };
   }, [surfaceRef, pointMode]);
+
+  // Kontextmenü schließt bei Klick daneben oder Escape.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   const startDraftFromPending = () => {
     if (!pending) return;
@@ -1209,6 +1249,28 @@ function PdfAnnotations({
           <div className="pdf-annotation-popover-actions">
             <button className="icon-button" type="button" aria-label="Schließen" onClick={closeDraft}><X size={14} /></button>
           </div>
+        </div>
+      ) : null}
+
+      {menu ? (
+        <div
+          className="pdf-annotation-menu"
+          style={{ left: Math.min(menu.left, Math.max(0, w - 210)), top: menu.top + 4 }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="pdf-annotation-menu-item"
+            onClick={() => {
+              draftIdRef.current = null;
+              setDraft({ kind: "point", rects: [{ x: menu.x, y: menu.y, width: 0, height: 0 }], quote: "", left: menu.left, top: menu.top });
+              setDraftBody("");
+              setPending(null);
+              setMenu(null);
+            }}
+          >
+            <Plus size={13} /> Punkt-Notiz hier hinzufügen
+          </button>
         </div>
       ) : null}
     </div>

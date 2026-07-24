@@ -88,6 +88,59 @@ export function caretIndexFromPoint(textarea: HTMLTextAreaElement, clientX: numb
 }
 
 
+// Pixel-Scrollposition (top) jedes Markdown-Blocks IM Editor-Textarea, weiche
+// Zeilenumbrüche eingerechnet. `linesBefore * lineHeight` reicht nicht: umgebrochene
+// lange Absätze (und Bild-Markdown, das im Editor nur Text ist) erzeugen zusätzliche
+// Höhe → sonst driftet der Split-Scroll-Sync über lange Notizen weg. Gemessen über
+// einen Spiegel-<div> mit identischem Umbruch-Layout (wie caretIndexFromPoint).
+export function measureEditorBlockTops(textarea: HTMLTextAreaElement, blockStarts: number[]): number[] {
+  const doc = textarea.ownerDocument;
+  const win = doc.defaultView ?? window;
+  const style = win.getComputedStyle(textarea);
+  const mirror = doc.createElement("div");
+  const copy = [
+    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+    "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "letterSpacing",
+    "lineHeight", "textTransform", "wordSpacing", "textIndent", "tabSize", "wordBreak",
+    "overflowWrap", "whiteSpace"
+  ] as const;
+  for (const property of copy) {
+    (mirror.style as unknown as Record<string, string>)[property] = (style as unknown as Record<string, string>)[property];
+  }
+  mirror.style.boxSizing = "border-box";
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.left = "-9999px";
+  mirror.style.top = "0";
+  // clientWidth (Inhalt + Padding, ohne Rahmen/Scrollbar) = tatsächliche Umbruchbreite.
+  mirror.style.width = `${textarea.clientWidth}px`;
+  mirror.style.height = "auto";
+  if (!mirror.style.whiteSpace || mirror.style.whiteSpace === "normal") mirror.style.whiteSpace = "pre-wrap";
+  if (!mirror.style.overflowWrap) mirror.style.overflowWrap = "break-word";
+
+  const value = textarea.value;
+  const frag = doc.createDocumentFragment();
+  const markers: HTMLSpanElement[] = [];
+  let cursor = 0;
+  for (const rawStart of blockStarts) {
+    const start = Math.max(cursor, Math.min(value.length, rawStart));
+    if (start > cursor) frag.appendChild(doc.createTextNode(value.slice(cursor, start)));
+    const marker = doc.createElement("span");
+    marker.textContent = "​";
+    frag.appendChild(marker);
+    markers.push(marker);
+    cursor = start;
+  }
+  if (cursor < value.length) frag.appendChild(doc.createTextNode(value.slice(cursor)));
+  if (value.endsWith("\n")) frag.appendChild(doc.createTextNode(" "));
+  mirror.appendChild(frag);
+  doc.body.appendChild(mirror);
+  const tops = markers.map((marker) => marker.offsetTop);
+  mirror.remove();
+  return tops;
+}
+
+
 export const TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spanisch", "Italienisch", "Portugiesisch", "Niederländisch", "Polnisch", "Chinesisch", "Japanisch"];
 
 export const FORMAT_AS_MARKDOWN_INSTRUCTION =

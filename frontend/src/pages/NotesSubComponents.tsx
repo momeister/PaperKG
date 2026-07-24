@@ -681,6 +681,7 @@ export function MarkdownPreview({
   editable = false,
   onBlockChange,
   onScroll,
+  onActivate,
   highlightBlockIndices,
   className = ""
 }: {
@@ -694,6 +695,8 @@ export function MarkdownPreview({
   editable?: boolean;
   onBlockChange?: (blockIndex: number, nextRaw: string, expectedRaw?: string) => void;
   onScroll?: (event: ReactUIEvent<HTMLElement>) => void;
+  // Markiert dieses Pane als Scroll-Leader (Pointer betritt die Vorschau).
+  onActivate?: () => void;
   highlightBlockIndices?: Set<number>;
   className?: string;
 }) {
@@ -708,7 +711,12 @@ export function MarkdownPreview({
     }
   }, [blocks.length, editingIndex]);
   return (
-    <article ref={previewRef} className={`markdown-preview ${editable ? "markdown-preview--editable" : ""} ${className}`.trim()} onScroll={onScroll}>
+    <article
+      ref={previewRef}
+      className={`markdown-preview ${editable ? "markdown-preview--editable" : ""} ${className}`.trim()}
+      onScroll={onScroll}
+      onPointerEnter={onActivate}
+    >
       {blocks.map((block, index) => {
         // In editable modes a toggle's summary click flips + / - in the stored fence via onBlockChange,
         // so the collapsed/expanded state persists in the markdown (survives reload, like Notion).

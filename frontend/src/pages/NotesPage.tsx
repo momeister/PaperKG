@@ -4,6 +4,7 @@ import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent
 import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeftRight,
   Bold,
   BookmarkPlus,
   Code,
@@ -13,6 +14,7 @@ import {
   ChevronUp,
   ChevronsUp,
   Download,
+  History,
   FilePlus2,
   Globe,
   Highlighter,
@@ -26,7 +28,6 @@ import {
   Minus,
   MoreHorizontal,
   NotebookPen,
-  PanelRightClose,
   PanelRightOpen,
   Pin,
   Quote,
@@ -89,6 +90,7 @@ import {
   isComplexPreviewBlock,
   isUntitledNoteTitle,
   latestThreadAnswer,
+  measureEditorBlockTops,
   loadBooleanUiState,
   loadNumberUiState,
   loadThreadMetaUiState,
@@ -282,6 +284,18 @@ export function NotesSurface({
   // in der schmalen Workspace-Spalte auf drei Zeilen um.
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLSpanElement | null>(null);
+  // "Ganze Notiz fragen" ist ein kompaktes Toolbar-Popover statt einer Vollbreit-Zeile
+  // (die sich im Preview über die ganze Seite aufblähte).
+  const [noteQuestionOpen, setNoteQuestionOpen] = useState(false);
+  const noteQuestionRef = useRef<HTMLSpanElement | null>(null);
+  // Kontinuierlicher Split-Scroll-Sync: das führende Pane (Pointer/Focus) treibt das
+  // andere; der Folge-Scroll treibt nicht zurück, weil der Leader gleich bleibt.
+  // Per ⇄-Button umschaltbar; ein Klick gleicht zusätzlich sofort vom zuletzt aktiven Pane an.
+  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(() => loadBooleanUiState("editor.scrollSync", true));
+  const scrollLeaderRef = useRef<"editor" | "preview" | null>(null);
+  const scrollSyncRaf = useRef<number | null>(null);
+  // Wrap-genaue Editor-Block-Tops sind teuer (Spiegel-Messung) → cachen bis Text/Breite wechselt.
+  const editorTopsCacheRef = useRef<{ md: string; width: number; tops: number[] } | null>(null);
   const [tableHover, setTableHover] = useState({ cols: 0, rows: 0 });
   const [splitRatio, setSplitRatio] = useState(() => loadNumberUiState("editor.splitRatio", 0.5));
   const splitGridRef = useRef<HTMLDivElement | null>(null);
@@ -968,6 +982,29 @@ export function NotesSurface({
     };
   }, [moreMenuOpen]);
 
+  // "Ganze Notiz fragen"-Popover schließt bei Klick daneben oder Escape.
+  useEffect(() => {
+    if (!noteQuestionOpen) {
+      return;
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (noteQuestionRef.current && !noteQuestionRef.current.contains(event.target as Node)) {
+        setNoteQuestionOpen(false);
+      }
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setNoteQuestionOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [noteQuestionOpen]);
+
   useEffect(() => {
     if (!selection) {
       setAiPopoverBottomPadding(0);
@@ -1562,6 +1599,7 @@ export function NotesSurface({
       return;
     }
     askNote.mutate();
+    setNoteQuestionOpen(false);
   }
 
   function setThreadCollapsed(thread: NoteAiThread, collapsed: boolean) {
@@ -2035,41 +2073,89 @@ export function NotesSurface({
     }
   }
 
-  function jumpPreviewToEditor() {
-    const node = textareaRef.current;
-    const preview = previewRef.current;
-    if (!node || !preview) return;
-    // Align by what is *visible*, not the caret: take the character at the editor's top-left visible
-    // corner (the topmost word) and scroll the preview to the block that contains it.
-    const rect = node.getBoundingClientRect();
-    const topOffset = caretIndexFromPoint(node, rect.left + 6, rect.top + 6) ?? 0;
-    const blocks = splitMarkdownBlocks(markdownRef.current);
-    let target = 0;
-    for (let index = 0; index < blocks.length; index += 1) {
-      if (blocks[index].start <= topOffset) target = index;
-      else break;
+  // Wrap-genaue Editor-Block-Tops (Spiegel-Messung), gecached bis Text/Breite wechseln.
+  function editorBlockTops(node: HTMLTextAreaElement, md: string, blocks: MarkdownBlock[]): number[] {
+    const width = node.clientWidth;
+    const cache = editorTopsCacheRef.current;
+    if (cache && cache.md === md && cache.width === width && cache.tops.length === blocks.length) {
+      return cache.tops;
     }
-    preview.querySelector<HTMLElement>(`[data-preview-block-index="${target}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    const tops = measureEditorBlockTops(node, blocks.map((block) => block.start));
+    editorTopsCacheRef.current = { md, width, tops };
+    return tops;
   }
 
-  function jumpEditorToPreview() {
+  // Bildet den Scroll des führenden Panes stückweise-linear auf das andere ab, verankert
+  // an den Blockgrenzen: Editor-Tops wrap-genau gemessen, Vorschau-Tops = offsetTop der
+  // Block-Wrapper (inkl. echter Bildhöhen). Zusätzliche Anker bei 0 und am realen
+  // Scroll-Ende koppeln Anfang und Ende exakt — so sind beide Panes gleichzeitig unten.
+  function applyScrollSync(leader: "editor" | "preview") {
     const node = textareaRef.current;
     const preview = previewRef.current;
     if (!node || !preview) return;
+    const md = markdownRef.current;
+    const blocks = splitMarkdownBlocks(md);
+    if (blocks.length === 0) return;
+    const allEditorTops = editorBlockTops(node, md, blocks);
+    const eTops: number[] = [];
+    const pTops: number[] = [];
+    // Block-Top in Vorschau-Scroll-Koordinaten (unabhängig vom offsetParent).
     const previewTop = preview.getBoundingClientRect().top;
-    const wrappers = Array.from(preview.querySelectorAll<HTMLElement>("[data-preview-block-index]"));
-    let topIndex = 0;
-    for (const wrapper of wrappers) {
-      if (wrapper.getBoundingClientRect().bottom >= previewTop + 1) {
-        topIndex = Number(wrapper.dataset.previewBlockIndex);
-        break;
-      }
+    for (let i = 0; i < blocks.length; i += 1) {
+      const wrap = preview.querySelector<HTMLElement>(`[data-preview-block-index="${i}"]`);
+      if (!wrap) continue;
+      eTops.push(allEditorTops[i] ?? 0);
+      pTops.push(wrap.getBoundingClientRect().top - previewTop + preview.scrollTop);
     }
-    const block = splitMarkdownBlocks(markdownRef.current)[topIndex];
-    if (!block) return;
-    node.scrollTop = estimatedTextareaScrollTop(markdownRef.current, block.start, node);
-    setEditorScrollTop(node.scrollTop);
-    node.focus();
+    if (eTops.length === 0) return;
+    // Startanker (0,0) und Endanker am realen Scroll-Maximum jedes Panes.
+    if (eTops[0] > 0 && pTops[0] > 0) {
+      eTops.unshift(0);
+      pTops.unshift(0);
+    }
+    const eMax = Math.max(0, node.scrollHeight - node.clientHeight);
+    const pMax = Math.max(0, preview.scrollHeight - preview.clientHeight);
+    if (eMax > eTops[eTops.length - 1] && pMax > pTops[pTops.length - 1]) {
+      eTops.push(eMax);
+      pTops.push(pMax);
+    }
+    if (eTops.length < 2) return;
+    const src = leader === "editor" ? eTops : pTops;
+    const dst = leader === "editor" ? pTops : eTops;
+    const pos = leader === "editor" ? node.scrollTop : preview.scrollTop;
+    let i = 0;
+    while (i < src.length - 1 && src[i + 1] <= pos) i += 1;
+    i = Math.min(i, src.length - 2);
+    const span = Math.max(1, src[i + 1] - src[i]);
+    const frac = Math.min(1, Math.max(0, (pos - src[i]) / span));
+    const target = dst[i] + frac * (dst[i + 1] - dst[i]);
+    if (leader === "editor") {
+      preview.scrollTop = target;
+    } else {
+      node.scrollTop = target;
+      setEditorScrollTop(node.scrollTop);
+    }
+  }
+
+  // Ein Sync pro Frame; nur das führende Pane treibt (verhindert Rück-Kopplung).
+  function scheduleScrollSync(leader: "editor" | "preview") {
+    if (!scrollSyncEnabled || editorMode !== "split") return;
+    if (scrollLeaderRef.current !== leader) return;
+    if (scrollSyncRaf.current !== null) return;
+    scrollSyncRaf.current = window.requestAnimationFrame(() => {
+      scrollSyncRaf.current = null;
+      applyScrollSync(leader);
+    });
+  }
+
+  // ⇄-Button: kontinuierlichen Sync an/aus schalten; beim Einschalten (und generell beim
+  // Klick) einmalig vom zuletzt aktiven Pane aus angleichen.
+  function toggleScrollSync() {
+    const next = !scrollSyncEnabled;
+    setScrollSyncEnabled(next);
+    saveBooleanUiState("editor.scrollSync", next);
+    const leader = scrollLeaderRef.current ?? "editor";
+    window.requestAnimationFrame(() => applyScrollSync(leader));
   }
 
   function undo() {
@@ -2472,28 +2558,33 @@ export function NotesSurface({
                 <input className="note-title-input" value={title} onChange={(event) => updateTitle(event.target.value)} placeholder="Titel" />
                 <div className="button-row">
                   <button
-                    className="button button-compact"
+                    className={`icon-button${publishNoteAsSource.isSuccess ? " icon-button--active" : ""}`}
                     type="button"
                     disabled={!activeNoteId || !markdown.trim() || publishNoteAsSource.isPending}
                     onClick={() => publishNoteAsSource.mutate()}
-                    title="Diese Notiz als zitierbare Quelle im Projekt bereitstellen (Snapshot, jederzeit aktualisierbar)"
+                    title={publishNoteAsSource.isPending ? "Speichere Quelle…" : publishNoteAsSource.isSuccess ? "Quelle aktuell – erneut klicken zum Aktualisieren" : "Als zitierbare Quelle im Projekt bereitstellen"}
                     aria-label="Als Quelle"
                   >
-                    <BookmarkPlus size={16} />
-                    <span>{publishNoteAsSource.isPending ? "Speichere…" : publishNoteAsSource.isSuccess ? "Quelle aktuell" : "Als Quelle"}</span>
+                    <BookmarkPlus size={17} />
                   </button>
-                  <button className="button button-compact" type="button" disabled={!activeNoteId || !markdown.trim()} onClick={exportCurrentNote} aria-label="Export">
-                    <Download size={16} />
-                    <span>Export</span>
+                  <button className="icon-button" type="button" disabled={!activeNoteId || !markdown.trim()} onClick={exportCurrentNote} aria-label="Export" title="Notiz exportieren">
+                    <Download size={17} />
                   </button>
-                  <button className="icon-button" type="button" aria-label="Undo" onClick={undo}>
+                  <button className="icon-button" type="button" aria-label="Undo" title="Rückgängig" onClick={undo}>
                     <Undo2 size={17} />
                   </button>
-                  <button className="icon-button" type="button" aria-label="Redo" disabled>
+                  <button className="icon-button" type="button" aria-label="Redo" title="Wiederholen" disabled>
                     <Redo2 size={17} />
                   </button>
-                  <button className="icon-button" type="button" aria-label="KI-Verlauf" onClick={() => setHistoryOpen((current) => !current)}>
-                    {historyOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+                  <button
+                    className={`icon-button${historyOpen ? " icon-button--active" : ""}`}
+                    type="button"
+                    aria-label="KI-Verlauf"
+                    aria-pressed={historyOpen}
+                    title="KI-Verlauf ein-/ausblenden"
+                    onClick={() => setHistoryOpen((current) => !current)}
+                  >
+                    <History size={17} />
                   </button>
                   <button className="icon-button" type="button" aria-label="Notiz loeschen" onClick={() => deleteNote.mutate()} disabled={deleteNote.isPending}>
                     <Trash2 size={17} />
@@ -2691,29 +2782,64 @@ export function NotesSurface({
                       <ChevronsUp size={16} />
                     </button>
                     {editorMode === "split" ? (
-                      <>
-                        <button
-                          className="button button-compact"
-                          type="button"
-                          title="Editor an die sichtbare Vorschau angleichen"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={jumpEditorToPreview}
-                        >
-                          Editor
-                        </button>
-                        <button
-                          className="button button-compact"
-                          type="button"
-                          title="Vorschau an den sichtbaren Editor angleichen"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={jumpPreviewToEditor}
-                        >
-                          Vorschau
-                        </button>
-                      </>
+                      <button
+                        className={`icon-button icon-button--compact${scrollSyncEnabled ? " icon-button--active" : ""}`}
+                        type="button"
+                        aria-label="Scroll-Synchronisation"
+                        aria-pressed={scrollSyncEnabled}
+                        title={scrollSyncEnabled
+                          ? "Scroll-Sync an – Klick: aus (und einmal an zuletzt aktives Pane angleichen)"
+                          : "Scroll-Sync aus – Klick: an (an zuletzt aktives Pane angleichen)"}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={toggleScrollSync}
+                      >
+                        <ArrowLeftRight size={16} />
+                      </button>
                     ) : null}
                   </div>
                 ) : null}
+                <span className="note-question-wrap" ref={noteQuestionRef}>
+                  <button
+                    className={`icon-button icon-button--compact${noteQuestionOpen ? " icon-button--active" : ""}`}
+                    type="button"
+                    aria-label="Ganze Notiz fragen"
+                    aria-expanded={noteQuestionOpen}
+                    title="Ganze Notiz fragen (KI)"
+                    disabled={!activeNoteId}
+                    onClick={() => setNoteQuestionOpen((current) => !current)}
+                  >
+                    <Sparkles size={15} />
+                  </button>
+                  {noteQuestionOpen ? (
+                    <div className="note-question-popover">
+                      <label className="note-question-field">
+                        <Sparkles size={15} />
+                        <input
+                          autoFocus
+                          value={noteQuestion}
+                          onChange={(event) => setNoteQuestion(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              askWholeNote();
+                            }
+                          }}
+                          placeholder="Ganze Notiz fragen"
+                        />
+                        <button
+                          className="button button-compact"
+                          type="button"
+                          aria-label="Ganze Notiz fragen"
+                          onClick={askWholeNote}
+                          disabled={!noteQuestion.trim() || askNote.isPending || !activeNoteId}
+                        >
+                          Fragen
+                        </button>
+                      </label>
+                      {askNote.isError ? <div className="inline-error">Notizfrage fehlgeschlagen: {formatError(askNote.error)}</div> : null}
+                    </div>
+                  ) : null}
+                </span>
                 <label className="note-search-field">
                   <Search size={15} />
                   <input
@@ -2734,33 +2860,6 @@ export function NotesSurface({
                 </label>
               </div>
 
-              {/* Die Notizfrage ist ein KI-Control und stand nur historisch in der
-                  Formatier-Toolbar — dort war sie der breiteste Umbruch-Verursacher. */}
-              <label className="note-question-field note-question-field--standalone">
-                <Sparkles size={15} />
-                <input
-                  value={noteQuestion}
-                  onChange={(event) => setNoteQuestion(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      askWholeNote();
-                    }
-                  }}
-                  placeholder="Ganze Notiz fragen"
-                />
-                <button
-                  className="button button-compact"
-                  type="button"
-                  aria-label="Ganze Notiz"
-                  onClick={askWholeNote}
-                  disabled={!noteQuestion.trim() || askNote.isPending || !activeNoteId}
-                >
-                  Notiz
-                </button>
-              </label>
-              {askNote.isError ? <div className="inline-error">Notizfrage fehlgeschlagen: {formatError(askNote.error)}</div> : null}
-
               <div
                 className={`markdown-editor-grid markdown-editor-grid--${editorMode}`}
                 ref={splitGridRef}
@@ -2771,6 +2870,7 @@ export function NotesSurface({
                     className={`markdown-editor-wrap markdown-editor-wrap--highlighted ${selection ? "markdown-editor-wrap--selection-active" : ""}`}
                     data-insert-preview={insertPreview ? "true" : undefined}
                     ref={editorWrapRef}
+                    onPointerEnter={() => { scrollLeaderRef.current = "editor"; }}
                     style={editorBottomStyle}
                   >
                     <TextareaHighlightLayer
@@ -2788,9 +2888,12 @@ export function NotesSurface({
                       onChange={(event) => updateMarkdown(event.target.value)}
                       onSelect={captureSelection}
                       onPointerDown={handleEditorPointerDown}
+                      onPointerEnter={() => { scrollLeaderRef.current = "editor"; }}
+                      onFocus={() => { scrollLeaderRef.current = "editor"; }}
                       onScroll={(event) => {
                         setEditorScrollTop(event.currentTarget.scrollTop);
                         setEditorScrollLeft(event.currentTarget.scrollLeft);
+                        scheduleScrollSync("editor");
                       }}
                       onKeyDown={handleEditorKeyDown}
                       onPaste={handleEditorPaste}
@@ -2941,8 +3044,10 @@ export function NotesSurface({
                     editable
                     onBlockChange={updatePreviewBlock}
                     highlightBlockIndices={selectionBlockIndices}
+                    onActivate={() => { scrollLeaderRef.current = "preview"; }}
                     onScroll={(event) => {
                       previewScrollRef.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft };
+                      scheduleScrollSync("preview");
                     }}
                   />
                 ) : null}
