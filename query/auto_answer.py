@@ -5,9 +5,15 @@ mirrors the Tiefenanalyse auto-harvest loop (``research_tree.py``) for a *single
 question and additionally widens the context the way the Import tab does: an LLM
 derives a handful of *related topics* from the question and those are harvested too.
 
-Flow: answer → (if weak/forced) derive related topics → harvest papers (with real
-Phase-3 extraction) + grey web sources for the question and each related topic →
-re-answer with the freshly harvested evidence.
+Flow: answer → (if weak/forced) derive related topics → harvest in three stages,
+re-answering after each and stopping as soon as the answer holds:
+
+1. ``scientific``  — Paper aus den wissenschaftlichen Quellen (mit echter Phase-3-Extraktion)
+2. ``trusted``     — Webquellen von Behörden, Hochschulen, Fachverlagen
+3. ``unverified``  — der Rest des Webs, als ungeprüft markiert
+
+Damit landen unsichere Quellen nur dann in der Antwort, wenn die belastbareren
+Stufen die Frage nicht decken konnten.
 
 Deliberately minimal dependencies — no ``api/`` imports — so it stays importable and
 testable without pulling the FastAPI app into the import graph.
@@ -29,6 +35,15 @@ from query.hybrid_retriever import HybridRetriever
 
 if TYPE_CHECKING:
     from query.llm_router import LLMRouter
+
+
+#: Eskalationsleiter der Auto-Recherche. ``tier`` ist die Domain-Stufe aus
+#: research/source_tiers.py und gilt nur fuer die Web-Stufen.
+HARVEST_STAGES: tuple[dict[str, str], ...] = (
+    {"id": "scientific", "label": "Wissenschaftliche Quellen", "tier": ""},
+    {"id": "trusted", "label": "Vertrauenswürdige Webquellen", "tier": "trusted"},
+    {"id": "unverified", "label": "Ungeprüfte Webquellen", "tier": "unknown"},
+)
 
 
 def _answer_has_citations(answer_dict: dict[str, Any]) -> bool:
@@ -131,11 +146,12 @@ async def auto_research_answer(
 
     - ``{"status": "answer", "answer": <dict>}`` — the initial grounded answer.
     - ``{"status": "planning", "related_topics": [...]}`` — derived related topics.
-    - ``{"status": "harvesting", "scope": "main"|"related", "topic": str,
-        "papers": [{id,title}], "grey": [{id,title,url}]}`` — one per harvest step.
-    - ``{"status": "reanswering"}`` — re-answer started.
-    - ``{"status": "harvest_error", "error": str, "topic": str}`` — non-fatal step error.
-    - ``{"status": "done", "answer": <dict>, "harvest_summary": {...}}`` — final answer.
+    - ``{"status": "harvesting", "stage": str, "stage_label": str,
+        "scope": "main"|"related", "topic": str,
+        "papers": [{id,title}], "grey": [{id,title,url,trust_tier}]}`` — one per harvest step.
+    - ``{"status": "reanswering", "stage": str}`` — re-answer after a stage.
+    - ``{"status": "harvest_error", "error": str, "topic": str, "stage": str}`` — non-fatal error.
+    - ``{"status": "done", "answer": <dict>, "harvest_summary": {..., "stages": [...]}}``.
     """
 
     def _answer(
@@ -188,69 +204,111 @@ async def auto_research_answer(
     harvested_grey: list[dict[str, str]] = []
     seen_pids: set[str] = set(paper_ids or [])
     seen_greys: set[str] = set(grey_source_ids or [])
+    stage_summaries: list[dict[str, Any]] = []
 
-    # 3. Harvest the main question first, then each related topic. Sequential keeps
-    # DuckDB's single writer happy (and matches the research-tree harvest loop).
-    harvest_plan: list[tuple[str, str, int, int]] = [("main", harvest_question, main_papers, main_grey)]
-    harvest_plan += [("related", topic, papers_per_topic, grey_per_topic) for topic in related_topics]
+    # Topics for every stage: the main question first, then each related topic.
+    # Sequential keeps DuckDB's single writer happy (and matches the research-tree loop).
+    topic_plan: list[tuple[str, str, int, int]] = [("main", harvest_question, main_papers, main_grey)]
+    topic_plan += [("related", topic, papers_per_topic, grey_per_topic) for topic in related_topics]
 
-    for scope, topic, n_papers, n_grey in harvest_plan:
-        step_papers: list[dict[str, str]] = []
-        step_grey: list[dict[str, str]] = []
+    async def _harvest_papers(topic: str, count: int) -> tuple[list[dict[str, str]], str | None]:
+        entries: list[dict[str, str]] = []
         try:
-            paper_records = await harvest_for_question(
+            records = await harvest_for_question(
                 question=topic,
                 project_id=str(project_id or ""),
                 db_path=metadata_db_path,
                 pdf_base_dir=pdf_base_dir,
                 projects_path=projects_path,
-                max_papers=n_papers,
+                max_papers=count,
                 llm_router=llm_router,
                 provider=provider,
                 model=model,
             )
-            for record in paper_records:
-                pid = str(record.get("id") or "")
-                if pid and pid not in seen_pids:
-                    seen_pids.add(pid)
-                    new_paper_ids.append(pid)
-                    entry = {"id": pid, "title": str(record.get("title") or pid)}
-                    step_papers.append(entry)
-                    harvested_papers.append(entry)
         except Exception as exc:  # noqa: BLE001 - keep going with remaining topics
-            yield {"status": "harvest_error", "error": f"Paper-Suche fehlgeschlagen: {exc}", "topic": topic}
+            return entries, f"Paper-Suche fehlgeschlagen: {exc}"
+        for record in records:
+            pid = str(record.get("id") or "")
+            if pid and pid not in seen_pids:
+                seen_pids.add(pid)
+                new_paper_ids.append(pid)
+                entry = {"id": pid, "title": str(record.get("title") or pid)}
+                entries.append(entry)
+                harvested_papers.append(entry)
+        return entries, None
 
-        if n_grey > 0:
-            try:
-                grey_records = await harvest_grey_sources_for_question(
-                    question=topic,
-                    project_id=str(project_id or ""),
-                    db_path=metadata_db_path,
-                    max_sources=n_grey,
-                )
-                for record in grey_records:
-                    gid = str(record.get("id") or "")
-                    if gid and gid not in seen_greys:
-                        seen_greys.add(gid)
-                        new_grey_ids.append(gid)
-                        entry = {"id": gid, "title": str(record.get("title") or gid),
-                                 "url": str(record.get("url") or "")}
-                        step_grey.append(entry)
-                        harvested_grey.append(entry)
-            except Exception as exc:  # noqa: BLE001
-                yield {"status": "harvest_error", "error": f"Web-Suche fehlgeschlagen: {exc}", "topic": topic}
+    async def _harvest_grey(topic: str, count: int, tier: str) -> tuple[list[dict[str, str]], str | None]:
+        entries: list[dict[str, str]] = []
+        if count <= 0:
+            return entries, None
+        try:
+            records = await harvest_grey_sources_for_question(
+                question=topic,
+                project_id=str(project_id or ""),
+                db_path=metadata_db_path,
+                max_sources=count,
+                tiers=(tier,),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return entries, f"Web-Suche fehlgeschlagen: {exc}"
+        for record in records:
+            gid = str(record.get("id") or "")
+            if gid and gid not in seen_greys:
+                seen_greys.add(gid)
+                new_grey_ids.append(gid)
+                entry = {
+                    "id": gid,
+                    "title": str(record.get("title") or gid),
+                    "url": str(record.get("url") or ""),
+                    "trust_tier": str(record.get("trust_tier") or tier),
+                }
+                entries.append(entry)
+                harvested_grey.append(entry)
+        return entries, None
 
-        yield {"status": "harvesting", "scope": scope, "topic": topic,
-               "papers": step_papers, "grey": step_grey}
+    # 3. Escalate one source class at a time: scientific sources first, then
+    # trustworthy institutions/publishers, and only if the answer still does not
+    # hold, the rest of the web. After each stage the question is answered again —
+    # a stage that already carries the answer stops the ladder.
+    for stage_index, stage in enumerate(HARVEST_STAGES):
+        stage_id = stage["id"]
+        stage_papers = 0
+        stage_grey = 0
+        for scope, topic, n_papers, n_grey in topic_plan:
+            step_papers: list[dict[str, str]] = []
+            step_grey: list[dict[str, str]] = []
+            if stage_id == "scientific":
+                step_papers, error = await _harvest_papers(topic, n_papers)
+            else:
+                step_grey, error = await _harvest_grey(topic, n_grey, str(stage["tier"]))
+            if error:
+                yield {"status": "harvest_error", "error": error, "topic": topic, "stage": stage_id}
+            stage_papers += len(step_papers)
+            stage_grey += len(step_grey)
+            yield {"status": "harvesting", "stage": stage_id, "stage_label": stage["label"],
+                   "scope": scope, "topic": topic, "papers": step_papers, "grey": step_grey}
 
-    # 4. Re-answer with the harvested evidence merged in. Mirror the research-tree
-    # merge: keep existing scope IDs, append the new papers; both empty → None.
-    if new_paper_ids or new_grey_ids:
-        existing_ids = [pid for pid in (paper_ids or []) if pid != "__none__"]
-        effective_paper_ids = (existing_ids + new_paper_ids) if (existing_ids or new_paper_ids) else None
-        effective_grey_ids = (list(grey_source_ids or []) + new_grey_ids) or None
-        yield {"status": "reanswering"}
-        answer_dict = await asyncio.to_thread(_answer, effective_paper_ids, effective_grey_ids)
+        found_here = bool(stage_papers or stage_grey)
+        is_last_stage = stage_index == len(HARVEST_STAGES) - 1
+        if found_here:
+            # 4. Re-answer with everything harvested so far. Mirror the research-tree
+            # merge: keep existing scope IDs, append the new ones; both empty → None.
+            existing_ids = [pid for pid in (paper_ids or []) if pid != "__none__"]
+            effective_paper_ids = (existing_ids + new_paper_ids) if (existing_ids or new_paper_ids) else None
+            effective_grey_ids = (list(grey_source_ids or []) + new_grey_ids) or None
+            yield {"status": "reanswering", "stage": stage_id}
+            answer_dict = await asyncio.to_thread(_answer, effective_paper_ids, effective_grey_ids)
+
+        sufficient = found_here and not _is_weak_answer(answer_dict)
+        stage_summaries.append({
+            "stage": stage_id,
+            "label": stage["label"],
+            "papers": stage_papers,
+            "grey": stage_grey,
+            "sufficient": sufficient,
+        })
+        if sufficient or is_last_stage:
+            break
 
     yield {
         "status": "done",
@@ -260,5 +318,6 @@ async def auto_research_answer(
             "papers": harvested_papers,
             "grey": harvested_grey,
             "related_topics": related_topics,
+            "stages": stage_summaries,
         },
     }

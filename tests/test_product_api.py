@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from api import product_main
+from api.routers import projects as projects_router
 from storage.metadata_db import MetadataDB
 
 
@@ -136,6 +137,108 @@ def test_product_projects_papers_dashboard_review_and_graph(tmp_path) -> None:
     assert deleted.json()["deleted"] is True
     projects_after_delete = client.get("/projects", params=common)
     assert projects_after_delete.json()["projects"] == []
+
+
+def test_project_rename_migrates_project_scoped_data(tmp_path, monkeypatch) -> None:
+    """Die Projekt-ID *ist* der Name — Umbenennen muss alles Projektgebundene mitziehen."""
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    _fixture_db(db_path)
+    monkeypatch.setattr(projects_router, "PROJECT_PRIMARY_PATH", tmp_path / "project_primary.json")
+    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json")
+
+    client = TestClient(product_main.app)
+    common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
+    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "alt", "paper_ids": ["p1"]})
+    client.put("/projects/alt/primary-paper", json={"paper_id": "p1"})
+
+    note = client.post(
+        "/projects/alt/notes",
+        params={"metadata_db_path": str(db_path)},
+        json={"title": "Notiz", "markdown": "# Inhalt"},
+    )
+    assert note.status_code == 200
+    note_id = note.json()["note"]["id"]
+    with MetadataDB(str(db_path)) as db:
+        grey = db.add_grey_source("alt", {"url": "https://example.org", "title": "Web", "summary": "s"})
+    grey_id = grey["id"]
+
+    renamed = client.patch("/projects/alt", params=common, json={"name": "neu"})
+    assert renamed.status_code == 200
+    assert renamed.json()["project"]["id"] == "neu"
+
+    saved = json.loads(projects_path.read_text(encoding="utf-8"))
+    assert saved == {"neu": ["p1"]}
+
+    # Notiz, Web-Quelle und Hauptquelle haengen jetzt am neuen Projekt …
+    moved_notes = client.get("/projects/neu/notes", params={"metadata_db_path": str(db_path)})
+    assert [item["id"] for item in moved_notes.json()["items"]] == [note_id]
+    with MetadataDB(str(db_path)) as db:
+        assert [record["id"] for record in db.list_grey_sources("neu")] == [grey_id]
+        assert db.list_grey_sources("alt") == []
+    assert renamed.json()["project"]["primary_paper_id"] == "p1"
+
+    # … und das alte Projekt existiert nicht mehr.
+    missing = client.patch("/projects/alt", params=common, json={"name": "wieder"})
+    assert missing.status_code == 404
+
+
+def test_project_rename_rejects_reserved_and_existing_names(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    _fixture_db(db_path)
+    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json")
+
+    client = TestClient(product_main.app)
+    common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
+    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "a"})
+    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "b"})
+
+    assert client.patch("/projects/a", params=common, json={"name": "Alle Papers"}).status_code == 400
+    assert client.patch("/projects/a", params=common, json={"name": "b"}).status_code == 409
+    # Der globale Modus steht nicht in projects.json — er ist damit gar nicht erst umbenennbar.
+    assert client.patch("/projects/__all_papers__", params=common, json={"name": "x"}).status_code == 404
+
+
+def test_pinned_projects_sort_first_and_survive_reload(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    _fixture_db(db_path)
+    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json")
+
+    client = TestClient(product_main.app)
+    common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
+    for name in ["alpha", "beta", "gamma"]:
+        client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": name})
+
+    assert [p["id"] for p in client.get("/projects", params=common).json()["projects"]] == ["alpha", "beta", "gamma"]
+
+    pinned = client.patch("/projects/gamma", params=common, json={"pinned": True})
+    assert pinned.json()["project"]["pinned"] is True
+    listed = client.get("/projects", params=common).json()["projects"]
+    assert [p["id"] for p in listed] == ["gamma", "alpha", "beta"]
+
+    client.patch("/projects/gamma", params=common, json={"pinned": False})
+    assert [p["id"] for p in client.get("/projects", params=common).json()["projects"]] == ["alpha", "beta", "gamma"]
+
+
+def test_pin_survives_rename_and_is_dropped_on_delete(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "metadata.duckdb"
+    projects_path = tmp_path / "projects.json"
+    meta_path = tmp_path / "project_meta.json"
+    _fixture_db(db_path)
+    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", meta_path)
+
+    client = TestClient(product_main.app)
+    common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
+    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "alt"})
+    client.patch("/projects/alt", params=common, json={"pinned": True})
+
+    renamed = client.patch("/projects/alt", params=common, json={"name": "neu"})
+    assert renamed.json()["project"]["pinned"] is True
+
+    client.delete("/projects/neu", params={"projects_path": str(projects_path)})
+    assert json.loads(meta_path.read_text(encoding="utf-8")) == {}
 
 
 def test_graph_explorer_never_truncates_extracted_papers(tmp_path) -> None:

@@ -1,11 +1,12 @@
-import React, { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import React, { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, X, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2, Search, Sparkles, Star, X, XCircle } from "lucide-react";
 
 import { api } from "../api";
-import { EmptyState } from "../components/EmptyState";
+import { PaperPickList } from "../components/PaperPickList";
 import { Status } from "../components/Status";
+import { FALLBACK_SOURCE_CATALOG, setSourceCatalog } from "../harvestSources";
 import { useAppState } from "../state";
 import type {
   DeepResearchFinding,
@@ -15,33 +16,21 @@ import type {
   ReferenceCandidate
 } from "../types";
 
-const sourceGroups: { group: string; options: { id: string; label: string; note?: string }[] }[] = [
-  {
-    group: "Allgemein",
-    options: [
-      { id: "arxiv", label: "arXiv" },
-      { id: "semantic_scholar", label: "Semantic Scholar" },
-      { id: "openalex", label: "OpenAlex" },
-      { id: "crossref", label: "Crossref" }
-    ]
-  },
-  {
-    group: "Medizin & Biologie",
-    options: [
-      { id: "europepmc", label: "Europe PMC / PubMed" },
-      { id: "biorxiv", label: "bioRxiv / medRxiv" }
-    ]
-  },
-  {
-    group: "Open Access (alle Fächer, inkl. Recht/Wirtschaft)",
-    options: [
-      { id: "core", label: "CORE", note: "API-Key (CORE_API_KEY) nötig" },
-      { id: "doaj", label: "DOAJ" }
-    ]
-  }
-];
-
 const ALL_PAPERS_SCOPES = new Set(["", "__all_papers__"]);
+const SOURCES_STORAGE_KEY = "sciencekg.import.sources";
+
+function loadStoredSources(fallback: string[]): string[] {
+  try {
+    const stored = localStorage.getItem(SOURCES_STORAGE_KEY);
+    const parsed = stored ? (JSON.parse(stored) as unknown) : null;
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string") && parsed.length) {
+      return parsed as string[];
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
 
 type TopicGroup = {
   topic: string;
@@ -50,10 +39,6 @@ type TopicGroup = {
   collapsed: boolean;
   pending: boolean;
 };
-
-function paperKey(paper: Paper): string {
-  return paper.id || `${paper.source}:${paper.source_id}`;
-}
 
 function useElapsedTimer(isPending: boolean): number {
   const [s, setS] = useState(0);
@@ -94,7 +79,7 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
   const downloadProjectId = isRealProject ? (activeProject as string) : undefined;
 
   const [topic, setTopic] = useState("");
-  const [sources, setSources] = useState<string[]>(["arxiv"]);
+  const [sources, setSources] = useState<string[]>(() => loadStoredSources(FALLBACK_SOURCE_CATALOG.default));
   const [maxResults, setMaxResults] = useState(10);
   const [results, setResults] = useState<Paper[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -106,7 +91,6 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
   const [topicGroups, setTopicGroups] = useSessionState<TopicGroup[]>("import-topic-groups", []);
   const [includeRelatedTopics, setIncludeRelatedTopics] = useState(false);
   const [researchQuestion, setResearchQuestion] = useState("");
-  const [autoDownload, setAutoDownload] = useState(false);
   const [primaryPaperId, setPrimaryPaperId] = useState<string | null>(null);
   // Saved findings are tracked PER PROJECT — a grey source saved in one project must
   // stay saveable in every other project (a global list blocked that).
@@ -123,6 +107,28 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
   const [dropZoneDragOver, setDropZoneDragOver] = useState(false);
 
   const queryClient = useQueryClient();
+
+  // Quellenkatalog kommt aus dem Backend (harvester/source_registry.py), damit
+  // Liste und Dispatch nicht wieder auseinanderlaufen.
+  const sourcesQuery = useQuery({ queryKey: ["harvest-sources"], queryFn: api.getHarvestSources, staleTime: 60 * 60 * 1000 });
+  const catalog = sourcesQuery.data ?? FALLBACK_SOURCE_CATALOG;
+  useEffect(() => setSourceCatalog(sourcesQuery.data), [sourcesQuery.data]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(sources));
+    } catch {
+      /* ignore */
+    }
+  }, [sources]);
+  const groupedSources = useMemo(
+    () =>
+      catalog.groups.map((group) => ({
+        ...group,
+        options: catalog.sources.filter((source) => source.group === group.id)
+      })),
+    [catalog]
+  );
+  const allSourceIds = useMemo(() => catalog.sources.map((source) => source.id), [catalog]);
 
   const extractRefsAbort = useRef<AbortController | null>(null);
   const discoverPaperAbort = useRef<AbortController | null>(null);
@@ -162,12 +168,8 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
       extractRefsAbort.current = new AbortController();
       return api.extractReferences({ paper_id: paperId, max_references: 40 }, extractRefsAbort.current.signal);
     },
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       setReferences((current) => ({ ...current, [payload.paper_id]: payload.references }));
-      if (autoDownload && payload.references.length) {
-        await api.harvestDownload(payload.references, true, downloadProjectId);
-        invalidateLibrary();
-      }
     }
   });
   const discoverTopic = useMutation({
@@ -175,12 +177,8 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
       discoverTopicAbort.current = new AbortController();
       return api.discoveryFromTopic({ topic: topic.trim(), sources, provider, max_per_query: maxPerQuery }, discoverTopicAbort.current.signal);
     },
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       setTopicCandidates(payload.candidates);
-      if (autoDownload && payload.candidates.length) {
-        await api.harvestDownload(payload.candidates.slice(0, 10), true, downloadProjectId);
-        invalidateLibrary();
-      }
     }
   });
   const discoverPaper = useMutation({
@@ -188,12 +186,8 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
       discoverPaperAbort.current = new AbortController();
       return api.discoveryFromPaper({ paper_id: paperId, sources, provider, max_per_query: maxPerQuery }, discoverPaperAbort.current.signal);
     },
-    onSuccess: async (payload, paperId) => {
+    onSuccess: (payload, paperId) => {
       setPaperCandidates((current) => ({ ...current, [paperId]: payload.candidates }));
-      if (autoDownload && payload.candidates.length) {
-        await api.harvestDownload(payload.candidates.slice(0, 10), true, downloadProjectId);
-        invalidateLibrary();
-      }
     }
   });
   const research = useMutation({
@@ -285,6 +279,15 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
     setSources((current) => (current.includes(source) ? current.filter((item) => item !== source) : [...current, source]));
   }
 
+  /** Ganze Fachgruppe an/aus — „nur Medizin & Biologie" ist damit ein Klick. */
+  function toggleGroupSources(ids: string[], enable: boolean) {
+    setSources((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => (enable ? next.add(id) : next.delete(id)));
+      return Array.from(next);
+    });
+  }
+
   function toggleGroup(topic: string) {
     setTopicGroups((current) =>
       current.map((g) => (g.topic === topic ? { ...g, collapsed: !g.collapsed } : g))
@@ -319,10 +322,6 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
           <span>Harvest</span>
           <h1>Import</h1>
         </div>
-        <label className="check-row">
-          <input type="checkbox" checked={autoDownload} onChange={(event) => setAutoDownload(event.target.checked)} />
-          <span>KI-Vorschlägen vertrauen: Top-10 automatisch laden</span>
-        </label>
       </div>
 
       <div className="two-column">
@@ -333,26 +332,51 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
               <input value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="Topic oder Frage" />
             </label>
             <div className="stack source-groups">
-              {sourceGroups.map((entry) => (
-                <div key={entry.group} className="source-group">
-                  <span className="source-group-title">{entry.group}</span>
-                  <div className="checkbox-grid">
-                    {entry.options.map((source) => (
-                      <label key={source.id} className="check-row" title={source.note ?? undefined}>
-                        <input
-                          type="checkbox"
-                          checked={sources.includes(source.id)}
-                          onChange={() => toggleSource(source.id)}
-                        />
-                        <span>
-                          {source.label}
-                          {source.note ? <em className="source-note"> · {source.note}</em> : null}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
+              <div className="source-group-all">
+                <span className="source-group-title">Quellen ({sources.length}/{allSourceIds.length})</span>
+                <div className="button-row">
+                  <button className="button" type="button" onClick={() => setSources(allSourceIds)}>
+                    Alle
+                  </button>
+                  <button className="button" type="button" onClick={() => setSources([])}>
+                    Keine
+                  </button>
                 </div>
-              ))}
+              </div>
+              {groupedSources.map((entry) => {
+                const ids = entry.options.map((option) => option.id);
+                const activeCount = ids.filter((id) => sources.includes(id)).length;
+                return (
+                  <div key={entry.id} className="source-group">
+                    <label className="check-row source-group-head">
+                      <input
+                        type="checkbox"
+                        checked={activeCount === ids.length && ids.length > 0}
+                        ref={(node) => {
+                          if (node) node.indeterminate = activeCount > 0 && activeCount < ids.length;
+                        }}
+                        onChange={(event) => toggleGroupSources(ids, event.target.checked)}
+                      />
+                      <span className="source-group-title">{entry.label}</span>
+                    </label>
+                    <div className="checkbox-grid">
+                      {entry.options.map((source) => (
+                        <label key={source.id} className="check-row" title={source.note ?? undefined}>
+                          <input
+                            type="checkbox"
+                            checked={sources.includes(source.id)}
+                            onChange={() => toggleSource(source.id)}
+                          />
+                          <span>
+                            {source.label}
+                            {source.note ? <em className="source-note"> · {source.note}</em> : null}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <label>
               Anzahl Paper
@@ -372,6 +396,19 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
                 <Sparkles size={16} />
                 <span>KI-Vorschläge</span>
               </button>
+              {/* Die Anzahl gehoert an den Knopf, den sie steuert — nicht in ein eigenes Panel. */}
+              <label className="import-count-label" title="Wie viele Paper die KI je generierter Suchanfrage holt (gilt auch für KI-Kontext).">
+                <span className="import-count-caption">je Anfrage</span>
+                <input
+                  className="import-count-input"
+                  type="number"
+                  min={1}
+                  max={20}
+                  aria-label="Paper je Suchanfrage"
+                  value={maxPerQuery}
+                  onChange={(event) => setMaxPerQuery(Number(event.target.value))}
+                />
+              </label>
               {discoverTopic.isPending && (
                 <button
                   className="button"
@@ -418,29 +455,6 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
           </label>
         </section>
       </div>
-
-      <section className="panel import-ai-settings">
-        <div className="panel-heading">
-          <div>
-            <span>KI</span>
-            <strong>KI-Einstellungen</strong>
-          </div>
-        </div>
-        <p className="muted" style={{ fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
-          Die KI analysiert Thema oder hochgeladene Papers und sucht in den oben gewählten Quellen nach verwandten Werken.
-        </p>
-        <div className="import-count-label">
-          <span>Paper je Suchanfrage (KI-Vorschläge &amp; KI-Kontext):</span>
-          <input
-            className="import-count-input"
-            type="number"
-            min={3}
-            max={20}
-            value={maxPerQuery}
-            onChange={(e) => setMaxPerQuery(Number(e.target.value))}
-          />
-        </div>
-      </section>
 
       {uploaded.length ? (
         <section className="panel">
@@ -524,17 +538,17 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
                   </p>
                 )}
                 {references[paper.id]?.length ? (
-                  <CandidateList
-                    title={`${references[paper.id].length} Quellen erkannt`}
-                    candidates={references[paper.id]}
+                  <PaperPickList
+                    title="Erkannte Quellen"
+                    papers={references[paper.id]}
                     onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
                     disabled={download.isPending}
                   />
                 ) : null}
                 {paperCandidates[paper.id]?.length ? (
-                  <CandidateList
-                    title={`${paperCandidates[paper.id].length} KI-Kontext-Vorschläge`}
-                    candidates={paperCandidates[paper.id]}
+                  <PaperPickList
+                    title="KI-Kontext-Vorschläge"
+                    papers={paperCandidates[paper.id]}
                     onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
                     disabled={download.isPending}
                     onClear={() => setPaperCandidates((prev) => { const next = { ...prev }; delete next[paper.id]; return next; })}
@@ -548,9 +562,9 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
 
       {topicCandidates.length ? (
         <section className="panel">
-          <CandidateList
-            title={`${topicCandidates.length} KI-Vorschläge zum Thema`}
-            candidates={topicCandidates}
+          <PaperPickList
+            title="KI-Vorschläge zum Thema"
+            papers={topicCandidates}
             onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
             disabled={download.isPending}
             onClear={() => setTopicCandidates([])}
@@ -760,37 +774,14 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
       </section>
 
       <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <span>Treffer</span>
-            <strong>{results.length} Papers</strong>
-          </div>
-          <div className="button-row">
-            <button className="button" type="button" disabled={!results.length || download.isPending} onClick={() => download.mutate({ papers: results, downloadPdfs: false })}>
-              <Download size={16} />
-              <span>Metadaten</span>
-            </button>
-            <button className="button button-primary" type="button" disabled={!results.length || download.isPending} onClick={() => download.mutate({ papers: results, downloadPdfs: true })}>
-              <Download size={16} />
-              <span>PDFs</span>
-            </button>
-          </div>
-        </div>
-        {results.length ? (
-          <div className="paper-grid">
-            {results.map((paper) => (
-              <article key={`${paper.source}:${paper.source_id}`} className="paper-card">
-                <strong>{paper.title || paper.id}</strong>
-                <span>
-                  {paper.source} · {paper.year ?? "n/a"}
-                </span>
-                <p>{paper.abstract || paper.doi || paper.source_id}</p>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="Keine Treffer" />
-        )}
+        <PaperPickList
+          title="Treffer"
+          papers={results}
+          onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
+          disabled={download.isPending}
+          showMetadataAction
+          emptyTitle="Keine Treffer"
+        />
       </section>
       <DownloadProgress
         pending={download.isPending}
@@ -934,106 +925,6 @@ function DownloadProgress({
         </>
       ) : null}
     </section>
-    </div>
-  );
-}
-
-function CandidateList({
-  title,
-  candidates,
-  onDownload,
-  disabled,
-  onClear
-}: {
-  title: string;
-  candidates: DiscoveryCandidate[] | ReferenceCandidate[];
-  onDownload: (papers: Paper[], downloadPdfs: boolean) => void;
-  disabled: boolean;
-  onClear?: () => void;
-}) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState(false);
-
-  function toggle(key: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }
-
-  function selectAll() {
-    setSelected(new Set(candidates.map((candidate) => paperKey(candidate))));
-  }
-
-  const selectedPapers = candidates.filter((candidate) => selected.has(paperKey(candidate)));
-
-  return (
-    <div className="candidate-list">
-      <div className="panel-heading">
-        <button
-          type="button"
-          className="candidate-list-toggle"
-          onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? "Aufklappen" : "Einklappen"}
-        >
-          <ChevronDown size={14} className={collapsed ? "topic-group-chevron--collapsed" : "topic-group-chevron"} />
-          <strong>{title}</strong>
-        </button>
-        <div className="button-row">
-          {!collapsed && (
-            <>
-              <button className="button" type="button" onClick={selectAll}>
-                Alle
-              </button>
-              {candidates.length > 50 && (
-                <span className="muted" style={{ fontSize: "0.75rem", whiteSpace: "nowrap" }}>
-                  <AlertTriangle size={12} style={{ verticalAlign: "middle" }} /> &gt;50 Paper = mehrere Min.
-                </span>
-              )}
-              <button
-                className="button button-primary"
-                type="button"
-                disabled={disabled || !selectedPapers.length}
-                onClick={() => onDownload(selectedPapers, true)}
-              >
-                <Download size={15} />
-                <span>{selectedPapers.length} laden</span>
-              </button>
-            </>
-          )}
-          {onClear && (
-            <button className="button" type="button" title="Vorschläge löschen" onClick={onClear}>
-              <X size={14} />
-            </button>
-          )}
-        </div>
-      </div>
-      {!collapsed && (
-        <div className="paper-grid">
-          {candidates.map((candidate) => {
-            const key = paperKey(candidate);
-            const reason = (candidate as DiscoveryCandidate).discovery_reason;
-            return (
-              <label key={key} className={`paper-card candidate-card ${selected.has(key) ? "candidate-selected" : ""}`}>
-                <div className="candidate-head">
-                  <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} />
-                  <strong>{candidate.title || candidate.id}</strong>
-                </div>
-                <span>
-                  {candidate.source} · {candidate.year ?? "n/a"}
-                  {candidate.has_full_text ? " · PDF" : ""}
-                </span>
-                {reason ? <p className="muted">{reason}</p> : <p>{candidate.abstract || candidate.doi || ""}</p>}
-              </label>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

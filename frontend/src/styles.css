@@ -530,7 +530,6 @@ h1 {
 
 .panel,
 .metric-card,
-.paper-card,
 .provider-card,
 .action-tile {
   background: var(--surface);
@@ -797,8 +796,68 @@ h1 {
 }
 
 .project-list-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0;
   padding: 0;
+}
+
+.project-list-row--pinned {
+  border-left: 3px solid var(--blue);
+}
+
+.project-pin-button {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
+.project-list-row--pinned .project-pin-button {
+  color: var(--blue);
+}
+
+.project-rename {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 10px;
+}
+
+.project-rename input {
+  min-width: 0;
+}
+
+.project-health-summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.project-health-label {
+  font-weight: 600;
+}
+
+.project-health-summary .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.project-health-link {
+  justify-self: start;
+  font-size: 13px;
+}
+
+.project-health-scope {
+  font-size: 12px;
 }
 
 .project-list-main {
@@ -860,7 +919,6 @@ h1 {
 .warning-list,
 .compact-table,
 .data-table,
-.paper-grid,
 .provider-grid,
 .model-list {
   display: grid;
@@ -1038,27 +1096,205 @@ h1 {
   color: var(--blue, #2563eb);
 }
 
-.paper-grid {
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+/* Auswaehlbare Paper-Liste (Import: Treffer + KI-Vorschlaege).
+   Eine Zeile pro Paper — Details erst auf Klick, damit lange Abstracts die
+   Liste nicht auseinanderziehen. */
+.pick-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
-.paper-card {
-  padding: 12px;
+.pick-list-heading {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pick-list-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.pick-list-toggle strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-list-warning {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.pick-rows {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pick-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-2);
+  min-width: 0;
+  transition:
+    border-color var(--dur-1, 140ms) var(--ease-out, ease),
+    background var(--dur-1, 140ms) var(--ease-out, ease);
+}
+
+.pick-item--selected {
+  border-color: var(--blue);
+  background: var(--accent-soft);
+}
+
+.pick-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 10px;
+}
+
+.pick-row-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.pick-row-main:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.pick-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.pick-row-year,
+.pick-row-pdf {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pick-row-pdf {
+  min-width: 26px;
+  text-align: right;
+}
+
+.pick-row-pdf--none {
+  opacity: 0.55;
+}
+
+/* Badge-Farbe kodiert die Art der Quelle, nicht die Quelle selbst:
+   begutachtet / Preprint / Nachweissystem. */
+.source-badge {
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.source-badge[data-tier="journal"] {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  border-color: color-mix(in srgb, var(--green) 30%, transparent);
+}
+
+.source-badge[data-tier="preprint"] {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 30%, transparent);
+}
+
+.source-badge[data-tier="index"] {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  border-color: color-mix(in srgb, var(--blue) 28%, transparent);
+}
+
+.pick-row-detail {
   display: grid;
   gap: 6px;
-  min-height: 138px;
+  padding: 2px 10px 10px 38px;
+  border-top: 1px solid var(--line);
+  margin-top: -1px;
 }
 
-.paper-card strong,
-.paper-card p {
+.pick-row-detail p {
+  margin: 0;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
-.paper-card span,
-.paper-card p {
-  margin: 0;
+.pick-row-abstract {
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   color: var(--muted);
-  font-size: 13px;
+}
+
+.pick-row-reason {
+  color: var(--text);
+  font-style: italic;
+}
+
+.pick-row-links {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+}
+
+.pick-row-links a {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+@media (max-width: 620px) {
+  .pick-row-main {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .pick-row-year {
+    display: none;
+  }
+
+  .pick-row-detail {
+    padding-left: 10px;
+  }
 }
 
 .assistant-layout {
@@ -2986,6 +3222,35 @@ h1 {
 .web-offer-card span {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Stufen der Auto-Recherche: Wissenschaft → vertrauenswürdig → ungeprüft. */
+.auto-stage-ladder {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.auto-stage-chip {
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.auto-stage-chip[data-state="active"] {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  font-weight: 600;
+}
+
+.auto-stage-chip[data-state="done"] {
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  color: var(--green);
 }
 
 .command-help-row {
@@ -6596,7 +6861,29 @@ button.data-row {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted, #8a93a6);
+}
+
+.source-group-all {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Gruppen-Checkbox: eine Fachgruppe komplett an/aus. */
+.source-group-head {
   margin-bottom: 0.35rem;
+  border-color: transparent;
+  background: transparent;
+}
+
+.source-group-head .source-group-title {
+  margin: 0;
+}
+
+.source-group .checkbox-grid {
+  padding-left: 22px;
 }
 
 .source-note {
@@ -6606,8 +6893,7 @@ button.data-row {
 }
 
 .uploaded-row,
-.grey-source-card,
-.candidate-list {
+.grey-source-card {
   border: 1px solid var(--border, #2a3142);
   border-radius: 10px;
   padding: 0.75rem 0.9rem;
@@ -6621,22 +6907,6 @@ button.data-row {
   gap: 0.75rem;
   flex-wrap: wrap;
   margin-bottom: 0.5rem;
-}
-
-.candidate-card {
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.candidate-card.candidate-selected {
-  border-color: var(--accent, #4c8bf5);
-  background: rgba(76, 139, 245, 0.08);
-}
-
-.candidate-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
 }
 
 .grey-research-panel {
@@ -6778,32 +7048,6 @@ button.data-row {
   font-size: 0.72rem;
 }
 
-/* Recommendation candidate lists: tidy, consistent grid */
-.candidate-list + .candidate-list {
-  margin-top: 0.6rem;
-}
-
-.candidate-list .paper-grid {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  margin-top: 0.5rem;
-}
-
-.candidate-list-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  color: inherit;
-  text-align: left;
-}
-
-.candidate-list-toggle:hover {
-  opacity: 0.75;
-}
-
 .import-status-row {
   display: flex;
   align-items: center;
@@ -6815,17 +7059,6 @@ button.data-row {
 .uploaded-row-head .button-row .button {
   font-size: 0.82rem;
   padding: 0.3rem 0.55rem;
-}
-
-.candidate-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.candidate-head strong {
-  font-size: 0.9rem;
-  line-height: 1.25;
 }
 
 /* Benchmarks tab */
@@ -7361,8 +7594,8 @@ button.data-row {
   white-space: nowrap;
 }
 
-.import-ai-settings {
-  padding: 10px 14px;
+.import-count-caption {
+  font-size: 0.75rem;
 }
 
 /* Research progress summary row */

@@ -73,6 +73,8 @@ import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
 import type {
   Answer,
+  AutoGreySource,
+  AutoHarvestStage,
   CitationLink,
   ClaimCheckResult,
   DeepResearchFinding,
@@ -173,6 +175,13 @@ import {
   WorkspaceNotesAssistant,
 } from "./WorkspaceSubComponents";
 
+/** Eskalationsleiter der Auto-Recherche (Spiegel von query/auto_answer.HARVEST_STAGES). */
+const AUTO_STAGES: { id: AutoHarvestStage; label: string; hint: string }[] = [
+  { id: "scientific", label: "Wissenschaft", hint: "Paper aus den wissenschaftlichen Quellen" },
+  { id: "trusted", label: "Vertrauenswürdig", hint: "Behörden, Hochschulen, Fachverlage" },
+  { id: "unverified", label: "Ungeprüft", hint: "Übriges Web — nur wenn die Stufen davor nicht reichen" }
+];
+
 // Flache Props: der gesamte State/alle Handler leben weiter in WorkspacePage.
 // Mutations/Ableitungen sind strukturell auf die hier genutzte Oberflaeche typisiert.
 export interface WorkspaceAssistantPaneProps {
@@ -199,9 +208,10 @@ export interface WorkspaceAssistantPaneProps {
   autoAbortRef: MutableRefObject<AbortController | null>;
   autoProgress: {
     phase: string;
+    stage?: AutoHarvestStage;
     relatedTopics: string[];
     papers: { id: string; title: string }[];
-    grey: { id: string; title: string; url: string }[];
+    grey: AutoGreySource[];
   } | null;
   autoResearch: boolean;
   chatSettingsOpen: boolean;
@@ -1019,6 +1029,19 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                 <div>
                   <strong>Auto-Recherche läuft …</strong>
                   <span>{autoProgress.phase}</span>
+                  {/* Die Leiter sichtbar machen: ungeprüfte Webquellen kommen erst,
+                      wenn Paper und vertrauenswürdige Seiten nicht gereicht haben. */}
+                  <div className="auto-stage-ladder">
+                    {AUTO_STAGES.map((stage, index) => {
+                      const activeIndex = AUTO_STAGES.findIndex((entry) => entry.id === autoProgress.stage);
+                      const state = activeIndex < 0 ? "pending" : index < activeIndex ? "done" : index === activeIndex ? "active" : "pending";
+                      return (
+                        <span key={stage.id} className="auto-stage-chip" data-state={state} title={stage.hint}>
+                          {stage.label}
+                        </span>
+                      );
+                    })}
+                  </div>
                   {autoProgress.relatedTopics.length ? (
                     <div className="web-research-topics" style={{ marginTop: "4px" }}>
                       <span className="muted">Verwandte Themen:</span>

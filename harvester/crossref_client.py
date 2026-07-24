@@ -61,8 +61,12 @@ class CrossrefClient:
         response.raise_for_status()
         return response.json()
 
-    async def search_works(self, query: str, rows: int = 20) -> list[dict[str, Any]]:
-        params = {"query.bibliographic": query, "rows": min(max(rows, 1), 100)}
+    async def search_works(self, query: str, rows: int = 20, filters: str | None = None) -> list[dict[str, Any]]:
+        """Bibliografische Suche; ``filters`` ist Crossrefs ``filter``-Parameter
+        (z. B. ``prefix:10.31219``, um auf OSF-Preprints einzugrenzen)."""
+        params: dict[str, Any] = {"query.bibliographic": query, "rows": min(max(rows, 1), 100)}
+        if filters:
+            params["filter"] = filters
         payload = await self._get("/works", params=params)
         return list(payload.get("message", {}).get("items", []))
 

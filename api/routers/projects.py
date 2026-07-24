@@ -20,6 +20,7 @@ from storage.path_safety import ensure_safe_path
 
 PROJECTS_PATH = Path("data/projects.json")
 PROJECT_PRIMARY_PATH = Path("data/project_primary.json")
+PROJECT_META_PATH = Path("data/project_meta.json")
 RESERVED_PROJECT_IDS = {"__all_papers__", "alle papers", "all papers"}
 DEFAULT_METADATA_DB_PATH = "data/metadata.duckdb"
 DEFAULT_GRAPH_DB_PATH = "data/graphs/global_kg"
@@ -36,6 +37,7 @@ class ProjectPayload(BaseModel):
 class ProjectPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     paper_ids: list[str] | None = None
+    pinned: bool | None = None
 
 
 class ProjectPaperPayload(BaseModel):
@@ -54,9 +56,10 @@ def list_projects(
     projects = _load_projects(_projects_path(projects_path))
     with MetadataDB(metadata_db_path) as db:
         papers = {str(paper.get("id")): paper for paper in db.list_papers(limit=50000)}
-    return {
-        "projects": [_project_view(project_id, paper_ids, papers) for project_id, paper_ids in sorted(projects.items())]
-    }
+    views = [_project_view(project_id, paper_ids, papers) for project_id, paper_ids in sorted(projects.items())]
+    # Angeheftete Projekte zuerst, sonst alphabetisch (die Liste ist bereits sortiert).
+    views.sort(key=lambda view: not view["pinned"])
+    return {"projects": views}
 
 
 @router.post("/projects")
@@ -74,11 +77,18 @@ def create_project(payload: ProjectPayload, projects_path: str | None = None) ->
 
 
 @router.patch("/projects/{project_id}")
-def patch_project(project_id: str, payload: ProjectPatch, projects_path: str | None = None) -> dict[str, Any]:
+def patch_project(
+    project_id: str,
+    payload: ProjectPatch,
+    projects_path: str | None = None,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
     path = _projects_path(projects_path)
     projects = _load_projects(path)
     if project_id not in projects:
         raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+    if _is_reserved_project_id(project_id):
+        raise HTTPException(status_code=400, detail="Alle Papers is the global library mode and cannot be renamed.")
 
     target_id = payload.name.strip() if payload.name else project_id
     if _is_reserved_project_id(target_id):
@@ -91,6 +101,21 @@ def patch_project(project_id: str, payload: ProjectPatch, projects_path: str | N
         projects.pop(project_id)
     projects[target_id] = paper_ids
     _save_projects(projects, path)
+
+    if target_id != project_id:
+        # Die Projekt-ID ist der Name: ohne diese Migration verlieren Notizen, Web-Quellen,
+        # Sessions und Analysen beim Umbenennen ihre Projektzuordnung.
+        _migrate_project_sidecars(project_id, target_id)
+        with MetadataDB(metadata_db_path) as db:
+            db.rename_project(project_id, target_id)
+
+    if payload.pinned is not None:
+        meta = _load_project_meta()
+        entry = dict(meta.get(target_id) or {})
+        entry["pinned"] = bool(payload.pinned)
+        meta[target_id] = entry
+        _save_project_meta(meta)
+
     return {"project": _project_view(target_id, paper_ids, {})}
 
 
@@ -104,7 +129,11 @@ def delete_project(project_id: str, projects_path: str | None = None) -> dict[st
         raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
     paper_ids = projects.pop(project_id)
     _save_projects(projects, path)
-    return {"deleted": True, "project": _project_view(project_id, paper_ids, {})}
+    view = _project_view(project_id, paper_ids, {})
+    meta = _load_project_meta()
+    if meta.pop(project_id, None) is not None:
+        _save_project_meta(meta)
+    return {"deleted": True, "project": view}
 
 
 @router.post("/projects/{project_id}/papers")
@@ -218,7 +247,10 @@ def _save_projects(projects: dict[str, list[str]], path: Path = PROJECTS_PATH) -
     path.write_text(json.dumps(projects, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _load_primary_papers(path: Path = PROJECT_PRIMARY_PATH) -> dict[str, str]:
+def _load_primary_papers(path: Path | None = None) -> dict[str, str]:
+    # Pfad erst beim Aufruf aufloesen (nicht als Default-Argument), damit Tests
+    # PROJECT_PRIMARY_PATH umbiegen koennen, statt in data/ zu schreiben.
+    path = path or PROJECT_PRIMARY_PATH
     if not path.exists():
         return {}
     try:
@@ -230,9 +262,42 @@ def _load_primary_papers(path: Path = PROJECT_PRIMARY_PATH) -> dict[str, str]:
     return {str(pid): str(value) for pid, value in data.items() if value}
 
 
-def _save_primary_papers(mapping: dict[str, str], path: Path = PROJECT_PRIMARY_PATH) -> None:
+def _save_primary_papers(mapping: dict[str, str], path: Path | None = None) -> None:
+    path = path or PROJECT_PRIMARY_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(mapping, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _load_project_meta(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Per-Projekt-UI-Metadaten (aktuell nur ``pinned``) neben projects.json."""
+    path = path or PROJECT_META_PATH
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(pid): dict(value) for pid, value in data.items() if isinstance(value, dict)}
+
+
+def _save_project_meta(meta: dict[str, dict[str, Any]], path: Path | None = None) -> None:
+    path = path or PROJECT_META_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _migrate_project_sidecars(old_project_id: str, new_project_id: str) -> None:
+    """Ziehe Primary-Paper und UI-Metadaten auf die neue Projekt-ID um."""
+    primaries = _load_primary_papers()
+    if old_project_id in primaries:
+        primaries[new_project_id] = primaries.pop(old_project_id)
+        _save_primary_papers(primaries)
+    meta = _load_project_meta()
+    if old_project_id in meta:
+        meta[new_project_id] = meta.pop(old_project_id)
+        _save_project_meta(meta)
 
 
 def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -245,6 +310,7 @@ def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[
         "year_min": min(years) if years else None,
         "year_max": max(years) if years else None,
         "primary_paper_id": _load_primary_papers().get(project_id),
+        "pinned": bool((_load_project_meta().get(project_id) or {}).get("pinned")),
     }
 
 

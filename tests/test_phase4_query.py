@@ -1381,33 +1381,55 @@ def test_pdf_context_keeps_whole_pdf_fallback_and_flags_unmatched_citation_links
     assert evidence_by_id[unmatched_link["evidence_id"]].metadata.get("context_policy") == "whole"
 
 
-def test_grounded_prompt_marks_grey_evidence_as_web_source() -> None:
+def _grey_prompt_for_tier(trust_tier: str | None) -> tuple[str, str, str]:
+    """Baue einen Prompt mit einem Paper- und einem Grauquellen-Beleg der Stufe *trust_tier*."""
     paper_source = Source(paper_id="p1", title="Graph Paper", year=2024, doi=None, url=None)
     grey_source = Source(paper_id="grey::g1", title="Web Finding", year=None, doi=None, url="https://example.test")
     paper_hit = SearchHit(source=paper_source)
     grey_hit = SearchHit(source=grey_source)
     paper_item = Evidence(paper_id="p1", kind="claim", field="claims", text="Paper claim text.", score=7.0)
+    metadata: dict[str, object] = {"source_type": "grey"}
+    if trust_tier:
+        metadata["trust_tier"] = trust_tier
     grey_item = Evidence(
         paper_id="grey::g1",
         kind="quote",
         field="evidence",
         text="Grey quote text.",
         score=1.5,
-        metadata={"source_type": "grey"},
+        metadata=metadata,
     )
     paper_hit.add_evidence(paper_item)
     grey_hit.add_evidence(grey_item)
 
     prompt = _build_grounded_prompt("What?", [paper_hit, grey_hit], [paper_item, grey_item])
-
     lines = prompt.splitlines()
     grey_line = next(line for line in lines if "[grey::g1]" in line)
     paper_line = next(line for line in lines if "[p1]" in line and "Graph Paper" in line)
-    assert "(Webquelle)" in grey_line
-    assert "(Webquelle)" not in paper_line
+    return prompt, grey_line, paper_line
+
+
+def test_grounded_prompt_marks_grey_evidence_as_web_source() -> None:
+    prompt, grey_line, paper_line = _grey_prompt_for_tier("trusted")
+
+    assert "(Webquelle · vertrauenswürdig)" in grey_line
+    assert "(Webquelle" not in paper_line
     assert "more current than papers" in prompt
     # Papers stay the primary sources; web sources support them in the same bracket.
     assert "after the paper ID" in prompt
+    # Vertrauenswürdige Quellen brauchen keinen Unsicherheits-Hinweis.
+    assert "ungeprüfte Webquelle" not in prompt
+
+
+def test_grounded_prompt_flags_unverified_web_sources() -> None:
+    # Ohne Tier (Altbestand) und bei "unknown" gilt dieselbe Vorsicht: die Antwort
+    # muss die Unsicherheit im Satz nennen, statt sie wie eine Fachquelle zu behandeln.
+    for tier in (None, "unknown"):
+        prompt, grey_line, _paper_line = _grey_prompt_for_tier(tier)
+        assert "(Webquelle · ungeprüft)" in grey_line
+        assert "laut einer ungeprüften Webquelle" in prompt
+        # Rangfolge steht explizit im Prompt.
+        assert "vertrauenswürdig" in prompt
 
 
 def test_answer_injects_selected_grey_sources_even_with_paper_ids() -> None:

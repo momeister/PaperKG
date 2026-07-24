@@ -342,6 +342,9 @@ class SchemaMixin(_Base):
                 "source_kind": "VARCHAR",
                 "origin_id": "VARCHAR",
                 "source_paper_ids": "JSON",
+                # trusted | unknown — Domain-Stufe der Auto-Recherche
+                # (research/source_tiers.py). Beeinflusst Ranking und Prompt.
+                "trust_tier": "VARCHAR",
             },
         )
         self._execute("CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)")

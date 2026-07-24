@@ -18,15 +18,20 @@ from typing import Any
 import httpx
 import yaml
 
+from research.source_tiers import UNKNOWN, classify_url
+
 
 @dataclass
 class SearchHit:
     url: str
     title: str
     snippet: str
+    #: Vertrauensstufe der Domain (``trusted`` | ``unknown``), gesetzt in
+    #: ``run_web_search``; steuert die Stufen der Auto-Recherche.
+    tier: str = UNKNOWN
 
     def to_dict(self) -> dict[str, str]:
-        return {"url": self.url, "title": self.title, "snippet": self.snippet}
+        return {"url": self.url, "title": self.title, "snippet": self.snippet, "tier": self.tier}
 
 
 class SearchProviderError(RuntimeError):
@@ -39,6 +44,10 @@ class ResearchConfig:
     providers: dict[str, dict[str, Any]] | None = None
     allowed_domains: list[str] | None = None
     blocked_domains: list[str] | None = None
+    #: Zusaetzlich zu den Defaults in research/source_tiers.py als
+    #: vertrauenswuerdig eingestufte Domains bzw. Endungen.
+    trusted_domains: list[str] | None = None
+    trusted_suffixes: list[str] | None = None
     timeout_seconds: float = 30.0
 
     def provider_settings(self, name: str) -> dict[str, Any]:
@@ -58,6 +67,8 @@ def load_research_config(config_path: str = "config.yaml") -> ResearchConfig:
         providers=raw.get("providers") if isinstance(raw.get("providers"), dict) else {},
         allowed_domains=raw.get("allowed_domains") or [],
         blocked_domains=raw.get("blocked_domains") or [],
+        trusted_domains=raw.get("trusted_domains") or [],
+        trusted_suffixes=raw.get("trusted_suffixes") or [],
         timeout_seconds=float(raw.get("timeout_seconds") or 30.0),
     )
 
@@ -95,7 +106,10 @@ async def run_web_search(
             raise SearchProviderError(f"Unknown web-search provider: {name}")
 
     hits = _filter_relevant_hits(hits, query)
-    return _apply_domain_filters(hits, config)[:max_results]
+    hits = _apply_domain_filters(hits, config)[:max_results]
+    for hit in hits:
+        hit.tier = classify_url(hit.url, config.trusted_domains, config.trusted_suffixes)
+    return hits
 
 
 def _apply_domain_filters(hits: list[SearchHit], config: ResearchConfig) -> list[SearchHit]:

@@ -67,6 +67,8 @@ import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
 import type {
   Answer,
+  AutoGreySource,
+  AutoHarvestStage,
   CitationLink,
   ClaimCheckResult,
   DeepResearchFinding,
@@ -266,9 +268,11 @@ export function WorkspacePage() {
   const [criticalMode, setCriticalMode] = useState(() => loadWorkspaceBoolean(scopedProjectId, "criticalMode", false));
   const [autoProgress, setAutoProgress] = useState<{
     phase: string;
+    /** Aktive Stufe der Eskalation (wissenschaftlich → vertrauenswürdig → ungeprüft). */
+    stage?: AutoHarvestStage;
     relatedTopics: string[];
     papers: { id: string; title: string }[];
-    grey: { id: string; title: string; url: string }[];
+    grey: AutoGreySource[];
   } | null>(null);
   const autoAbortRef = useRef<AbortController | null>(null);
   const [paletteIndex, setPaletteIndex] = useState(0);
@@ -590,16 +594,22 @@ export function WorkspacePage() {
                 grey: p?.grey ?? []
               }));
               break;
-            case "harvesting":
+            case "harvesting": {
+              const stageLabel = event.stage_label ?? "Quellen";
               setAutoProgress((p) => ({
-                phase: event.scope === "main" ? "Paper & Web zur Frage werden geladen …" : `Verwandtes Thema „${event.topic}" wird recherchiert …`,
+                phase:
+                  event.scope === "main"
+                    ? `${stageLabel} zur Frage werden geladen …`
+                    : `${stageLabel}: verwandtes Thema „${event.topic}" …`,
+                stage: event.stage ?? p?.stage,
                 relatedTopics: p?.relatedTopics ?? [],
                 papers: [...(p?.papers ?? []), ...(event.papers ?? [])],
                 grey: [...(p?.grey ?? []), ...(event.grey ?? [])]
               }));
               break;
+            }
             case "reanswering":
-              setAutoProgress((p) => (p ? { ...p, phase: "Antwort wird mit den neuen Quellen erstellt …" } : p));
+              setAutoProgress((p) => (p ? { ...p, phase: "Antwort wird mit den neuen Quellen erstellt …", stage: event.stage ?? p.stage } : p));
               break;
             case "harvest_error":
               logAction("Auto-Recherche", event.error ?? "Ein Rechercheschritt ist fehlgeschlagen.", "error");
@@ -616,11 +626,15 @@ export function WorkspacePage() {
               // noch eine Evidenz-Lücke, nie "reichte aus" behaupten.
               const gapRemains = answerSuggestsWebSearch(event.answer);
               const addedCount = (summary?.papers.length ?? 0) + (summary?.grey.length ?? 0);
+              // Welche Stufe die Antwort getragen hat, ist die wichtigste Information:
+              // "reichte wissenschaftlich" vs. "nur ungeprüftes Web".
+              const lastStage = summary?.stages?.[summary.stages.length - 1];
+              const stageNote = lastStage ? ` Zuletzt: ${lastStage.label}.` : "";
               updateAction(actionId, {
                 status: "ok",
                 detail: summary?.harvested
                   ? addedCount
-                    ? `${summary.papers.length} Paper + ${summary.grey.length} Web-Quellen ergänzt.${gapRemains ? " Restlücke bleibt." : ""}`
+                    ? `${summary.papers.length} Paper + ${summary.grey.length} Web-Quellen ergänzt.${stageNote}${gapRemains ? " Restlücke bleibt." : ""}`
                     : "Keine zusätzlichen Quellen gefunden."
                   : gapRemains
                     ? "Lokale Antwort meldet Evidenz-Lücke."

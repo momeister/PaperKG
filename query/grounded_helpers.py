@@ -156,13 +156,25 @@ def _build_grounded_prompt(
         )
     lines.extend(["", "Evidence:"])
     has_grey_evidence = False
+    has_unverified_evidence = False
     for index, item in enumerate(evidence, start=1):
         title = source_titles.get(item.paper_id, item.paper_id)
         item_metadata = getattr(item, "metadata", None)
         is_grey = item.paper_id.startswith("grey::") or (
             isinstance(item_metadata, dict) and item_metadata.get("source_type") == "grey"
         )
-        marker = "(Webquelle) " if is_grey else ""
+        # Webquellen tragen ihre Vertrauensstufe (research/source_tiers.py) im Marker:
+        # Behoerden/Hochschulen/Fachverlage vs. beliebige Seiten.
+        trust_tier = ""
+        if isinstance(item_metadata, dict):
+            trust_tier = str(item_metadata.get("trust_tier") or "")
+        marker = ""
+        if is_grey:
+            if trust_tier == "trusted":
+                marker = "(Webquelle · vertrauenswürdig) "
+            else:
+                marker = "(Webquelle · ungeprüft) "
+                has_unverified_evidence = True
         has_grey_evidence = has_grey_evidence or is_grey
         lines.append(
             f"{index}. [{item.paper_id}] {title} | {item.kind} | {marker}{_sanitize_evidence_text(item.text)}"
@@ -170,10 +182,17 @@ def _build_grounded_prompt(
     if has_grey_evidence:
         lines.append(
             "Evidence marked (Webquelle) comes from web sources, which are often more current than papers. "
-            "Papers are the primary, verified sources: when paper evidence supports a claim, cite the "
-            "paper, and add a (Webquelle) ID after the paper ID in the same bracket (e.g. [p1, grey::abc]) "
-            "only as supporting or updating context. Cite a (Webquelle) alone only for information that no "
-            "paper evidence covers, such as recent developments or current events."
+            "Rank sources in this order: papers first, then (Webquelle · vertrauenswürdig) — official "
+            "institutions, universities and established publishers — and only last "
+            "(Webquelle · ungeprüft). When paper evidence supports a claim, cite the paper, and add a "
+            "web-source ID after the paper ID in the same bracket (e.g. [p1, grey::abc]) only as "
+            "supporting or updating context. Cite a web source alone only for information that no paper "
+            "evidence covers, such as recent developments or current events."
+        )
+    if has_unverified_evidence:
+        lines.append(
+            "When a statement rests only on (Webquelle · ungeprüft) evidence, say so in that sentence "
+            "(e.g. 'laut einer ungeprüften Webquelle') so the reader can weigh it."
         )
     answer_instruction = (
         "Gib eine ausführliche, gut strukturierte Antwort auf Basis der Belege. "

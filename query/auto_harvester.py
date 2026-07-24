@@ -2,7 +2,8 @@
 
 Searches for papers related to a question and inserts them into the project
 so subsequent answers can use them. Deliberately minimal dependencies — no
-api/ imports to avoid circular imports with product_main.
+api/ imports at module level to avoid circular imports with product_main
+(die Quellen-Aufaecherung wird zur Laufzeit importiert, mit Fallback).
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import httpx
 from harvester.arxiv_client import ArxivClient
 from harvester.oa_resolver import resolve_oa_pdf_url
 from harvester.semantic_scholar_client import SemanticScholarClient
+from harvester.source_registry import TIER_RANK, source_tier
 from harvester.url_guard import is_safe_public_url
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
@@ -25,6 +27,15 @@ if TYPE_CHECKING:
 
 _PROJECTS_PATH = Path("data/projects.json")
 _USER_AGENT = "ScienceKG/auto-harvest (local)"
+
+#: Stufe 1 der Auto-Recherche: breiter als arXiv+S2, aber ohne Key-pflichtige Quellen.
+DEFAULT_SCIENTIFIC_SOURCES: tuple[str, ...] = (
+    "arxiv",
+    "semantic_scholar",
+    "openalex",
+    "crossref",
+    "europepmc",
+)
 
 
 def _load_projects(path: Path) -> dict[str, list[str]]:
@@ -212,6 +223,23 @@ def _extract_pdf_into_db(
     return failure is None
 
 
+async def _search_scientific_sources(question: str, sources: list[str], max_papers: int) -> list[dict[str, Any]]:
+    """Dieselbe Quellen-Aufaecherung wie der Import (api/routers/harvest.py).
+
+    Ohne sie kaeme die Auto-Recherche nur an arXiv und Semantic Scholar. Der Import
+    liegt erst zur Laufzeit im Graph, damit query/ nicht am Modul-Import auf api/
+    zeigt; schlaegt er fehl, faellt ``harvest_for_question`` auf den schlanken
+    arXiv/S2-Pfad zurueck.
+    """
+    try:
+        from api.routers.harvest import _run_harvest_search
+
+        found, _warnings = await _run_harvest_search(question, sources, max_papers)
+        return list(found)
+    except Exception:
+        return []
+
+
 async def harvest_for_question(
     question: str,
     project_id: str | None,
@@ -232,8 +260,8 @@ async def harvest_for_question(
 
     Returns list of dicts with at least ``{"id": str, "title": str}`` for each inserted paper.
     """
-    sources = sources or ["arxiv", "semantic_scholar"]
-    results: list[dict[str, Any]] = []
+    sources = sources or list(DEFAULT_SCIENTIFIC_SOURCES)
+    results: list[dict[str, Any]] = list(await _search_scientific_sources(question, list(sources), max_papers))
 
     async def _search_arxiv() -> None:
         client = ArxivClient()
@@ -272,21 +300,23 @@ async def harvest_for_question(
         finally:
             await client.close()
 
-    tasks = []
-    if "arxiv" in sources:
-        tasks.append(_search_arxiv())
-    if "semantic_scholar" in sources:
-        tasks.append(_search_ss())
-    if tasks:
-        await asyncio.gather(*tasks)
+    if not results:
+        tasks = []
+        if "arxiv" in sources:
+            tasks.append(_search_arxiv())
+        if "semantic_scholar" in sources:
+            tasks.append(_search_ss())
+        if tasks:
+            await asyncio.gather(*tasks)
 
     if not results:
         return []
 
-    # Dedupe by title/doi, take top max_papers
+    # Dedupe by title/doi, take top max_papers. Begutachtete Quellen zuerst,
+    # Preprints zuletzt — bei knappem Budget zaehlt die belastbarere Fundstelle.
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
-    for r in results:
+    for r in sorted(results, key=lambda item: TIER_RANK.get(source_tier(str(item.get("source") or "")), 1)):
         key = str(r.get("doi") or r.get("title") or "").lower().strip()
         if key and key not in seen:
             seen.add(key)
@@ -351,8 +381,14 @@ async def harvest_grey_sources_for_question(
     project_id: str | None,
     db_path: str = "data/metadata.duckdb",
     max_sources: int = 3,
+    tiers: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Search the web for *question*, fetch + sanitize pages, save as grey sources.
+
+    ``tiers`` grenzt auf Vertrauensstufen ein (``("trusted",)`` / ``("unknown",)``,
+    siehe research/source_tiers.py) — so kann die Auto-Recherche erst
+    vertrauenswuerdige Domains und erst danach den Rest des Webs heranziehen.
+    ``None`` heisst: alle Stufen, wie bisher.
 
     Returns list of saved grey source records (each with at least id, title, url).
     """
@@ -361,9 +397,13 @@ async def harvest_grey_sources_for_question(
 
     try:
         config = load_research_config()
-        hits = await run_web_search(question, config, max_results=max_sources + 2)
+        # Mehr holen als noetig: der Tier-Filter siebt danach einen Teil weg.
+        hits = await run_web_search(question, config, max_results=max_sources * 3 + 2)
     except Exception:
         return []
+
+    if tiers:
+        hits = [hit for hit in hits if getattr(hit, "tier", "unknown") in tiers]
 
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=20.0) as client:
@@ -384,6 +424,7 @@ async def harvest_grey_sources_for_question(
                             "summary": hit.snippet or "",
                             "full_text": full_text,
                             "status": "saved",
+                            "trust_tier": getattr(hit, "tier", "unknown"),
                         },
                     )
                     results.append(record)

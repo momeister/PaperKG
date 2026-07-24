@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Check, ChevronDown, Pencil, Pin, PinOff, Plus, Search, Trash2, X } from "lucide-react";
 
 import { api } from "../api";
 import { MetricCard } from "../components/MetricCard";
@@ -13,6 +14,9 @@ export function ProjectsPage({ embedded = false }: { embedded?: boolean }) {
   const [query, setQuery] = useState("");
   const [name, setName] = useState("");
   const [deleteError, setDeleteError] = useState("");
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [healthOpen, setHealthOpen] = useState(false);
   const queryClient = useQueryClient();
   const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
   const dashboardQuery = useQuery({
@@ -50,6 +54,22 @@ export function ProjectsPage({ embedded = false }: { embedded?: boolean }) {
     },
     onError: (error) => setDeleteError(error instanceof Error ? error.message : "Projekt konnte nicht geloescht werden")
   });
+  // Umbenennen verschiebt die Projekt-ID: das Backend zieht Notizen, Web-Quellen,
+  // Sessions und Analysen mit um, hier muss nur die aktive Auswahl nachziehen.
+  const patchProject = useMutation({
+    mutationFn: ({ projectId, ...payload }: { projectId: string; name?: string; pinned?: boolean }) =>
+      api.patchProject(projectId, payload),
+    onMutate: () => setDeleteError(""),
+    onSuccess: (result, variables) => {
+      if (activeProject === variables.projectId && result.project.id !== variables.projectId) {
+        setActiveProject(result.project.id);
+      }
+      setRenameId(null);
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (error) => setDeleteError(error instanceof Error ? error.message : "Projekt konnte nicht geändert werden")
+  });
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -68,8 +88,25 @@ export function ProjectsPage({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
+  function startRename(project: Project) {
+    setRenameId(project.id);
+    setRenameValue(project.name);
+  }
+
+  function commitRename(projectId: string) {
+    const next = renameValue.trim();
+    if (!next || next === projectId) {
+      setRenameId(null);
+      return;
+    }
+    patchProject.mutate({ projectId, name: next });
+  }
+
   const filteredProjects = (projectsQuery.data?.projects ?? []).filter((project) => project.name.toLowerCase().includes(query.toLowerCase()));
   const metrics = dashboardQuery.data?.metrics;
+  const health = dashboardQuery.data?.health;
+  const warnings = health?.warnings ?? [];
+  const latestJobs = dashboardQuery.data?.latest_jobs ?? [];
 
   return (
     <section className={embedded ? "research-stage-panel" : "page"}>
@@ -96,17 +133,55 @@ export function ProjectsPage({ embedded = false }: { embedded?: boolean }) {
         <MetricCard label="Warnungen" value={metrics?.warnings ?? "—"} tone={metrics?.warnings ? "amber" : "neutral"} />
       </div>
 
-      <div className="two-column two-column--wide-left">
-        <section className="panel">
-          <div className="panel-toolbar">
-            <label className="search-field">
-              <Search size={17} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
-            </label>
-          </div>
-          <div className="list">
-            {filteredProjects.map((project) => (
-              <article className={`list-row project-list-row ${activeProject === project.id ? "list-row--active" : ""}`} key={project.id}>
+      <section className="panel">
+        <div className="panel-toolbar">
+          <label className="search-field">
+            <Search size={17} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
+          </label>
+        </div>
+        <div className="list">
+          {filteredProjects.map((project) => (
+            <article
+              className={`list-row project-list-row ${activeProject === project.id ? "list-row--active" : ""} ${project.pinned ? "project-list-row--pinned" : ""}`}
+              key={project.id}
+            >
+              <button
+                className="icon-button project-pin-button"
+                type="button"
+                aria-label={project.pinned ? "Nicht mehr anheften" : "Anheften"}
+                title={project.pinned ? "Nicht mehr anheften" : "Oben anheften"}
+                onClick={() => patchProject.mutate({ projectId: project.id, pinned: !project.pinned })}
+                disabled={patchProject.isPending}
+              >
+                {project.pinned ? <Pin size={15} /> : <PinOff size={15} />}
+              </button>
+              {renameId === project.id ? (
+                <div className="project-rename">
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    aria-label="Projektname"
+                    onChange={(event) => setRenameValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") commitRename(project.id);
+                      if (event.key === "Escape") setRenameId(null);
+                    }}
+                  />
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Namen speichern"
+                    onClick={() => commitRename(project.id)}
+                    disabled={patchProject.isPending}
+                  >
+                    <Check size={16} />
+                  </button>
+                  <button className="icon-button" type="button" aria-label="Abbrechen" onClick={() => setRenameId(null)}>
+                    <X size={16} />
+                  </button>
+                </div>
+              ) : (
                 <button className="project-list-main" type="button" onClick={() => setActiveProject(project.id)}>
                   <strong>{project.name}</strong>
                   <span>{project.paper_count} Papers</span>
@@ -114,51 +189,73 @@ export function ProjectsPage({ embedded = false }: { embedded?: boolean }) {
                     {project.year_min && project.year_max ? `${project.year_min}-${project.year_max}` : "ohne Jahrspanne"}
                   </small>
                 </button>
+              )}
+              {renameId === project.id ? null : (
                 <button
-                  className="icon-button project-delete-button"
+                  className="icon-button"
                   type="button"
-                  aria-label="Loeschen"
-                  title="Projekt loeschen"
-                  onClick={() => removeProject(project.id)}
-                  disabled={deleteProject.isPending}
+                  aria-label="Umbenennen"
+                  title="Projekt umbenennen"
+                  onClick={() => startRename(project)}
                 >
-                  <Trash2 size={17} />
+                  <Pencil size={16} />
                 </button>
-              </article>
-            ))}
-          </div>
-          {deleteError ? <div className="inline-error">{deleteError}</div> : null}
-        </section>
+              )}
+              <button
+                className="icon-button project-delete-button"
+                type="button"
+                aria-label="Loeschen"
+                title="Projekt loeschen"
+                onClick={() => removeProject(project.id)}
+                disabled={deleteProject.isPending}
+              >
+                <Trash2 size={17} />
+              </button>
+            </article>
+          ))}
+        </div>
+        {deleteError ? <div className="inline-error">{deleteError}</div> : null}
+      </section>
 
-        <section className="panel">
-          <div className="panel-heading">
-            <div>
-              <span>Health</span>
-              <strong>{activeProject ?? "Alle Papers"}</strong>
+      {/* Health ist hier Nebeninformation: eingeklappt eine Zeile, die volle
+          KG-Health liegt in der Qualitaets-Seite. */}
+      <section className="panel project-health">
+        <button className="project-health-summary" type="button" onClick={() => setHealthOpen((open) => !open)}>
+          <ChevronDown size={15} className={healthOpen ? "topic-group-chevron" : "topic-group-chevron--collapsed"} />
+          <span className="project-health-label">Health</span>
+          <Status value={health?.status ?? (activeProject ? "loading" : "idle")} />
+          <span className="muted">
+            {warnings.length} Warnungen · {latestJobs.length} Jobs
+          </span>
+        </button>
+        {healthOpen ? (
+          <>
+            <div className="muted project-health-scope">{activeProject ?? "Alle Papers"}</div>
+            <div className="warning-list">
+              {warnings.map((warning) => (
+                <div key={warning} className="warning-row">
+                  {warning}
+                </div>
+              ))}
+              {!warnings.length ? <div className="muted-row">Keine Warnungen</div> : null}
             </div>
-            <Status value={dashboardQuery.data?.health.status ?? "loading"} />
-          </div>
-          <div className="warning-list">
-            {(dashboardQuery.data?.health.warnings ?? []).map((warning) => (
-              <div key={warning} className="warning-row">
-                {warning}
-              </div>
-            ))}
-            {!dashboardQuery.data?.health.warnings?.length ? <div className="muted-row">Keine Warnungen</div> : null}
-          </div>
-          <div className="compact-table">
-            {(dashboardQuery.data?.latest_jobs ?? []).map((job) => (
-              <div key={job.job_id} className="table-row">
-                <span>{job.job_id}</span>
-                <Status value={job.status} />
-                <span>
-                  {job.papers_processed}/{job.papers_total}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
+            <div className="compact-table">
+              {latestJobs.map((job) => (
+                <div key={job.job_id} className="table-row">
+                  <span>{job.job_id}</span>
+                  <Status value={job.status} />
+                  <span>
+                    {job.papers_processed}/{job.papers_total}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <Link className="project-health-link" to="/quality">
+              Vollständige KG-Health in Qualität
+            </Link>
+          </>
+        ) : null}
+      </section>
     </section>
   );
 }

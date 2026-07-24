@@ -1,5 +1,7 @@
-"""Harvest: Quellen-Suche (arXiv/OpenAlex/S2/Crossref/EuropePMC/CORE/DOAJ),
-PDF-Downloads und Referenz-Extraktion + Normalizer.
+"""Harvest: Quellen-Suche, PDF-Downloads und Referenz-Extraktion + Normalizer.
+
+Welche Quellen es gibt, steht in ``harvester/source_registry.py`` — diese Datei
+faechert die Suche darueber auf und liefert den Katalog unter ``GET /harvest/sources``.
 
 Split out of api/product_main.py. Behaviour unchanged. Patchbare Namen laufen
 ueber pm.<name>: _run_harvest_search (Test-Patch), httpx.AsyncClient,
@@ -20,13 +22,20 @@ from pydantic import BaseModel, Field
 import api.product_main as pm  # patchable singletons + geteilte Helfer
 from api.routers.projects import _attach_papers_to_project
 from extraction.reference_parser import extract_reference_section, split_reference_entries
+from harvester.ads_client import AdsApiKeyMissing, AdsClient, AdsConfig
 from harvester.arxiv_client import ArxivClient
 from harvester.core_client import CoreApiKeyMissing, CoreClient, CoreConfig
 from harvester.crossref_client import CrossrefClient, CrossrefConfig
+from harvester.dblp_client import DblpClient, DblpConfig
+from harvester.doab_client import DoabClient, DoabConfig, doab_metadata
 from harvester.doaj_client import DoajClient, DoajConfig
+from harvester.eric_client import EricClient, EricConfig
 from harvester.europepmc_client import EuropePMCClient, EuropePMCConfig
+from harvester.hal_client import HalClient, HalConfig
+from harvester.openaire_client import OpenAireClient, OpenAireConfig
 from harvester.openalex_client import OpenAlexClient
 from harvester.semantic_scholar_client import SemanticScholarClient
+from harvester.source_registry import DEFAULT_SOURCES, catalog as harvest_source_catalog
 from harvester.url_guard import is_safe_public_url
 from quality.pdf_resolver import BenchmarkPdfResolver, _looks_like_pdf
 from storage.file_manager import FileManager
@@ -40,7 +49,7 @@ router = APIRouter()
 
 class HarvestSearchRequest(BaseModel):
     query: str = Field(min_length=1)
-    sources: list[str] = ["arxiv"]
+    sources: list[str] = list(DEFAULT_SOURCES)
     max_results: int = Field(default=10, ge=1, le=50)
 
 
@@ -61,6 +70,12 @@ class ReferenceExtractRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
 
+
+
+@router.get("/harvest/sources")
+def harvest_sources() -> dict[str, Any]:
+    """Katalog der waehlbaren Suchquellen inkl. fachlicher Gruppen."""
+    return harvest_source_catalog()
 
 
 @router.post("/harvest/search")
@@ -125,9 +140,28 @@ async def _fetch_one_pdf(
             "canonical_id": canonical_id,
             "title": title,
             "doi": doi,
+            "landing_page_url": paper.get("landing_page_url"),
+            "remote_pdf_url": paper.get("pdf_url"),
             "saved_path": saved_path,
             "detail": detail,
         }
+
+
+def _external_paper_url(landing: Any, doi: Any, remote_pdf: Any) -> str | None:
+    """Dauerhafter Link zum Original — dieselbe Reihenfolge wie ``GET /paper/meta``
+    und ``externalPaperUrl`` im Frontend: Landing-Page, sonst DOI, sonst PDF-Link.
+
+    Wichtig fuer Paper ohne freien Volltext: darueber kommt man spaeter noch an
+    das Paper (Bibliothek, Kauf), auch wenn nie ein PDF geladen wurde.
+    """
+    landing_text = str(landing or "").strip()
+    if landing_text.startswith("http"):
+        return landing_text
+    doi_text = str(doi or "").strip().replace("https://doi.org/", "")
+    if doi_text:
+        return f"https://doi.org/{doi_text}"
+    remote_text = str(remote_pdf or "").strip()
+    return remote_text if remote_text.startswith("http") else None
 
 
 @router.post("/harvest/download")
@@ -197,7 +231,11 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
                 downloaded += 1
                 results.append({"paper_id": canonical_id, "title": title, "status": "downloaded"})
             else:
-                landing_url = f"https://doi.org/{str(doi).replace('https://doi.org/', '').strip()}" if doi else None
+                landing_url = _external_paper_url(
+                    fetch_result.get("landing_page_url"),
+                    doi,
+                    fetch_result.get("remote_pdf_url"),
+                )
                 status = "failed" if detail and "fehlgeschlagen" in detail else "no_pdf"
                 if status == "failed":
                     failed_downloads.append(f"{title}: {detail}")
@@ -403,7 +441,63 @@ async def _run_harvest_search(query: str, sources: list[str], max_results: int) 
                     results.extend(_normalize_doaj_article(item) for item in items)
                 finally:
                     await client.close()
-        except CoreApiKeyMissing as exc:
+            elif source == "openaire":
+                client = OpenAireClient(OpenAireConfig())
+                try:
+                    items = await client.search_publications(query, limit=max_results)
+                    results.extend(_normalize_openaire_product(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "dblp":
+                client = DblpClient(DblpConfig())
+                try:
+                    items = await client.search_publications(query, limit=max_results)
+                    results.extend(_normalize_dblp_publication(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "ads":
+                section = _harvester_section("ads")
+                client = AdsClient(AdsConfig(api_key=_resolved_key(section, "ADS_API_KEY")))
+                try:
+                    items = await client.search_documents(query, limit=max_results)
+                    results.extend(_normalize_ads_document(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "osf":
+                # Die OSF-API kennt nur Titel-Teilstringsuche; ueber Crossref, auf den
+                # OSF-DOI-Praefix eingegrenzt, gibt es echte Relevanz und Abstracts.
+                client = CrossrefClient(CrossrefConfig(mailto=_crossref_mailto()))
+                try:
+                    items = await client.search_works(query, rows=max_results, filters="prefix:10.31219")
+                    results.extend(_normalize_crossref_work(item, source="osf") for item in items)
+                finally:
+                    await client.close()
+            elif source == "eric":
+                client = EricClient(EricConfig())
+                try:
+                    items = await client.search_records(query, limit=max_results)
+                    results.extend(_normalize_eric_record(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "doab":
+                client = DoabClient(DoabConfig())
+                try:
+                    items = await client.search_books(query, limit=max_results)
+                    results.extend(_normalize_doab_book(item) for item in items)
+                finally:
+                    await client.close()
+            elif source == "hal":
+                client = HalClient(HalConfig())
+                try:
+                    items = await client.search_documents(query, limit=max_results)
+                    results.extend(_normalize_hal_document(item) for item in items)
+                finally:
+                    await client.close()
+            else:
+                # Macht Drift zwischen source_registry und dieser Verzweigung sichtbar,
+                # statt die Quelle stillschweigend zu verschlucken.
+                warnings.append(f"{source}: unbekannte Quelle")
+        except (CoreApiKeyMissing, AdsApiKeyMissing) as exc:
             warnings.append(f"{source}: {exc}")
         except Exception as exc:
             warnings.append(f"{source}: {exc}")
@@ -424,13 +518,41 @@ def _dedupe_harvest_results(results: list[dict[str, Any]]) -> list[dict[str, Any
     return output
 
 
+def _openalex_abstract(work: dict[str, Any]) -> str:
+    """OpenAlex liefert den Abstract nur als invertierten Index (Wort -> Positionen).
+
+    Ohne diese Rueckwandlung haetten OpenAlex-Paper immer einen leeren Abstract —
+    und damit weder eine Vorschau im Import noch eine Abstract-only-Extraktion,
+    wenn kein PDF verfuegbar ist.
+    """
+    direct = str(work.get("abstract") or "").strip()
+    if direct:
+        return direct
+    inverted = work.get("abstract_inverted_index")
+    if not isinstance(inverted, dict) or not inverted:
+        return ""
+    positions: list[tuple[int, str]] = []
+    for word, indexes in inverted.items():
+        if not isinstance(indexes, list):
+            continue
+        for index in indexes:
+            try:
+                positions.append((int(index), str(word)))
+            except (TypeError, ValueError):
+                continue
+    if not positions:
+        return ""
+    positions.sort(key=lambda item: item[0])
+    return " ".join(word for _, word in positions)
+
+
 def _normalize_openalex_work(work: dict[str, Any]) -> dict[str, Any]:
     openalex_id = str(work.get("id") or "").rsplit("/", 1)[-1]
     return {
         "source": "openalex",
         "source_id": openalex_id,
         "title": work.get("title") or "",
-        "abstract": work.get("abstract") or "",
+        "abstract": _openalex_abstract(work),
         "authors": [
             item.get("author", {}).get("display_name")
             for item in work.get("authorships", [])
@@ -481,7 +603,7 @@ def _crossref_year(work: dict[str, Any]) -> int | None:
     return None
 
 
-def _normalize_crossref_work(work: dict[str, Any]) -> dict[str, Any]:
+def _normalize_crossref_work(work: dict[str, Any], source: str = "crossref") -> dict[str, Any]:
     doi = work.get("DOI")
     authors = []
     for author in work.get("author", []) or []:
@@ -496,7 +618,7 @@ def _normalize_crossref_work(work: dict[str, Any]) -> dict[str, Any]:
             break
     abstract = re.sub(r"<[^>]+>", "", str(work.get("abstract") or "")).strip()
     return {
-        "source": "crossref",
+        "source": source,
         "source_id": str(doi or work.get("URL") or "unknown"),
         "title": _crossref_title(work),
         "abstract": abstract,
@@ -562,6 +684,169 @@ def _normalize_core_work(work: dict[str, Any]) -> dict[str, Any]:
         "doi": doi,
         "pdf_url": pdf_url,
         "landing_page_url": (f"https://doi.org/{doi}" if doi else work.get("sourceFulltextUrls")),
+        "has_full_text": bool(pdf_url),
+    }
+
+
+def _first_str(value: Any) -> str:
+    """Solr-/DSpace-Felder liefern oft Listen — nimm den ersten sinnvollen Wert."""
+    if isinstance(value, list):
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                return text
+        return ""
+    return str(value or "").strip()
+
+
+def _as_year(value: Any) -> int | None:
+    text = str(value or "").strip()[:4]
+    return int(text) if text.isdigit() else None
+
+
+def _normalize_openaire_product(product: dict[str, Any]) -> dict[str, Any]:
+    doi = None
+    for pid in product.get("pids") or []:
+        if isinstance(pid, dict) and str(pid.get("scheme") or "").lower() == "doi":
+            doi = pid.get("value")
+            break
+    pdf_url = None
+    landing = None
+    for instance in product.get("instances") or []:
+        if not isinstance(instance, dict):
+            continue
+        for url in instance.get("urls") or []:
+            text = str(url or "")
+            if not landing:
+                landing = text
+            if text.lower().endswith(".pdf"):
+                pdf_url = text
+                break
+    year = None
+    published = str(product.get("publicationDate") or "")[:4]
+    if published.isdigit():
+        year = int(published)
+    return {
+        "source": "openaire",
+        "source_id": str(product.get("id") or doi or "unknown"),
+        "title": str(product.get("mainTitle") or ""),
+        "abstract": _first_str(product.get("descriptions")),
+        "authors": [
+            str(author.get("fullName") or "")
+            for author in product.get("authors") or []
+            if isinstance(author, dict) and author.get("fullName")
+        ],
+        "year": year,
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "landing_page_url": (f"https://doi.org/{doi}" if doi else landing),
+        "has_full_text": bool(pdf_url),
+    }
+
+
+def _normalize_dblp_publication(info: dict[str, Any]) -> dict[str, Any]:
+    authors = info.get("authors") or {}
+    raw_authors = authors.get("author") if isinstance(authors, dict) else None
+    if isinstance(raw_authors, dict):
+        raw_authors = [raw_authors]
+    doi = info.get("doi")
+    landing = info.get("ee") or info.get("url")
+    return {
+        "source": "dblp",
+        "source_id": str(info.get("key") or doi or info.get("url") or "unknown"),
+        "title": str(info.get("title") or "").rstrip("."),
+        # DBLP ist eine Bibliografie ohne Abstracts; der Volltext-Resolver holt
+        # spaeter ueber die DOI, was frei verfuegbar ist.
+        "abstract": "",
+        "authors": [str(item.get("text") or "") for item in raw_authors or [] if isinstance(item, dict)],
+        "year": int(info["year"]) if str(info.get("year") or "").isdigit() else None,
+        "doi": doi,
+        "pdf_url": None,
+        "landing_page_url": (f"https://doi.org/{doi}" if doi else landing),
+        "has_full_text": False,
+    }
+
+
+def _normalize_ads_document(doc: dict[str, Any]) -> dict[str, Any]:
+    bibcode = str(doc.get("bibcode") or "")
+    doi = _first_str(doc.get("doi")) or None
+    return {
+        "source": "ads",
+        "source_id": bibcode or (doi or "unknown"),
+        "title": _first_str(doc.get("title")),
+        "abstract": str(doc.get("abstract") or ""),
+        "authors": [str(name) for name in doc.get("author") or []],
+        "year": _as_year(doc.get("year")),
+        "doi": doi,
+        "pdf_url": None,
+        "landing_page_url": (
+            f"https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract" if bibcode else (f"https://doi.org/{doi}" if doi else None)
+        ),
+        "has_full_text": False,
+    }
+
+
+def _normalize_eric_record(doc: dict[str, Any]) -> dict[str, Any]:
+    record_id = str(doc.get("id") or "")
+    has_fulltext = bool(doc.get("e_fulltextauth"))
+    year = doc.get("publicationdateyear")
+    return {
+        "source": "eric",
+        "source_id": record_id or "unknown",
+        "title": _first_str(doc.get("title")),
+        "abstract": str(doc.get("description") or ""),
+        "authors": [str(name) for name in doc.get("author") or []],
+        "year": _as_year(year),
+        "doi": None,
+        "pdf_url": (f"https://files.eric.ed.gov/fulltext/{record_id}.pdf" if has_fulltext and record_id else None),
+        "landing_page_url": (f"https://eric.ed.gov/?id={record_id}" if record_id else None),
+        "has_full_text": has_fulltext,
+    }
+
+
+def _normalize_doab_book(item: dict[str, Any]) -> dict[str, Any]:
+    meta = doab_metadata(item)
+    doi = None
+    for key in ("oapen.identifier.doi", "dc.identifier.doi"):
+        if meta.get(key):
+            doi = meta[key][0].replace("https://doi.org/", "")
+            break
+    landing = (meta.get("dc.identifier.uri") or [None])[0]
+    handle = str(item.get("handle") or "")
+    year = ""
+    for key in ("dc.date.issued", "dc.date.available", "dc.date.accessioned"):
+        if meta.get(key):
+            year = meta[key][0][:4]
+            break
+    return {
+        "source": "doab",
+        "source_id": str(item.get("uuid") or handle or "unknown"),
+        "title": (meta.get("dc.title") or [str(item.get("name") or "")])[0],
+        "abstract": (meta.get("dc.description.abstract") or [""])[0],
+        "authors": meta.get("dc.contributor.author") or [],
+        "year": _as_year(year),
+        "doi": doi,
+        "pdf_url": None,
+        "landing_page_url": landing or (f"https://directory.doabooks.org/handle/{handle}" if handle else None),
+        "has_full_text": False,
+    }
+
+
+def _normalize_hal_document(doc: dict[str, Any]) -> dict[str, Any]:
+    doi = _first_str(doc.get("doiId_s")) or None
+    pdf_url = _first_str(doc.get("fileMain_s")) or None
+    landing = _first_str(doc.get("uri_s")) or None
+    year = doc.get("producedDateY_i")
+    return {
+        "source": "hal",
+        "source_id": str(doc.get("docid") or doi or "unknown"),
+        "title": _first_str(doc.get("title_s")),
+        "abstract": _first_str(doc.get("abstract_s")),
+        "authors": [str(name) for name in doc.get("authFullName_s") or []],
+        "year": _as_year(year),
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "landing_page_url": landing or (f"https://doi.org/{doi}" if doi else None),
         "has_full_text": bool(pdf_url),
     }
 

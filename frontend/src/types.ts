@@ -6,6 +6,27 @@ export type Project = {
   year_min?: number | null;
   year_max?: number | null;
   primary_paper_id?: string | null;
+  pinned?: boolean;
+};
+
+export type HarvestSource = {
+  id: string;
+  label: string;
+  group: string;
+  tier: "journal" | "preprint" | "index";
+  needs_key: boolean;
+  note?: string | null;
+};
+
+export type HarvestSourceGroup = {
+  id: string;
+  label: string;
+};
+
+export type HarvestSourceCatalog = {
+  sources: HarvestSource[];
+  groups: HarvestSourceGroup[];
+  default: string[];
 };
 
 export type DiscoveryCandidate = Paper & {
@@ -105,6 +126,7 @@ export type Paper = {
   paperId?: string;
   display_title?: string;
   abstract?: string;
+  authors?: string[];
   source?: string;
   source_id?: string;
   filename?: string;
@@ -241,11 +263,26 @@ export type ProfessorReview = {
   finale_antwort?: string;
 };
 
+/** Stufe der Auto-Recherche: wissenschaftlich → vertrauenswürdig → ungeprüft. */
+export type AutoHarvestStage = "scientific" | "trusted" | "unverified";
+
+export type AutoHarvestStageSummary = {
+  stage: AutoHarvestStage;
+  label: string;
+  papers: number;
+  grey: number;
+  /** true, wenn die Antwort nach dieser Stufe trug (die Leiter endet dann). */
+  sufficient: boolean;
+};
+
+export type AutoGreySource = { id: string; title: string; url: string; trust_tier?: string };
+
 export type AutoHarvestSummary = {
   harvested: boolean;
   papers: Array<{ id: string; title: string }>;
-  grey: Array<{ id: string; title: string; url: string }>;
+  grey: AutoGreySource[];
   related_topics: string[];
+  stages?: AutoHarvestStageSummary[];
 };
 
 /** One SSE event from POST /query/auto-answer (auto-research answering). */
@@ -254,9 +291,11 @@ export type AutoAnswerEvent = {
   answer?: Answer;
   related_topics?: string[];
   scope?: "main" | "related";
+  stage?: AutoHarvestStage;
+  stage_label?: string;
   topic?: string;
   papers?: Array<{ id: string; title: string }>;
-  grey?: Array<{ id: string; title: string; url: string }>;
+  grey?: AutoGreySource[];
   harvest_summary?: AutoHarvestSummary;
   error?: string;
 };

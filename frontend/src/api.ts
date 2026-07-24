@@ -32,6 +32,7 @@ import type {
   ExtractionRunResponse,
   GraphExplorer,
   HarvestDownloadResponse,
+  HarvestSourceCatalog,
   HealthReport,
   Job,
   Note,
@@ -144,6 +145,11 @@ export const api = {
   getHealth: () => request<HealthReport>("/system/health-report"),
   getProjects: () => request<{ projects: Project[] }>("/projects"),
   createProject: (name: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  patchProject: (projectId: string, payload: { name?: string; pinned?: boolean }) =>
+    request<{ project: Project }>(`/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
   deleteProject: (projectId: string) =>
     request<{ deleted: boolean; project: Project }>(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" }),
   addProjectPapers: (projectId: string, paperIds: string[]) =>
@@ -164,6 +170,7 @@ export const api = {
       headers: { "content-type": file.type || "application/pdf", "x-filename": file.name },
       body: file
     }),
+  getHarvestSources: () => request<HarvestSourceCatalog>("/harvest/sources"),
   harvestSearch: (payload: { query: string; sources: string[]; max_results: number }) =>
     request<{ query: string; results: Paper[]; warnings: string[] }>("/harvest/search", {
       method: "POST",

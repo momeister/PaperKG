@@ -259,6 +259,11 @@ def test_extract_pdf_into_db_writes_real_extraction(tmp_path, monkeypatch) -> No
     assert rows[0][0] != "auto-harvest"
 
 
+async def _no_remote_sources(question, sources, max_papers):  # noqa: ANN001, ARG001
+    """Stellvertreter fuer die breite Quellen-Aufaecherung: keine echten API-Aufrufe."""
+    return []
+
+
 async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
@@ -288,6 +293,9 @@ async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monk
 
     monkeypatch.setattr(auto_harvester, "ArxivClient", FakeArxiv)
     monkeypatch.setattr(auto_harvester, "SemanticScholarClient", FakeSS)
+    # Die breite Quellen-Aufaecherung wuerde echte APIs anfragen; hier wird der
+    # schlanke arXiv/S2-Fallback getestet (Projekt-Zuordnung + synthetische Extraktion).
+    monkeypatch.setattr(auto_harvester, "_search_scientific_sources", _no_remote_sources)
 
     inserted = await harvest_for_question(
         question="frage",

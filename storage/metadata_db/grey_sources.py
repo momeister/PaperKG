@@ -26,8 +26,9 @@ class GreySourcesMixin(_Base):
         self._execute("""
             INSERT INTO grey_sources
             (id, project_id, query, url, title, summary, raw_excerpt, full_text, evidence,
-             injection_flags, status, source_kind, origin_id, source_paper_ids, created_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             injection_flags, status, source_kind, origin_id, source_paper_ids, trust_tier,
+             created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 query = EXCLUDED.query,
                 url = EXCLUDED.url,
@@ -40,7 +41,8 @@ class GreySourcesMixin(_Base):
                 status = EXCLUDED.status,
                 source_kind = EXCLUDED.source_kind,
                 origin_id = EXCLUDED.origin_id,
-                source_paper_ids = EXCLUDED.source_paper_ids
+                source_paper_ids = EXCLUDED.source_paper_ids,
+                trust_tier = EXCLUDED.trust_tier
         """, [
             grey_id,
             str(project_id),
@@ -56,6 +58,7 @@ class GreySourcesMixin(_Base):
             str(source.get("source_kind") or "web"),
             source.get("origin_id"),
             json.dumps(paper_ids),
+            str(source.get("trust_tier") or "unknown"),
             now,
         ])
         return self.get_grey_source(grey_id) or {"id": grey_id}

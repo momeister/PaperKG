@@ -690,16 +690,35 @@ class ResearchTreeRunner:
                     {"id": r["id"], "title": r.get("title", r["id"])} for r in paper_records
                 ]
 
-                # Harvest grey (web) sources
+                # Harvest grey (web) sources. Wie in query/auto_answer.py gilt die
+                # Rangfolge Paper → vertrauenswürdige Domains → ungeprüftes Web; hier
+                # ohne Zwischenantwort pro Stufe (ein Baum hat viele Knoten), also:
+                # ungeprüfte Treffer nur, wenn die vertrauenswürdigen nichts hergaben.
+                grey_db_path = str(kwargs.get("metadata_db_path") or "data/metadata.duckdb")
+                grey_project_id = str(kwargs.get("project_id") or "")
                 grey_records = await harvest_grey_sources_for_question(
                     question=question,
-                    project_id=str(kwargs.get("project_id") or ""),
-                    db_path=str(kwargs.get("metadata_db_path") or "data/metadata.duckdb"),
+                    project_id=grey_project_id,
+                    db_path=grey_db_path,
                     max_sources=2,
+                    tiers=("trusted",),
                 )
+                if not grey_records:
+                    grey_records = await harvest_grey_sources_for_question(
+                        question=question,
+                        project_id=grey_project_id,
+                        db_path=grey_db_path,
+                        max_sources=2,
+                        tiers=("unknown",),
+                    )
                 new_grey_ids = [r["id"] for r in grey_records]
                 harvested_grey_info = [
-                    {"id": r.get("id", ""), "title": r.get("title", ""), "url": r.get("url", "")}
+                    {
+                        "id": r.get("id", ""),
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "trust_tier": r.get("trust_tier", "unknown"),
+                    }
                     for r in grey_records
                 ]
 

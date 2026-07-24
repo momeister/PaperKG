@@ -7,6 +7,7 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
+import { externalPaperUrl } from "../paperLinks";
 import { useAppState } from "../state";
 import type { GreySource, Paper } from "../types";
 
@@ -20,16 +21,7 @@ function loadPdfDockWidth(): number {
   return Number.isFinite(stored) && stored >= PDF_DOCK_MIN_WIDTH ? stored : 560;
 }
 
-/** Link zur Originalquelle nach derselben Regel wie `/paper/meta` im Backend
- *  (api/routers/papers.py): Landing-Page → DOI → direkter PDF-Link. */
-export function externalPaperUrl(paper: Paper): string | null {
-  const landing = (paper.landing_page_url ?? "").trim();
-  if (landing) return landing;
-  const doi = (paper.doi ?? "").trim();
-  if (doi) return `https://doi.org/${doi}`;
-  const pdfUrl = (paper.pdf_url ?? "").trim();
-  return /^https?:\/\//i.test(pdfUrl) ? pdfUrl : null;
-}
+export { externalPaperUrl };
 
 export function LibraryPage() {
   const { activeProject, provider, model } = useAppState();

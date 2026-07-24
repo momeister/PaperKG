@@ -34,7 +34,7 @@ class _ScriptedResponder:
 
 def _patch_common(monkeypatch, responder: _ScriptedResponder, *, related: list[str]) -> dict[str, list]:
     """Wire fakes into query.auto_answer and return a dict capturing harvest calls."""
-    captured: dict[str, list] = {"papers_for": [], "grey_for": []}
+    captured: dict[str, list] = {"papers_for": [], "grey_for": [], "grey_tiers": []}
 
     monkeypatch.setattr(auto_answer, "HybridRetriever", lambda *a, **k: object())
     monkeypatch.setattr(auto_answer, "GroundedResponder", lambda *a, **k: responder)
@@ -48,8 +48,17 @@ def _patch_common(monkeypatch, responder: _ScriptedResponder, *, related: list[s
         return [{"id": f"arxiv:{question}", "title": f"Paper for {question}"}]
 
     async def _fake_harvest_grey(*, question: str, **kwargs: Any) -> list[dict[str, str]]:
+        tier = (kwargs.get("tiers") or ("unknown",))[0]
         captured["grey_for"].append(question)
-        return [{"id": f"grey_{abs(hash(question)) % 1000}", "title": "G", "url": "http://x"}]
+        captured["grey_tiers"].append(tier)
+        return [
+            {
+                "id": f"grey_{tier}_{abs(hash(question)) % 1000}",
+                "title": "G",
+                "url": "http://x",
+                "trust_tier": tier,
+            }
+        ]
 
     monkeypatch.setattr(auto_answer, "harvest_for_question", _fake_harvest_papers)
     monkeypatch.setattr(auto_answer, "harvest_grey_sources_for_question", _fake_harvest_grey)
@@ -77,8 +86,9 @@ async def test_strong_answer_skips_harvest(monkeypatch) -> None:
 
 
 async def test_weak_answer_harvests_related_topics_and_reanswers(monkeypatch) -> None:
-    # First answer has no traceable citation → weak → harvest main + each related topic,
-    # then re-answer. Second answer is strong.
+    # First answer has no traceable citation → weak → stage 1 harvests papers for the
+    # main question + each related topic, then re-answers. The re-answer is strong, so
+    # the ladder stops before touching the web at all.
     responder = _ScriptedResponder(
         [
             {"answer": "No local evidence found.", "no_answer": True},
@@ -103,20 +113,65 @@ async def test_weak_answer_harvests_related_topics_and_reanswers(monkeypatch) ->
     assert "reanswering" in statuses
     assert statuses[-1] == "done"
 
-    # Main question + both related topics were harvested for papers and grey sources.
+    # Stage 1 is scientific-only: papers for every topic, no web sources yet.
     assert captured["papers_for"] == ["What is X?", "topic one", "topic two"]
-    assert captured["grey_for"] == ["What is X?", "topic one", "topic two"]
+    assert captured["grey_for"] == []
 
     # The re-answer (2nd responder call) received the original scope ID plus the new ones.
     second_call = responder.calls[1]
     assert "existing:1" in second_call["paper_ids"]
     assert any(pid.startswith("arxiv:") for pid in second_call["paper_ids"])
-    assert second_call["grey_source_ids"]  # harvested grey ids flowed in
 
     summary = events[-1]["harvest_summary"]
     assert summary["harvested"] is True
     assert summary["related_topics"] == ["topic one", "topic two"]
     assert len(summary["papers"]) == 3
+    assert [stage["stage"] for stage in summary["stages"]] == ["scientific"]
+    assert summary["stages"][0]["sufficient"] is True
+
+
+async def test_escalates_to_trusted_web_then_unverified(monkeypatch) -> None:
+    # Every answer stays weak → the ladder walks all three stages, and the web stages
+    # ask for their tier explicitly: trusted before unknown.
+    responder = _ScriptedResponder([{"answer": "Nothing conclusive.", "no_answer": True}])
+    captured = _patch_common(monkeypatch, responder, related=[])
+
+    events = await _collect(
+        auto_answer.auto_research_answer(question="What is X?", llm_router=object())
+    )
+
+    summary = events[-1]["harvest_summary"]
+    assert [stage["stage"] for stage in summary["stages"]] == ["scientific", "trusted", "unverified"]
+    assert all(stage["sufficient"] is False for stage in summary["stages"])
+    assert captured["grey_tiers"] == ["trusted", "unknown"]
+    assert [source["trust_tier"] for source in summary["grey"]] == ["trusted", "unknown"]
+    assert {event.get("stage") for event in events if event["status"] == "harvesting"} == {
+        "scientific",
+        "trusted",
+        "unverified",
+    }
+
+
+async def test_trusted_stage_stops_before_unverified_web(monkeypatch) -> None:
+    # Papers do not help, but a trustworthy web source does → the unverified stage
+    # never runs, so no unchecked page can reach the answer.
+    responder = _ScriptedResponder(
+        [
+            {"answer": "Nothing local.", "no_answer": True},
+            {"answer": "Still nothing.", "no_answer": True},
+            {"answer": "Now grounded in [grey::abc].", "no_answer": False},
+        ]
+    )
+    captured = _patch_common(monkeypatch, responder, related=[])
+
+    events = await _collect(
+        auto_answer.auto_research_answer(question="What is X?", llm_router=object())
+    )
+
+    summary = events[-1]["harvest_summary"]
+    assert [stage["stage"] for stage in summary["stages"]] == ["scientific", "trusted"]
+    assert summary["stages"][-1]["sufficient"] is True
+    assert captured["grey_tiers"] == ["trusted"]
 
 
 def test_is_weak_answer_reads_responder_verdict() -> None:

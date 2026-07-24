@@ -14,7 +14,11 @@ deployments — they share one DuckDB, one PDF store, and one config. Most docs 
 `QUICKSTART_PHASE3.md`, `ScienceKG_Projektplan.md`, `MEMORY.md`) are in German; code and identifiers
 are English.
 
-- **Phase 1** — harvesting (arXiv, Semantic Scholar, OpenAlex, Unpaywall, Papers with Code), dedup, DuckDB + local PDFs
+- **Phase 1** — harvesting, dedup, DuckDB + local PDFs. The searchable sources live in
+  **`harvester/source_registry.py`** (one list, fachlich gruppiert) — the dispatch in
+  `api/routers/harvest.py::_run_harvest_search` and `GET /harvest/sources` (frontend picker) both read it,
+  so add a source in exactly those two places. `harvester/http_client.py` is the shared throttled base for
+  newer clients. Unpaywall is an OA-PDF *resolver*, not a search source.
 - **Phase 2** — Kuzu citation graph, co-citation similarity
 - **Phase 3** — PDF parsing, LLM entity/claim extraction, entity linking, embeddings, batch jobs
 - **Phase 4** — local query assistant: KG/hybrid retrieval, grounded answers, hypotheses, source verification
@@ -171,6 +175,17 @@ charts, auto-tables and ComfyUI images. PDF compilation needs a LaTeX engine on 
 Without an engine the endpoint gracefully returns a ZIP of `.tex`+`.bib`+figures instead (compile on
 Overleaf). ComfyUI (port 8188) is optional and best-effort. Requires `matplotlib` in the `.venv`.
 
+### Auto-Recherche (Quellen-Stufenleiter)
+The Workspace **Auto-Recherche** toggle (and `/auto`) answers, and when the answer is weak escalates
+**one source class at a time**, re-answering after each stage and stopping as soon as the answer holds
+(`query/auto_answer.py::HARVEST_STAGES`): `scientific` (papers via the full source registry, real Phase-3
+extraction) → `trusted` (institutions/universities/publishers) → `unverified` (rest of the web, and the
+prompt makes the answer say so). Domain tiers come from **`research/source_tiers.py`** (built-in list plus
+additive `research.trusted_domains` / `trusted_suffixes` in `config.yaml`); the tier rides on `SearchHit.tier`,
+is stored in `grey_sources.trust_tier`, lowers the evidence score for unverified sources
+(`query/grounded_responder.py`) and changes the `(Webquelle · …)` marker in the prompt
+(`query/grounded_helpers.py`). `query/research_tree.py` uses the same ordering without a per-stage re-answer.
+
 ### Desktop-agent hand-off (Parallelmodus)
 In the Workspace Parallel mode, each *Variante* in the Notes "Ergebnisse" tab has an
 **„An Desktop-Agent übergeben"** button. The backend (`query/agent_handoff.py`,
@@ -229,5 +244,15 @@ python -m quality.phase4_eval --provider lm_studio --output data/eval/phase4_lm_
   failure by `quality/phase4_eval.py`. Preserve this when touching `grounded_responder` or prompts.
 - `Alle Papers` is a **reserved global project mode** (`__all_papers__`): when active, Library/Graph/Assistant
   send no `project_id` and notes go to a global collection. It cannot be deleted or recreated as a normal project.
+- A project's **id is its name** (`data/projects.json` is `{name: [paper_ids]}`). Renaming therefore moves every
+  project-scoped row: `PATCH /projects/{id}` calls `MetadataDB.rename_project`
+  (`storage/metadata_db/project_scope.py`, one UPDATE per table in `PROJECT_SCOPED_TABLES`) and migrates the
+  sidecars `data/project_primary.json` / `data/project_meta.json` (pinning). Anything else keyed by `project_id`
+  must be added to that tuple. The sidecar helpers resolve their path at call time so tests can redirect them.
+- A paper without a downloadable PDF is still useful: its abstract feeds **abstract-only extraction**
+  (`api/routers/extraction.py::_abstract_only_extraction_text`) and `landing_page_url`/`doi` stay the durable link
+  to the original (`_external_paper_url` in `api/routers/harvest.py`, `externalPaperUrl` in
+  `frontend/src/paperLinks.ts`). Keep normalizers filling both fields; `pdf_url` is overwritten with the local
+  path after a download and is *not* a reliable external link.
 - A graphify `hook-check` runs on every Bash call (`.codex/hooks.json`); `.codex/` is gitignored and unrelated
   to your task — let the hook run, don't modify it.

@@ -32,7 +32,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     citation_count: 1,
     asset_count: 0
   };
-  const projects: Array<{ id: string; name: string; paper_ids: string[]; paper_count: number; year_min: number | null; year_max: number | null }> = [];
+  const projects: Array<{ id: string; name: string; paper_ids: string[]; paper_count: number; year_min: number | null; year_max: number | null; pinned?: boolean }> = [];
   const papers = [
     {
       id: "p1",
@@ -158,6 +158,56 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
       return;
     }
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects }) });
+  });
+
+  // Umbenennen/Anheften: die Projekt-ID ist der Name, das Backend zieht projektgebundene
+  // Daten mit um — hier reicht das Umschreiben des Mock-Eintrags.
+  await page.route(/\/projects\/[^/?]+(?:\?.*)?$/, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.fallback();
+      return;
+    }
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() || "");
+    const payload = route.request().postDataJSON() as { name?: string; pinned?: boolean };
+    const project = projects.find((entry) => entry.id === id);
+    if (!project) {
+      await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not found" }) });
+      return;
+    }
+    if (payload.name) {
+      project.id = payload.name;
+      project.name = payload.name;
+    }
+    if (payload.pinned !== undefined) {
+      project.pinned = payload.pinned;
+    }
+    projects.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ project }) });
+  });
+
+  await page.route(/\/harvest\/search(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        query: "graph transformer",
+        results: [
+          {
+            id: "arxiv:2401.00001",
+            title: "Graph Transformers for Everything",
+            abstract: "Kompakter Abstract fuer die Detailansicht.",
+            authors: ["A. Autor"],
+            source: "arxiv",
+            source_id: "2401.00001",
+            year: 2024,
+            doi: "10.1/gt",
+            pdf_url: "https://arxiv.org/pdf/2401.00001",
+            landing_page_url: "https://arxiv.org/abs/2401.00001",
+            has_full_text: true
+          }
+        ],
+        warnings: []
+      })
+    });
   });
 
   await page.route(/\/papers\/upload(?:\?.*)?$/, async (route) => {
@@ -498,6 +548,26 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.getByPlaceholder("Neues Projekt").fill(projectName);
   await page.getByRole("button", { name: /Anlegen/ }).click();
   await expect(page.getByRole("button", { name: new RegExp(projectName) })).toBeVisible();
+
+  // Projektzeile: Umbenennen (inline) und Anheften.
+  const projectRow = page.locator(".project-list-row").filter({ hasText: projectName });
+  await projectRow.getByRole("button", { name: "Umbenennen" }).click();
+  const renamedProject = `${projectName}-neu`;
+  await page.getByLabel("Projektname").fill(renamedProject);
+  await page.getByRole("button", { name: "Namen speichern" }).click();
+  await expect(page.getByRole("button", { name: new RegExp(renamedProject) })).toBeVisible();
+
+  const renamedRow = page.locator(".project-list-row").filter({ hasText: renamedProject });
+  await renamedRow.getByRole("button", { name: "Anheften" }).click();
+  await expect(renamedRow).toHaveClass(/project-list-row--pinned/);
+
+  // Health ist untergeordnet: eingeklappt, Details erst auf Klick.
+  const healthToggle = page.getByRole("button", { name: /^Health/ });
+  await expect(page.getByText("Vollständige KG-Health in Qualität")).toHaveCount(0);
+  await healthToggle.click();
+  await expect(page.getByText("Vollständige KG-Health in Qualität")).toBeVisible();
+  await healthToggle.click();
+
   await page.getByLabel("Projekt").selectOption("");
   await expect(page.getByLabel("Projekt")).toHaveValue("");
 
@@ -566,6 +636,30 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   // Race-Fix: erst warten, bis die Import-Stufe gemountet ist — sonst matcht der
   // Locator das noch gemountete versteckte Notes-Bild-Input statt der PDF-Dropzone.
   await expect(page.getByRole("heading", { name: "Import" })).toBeVisible();
+
+  // Quellen fachweise auswaehlen: die Gruppen-Checkbox schaltet alle Quellen der Gruppe.
+  const lifeGroup = page.locator(".source-group").filter({ hasText: "Medizin & Biologie" });
+  const lifeGroupBox = lifeGroup.getByRole("checkbox").first();
+  await lifeGroupBox.check();
+  for (const box of await lifeGroup.getByRole("checkbox").all()) {
+    await expect(box).toBeChecked();
+  }
+  await page.getByRole("button", { name: "Keine", exact: true }).click();
+  await expect(lifeGroupBox).not.toBeChecked();
+  await page.getByRole("button", { name: "Alle", exact: true }).click();
+  await expect(lifeGroupBox).toBeChecked();
+
+  // Suche liefert kompakte Zeilen: Titel + Quellen-Badge, Abstract erst auf Klick.
+  await page.getByPlaceholder("Topic oder Frage").fill("graph transformer");
+  await page.getByRole("button", { name: "Suchen" }).click();
+  const hitRow = page.locator(".pick-item").first();
+  await expect(hitRow).toBeVisible();
+  await expect(hitRow.locator(".source-badge")).toHaveText("arXiv");
+  await expect(page.getByText("Kompakter Abstract fuer die Detailansicht.")).toHaveCount(0);
+  await hitRow.locator(".pick-row-main").click();
+  await expect(page.getByText("Kompakter Abstract fuer die Detailansicht.")).toBeVisible();
+  await expect(hitRow.getByRole("link", { name: /Original öffnen/ })).toBeVisible();
+
   await page.locator('.drop-zone input[type="file"]').setInputFiles({
     name: "tiny.pdf",
     mimeType: "application/pdf",
@@ -735,7 +829,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   );
   await expect(workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl")).toBeVisible();
   await workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl").fill("Arbeitsplatz erklaeren");
-  await workspaceNotes.getByRole("button", { name: "Fragen" }).click();
+  // exact: sonst matcht auch der Toolbar-Knopf "Ganze Notiz fragen".
+  await workspaceNotes.getByRole("button", { name: "Fragen", exact: true }).click();
   await expect(workspaceNotes.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
   await workspaceNotes.getByRole("button", { name: "Schliessen" }).click();
   await workspaceEditor.click();
@@ -745,7 +840,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   }
   await expect(workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl")).toBeVisible();
   await workspaceNotes.getByPlaceholder("KI-Frage zu dieser Auswahl").fill("Zweite Notiz");
-  await workspaceNotes.getByRole("button", { name: "Fragen" }).click();
+  // exact: sonst matcht auch der Toolbar-Knopf "Ganze Notiz fragen".
+  await workspaceNotes.getByRole("button", { name: "Fragen", exact: true }).click();
   await expect(workspaceNotes.getByLabel("KI-Antwort")).toHaveValue(/Das bedeutet in einfachen Worten/);
   await expect(workspaceNav.getByRole("button", { name: /KI-Notizen/ })).toHaveCount(0);
   await workspaceAssistant.getByRole("button", { name: "Notizen", exact: true }).click();
