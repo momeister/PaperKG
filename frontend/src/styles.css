@@ -7459,9 +7459,12 @@ button.data-row {
   font-size: 0.85rem;
 }
 
+/* Das Hauptthema ist jetzt genauso einklappbar wie die verwandten Themen —
+   nur optisch weiter hervorgehoben. */
 .topic-group-header--main {
-  cursor: default;
+  cursor: pointer;
   background: var(--surface);
+  font-weight: 600;
 }
 
 .topic-group-label {
@@ -11472,4 +11475,246 @@ button.parallel-cite {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+}
+
+/* --- Sichtbare Query-Fehler ------------------------------------------------ */
+/* Fehler wurden lange als `data ?? []` verschluckt und damit als leere Liste   */
+/* gerendert — ein gesperrter DuckDB-Lock sah aus wie ein Datenverlust. Diese   */
+/* Bausteine machen den Unterschied zwischen "leer" und "kaputt" sichtbar.      */
+/* Bewusst über Theme-Tokens (--red/--amber), damit sie in allen sechs Themes   */
+/* lesbar bleiben.                                                             */
+.query-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--line));
+  background: color-mix(in srgb, var(--red) 10%, var(--surface));
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.query-error-icon {
+  color: var(--red);
+  flex: none;
+  margin-top: 1px;
+}
+
+.query-error-body {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.query-error-body strong {
+  color: var(--red);
+  font-size: 13px;
+}
+
+.query-error-body span {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.query-error-hint {
+  color: var(--muted);
+}
+
+.query-degraded {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  background: color-mix(in srgb, var(--amber) 12%, var(--surface));
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.query-degraded > svg {
+  color: var(--amber);
+  flex: none;
+}
+
+.query-degraded > span {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- Batch-Quellenfilter (Extraktion) -------------------------------------- */
+/* Macht sichtbar, dass Paper ohne PDF ueber Titel + Abstract extrahiert werden  */
+/* — und laesst sie bewusst ein- oder ausschliessen.                            */
+.batch-scope {
+  display: flex;
+  font-size: 12px;
+}
+
+.batch-scope button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: var(--radius, 6px);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.batch-scope button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+
+.extraction-overview-badge .muted {
+  font-size: 11px;
+}
+
+/* --- KI-Limit-Banner (Extraktion) ------------------------------------------ */
+/* Ein 429 landete bisher nur als roher Text in einer von 400 Log-Zeilen. Dass  */
+/* das Kontingent erschoepft war (und nicht ein PDF kaputt), war nicht zu sehen. */
+.llm-limit-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid color-mix(in srgb, var(--amber) 50%, var(--line));
+  background: color-mix(in srgb, var(--amber) 12%, var(--surface));
+  color: var(--text);
+}
+
+.llm-limit-banner > svg {
+  color: var(--amber);
+  flex: none;
+  margin-top: 1px;
+}
+
+.llm-limit-banner--stop {
+  border-color: color-mix(in srgb, var(--red) 50%, var(--line));
+  background: color-mix(in srgb, var(--red) 11%, var(--surface));
+}
+
+.llm-limit-banner--stop > svg {
+  color: var(--red);
+}
+
+.llm-limit-banner > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.llm-limit-banner strong {
+  font-size: 13px;
+}
+
+.llm-limit-banner span {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* --- KI-Vorschläge: die Themen hinter den Kandidaten ----------------------- */
+/* Das Backend liefert die generierten Suchanfragen samt Begründung mit; die UI  */
+/* hat sie bisher verworfen und nur die fertigen Paper gezeigt.                  */
+.discovery-analysis {
+  display: grid;
+  gap: 7px;
+  padding-bottom: 11px;
+  margin-bottom: 11px;
+  border-bottom: 1px solid var(--line);
+}
+
+.discovery-analysis p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.discovery-analysis-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.discovery-analysis-methods {
+  font-size: 11.5px;
+}
+
+.discovery-topic-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topic-chip--action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--dur-1, 0.15s) var(--ease-out, ease),
+    background var(--dur-1, 0.15s) var(--ease-out, ease);
+}
+
+.topic-chip--action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.topic-chip--action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Sammel-Speichern je Themengruppe. */
+.topic-group-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0.2rem 0.4rem;
+}
+
+/* --- Projekt-Bundles (Export / Import) ------------------------------------- */
+.project-export-option {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bundle-preview {
+  margin-top: 11px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-2);
+}
+
+.bundle-preview-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.bundle-preview-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.bundle-preview-counts > span {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
 }

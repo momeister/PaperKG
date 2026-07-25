@@ -268,7 +268,9 @@ export default function App() {
               <label>
                 Projekt
                 <select value={activeProject ?? ""} onChange={(event) => setActiveProject(event.target.value || undefined)}>
-                  <option value="">Alle Papers</option>
+                  {/* Bei einem Ladefehler sonst nur "Alle Papers" — das sah aus, als
+                      waeren alle Projekte geloescht. Deshalb ein eigener Eintrag. */}
+                  <option value="">{projectsQuery.isError ? "⚠ Projekte nicht ladbar" : "Alle Papers"}</option>
                   {(projectsQuery.data?.projects ?? []).map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.name}

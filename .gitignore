@@ -60,6 +60,9 @@ data/project_primary.json
 data/project_meta.json
 data/vocabulary.json
 data/note_assets/
+data/_backup_*/
+data/*.corrupt-*
+data/.backend.lock
 
 # Build / packaging
 build/
@@ -98,3 +101,5 @@ remember.txt
 
 # Playwright-Ausgaben
 frontend/test-results/
+frontend/playwright-report/
+frontend/e2e-artifacts/

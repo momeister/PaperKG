@@ -669,12 +669,21 @@ class LLMRouter:
 
 	@staticmethod
 	def _http_status_runtime_error(exc: httpx.HTTPStatusError) -> RuntimeError:
+		# Der Statuscode und Retry-After muessen im Text landen: weiter oben faengt
+		# die Extraktion jede Exception ab und behaelt nur noch den String. Ohne
+		# "HTTP 429" darin kann query/llm_errors.py ein Rate-Limit spaeter nicht
+		# mehr von einem beliebigen Fehler unterscheiden.
 		response = exc.response
 		detail = (response.text or "").strip()
 		if len(detail) > 800:
 			detail = detail[:800] + "..."
-		message = f"{exc}; response_body={detail}" if detail else str(exc)
-		return RuntimeError(message)
+		parts = [f"HTTP {response.status_code}", str(exc)]
+		retry_after = response.headers.get("retry-after")
+		if retry_after:
+			parts.append(f"retry_after={retry_after}s")
+		if detail:
+			parts.append(f"response_body={detail}")
+		return RuntimeError("; ".join(parts))
 
 	@staticmethod
 	def _drop_none_values(data: dict[str, Any]) -> dict[str, Any]:

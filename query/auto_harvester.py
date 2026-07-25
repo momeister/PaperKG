@@ -8,7 +8,6 @@ api/ imports at module level to avoid circular imports with product_main
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +18,7 @@ from harvester.oa_resolver import resolve_oa_pdf_url
 from harvester.semantic_scholar_client import SemanticScholarClient
 from harvester.source_registry import TIER_RANK, source_tier
 from harvester.url_guard import is_safe_public_url
+from storage.atomic_json import read_json_dict, write_json_atomic
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
@@ -39,18 +39,14 @@ DEFAULT_SCIENTIFIC_SOURCES: tuple[str, ...] = (
 
 
 def _load_projects(path: Path) -> dict[str, list[str]]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return {str(k): [str(v) for v in vs] if isinstance(vs, list) else [] for k, vs in data.items() if isinstance(data, dict)}
+    # Gleiche Semantik wie api/routers/projects.py: kaputtes JSON meldet sich laut,
+    # statt still als "keine Projekte" durchzugehen (siehe storage/atomic_json.py).
+    data = read_json_dict(path)
+    return {str(k): [str(v) for v in vs] if isinstance(vs, list) else [] for k, vs in data.items()}
 
 
 def _save_projects(projects: dict[str, list[str]], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(projects, indent=2, sort_keys=True), encoding="utf-8")
+    write_json_atomic(path, projects)
 
 
 def _looks_like_pdf(content: bytes, content_type: str) -> bool:

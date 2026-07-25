@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from extraction.entity_extractor._shared import (
     ParsedLLMResponse,
 )
+from query.llm_errors import classify_llm_error, tag_error
 
 if TYPE_CHECKING:
     from extraction.entity_extractor import EntityExtractor
@@ -65,7 +66,13 @@ class QualityMixin(_Base):
             return None
         excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in failed_calls)
         if "No models loaded" in excerpts:
-            return "LLM extraction failed: LM Studio has no model loaded."
+            return tag_error("connection", "LM Studio hat kein Modell geladen.")
+        # Die eigentliche Ursache steckt im Rohtext des gescheiterten Aufrufs
+        # (z.B. "HTTP 429 …"). Sie hier einzuordnen ist die einzige Stelle, an der
+        # sie noch vorhanden ist — weiter oben bleibt nur dieser eine String uebrig.
+        kind, human = classify_llm_error(excerpts)
+        if kind != "unknown":
+            return tag_error(kind, human)
         if "LLM call failed" in excerpts or "retry failed" in excerpts:
             return "LLM extraction failed for every extraction call; no KG-safe entities were produced."
         return "LLM extraction failed before usable JSON could be produced."

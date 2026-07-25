@@ -38,6 +38,23 @@ harvester/  → storage/  → parsing/  → extraction/  → graph/  → query/ 
   `extraction_quality`, `entity_review_queue`, and the notes tables (`notes`, `note_citations`,
   `note_assets`, `note_ai_threads`/`note_ai_messages`, `note_versions`). When adding a feature with
   persistence, add a table here, not a new store.
+  **DuckDB allows exactly one writing process per file.** A second backend (Docker *and* host, a
+  stray Tauri sidecar, Streamlit) used to surface as `duckdb.IOException` → HTTP 500 → the frontend's
+  `data ?? []` → *"all projects are gone"*. Three guards now exist: `MetadataDBLockedError`
+  (`storage/metadata_db/base.py`, served as **503** with a German explanation), a startup
+  `InstanceLock` (`storage/instance_lock.py`), and `GET /projects` no longer needing the DB at all.
+  `InstanceLock` deliberately uses **two** mechanisms on `data/.backend.lock`: an OS advisory
+  `flock` (exact, self-releasing — but same-kernel only) *plus* a heartbeat timestamp written into
+  the file every 10s, stale after 45s. The heartbeat is not redundant: Docker Desktop runs the
+  daemon in a VM, so a bind mount passes through virtiofs/gRPC-FUSE and **propagates no POSIX
+  locks at all — not even DuckDB's own**. Measured: with the container up, the host could open the
+  same `metadata.duckdb` read-write. Two writers on one file is worse than a visible error, so the
+  file *content* (which does propagate) is what actually guards the container↔host case.
+- **`storage/atomic_json.py`** — the JSON sidecars (`data/projects.json`, `project_primary.json`,
+  `project_meta.json`) hold the *only* copy of the project→paper mapping and are gitignored. Always write
+  them via `write_json_atomic` (tmp + `fsync` + `os.replace`) and read via `read_json_dict`, which raises
+  `CorruptJsonError` instead of silently returning `{}` — a truncated file read as `{}` used to be
+  overwritten on the next save, turning a crash into real data loss.
 - **`storage/file_manager.py`** — versioned local PDF store under `data/pdfs/`.
 - **`query/llm_router.py`** — `LLMRouter.from_config_file("config.yaml")`. Single abstraction over all
   providers (`ollama`, `lm_studio`, `openai`/`openai_compatible`, `gemini`, `nvidia`, `nvidia_local_nim`).
@@ -68,7 +85,14 @@ harvester/  → storage/  → parsing/  → extraction/  → graph/  → query/ 
 
 ## Commands
 
-This is a **Windows / PowerShell** environment. The repo uses a local **`.venv`**; `uv` is also available.
+The repo is developed on **both Windows (PowerShell) and Linux**. Commands below are written in the
+PowerShell form; on Linux/macOS use `npm` wherever they say `npm.cmd`, and `.venv/bin/python` instead of
+`.venv\Scripts\python`. The repo uses a local **`.venv`**; `uv` is also available.
+
+**Always make sure only one backend is running.** Docker (`./data` is bind-mounted) and a host backend
+contend for the same DuckDB file; the second one now refuses to start (`storage/instance_lock.py`).
+Set `SCIENCEKG_DISABLE_INSTANCE_LOCK=1` only if you know what you are doing (the test suite sets it
+implicitly by detecting pytest).
 
 ### Python tests (pytest)
 ```powershell
@@ -249,10 +273,28 @@ python -m quality.phase4_eval --provider lm_studio --output data/eval/phase4_lm_
   (`storage/metadata_db/project_scope.py`, one UPDATE per table in `PROJECT_SCOPED_TABLES`) and migrates the
   sidecars `data/project_primary.json` / `data/project_meta.json` (pinning). Anything else keyed by `project_id`
   must be added to that tuple. The sidecar helpers resolve their path at call time so tests can redirect them.
+  **Order matters:** migrate the DB and sidecars *first*, write `projects.json` last — the reverse leaves the
+  project renamed while its `grey_sources`/`notes` still point at the old id if the DB call fails.
 - A paper without a downloadable PDF is still useful: its abstract feeds **abstract-only extraction**
-  (`api/routers/extraction.py::_abstract_only_extraction_text`) and `landing_page_url`/`doi` stay the durable link
-  to the original (`_external_paper_url` in `api/routers/harvest.py`, `externalPaperUrl` in
-  `frontend/src/paperLinks.ts`). Keep normalizers filling both fields; `pdf_url` is overwritten with the local
-  path after a download and is *not* a reliable external link.
+  (`api/routers/extraction.py::_abstract_only_extraction_text`, an unconditional fallback when PDF resolution
+  404s) and `landing_page_url`/`doi` stay the durable link to the original (`_external_paper_url` in
+  `api/routers/harvest.py`, `externalPaperUrl` in `frontend/src/paperLinks.ts`). Keep normalizers filling both
+  fields; `pdf_url` is overwritten with the local path after a download and is *not* a reliable external link.
+  Everything that counts "how many papers can I extract?" goes through **`frontend/src/extractionCounts.ts`** —
+  one formula for the page badge, the batch panel and the pipeline tile, because two independent counts (PDF-only
+  vs. PDF+abstract) read as a contradiction.
+- **LLM failures are classified in `query/llm_errors.py`** (`quota | rate_limit | auth | context_length |
+  connection | empty | unknown`). The kind rides through `batch_job_items.error_message` /
+  `extraction_results.error_message` as a `"[llm:<kind>] …"` prefix (`tag_error`/`parse_tagged_error`, mirrored in
+  `frontend/src/llmErrors.ts`) — no schema column needed. `BatchProcessor` **stops** the run on
+  `quota`/`rate_limit`/`auth` and leaves the remaining items `pending`; without that, one exhausted quota burned
+  through every selected paper. `LLMRouter._http_status_runtime_error` must keep putting `HTTP <status>` in the
+  message, otherwise the classifier has nothing to match on.
+- **Projekt-Bundles** (`graph_bundle/`, routes in `api/routers/graph_bundle.py`): a project as a portable ZIP —
+  `manifest.json` + one JSONL per table + optional PDFs. `GET /projects/{id}/export`, `POST /bundles/preview`
+  (dry run), `POST /bundles/import` (`merge`|`replace`). Kuzu is deliberately *not* in the bundle: it is a cache,
+  rebuilt via `POST /jobs/graph-rebuild`. Imports are idempotent — extractions dedupe on a content fingerprint,
+  not on `extraction_timestamp` (which `save_extraction_result` reassigns). Every ZIP entry goes through
+  `safe_member_path` before anything is written; never `extractall` a bundle.
 - A graphify `hook-check` runs on every Bash call (`.codex/hooks.json`); `.codex/` is gitignored and unrelated
   to your task — let the hook run, don't modify it.

@@ -1,6 +1,9 @@
 """Unit tests for the harvest-source registry and normalizers (pure, no network)."""
 from __future__ import annotations
 
+import httpx
+import pytest
+
 from api.product_main import (
     _normalize_core_work,
     _normalize_crossref_work,
@@ -120,18 +123,40 @@ def test_catalog_lists_every_source_in_an_existing_group():
     assert set(DEFAULT_SOURCES) <= {source["id"] for source in HARVEST_SOURCES}
 
 
-async def test_every_registered_source_has_a_dispatch_branch():
+@pytest.fixture
+def offline_httpx(monkeypatch):
+    """Jeder ausgehende Request scheitert sofort — kein Netz im Unit-Test.
+
+    Alle Harvest-Clients laufen ueber ``httpx.AsyncClient`` (direkt oder ueber
+    ``harvester/http_client.py``), ein Riegel reicht also fuer alle Quellen.
+    Ohne ihn ruft der Dispatch-Test wirklich jede registrierte Quelle auf und
+    kann den gesamten Suite-Lauf blockieren: ``ArxivClient`` allein wiederholt
+    bis zu 6x mit 10-60s Backoff. ``ConnectError`` (nicht ``TimeoutException``)
+    umgeht genau diese Retry-Schleife.
+    """
+
+    async def _refuse(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        raise httpx.ConnectError("offline im Test")
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", _refuse)
+
+
+async def test_every_registered_source_has_a_dispatch_branch(offline_httpx):
     """Keine Quelle aus der Registry faellt in den else-Zweig.
 
-    Die Clients werden absichtlich nicht gemockt: geprueft wird nur, dass keine ID
-    unbekannt ist. Netzwerk-/Key-Fehler erscheinen als andere Warnung und sind hier egal.
+    Geprueft wird nur, dass keine ID unbekannt ist. Die Clients scheitern durch
+    ``offline_httpx`` sofort am Netz — das erscheint als andere Warnung und ist
+    hier egal.
     """
     ids = [source["id"] for source in HARVEST_SOURCES]
     _results, warnings = await _run_harvest_search("", ids, 1)
     assert [w for w in warnings if "unbekannte Quelle" in w] == []
+    # Jede Quelle muss den Dispatch ueberhaupt erreicht haben, sonst wuerde der
+    # Test auch bei einer stillschweigend uebersprungenen ID gruen sein.
+    assert len(warnings) == len(ids)
 
 
-async def test_unknown_source_is_reported():
+async def test_unknown_source_is_reported(offline_httpx):
     _results, warnings = await _run_harvest_search("x", ["definitely_not_a_source"], 1)
     assert warnings == ["definitely_not_a_source: unbekannte Quelle"]
 

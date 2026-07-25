@@ -5,6 +5,7 @@ import { DownloadCloud, ExternalLink, FileText, Globe, Maximize2, Minimize2, Plu
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { QueryError } from "../components/QueryError";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
 import { externalPaperUrl } from "../paperLinks";
@@ -252,10 +253,28 @@ export function LibraryPage() {
               );
             })}
           </div>
+        ) : papersQuery.isError ? (
+          // Frueher rutschte ein Backend-Fehler hier als "Keine Papers" durch —
+          // genau die Anzeige, die einen DuckDB-Lock wie Datenverlust aussehen liess.
+          <QueryError
+            error={papersQuery.error}
+            title="Bibliothek konnte nicht geladen werden"
+            onRetry={() => papersQuery.refetch()}
+          />
         ) : (
           <EmptyState title={papersQuery.isLoading ? "Lade Library" : "Keine Papers"} />
         )}
       </section>
+
+      {isRealProject && greyQuery.isError ? (
+        <section className="panel">
+          <QueryError
+            error={greyQuery.error}
+            title="Graue Quellen konnten nicht geladen werden"
+            onRetry={() => greyQuery.refetch()}
+          />
+        </section>
+      ) : null}
 
       {isRealProject && greySources.length ? (
         <section className="panel">

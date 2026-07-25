@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 from query.auto_harvester import harvest_for_question, harvest_grey_sources_for_question
 from query.grounded_responder import GroundedResponder
 from query.hybrid_retriever import HybridRetriever
+from query.llm_errors import classify_llm_error
 from query.llm_router import LLMRouter
 
 
@@ -827,50 +828,10 @@ def _strip_unknown_citations(text: str, known_ids: frozenset[str]) -> str:
     return re.sub(r"\[([^\]]+)\]", _keep, text)
 
 
-def _classify_llm_error(error: str) -> tuple[str, str]:
-    """Map a raw LLM error string to (kind, human-readable German message).
-
-    Lets the UI tell the user *why* the analysis degraded — quota vs. rate limit
-    vs. auth vs. connection — instead of a generic "evidence-only fallback".
-    """
-    e = (error or "").lower()
-    if e in ("empty_synthesis", "empty_response") or "empty response" in e:
-        return (
-            "empty",
-            "Das Modell lieferte eine leere Antwort (evtl. abgeschnitten oder überlastet). "
-            "Erneut versuchen oder ein anderes Modell wählen.",
-        )
-    if any(k in e for k in ("insufficient_quota", "quota", "resource_exhausted", "billing", "credit", "exhausted")):
-        return (
-            "quota",
-            "LLM-Kontingent/Guthaben aufgebraucht. Deine KI-Anfragen für diesen Anbieter sind "
-            "vorerst erschöpft — warte (z.B. bis morgen) oder wechsle Provider/API-Key.",
-        )
-    if any(k in e for k in ("rate limit", "rate_limit", "ratelimit", "429", "too many requests")):
-        return (
-            "rate_limit",
-            "Rate-Limit des LLM-Anbieters erreicht (HTTP 429). Zu viele Anfragen in kurzer Zeit — "
-            "kurz warten und erneut versuchen, oder Tiefe/Zweige reduzieren.",
-        )
-    if any(k in e for k in ("401", "403", "unauthorized", "invalid api key", "invalid_api_key", "authentication", "api key", "permission")):
-        return (
-            "auth",
-            "Authentifizierung fehlgeschlagen — API-Key fehlt oder ist ungültig. "
-            "Prüfe den Key in .env / config.yaml.",
-        )
-    if any(k in e for k in ("context length", "maximum context", "context_length", "too many tokens", "reduce the length", "context window")):
-        return (
-            "context_length",
-            "Anfrage überschreitet das Kontextfenster des Modells. Reduziere Tiefe/Zweige oder die "
-            "Anzahl der einbezogenen Quellen.",
-        )
-    if any(k in e for k in ("timeout", "timed out", "connection", "connect", "refused", "max retries", "name or service", "unreachable", "econnrefused")):
-        return (
-            "connection",
-            "Keine Verbindung zum LLM (Timeout/Connection). Läuft LM Studio bzw. der konfigurierte "
-            "Anbieter und ist er erreichbar?",
-        )
-    return ("unknown", f"LLM-Aufruf fehlgeschlagen: {(error or '').strip()[:300]}")
+# Der Klassifizierer lebt jetzt in query/llm_errors.py, damit auch die
+# Batch-Extraktion ihn nutzen kann (sie feuerte bei einem 429 sonst
+# hunderte weitere Anfragen gegen dieselbe Wand).
+_classify_llm_error = classify_llm_error
 
 
 def _llm_error_event(node_id: str, question: str, depth: int, raw: str, prefix: str = "") -> str:

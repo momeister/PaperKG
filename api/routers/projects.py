@@ -6,7 +6,7 @@ fuer papers/harvest/extraction und werden von dort importiert.
 """
 from __future__ import annotations
 
-import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -15,8 +15,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from quality.kg_health import build_health_report
+from storage.atomic_json import read_json_dict, write_json_atomic
 from storage.metadata_db import MetadataDB
 from storage.path_safety import ensure_safe_path
+
+logger = logging.getLogger(__name__)
 
 PROJECTS_PATH = Path("data/projects.json")
 PROJECT_PRIMARY_PATH = Path("data/project_primary.json")
@@ -54,12 +57,25 @@ def list_projects(
     projects_path: str | None = None,
 ) -> dict[str, Any]:
     projects = _load_projects(_projects_path(projects_path))
-    with MetadataDB(metadata_db_path) as db:
-        papers = {str(paper.get("id")): paper for paper in db.list_papers(limit=50000)}
+    # Die Projektliste steht vollstaendig in projects.json; die DB liefert nur die
+    # Jahresspanne fuers Label. Ist sie gesperrt (zweites Backend) oder kaputt, waere
+    # es fatal, deshalb die ganze Liste zu verweigern — das sah frueher aus, als
+    # waeren alle Projekte geloescht. Also: degradiert ausliefern statt 500.
+    papers: dict[str, dict[str, Any]] = {}
+    degraded: str | None = None
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            papers = {str(paper.get("id")): paper for paper in db.list_papers(limit=50000)}
+    except Exception as error:  # noqa: BLE001 - Projektliste darf daran nicht scheitern
+        logger.warning("Projektliste ohne Metadaten-DB ausgeliefert: %s", error)
+        degraded = str(error)
     views = [_project_view(project_id, paper_ids, papers) for project_id, paper_ids in sorted(projects.items())]
     # Angeheftete Projekte zuerst, sonst alphabetisch (die Liste ist bereits sortiert).
     views.sort(key=lambda view: not view["pinned"])
-    return {"projects": views}
+    payload: dict[str, Any] = {"projects": views}
+    if degraded:
+        payload["degraded"] = degraded
+    return payload
 
 
 @router.post("/projects")
@@ -97,17 +113,22 @@ def patch_project(
         raise HTTPException(status_code=409, detail=f"Project already exists: {target_id}")
 
     paper_ids = _unique_strings(payload.paper_ids) if payload.paper_ids is not None else projects[project_id]
-    if target_id != project_id:
-        projects.pop(project_id)
-    projects[target_id] = paper_ids
-    _save_projects(projects, path)
 
     if target_id != project_id:
         # Die Projekt-ID ist der Name: ohne diese Migration verlieren Notizen, Web-Quellen,
         # Sessions und Analysen beim Umbenennen ihre Projektzuordnung.
-        _migrate_project_sidecars(project_id, target_id)
+        #
+        # Reihenfolge ist kritisch: erst die DB und die Sidecars migrieren, dann
+        # projects.json schreiben. Andersherum hinterlaesst ein Fehler beim
+        # DB-Zugriff (z.B. Lock durch ein zweites Backend) ein umbenanntes Projekt,
+        # dessen grey_sources/notes noch an der alten ID haengen — dauerhaft verwaist.
         with MetadataDB(metadata_db_path) as db:
             db.rename_project(project_id, target_id)
+        _migrate_project_sidecars(project_id, target_id)
+        projects.pop(project_id)
+
+    projects[target_id] = paper_ids
+    _save_projects(projects, path)
 
     if payload.pinned is not None:
         meta = _load_project_meta()
@@ -228,14 +249,10 @@ def _projects_path(value: str | None = None) -> Path:
 
 
 def _load_projects(path: Path = PROJECTS_PATH) -> dict[str, list[str]]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
+    # read_json_dict wirft bei kaputtem JSON (CorruptJsonError) statt still {} zu
+    # liefern: ein leeres Dict wuerde beim naechsten Speichern die echte Zuordnung
+    # ueberschreiben und die Projekte tatsaechlich vernichten.
+    data = read_json_dict(path)
     return {
         str(project_id): _unique_strings(paper_ids if isinstance(paper_ids, list) else [])
         for project_id, paper_ids in data.items()
@@ -243,49 +260,28 @@ def _load_projects(path: Path = PROJECTS_PATH) -> dict[str, list[str]]:
 
 
 def _save_projects(projects: dict[str, list[str]], path: Path = PROJECTS_PATH) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(projects, indent=2, sort_keys=True), encoding="utf-8")
+    write_json_atomic(path, projects)
 
 
 def _load_primary_papers(path: Path | None = None) -> dict[str, str]:
     # Pfad erst beim Aufruf aufloesen (nicht als Default-Argument), damit Tests
     # PROJECT_PRIMARY_PATH umbiegen koennen, statt in data/ zu schreiben.
-    path = path or PROJECT_PRIMARY_PATH
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
+    data = read_json_dict(path or PROJECT_PRIMARY_PATH)
     return {str(pid): str(value) for pid, value in data.items() if value}
 
 
 def _save_primary_papers(mapping: dict[str, str], path: Path | None = None) -> None:
-    path = path or PROJECT_PRIMARY_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(mapping, indent=2, sort_keys=True), encoding="utf-8")
+    write_json_atomic(path or PROJECT_PRIMARY_PATH, mapping)
 
 
 def _load_project_meta(path: Path | None = None) -> dict[str, dict[str, Any]]:
     """Per-Projekt-UI-Metadaten (aktuell nur ``pinned``) neben projects.json."""
-    path = path or PROJECT_META_PATH
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
+    data = read_json_dict(path or PROJECT_META_PATH)
     return {str(pid): dict(value) for pid, value in data.items() if isinstance(value, dict)}
 
 
 def _save_project_meta(meta: dict[str, dict[str, Any]], path: Path | None = None) -> None:
-    path = path or PROJECT_META_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+    write_json_atomic(path or PROJECT_META_PATH, meta)
 
 
 def _migrate_project_sidecars(old_project_id: str, new_project_id: str) -> None:

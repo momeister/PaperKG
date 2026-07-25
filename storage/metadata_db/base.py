@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -10,6 +11,36 @@ import duckdb
 if TYPE_CHECKING:
     from storage.metadata_db import MetadataDB
 
+
+class MetadataDBLockedError(RuntimeError):
+    """Ein anderer Prozess haelt den DuckDB-Lock auf die Metadaten-Datenbank.
+
+    DuckDB erlaubt nur *einen* schreibenden Prozess pro Datei. Frueher schlug das
+    als rohe ``duckdb.IOException`` bis in die Endpunkte durch (HTTP 500), und weil
+    das Frontend jeden Fehler als leere Liste rendert, sah ein banaler Lock-Konflikt
+    aus wie "alle Projekte und Paper sind weg". Diese Exception traegt stattdessen
+    eine verstaendliche Meldung inklusive des blockierenden Prozesses.
+    """
+
+    def __init__(self, db_path: str, original: Exception) -> None:
+        self.db_path = db_path
+        self.original = original
+        self.holder = _parse_lock_holder(str(original))
+        holder_text = f" Blockiert von: {self.holder}." if self.holder else ""
+        super().__init__(
+            f"Die Datenbank {db_path} ist bereits von einem anderen Prozess geoeffnet.{holder_text} "
+            "DuckDB erlaubt nur eine schreibende Instanz: beende das zweite Backend "
+            "(uvicorn, Tauri-Sidecar, Streamlit, pytest oder einen laufenden Docker-Container) "
+            "und lade die Seite neu. Es gehen keine Daten verloren."
+        )
+
+
+def _parse_lock_holder(message: str) -> str | None:
+    """Ziehe ``Conflicting lock is held in <exe> (PID <n>)`` aus der DuckDB-Meldung."""
+    match = re.search(r"Conflicting lock is held in (.+?) \(PID (\d+)\)", message)
+    if not match:
+        return None
+    return f"{match.group(1).strip()} (PID {match.group(2)})"
 
 
 class MetadataDBBase:
@@ -60,7 +91,9 @@ class MetadataDBBase:
                 if attempt == attempts - 1:
                     break
                 time.sleep(delay)
-        raise last_error  # type: ignore[misc]
+        # Haelt ein anderer Prozess den Lock dauerhaft, hilft weiteres Warten nicht —
+        # in eine sprechende Exception uebersetzen, die die API als 503 ausliefert.
+        raise MetadataDBLockedError(str(db_file), last_error)  # type: ignore[arg-type]
 
     def __enter__(self) -> "MetadataDB":
         return self

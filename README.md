@@ -21,6 +21,18 @@ Notes:
   wheels for Python < 3.14.
 - Your DuckDB, PDFs, exports and notes live in `./data`, which is mounted as a volume and
   persists across restarts.
+- **Only ever run one backend on the same `./data`.** Because `./data` is a bind mount,
+  the container and the host share one `metadata.duckdb`, and DuckDB allows exactly one
+  writing process. Starting a second backend (Docker *and* `scripts/run_product.py`, or a
+  Tauri shell, or Streamlit) now fails immediately with an explanatory message naming the
+  process that holds the slot, instead of producing an empty-looking UI — see
+  `storage/instance_lock.py`. Stop the stack with `docker compose down` before starting a
+  host backend.
+
+  This matters more under Docker Desktop than it looks: its daemon runs in a VM, so the
+  bind mount carries **no POSIX file locks at all — not even DuckDB's own**. Without the
+  guard, a container and a host backend would both happily write the same database.
+  After a hard kill (no clean shutdown) the slot frees itself after ~45 seconds.
 - **Local LLM backends** (Ollama on `:11434`, LM Studio on `:1234`, ...) typically run on
   the *host*, not inside the containers. Point `config.yaml` at them via
   `http://host.docker.internal:<port>` instead of `http://localhost:<port>`.
@@ -30,6 +42,36 @@ Notes:
 
 To run without Docker, see the per-phase instructions below; the product stack is started
 with `python scripts/run_product.py`.
+
+## Projekt-Bundles: sichern, umziehen, teilen
+
+Ein Projekt lässt sich samt Papern, Extraktionsergebnissen, Web-Quellen und Embeddings als
+ZIP exportieren und anderswo wieder einspielen — in der **Projektübersicht** über
+„Exportieren" je Projekt bzw. die Dropzone „Projekt importieren".
+
+```bash
+# Export (ohne PDFs; include_pdfs=true legt sie bei)
+curl -OJ "http://localhost:8000/projects/Mein%20Projekt/export?include_pdfs=false"
+
+# Vorschau: was steckt drin, was würde sich ändern?
+curl -X POST -H "content-type: application/zip" \
+     --data-binary @paperkg-export_mein-projekt_2026-07-25.zip \
+     http://localhost:8000/bundles/preview
+
+# Import: merge (ergänzt) oder replace (setzt die Paperliste neu)
+curl -X POST -H "content-type: application/zip" \
+     --data-binary @paperkg-export_mein-projekt_2026-07-25.zip \
+     "http://localhost:8000/bundles/import?mode=merge"
+```
+
+Das Bundle enthält `manifest.json` (Version, Zähler, sha256 je Datei), `project.json` und je
+eine JSONL-Datei pro Tabelle. Der **Kuzu-Graph wird bewusst nicht exportiert** — er ist ein
+Cache und wird nach dem Import über `POST /jobs/graph-rebuild` neu berechnet. Ein Import ist
+idempotent: dasselbe Bundle zweimal einzuspielen erzeugt keine Duplikate. Code liegt in
+`graph_bundle/`, Routen in `api/routers/graph_bundle.py`.
+
+Weil `data/projects.json` gitignored ist und sonst keinerlei Historie hat, ist ein Bundle
+gleichzeitig die einfachste **Sicherung** eines Projekts.
 
 ## Security & threat model
 

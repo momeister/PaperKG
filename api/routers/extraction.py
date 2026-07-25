@@ -8,6 +8,7 @@ embedding_engine (geteilte Instanz), _slug (bleibt in product_main).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from datetime import datetime
@@ -36,6 +37,8 @@ from storage.metadata_db import MetadataDB
 DEFAULT_METADATA_DB_PATH = "data/metadata.duckdb"
 DEFAULT_PDF_BASE_DIR = "data/pdfs"
 DEFAULT_VOCABULARY_PATH = "data/vocabulary.json"
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -120,6 +123,7 @@ def extraction_library(
         projects = _load_projects(_projects_path(projects_path))
         member_ids = set(projects.get(project_id or "", []))
         rows = [row for row in rows if str(row.get("paper_id") or "") in member_ids]
+    degraded: str | None = None
     try:
         with MetadataDB(metadata_db_path) as _db:
             grey_list = _db.list_grey_sources(None if is_global else project_id, limit=50000)
@@ -164,8 +168,12 @@ def extraction_library(
                 "latest_extraction_status": latest_by_paper.get(pid),
                 "known_paper": True,
             })
-    except Exception:
-        pass
+    except Exception as error:  # noqa: BLE001 - der Datei-Scan bleibt auch ohne DB nutzbar
+        # Frueher ein stilles `pass`: bei gesperrter DB verschwanden dadurch saemtliche
+        # Grauquellen und alle nur-Abstract-Paper aus der Liste, ohne jeden Hinweis.
+        # Jetzt wird die Teilansicht als `degraded` markiert und die UI warnt.
+        logger.warning("Extraktions-Library ohne Metadaten-DB ausgeliefert: %s", error)
+        degraded = str(error)
     if query:
         query_lower = query.lower()
         rows = [
@@ -175,7 +183,10 @@ def extraction_library(
             or query_lower in str(row.get("filename") or "").lower()
         ]
     items = rows if limit is None else rows[:limit]
-    return {"items": items, "total": len(rows)}
+    payload: dict[str, Any] = {"items": items, "total": len(rows)}
+    if degraded:
+        payload["degraded"] = degraded
+    return payload
 
 
 @router.post("/extraction/parse")
@@ -365,6 +376,12 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
         metadata_db_factory=lambda: MetadataDB(request.metadata_db_path),
         link_concepts=request.link_concepts,
         quality_db_path=request.metadata_db_path,
+        # Genau ein Wiederholungsversuch mit Pause: kurze Rate-Limit-Fenster und
+        # Netzwerk-Aussetzer kosten damit nur Zeit statt eines verlorenen Papers.
+        # Bei erschoepftem Kontingent oder ungueltigem Key wird nicht wiederholt,
+        # sondern der Batch abgebrochen (siehe BatchProcessor.process_papers).
+        max_retries=1,
+        retry_delay_seconds=20.0,
     )
     status = processor.process_papers(
         [item.paper_id for item in request.items],
@@ -465,8 +482,17 @@ def _latest_successful_extractions(extractions: list[dict[str, Any]]) -> dict[st
 
 
 def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[str, Any]]:
+    """Alle Paper mit lokal aufloesbarem PDF, plus verwaiste PDFs auf der Platte.
+
+    Schluessel ist die ``paper_id``, **nicht** der PDF-Pfad: teilen sich zwei Paper
+    (etwa ein Preprint und die Journal-Version nach dem Dedup) dieselbe Datei, hat
+    die pfad-basierte Variante eines davon ueberschrieben. Der Aufrufer leitet aus
+    den ueberlebenden Zeilen ``found_ids`` ab und meldete das verdraengte Paper
+    anschliessend faelschlich als "ohne PDF" — obwohl ein PDF existiert.
+    """
     latest_by_paper: dict[str, str] = {}
-    rows_by_path: dict[str, dict[str, Any]] = {}
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    seen_paths: set[str] = set()
     pdf_index = build_pdf_index(pdf_base_dir)
     with MetadataDB(metadata_db_path) as db:
         latest_by_paper = _latest_extraction_statuses(db)
@@ -476,13 +502,17 @@ def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[st
             if not pdf_path:
                 continue
             path = Path(str(pdf_path))
-            key = str(path.resolve()) if path.exists() else str(path)
-            pid = str(view.get("id") or view.get("paper_id") or "")
-            rows_by_path[key] = {
-                "paper_id": pid or _default_paper_id_from_pdf(path.name),
+            pid = str(view.get("id") or view.get("paper_id") or "") or _default_paper_id_from_pdf(path.name)
+            seen_paths.add(str(path.resolve()) if path.exists() else str(path))
+            rows_by_id[pid] = {
+                "paper_id": pid,
                 "title": view.get("display_title") or view.get("title") or _clean_pdf_title(path.name),
                 "filename": path.name,
                 "pdf_path": str(path),
+                "pdf_available": True,
+                # Auch fuer PDF-Zeilen mitliefern: das Frontend kann damit vorhersagen,
+                # ob der Abstract-Fallback greift, falls das PDF nicht parsebar ist.
+                "abstract_available": bool(str(paper.get("abstract") or "").strip()),
                 "size_bytes": path.stat().st_size if path.exists() else None,
                 "modified_timestamp": datetime.fromtimestamp(path.stat().st_mtime).isoformat() if path.exists() else None,
                 "latest_extraction_status": latest_by_paper.get(pid),
@@ -491,21 +521,24 @@ def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[st
 
     for path_str, _stem in pdf_index:
         path = Path(path_str)
-        key = str(path.resolve())
-        if key in rows_by_path:
+        if str(path.resolve()) in seen_paths:
             continue
         paper_id_value = _default_paper_id_from_pdf(path.name)
-        rows_by_path[key] = {
+        if paper_id_value in rows_by_id:
+            continue
+        rows_by_id[paper_id_value] = {
             "paper_id": paper_id_value,
             "title": _clean_pdf_title(path.name) or paper_id_value,
             "filename": path.name,
             "pdf_path": str(path),
+            "pdf_available": True,
+            "abstract_available": False,
             "size_bytes": path.stat().st_size,
             "modified_timestamp": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
             "latest_extraction_status": latest_by_paper.get(paper_id_value),
             "known_paper": False,
         }
-    rows = list(rows_by_path.values())
+    rows = list(rows_by_id.values())
     rows.sort(key=lambda row: str(row.get("modified_timestamp") or ""), reverse=True)
     return rows
 

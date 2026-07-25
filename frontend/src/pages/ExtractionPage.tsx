@@ -1,10 +1,20 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, ChevronDown, ChevronRight, Database, FileSearch, FilterX, Globe, ListChecks, Play, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, ChevronDown, ChevronRight, Database, FileSearch, FilterX, Globe, ListChecks, Play, Plus, RefreshCw, Search, X } from "lucide-react";
 
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { DegradedNotice, QueryError } from "../components/QueryError";
 import { Status } from "../components/Status";
+import {
+  BatchScope,
+  breakdownLabel,
+  computeExtractionCounts,
+  hasPdf,
+  isBatchable,
+  matchesScope
+} from "../extractionCounts";
+import { firstLlmError, isProviderLimit, llmErrorHeadline, parseLlmError, type ParsedLlmError } from "../llmErrors";
 import { useAppState } from "../state";
 import type { BatchJobItem, ExtractionHistoryItem, ExtractionLibraryItem, ExtractionResultPayload, ExtractionRunResponse } from "../types";
 
@@ -40,6 +50,9 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
   const [contextSize, setContextSize] = useState(32768);
   const [maxTokens, setMaxTokens] = useState(16384);
   const [selectedBatchPaths, setSelectedBatchPaths] = useState<string[]>([]);
+  // Quellen-Filter fuer den Batch: bewusst waehlen koennen, ob Paper ohne PDF
+  // (Abstract-only-Extraktion) mitlaufen sollen.
+  const [batchScope, setBatchScope] = useState<BatchScope>("all");
   const [lastResult, setLastResult] = useState<ExtractionRunResponse | null>(null);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const [pendingJobId, setPendingJobId] = useState<string | null>(null);
@@ -173,18 +186,23 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
     setSelectedBatchPaths((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
 
-  function toggleAllBatch() {
-    const ids = (libraryQueryResult.data?.items ?? [])
-      .filter((item) => isBatchable(item) && item.latest_extraction_status !== "success")
+  /** Noch offene, batchbare Paper — eingeschraenkt auf den gewaehlten Quellen-Filter. */
+  function openBatchableIds() {
+    return (libraryQueryResult.data?.items ?? [])
+      .filter(
+        (item) =>
+          isBatchable(item) && matchesScope(item, batchScope) && item.latest_extraction_status !== "success"
+      )
       .map((item) => item.paper_id);
+  }
+
+  function toggleAllBatch() {
+    const ids = openBatchableIds();
     setSelectedBatchPaths((current) => (current.length === ids.length ? [] : ids));
   }
 
   function selectUnextracted() {
-    const ids = (libraryQueryResult.data?.items ?? [])
-      .filter((item) => isBatchable(item) && item.latest_extraction_status !== "success")
-      .map((item) => item.paper_id);
-    setSelectedBatchPaths(ids);
+    setSelectedBatchPaths(openBatchableIds());
   }
 
   function submitExtract(event: FormEvent) {
@@ -197,11 +215,20 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
   const libraryItems = libraryQueryResult.data?.items ?? [];
   const historyItems = historyQuery.data?.items ?? [];
   const vocabularyItems = vocabularyQuery.data?.items ?? [];
-  const hasPdfItems = libraryItems.filter((i) => i.source_type !== "grey" && i.pdf_path && i.pdf_available !== false);
-  const noPdfCount = libraryItems.filter((i) => i.source_type !== "grey" && (!i.pdf_path || i.pdf_available === false)).length;
-  const totalPdfCount = hasPdfItems.length;
-  const extractedPdfCount = hasPdfItems.filter((i) => i.latest_extraction_status === "success").length;
-  const unextractedCount = libraryItems.filter((i) => isBatchable(i) && i.latest_extraction_status !== "success").length;
+  // Ein Zaehler statt zweier widerspruechlicher: `computeExtractionCounts` liefert
+  // Gesamtmenge *und* Aufschluesselung, und die Pipeline-Kachel nutzt dieselbe Formel.
+  const counts = useMemo(() => computeExtractionCounts(libraryItems), [libraryItems]);
+  const scopedLibraryItems = useMemo(
+    () => (batchScope === "all" ? libraryItems : libraryItems.filter((i) => matchesScope(i, batchScope))),
+    [libraryItems, batchScope]
+  );
+  const scopedOpenCount = useMemo(
+    () =>
+      libraryItems.filter(
+        (i) => isBatchable(i) && matchesScope(i, batchScope) && i.latest_extraction_status !== "success"
+      ).length,
+    [libraryItems, batchScope]
+  );
   const batchItems: BatchJobItem[] = batchItemsQuery.data?.items ?? [];
   const currentItem = batchItems.find((i) => i.status === "processing");
   const runningJob = pendingJobId ? jobsQuery.data?.jobs.find((j) => j.job_id === pendingJobId) : null;
@@ -216,11 +243,11 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
           </p>
         </div>
         <div className="extraction-header-actions">
-          {totalPdfCount > 0 && (
-            <div className="extraction-overview-badge">
-              <strong>{extractedPdfCount}/{totalPdfCount}</strong>
+          {counts.extractable > 0 && (
+            <div className="extraction-overview-badge" title="Extrahierbar sind Paper mit lokalem PDF und Paper, die zwar kein PDF, aber einen Abstract haben.">
+              <strong>{counts.extracted}/{counts.extractable}</strong>
               <span>extrahiert</span>
-              {noPdfCount > 0 && <span className="muted">+{noPdfCount} ohne PDF</span>}
+              <span className="muted">{breakdownLabel(counts)}</span>
             </div>
           )}
           <div className="segmented extraction-tabs">
@@ -383,16 +410,37 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
             <div className="panel-heading">
               <div>
                 <span>Batch-Extraktion</span>
-                <strong>{extractedPdfCount}/{totalPdfCount} extrahiert · {selectedBatchPaths.length} ausgewählt</strong>
+                <strong>{counts.extracted}/{counts.extractable} extrahiert · {selectedBatchPaths.length} ausgewählt</strong>
+                <span className="muted">{breakdownLabel(counts)}</span>
               </div>
               <div className="button-row">
-                <button className="button" type="button" disabled={unextractedCount === 0} onClick={selectUnextracted} title="Alle noch nicht erfolgreich extrahierten PDFs auswählen">
+                {/* Quellen-Filter: Paper ohne PDF werden ueber Titel + Abstract
+                    extrahiert (duenner, aber besser als gar keine Aufnahme). Wer das
+                    nicht will, schraenkt hier auf "PDF" ein. */}
+                <div className="segmented batch-scope">
+                  <button className={batchScope === "all" ? "active" : ""} type="button" onClick={() => setBatchScope("all")} title="PDFs und Paper mit Abstract">
+                    Alle ({counts.extractable})
+                  </button>
+                  <button className={batchScope === "pdf" ? "active" : ""} type="button" onClick={() => setBatchScope("pdf")} title="Nur Paper mit lokalem PDF">
+                    PDF ({counts.withPdf})
+                  </button>
+                  <button className={batchScope === "abstract" ? "active" : ""} type="button" onClick={() => setBatchScope("abstract")} title="Nur Paper ohne PDF — Extraktion aus Titel + Abstract">
+                    Abstract ({counts.abstractOnly})
+                  </button>
+                </div>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={scopedOpenCount === 0}
+                  onClick={selectUnextracted}
+                  title={`Noch offen: ${counts.openWithPdf} mit PDF + ${counts.openAbstractOnly} nur Abstract`}
+                >
                   <FilterX size={16} />
-                  <span>Nicht extrahiert ({unextractedCount})</span>
+                  <span>Nicht extrahiert ({scopedOpenCount})</span>
                 </button>
                 <button className="button" type="button" onClick={toggleAllBatch}>
                   <ListChecks size={16} />
-                  <span>{selectedBatchPaths.length === unextractedCount && unextractedCount > 0 ? "Leeren" : "Alle"}</span>
+                  <span>{selectedBatchPaths.length === scopedOpenCount && scopedOpenCount > 0 ? "Leeren" : "Alle"}</span>
                 </button>
                 <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending} onClick={() => batch.mutate()}>
                   <Play size={16} />
@@ -400,7 +448,22 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                 </button>
               </div>
             </div>
+            <DegradedNotice reason={libraryQueryResult.data?.degraded} onRetry={() => libraryQueryResult.refetch()} />
+            {libraryQueryResult.isError ? (
+              <QueryError
+                error={libraryQueryResult.error}
+                title="Extraktions-Bibliothek konnte nicht geladen werden"
+                onRetry={() => libraryQueryResult.refetch()}
+              />
+            ) : null}
             <ErrorBox error={batch.error} />
+            <LlmLimitBanner
+              parsed={firstLlmError([
+                batch.data?.job.error_message,
+                runningJob?.error_message,
+                ...batchItems.map((item) => item.error_message)
+              ])}
+            />
 
             {/* Live status during batch */}
             {batch.isPending && pendingJobId && (
@@ -435,6 +498,12 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                 {batch.data.job.papers_failed > 0 && (
                   <span className="error-badge">{batch.data.job.papers_failed} Fehler</span>
                 )}
+                {/* job.error_message wurde hier bisher nie gerendert. */}
+                {batch.data.job.error_message ? (
+                  <span className="log-error" title={batch.data.job.error_message}>
+                    {parseLlmError(batch.data.job.error_message).message || batch.data.job.error_message}
+                  </span>
+                ) : null}
               </div>
             )}
 
@@ -459,7 +528,9 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
               </details>
             )}
 
-            <ExtractionLibraryTable items={libraryItems} selectedPath={selectedPdf?.paper_id ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
+            {/* Im Batch-Modus zeigt die Tabelle genau die Menge, auf die sich der
+                Quellen-Filter und die Auswahl-Knoepfe beziehen. */}
+            <ExtractionLibraryTable items={scopedLibraryItems} selectedPath={selectedPdf?.paper_id ?? ""} selectedBatchPaths={selectedBatchPaths} onSelect={selectPdf} onToggleBatch={toggleBatch} batchMode />
             <JobsMiniList jobs={jobsQuery.data?.jobs ?? []} />
           </section>
         </div>
@@ -640,7 +711,9 @@ function ExtractionLibraryTable({
 
   const renderRow = (item: ExtractionLibraryItem) => {
     const isGrey = item.source_type === "grey";
-    const noPdf = !isGrey && item.pdf_available === false;
+    // `hasPdf` statt einer eigenen Bedingung: sonst gilt ein Paper mit leerem
+    // Pfad, aber ohne `pdf_available`-Flag hier als PDF-Paper und in den Zaehlern nicht.
+    const noPdf = !isGrey && !hasPdf(item);
     const batchable = isBatchable(item);
     const alreadyExtracted = !isGrey && !noPdf && item.latest_extraction_status === "success";
     return (
@@ -665,7 +738,13 @@ function ExtractionLibraryTable({
         <span>{item.latest_extraction_status ? <Status value={item.latest_extraction_status} /> : "missing"}</span>
         <span>
           {noPdf ? (
-            <span className="muted" title="Kein PDF — Extraktion nutzt Titel + Abstract">nur Abstract</span>
+            item.abstract_available === true ? (
+              <span className="muted" title="Kein PDF — Extraktion nutzt Titel + Abstract">nur Abstract</span>
+            ) : (
+              // Ohne PDF *und* ohne Abstract gibt es nichts zu extrahieren — das
+              // als „nur Abstract" auszuzeichnen widersprach der Aufschluesselung.
+              <span className="muted" title="Weder PDF noch Abstract — nicht extrahierbar">ohne Text</span>
+            )
           ) : (
             formatBytes(item.size_bytes)
           )}
@@ -863,22 +942,65 @@ function ExtractionHistoryTable({ items }: { items: ExtractionHistoryItem[] }) {
   );
 }
 
-function JobsMiniList({ jobs }: { jobs: Array<{ job_id: string; status: string; papers_processed: number; papers_total: number; papers_failed: number }> }) {
+function JobsMiniList({
+  jobs
+}: {
+  jobs: Array<{
+    job_id: string;
+    status: string;
+    papers_processed: number;
+    papers_total: number;
+    papers_failed: number;
+    error_message?: string | null;
+  }>;
+}) {
   if (!jobs.length) {
     return null;
   }
   return (
     <div className="extraction-jobs-strip">
-      {jobs.slice(0, 4).map((job) => (
-        <div className="status-strip" key={job.job_id}>
-          <Status value={job.status} />
-          <strong>{job.job_id}</strong>
-          <span>
-            {job.papers_processed}/{job.papers_total}
-          </span>
-          <span>{job.papers_failed} failed</span>
-        </div>
-      ))}
+      {jobs.slice(0, 4).map((job) => {
+        // Der Grund eines gescheiterten Jobs wurde hier bisher weggeworfen —
+        // ausgerechnet an der Stelle, an der man nach einem Abbruch zuerst schaut.
+        const parsed = parseLlmError(job.error_message);
+        return (
+          <div className="status-strip" key={job.job_id}>
+            <Status value={job.status} />
+            <strong>{job.job_id}</strong>
+            <span>
+              {job.papers_processed}/{job.papers_total}
+            </span>
+            <span>{job.papers_failed} failed</span>
+            {job.error_message ? (
+              <span className="log-error" title={job.error_message}>
+                {parsed.kind ? llmErrorHeadline(parsed.kind) : job.error_message}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Macht ein erreichtes Anbieter-Limit als solches sichtbar.
+ *
+ * Vorher landete ein HTTP 429 als roher Text in einer Log-Zeile — zwischen 400
+ * anderen. Dass der Grund ein aufgebrauchtes Kontingent war (und nicht ein
+ * kaputtes PDF), war praktisch nicht zu erkennen.
+ */
+function LlmLimitBanner({ parsed }: { parsed: ParsedLlmError | null }) {
+  if (!parsed?.kind) {
+    return null;
+  }
+  return (
+    <div className={`llm-limit-banner ${isProviderLimit(parsed.kind) ? "llm-limit-banner--stop" : ""}`} role="alert">
+      <AlertTriangle size={17} />
+      <div>
+        <strong>{llmErrorHeadline(parsed.kind)}</strong>
+        <span>{parsed.message}</span>
+      </div>
     </div>
   );
 }
@@ -906,17 +1028,6 @@ function formatApiError(error: ApiError) {
     return `${message}.${parser}${paperId}${path}${reason}`;
   }
   return error.message;
-}
-
-function isBatchable(item: ExtractionLibraryItem) {
-  if (item.source_type === "grey") {
-    return false;
-  }
-  if (item.pdf_available === false || !item.pdf_path) {
-    // Ohne PDF nur batchbar, wenn ein Abstract für die Abstract-only-Extraktion existiert.
-    return item.abstract_available === true;
-  }
-  return true;
 }
 
 function selectedBatchItems(items: ExtractionLibraryItem[], selectedIds: string[]) {

@@ -80,7 +80,10 @@ def harvest_sources() -> dict[str, Any]:
 
 @router.post("/harvest/search")
 async def harvest_search(request: HarvestSearchRequest) -> dict[str, Any]:
-    results, warnings = await _run_harvest_search(request.query, request.sources, request.max_results)
+    # Bewusst ueber pm.: nur so greift der dokumentierte Test-Patch
+    # (``monkeypatch.setattr(product_main, "_run_harvest_search", ...)``).
+    # Der lokale Name wuerde am Patch vorbeilaufen und echt ins Netz gehen.
+    results, warnings = await pm._run_harvest_search(request.query, request.sources, request.max_results)
     return {"query": request.query, "results": results, "warnings": warnings}
 
 

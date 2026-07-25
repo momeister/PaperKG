@@ -11,7 +11,9 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: {
-    command: "npm.cmd run dev -- --port 5173",
+    // `npm.cmd` gibt es nur auf Windows; auf Linux/macOS (und im Docker-Build)
+    // heisst das Binary `npm`.
+    command: `${process.platform === "win32" ? "npm.cmd" : "npm"} run dev -- --port 5173`,
     url: "http://127.0.0.1:5173",
     reuseExistingServer: true,
     timeout: 20000

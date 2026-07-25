@@ -13,6 +13,13 @@
 # Local LLM backends (Ollama :11434, LM Studio :1234, ...) usually run on the HOST, not
 # in these containers. Point config.yaml at them via http://host.docker.internal:<port>
 # (host-gateway is wired up below) instead of http://localhost:<port>.
+#
+# WICHTIG — nur EIN Backend auf demselben data/:
+# ./data ist ein Bind-Mount, der Container und Host teilen sich also dieselbe
+# metadata.duckdb. DuckDB laesst nur einen schreibenden Prozess zu. Laeuft parallel
+# ein Host-Backend (scripts/run_product.py, Tauri, Streamlit), verweigert eines von
+# beiden mit klarer Meldung den Start (storage/instance_lock.py). Also entweder
+# Docker ODER Host — nicht beides. `docker compose down` beendet den Stack.
 
 services:
   backend:
@@ -34,7 +41,11 @@ services:
       - ./ontology.yaml:/app/ontology.yaml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+    # Kein `restart: unless-stopped`: ein vergessener Stack kam nach jedem Neustart
+    # von selbst zurueck, griff sich den DuckDB-Lock und liess die UI leer aussehen.
+    # `on-failure` faengt echte Abstuerze ab, ohne den Stack zu verewigen.
+    restart: on-failure:3
+    stop_grace_period: 30s          # Zeit fuer sauberes Schliessen der DuckDB (WAL-Checkpoint)
 
   frontend:
     build:
@@ -47,4 +58,4 @@ services:
       - "127.0.0.1:5173:80"
     depends_on:
       - backend
-    restart: unless-stopped
+    restart: on-failure:3

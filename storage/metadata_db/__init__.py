@@ -5,7 +5,7 @@ unchanged: ``from storage.metadata_db import MetadataDB``.
 """
 from __future__ import annotations
 
-from storage.metadata_db.base import MetadataDBBase
+from storage.metadata_db.base import MetadataDBBase, MetadataDBLockedError
 from storage.metadata_db.schema import SchemaMixin
 from storage.metadata_db.papers import PapersMixin
 from storage.metadata_db.extraction import ExtractionMixin
@@ -27,4 +27,4 @@ class MetadataDB(SchemaMixin, PapersMixin, ExtractionMixin, BatchMixin, Embeddin
     """Full DuckDB metadata store (see domain mixins for grouped methods)."""
 
 
-__all__ = ["MetadataDB"]
+__all__ = ["MetadataDB", "MetadataDBLockedError"]

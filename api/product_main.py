@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx  # noqa: F401  # pm.httpx.AsyncClient (papers/harvest/agent/grey-Router) + Test-Patch-Surface
@@ -21,6 +22,9 @@ from query.llm_router import LLMRouter
 from query.auto_answer import auto_research_answer  # noqa: F401  # pm.auto_research_answer (discovery-Router) + Test-Patch-Surface
 from query.research_tree import ResearchTreeRunner  # noqa: F401  # pm.ResearchTreeRunner (discovery-Router) + Test-Patch-Surface
 from query import guide_flow, screen_companion, self_drive
+from storage.atomic_json import CorruptJsonError
+from storage.instance_lock import InstanceLock, InstanceLockError
+from storage.metadata_db import MetadataDBLockedError
 from storage.path_safety import PathSafetyError
 from workspace import manager as workspace_manager  # noqa: F401  # pm.workspace_manager (routers) + test patch surface
 from workspace.manager import WorkspaceError
@@ -80,6 +84,8 @@ from api.routers import companion as _companion_router  # noqa: E402
 app.include_router(_companion_router.router)
 from api.routers import projects as _projects_router  # noqa: E402
 app.include_router(_projects_router.router)
+from api.routers import graph_bundle as _graph_bundle_router  # noqa: E402
+app.include_router(_graph_bundle_router.router)
 from api.routers import papers as _papers_router  # noqa: E402
 app.include_router(_papers_router.router)
 from api.routers import harvest as _harvest_router  # noqa: E402
@@ -152,6 +158,46 @@ async def _path_safety_handler(request: Request, exc: PathSafetyError) -> Respon
 async def _workspace_error_handler(request: Request, exc: WorkspaceError) -> Response:
     """Code-Werkstatt: bad path / missing folder / oversized file → clean 400."""
     return Response(content=str(exc), status_code=400, media_type="text/plain")
+
+
+@app.exception_handler(MetadataDBLockedError)
+async def _metadata_db_locked_handler(request: Request, exc: MetadataDBLockedError) -> Response:
+    """Zweites Backend auf derselben DuckDB → 503 mit erklaerender Meldung.
+
+    Vorher schlug das als 500 durch, und weil das Frontend Fehler als leere Listen
+    rendert, sah ein Lock-Konflikt aus wie ein Totalverlust aller Projekte.
+    """
+    return Response(content=str(exc), status_code=503, media_type="text/plain")
+
+
+@app.exception_handler(CorruptJsonError)
+async def _corrupt_json_handler(request: Request, exc: CorruptJsonError) -> Response:
+    """Beschaedigte projects.json & Co. laut melden statt still als leer behandeln."""
+    return Response(content=str(exc), status_code=500, media_type="text/plain")
+
+
+# Ein-Instanz-Guard: verhindert, dass ein zweites Backend (manuelles uvicorn neben
+# dem Tauri-Sidecar, vergessener Docker-Stack) dieselbe DuckDB greift und die UI
+# dadurch leer aussehen laesst. Siehe storage/instance_lock.py.
+_instance_lock = InstanceLock(DEFAULT_METADATA_DB_PATH)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    try:
+        _instance_lock.acquire()
+    except InstanceLockError as error:
+        # Ohne diese Zeile sieht der Nutzer nur einen Python-Traceback und
+        # uebersieht die eigentliche Erklaerung darin.
+        print(f"\n  ScienceKG kann nicht starten\n\n  {error}\n", flush=True)
+        raise
+    try:
+        yield
+    finally:
+        _instance_lock.release()
+
+
+app.router.lifespan_context = _lifespan
 
 
 # Optional, opt-in API token. The product API has no user accounts — it is meant to

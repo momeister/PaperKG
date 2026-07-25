@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import hashlib
+import logging
 import time
 from typing import Any
 
@@ -10,7 +11,10 @@ from extraction.entity_extractor import EntityExtractor, extraction_failure_reas
 from extraction.entity_linker import ExtractionPipeline
 from extraction.embedding_engine import EmbeddingEngine
 from parsing.parser_router import ParserRouter, ParserType
+from query.llm_errors import classify_llm_error, is_provider_limit, parse_tagged_error, tag_error
 from query.llm_router import LLMRouter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -287,16 +291,22 @@ class BatchProcessor:
                         break
                     except Exception as exc:
                         last_error = exc
+                        error_kind = parse_tagged_error(str(exc))[0] or classify_llm_error(str(exc))[0]
+                        # Bei einem Rate-Limit lohnt genau ein Wiederholungsversuch;
+                        # bei erschoepftem Kontingent oder ungueltigem Key nicht.
+                        retriable = attempt < self.max_retries and error_kind != "quota" and error_kind != "auth"
                         if metadata_db is not None:
                             metadata_db.upsert_batch_job_item(
                                 job_id,
                                 paper_id,
                                 pdf_path,
-                                "failed" if attempt == self.max_retries else "pending",
+                                "pending" if retriable else "failed",
                                 attempts=attempt + 1,
                                 error_message=str(exc),
                             )
-                        if attempt < self.max_retries and self.retry_delay_seconds:
+                        if not retriable:
+                            break
+                        if self.retry_delay_seconds:
                             time.sleep(self.retry_delay_seconds)
 
                 if last_error is not None:
@@ -305,6 +315,25 @@ class BatchProcessor:
                         status.error_message = str(last_error)
                     if metadata_db is not None:
                         self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+
+                    # Anbieter-Limit erreicht (Kontingent/429/Auth): jeder weitere
+                    # Aufruf scheitert genauso. Frueher lief der Batch stur weiter und
+                    # verbrannte hunderte Paper an derselben Absage — die restlichen
+                    # bleiben jetzt `pending` und sind mit einem neuen Lauf nachholbar.
+                    limit_kind = parse_tagged_error(str(last_error))[0] or classify_llm_error(str(last_error))[0]
+                    if is_provider_limit(limit_kind):
+                        _kind, human = classify_llm_error(str(last_error))
+                        status.status = "failed"
+                        status.error_message = tag_error(
+                            limit_kind,
+                            f"{human} Batch nach {status.papers_processed + status.papers_failed} von "
+                            f"{status.papers_total} Papern gestoppt; der Rest bleibt offen und kann "
+                            "nach dem Zurücksetzen des Limits erneut gestartet werden.",
+                        )
+                        logger.warning("Batch %s gestoppt: %s", job_id, status.error_message)
+                        if metadata_db is not None:
+                            self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                        return status
 
             status.status = "completed_with_errors" if status.papers_failed else "completed"
             if metadata_db is not None:

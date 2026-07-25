@@ -5,11 +5,14 @@ import { ArrowRight, CheckCircle2, ChevronDown, Download, FileUp, Globe, Loader2
 
 import { api } from "../api";
 import { PaperPickList } from "../components/PaperPickList";
+import { QueryError } from "../components/QueryError";
 import { Status } from "../components/Status";
 import { FALLBACK_SOURCE_CATALOG, setSourceCatalog } from "../harvestSources";
 import { useAppState } from "../state";
+import { findingToGreyRecord } from "./workspaceHelpers";
 import type {
   DeepResearchFinding,
+  DiscoveryAnalysis,
   DiscoveryCandidate,
   HarvestDownloadResponse,
   Paper,
@@ -87,6 +90,10 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
   const [uploaded, setUploaded] = useSessionState<Paper[]>("import-uploaded", []);
   const [references, setReferences] = useSessionState<Record<string, ReferenceCandidate[]>>("import-references", {});
   const [topicCandidates, setTopicCandidates] = useSessionState<DiscoveryCandidate[]>("import-topic-candidates", []);
+  // Die LLM-Analyse hinter den KI-Vorschlägen wurde bisher weggeworfen — dabei
+  // stecken darin die eigentlich interessanten Vorschlagsthemen (`queries`), aus
+  // denen die Kandidaten überhaupt erst entstanden sind.
+  const [topicAnalysis, setTopicAnalysis] = useSessionState<DiscoveryAnalysis | null>("import-topic-analysis", null);
   const [paperCandidates, setPaperCandidates] = useSessionState<Record<string, DiscoveryCandidate[]>>("import-paper-candidates", {});
   const [topicGroups, setTopicGroups] = useSessionState<TopicGroup[]>("import-topic-groups", []);
   const [includeRelatedTopics, setIncludeRelatedTopics] = useState(false);
@@ -179,6 +186,7 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
     },
     onSuccess: (payload) => {
       setTopicCandidates(payload.candidates);
+      setTopicAnalysis(payload.analysis ?? null);
     }
   });
   const discoverPaper = useMutation({
@@ -234,35 +242,45 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
       }
     }
   });
+  /** Merkt gespeicherte URLs pro Projekt, damit der Knopf „Gespeichert" anzeigt. */
+  function rememberSaved(urls: string[]) {
+    setSavedFindingsByProject((current) => {
+      const key = activeProject ?? "";
+      const existing = current[key] ?? [];
+      const merged = [...existing, ...urls.filter((url) => !existing.includes(url))];
+      return merged.length === existing.length ? current : { ...current, [key]: merged };
+    });
+  }
+
+  // `findingToGreyRecord` statt einer handgeschriebenen Kopie: die lokale Variante
+  // liess den `full_text ?? raw_excerpt`-Fallback aus, wodurch Quellen ohne Volltext
+  // leer im Projekt landeten.
   const saveGrey = useMutation({
-    mutationFn: (finding: DeepResearchFinding) =>
-      api.addGreySources(
-        activeProject as string,
-        [
-          {
-            url: finding.url,
-            title: finding.title,
-            summary: finding.summary,
-            raw_excerpt: finding.raw_excerpt,
-            full_text: finding.full_text,
-            evidence: finding.evidence,
-            injection_flags: finding.injection_flags
-          }
-        ],
-        researchQuestion
-      ),
-    onSuccess: (_data, finding) =>
-      setSavedFindingsByProject((current) => {
-        const key = activeProject ?? "";
-        const urls = current[key] ?? [];
-        return urls.includes(finding.url) ? current : { ...current, [key]: [...urls, finding.url] };
-      })
+    mutationFn: (findings: DeepResearchFinding[]) =>
+      api.addGreySources(activeProject as string, findings.map(findingToGreyRecord), researchQuestion),
+    onSuccess: (_data, findings) => rememberSaved(findings.map((finding) => finding.url))
   });
+
+  /** Noch nicht gespeicherte Treffer — Grundlage für die „Alle speichern"-Knöpfe. */
+  function unsavedFindings(groups: TopicGroup[]): DeepResearchFinding[] {
+    const seen = new Set(savedFindingUrls);
+    const out: DeepResearchFinding[] = [];
+    for (const group of groups) {
+      for (const finding of group.findings) {
+        if (!seen.has(finding.url)) {
+          seen.add(finding.url);
+          out.push(finding);
+        }
+      }
+    }
+    return out;
+  }
   const markPrimary = useMutation({
     mutationFn: (paperId: string | null) => api.setPrimaryPaper(activeProject as string, paperId),
     onSuccess: (payload) => setPrimaryPaperId(payload.primary_paper_id)
   });
 
+  const searchElapsed = useElapsedTimer(search.isPending);
   const extractRefsElapsed = useElapsedTimer(extractRefs.isPending);
   const discoverPaperElapsed = useElapsedTimer(discoverPaper.isPending);
   const discoverTopicElapsed = useElapsedTimer(discoverTopic.isPending);
@@ -384,8 +402,8 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
             </label>
             <div className="button-row">
               <button className="button button-primary" type="submit" disabled={search.isPending || !sources.length}>
-                <Search size={17} />
-                <span>Suchen</span>
+                {search.isPending ? <Loader2 size={17} className="spin" /> : <Search size={17} />}
+                <span>{search.isPending ? "Sucht …" : "Suchen"}</span>
               </button>
               <button
                 className="button"
@@ -420,6 +438,17 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
                 </button>
               )}
             </div>
+            {/* Die normale Suche hatte bisher keinerlei Rückmeldung: der Knopf war
+                deaktiviert, sonst passierte sichtbar nichts — bei zwölf Quellen
+                gut eine halbe Minute lang. */}
+            {search.isPending && (
+              <div className="import-status-row">
+                <Loader2 size={14} className="spin" />
+                <span className="muted">
+                  Durchsucht {sources.length} {sources.length === 1 ? "Quelle" : "Quellen"} … {searchElapsed}s
+                </span>
+              </div>
+            )}
             {discoverTopic.isPending && (
               <div className="import-status-row">
                 <Loader2 size={14} className="spin" />
@@ -427,6 +456,15 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
               </div>
             )}
           </form>
+
+          {/* search.isError war bisher nirgends sichtbar — eine gescheiterte Suche
+              sah aus wie eine Suche ohne Treffer. */}
+          {search.isError ? (
+            <QueryError error={search.error} title="Suche fehlgeschlagen" onRetry={() => search.mutate({ query: topic.trim(), sources, max_results: maxResults })} />
+          ) : null}
+          {discoverTopic.isError ? (
+            <QueryError error={discoverTopic.error} title="KI-Vorschläge fehlgeschlagen" onRetry={() => discoverTopic.mutate()} />
+          ) : null}
 
           {warnings.map((warning) => (
             <div key={warning} className="warning-row">
@@ -560,15 +598,67 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
         </section>
       ) : null}
 
-      {topicCandidates.length ? (
+      {/* Reihenfolge nach dem Suchen: erst die ganz normalen Treffer, dann die
+          KI-Vorschläge, dann die Web-Recherche. Die Treffer standen vorher ganz
+          unten, hinter zwei Panels, die man gar nicht angestoßen hatte. */}
+      <section className="panel">
+        <PaperPickList
+          title="Treffer"
+          papers={results}
+          onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
+          disabled={download.isPending}
+          showMetadataAction
+          emptyTitle="Keine Treffer"
+        />
+      </section>
+
+      {topicCandidates.length || topicAnalysis ? (
         <section className="panel">
-          <PaperPickList
-            title="KI-Vorschläge zum Thema"
-            papers={topicCandidates}
-            onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
-            disabled={download.isPending}
-            onClear={() => setTopicCandidates([])}
-          />
+          {/* Die Vorschlagsthemen selbst — bisher verworfen, obwohl das Backend sie
+              mitliefert. Ein Klick übernimmt das Thema und startet die Suche. */}
+          {topicAnalysis ? (
+            <div className="discovery-analysis">
+              {topicAnalysis.topic_summary ? <p className="muted">{topicAnalysis.topic_summary}</p> : null}
+              {topicAnalysis.queries?.length ? (
+                <>
+                  <span className="discovery-analysis-label">Vorschlagsthemen — anklicken, um danach zu suchen</span>
+                  <div className="discovery-topic-chips">
+                    {topicAnalysis.queries.map((entry) => (
+                      <button
+                        key={entry.query}
+                        className="topic-chip topic-chip--action"
+                        type="button"
+                        title={entry.reason || entry.query}
+                        disabled={search.isPending || !sources.length}
+                        onClick={() => {
+                          setTopic(entry.query);
+                          search.mutate({ query: entry.query, sources, max_results: maxResults });
+                        }}
+                      >
+                        <Search size={12} />
+                        <span>{entry.query}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+              {topicAnalysis.methods?.length ? (
+                <span className="muted discovery-analysis-methods">Methoden: {topicAnalysis.methods.join(", ")}</span>
+              ) : null}
+            </div>
+          ) : null}
+          {topicCandidates.length ? (
+            <PaperPickList
+              title="KI-Vorschläge zum Thema"
+              papers={topicCandidates}
+              onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
+              disabled={download.isPending}
+              onClear={() => {
+                setTopicCandidates([]);
+                setTopicAnalysis(null);
+              }}
+            />
+          ) : null}
         </section>
       ) : null}
 
@@ -595,6 +685,26 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
                 </span>
               );
               return <Status value="idle" />;
+            })()}
+            {/* Alle Web-Treffer auf einmal ins Projekt — die API nimmt seit jeher
+                eine Liste entgegen, nur die UI schickte immer genau einen. */}
+            {(() => {
+              const pending = unsavedFindings(topicGroups);
+              if (!isRealProject || research.isPending || topicGroups.some((g) => g.pending) || !pending.length) {
+                return null;
+              }
+              return (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  disabled={saveGrey.isPending}
+                  title={`${pending.length} noch nicht gespeicherte Webquellen zum Projekt „${activeProject}" hinzufügen`}
+                  onClick={() => saveGrey.mutate(pending)}
+                >
+                  {saveGrey.isPending ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+                  <span>Alle speichern ({pending.length})</span>
+                </button>
+              );
             })()}
             {topicGroups.length > 0 && !research.isPending && !topicGroups.some((g) => g.pending) ? (
               <button
@@ -710,14 +820,15 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
           <div className="topic-groups">
             {topicGroups.map((group) => (
               <div key={group.topic} className="topic-group">
+                {/* Auch das Hauptthema klappt zu: es war als einziges festgenagelt,
+                    obwohl gerade es die längste Trefferliste hat. */}
                 <button
                   type="button"
                   className={`topic-group-header ${group.isMain ? "topic-group-header--main" : ""}`}
-                  onClick={() => !group.isMain && toggleGroup(group.topic)}
+                  aria-expanded={!group.collapsed}
+                  onClick={() => toggleGroup(group.topic)}
                 >
-                  {!group.isMain && (
-                    <ChevronDown size={14} className={group.collapsed ? "topic-group-chevron--collapsed" : "topic-group-chevron"} />
-                  )}
+                  <ChevronDown size={14} className={group.collapsed ? "topic-group-chevron--collapsed" : "topic-group-chevron"} />
                   <span className="topic-group-label">
                     {group.isMain ? group.topic : `Verwandtes Thema: ${group.topic}`}
                   </span>
@@ -730,6 +841,25 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
                     <span className="topic-group-count">{group.findings.length} Treffer</span>
                   )}
                 </button>
+                {(() => {
+                  const pending = unsavedFindings([group]);
+                  if (group.collapsed || group.pending || !isRealProject || !pending.length) {
+                    return null;
+                  }
+                  return (
+                    <div className="topic-group-actions">
+                      <button
+                        className="button button-compact"
+                        type="button"
+                        disabled={saveGrey.isPending}
+                        onClick={() => saveGrey.mutate(pending)}
+                      >
+                        <Download size={13} />
+                        <span>Dieses Thema speichern ({pending.length})</span>
+                      </button>
+                    </div>
+                  );
+                })()}
                 {!group.collapsed ? (
                   <div className="topic-group-findings">
                     {group.pending ? (
@@ -747,7 +877,7 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
                                 className="button"
                                 type="button"
                                 disabled={!isRealProject || saveGrey.isPending || savedFindingUrls.includes(finding.url)}
-                                onClick={() => saveGrey.mutate(finding)}
+                                onClick={() => saveGrey.mutate([finding])}
                               >
                                 {savedFindingUrls.includes(finding.url) ? "Gespeichert" : "Zum Projekt"}
                               </button>
@@ -773,16 +903,6 @@ export function ImportPage({ embedded = false }: { embedded?: boolean }) {
         ) : null}
       </section>
 
-      <section className="panel">
-        <PaperPickList
-          title="Treffer"
-          papers={results}
-          onDownload={(papers, pdfs) => download.mutate({ papers, downloadPdfs: pdfs })}
-          disabled={download.isPending}
-          showMetadataAction
-          emptyTitle="Keine Treffer"
-        />
-      </section>
       <DownloadProgress
         pending={download.isPending}
         data={download.data}

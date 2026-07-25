@@ -143,7 +143,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
 export const api = {
   getHealth: () => request<HealthReport>("/system/health-report"),
-  getProjects: () => request<{ projects: Project[] }>("/projects"),
+  // `degraded` ist gesetzt, wenn die Projektliste aus projects.json kommt, die
+  // Metadaten-DB aber nicht lesbar war (z.B. zweites Backend haelt den Lock).
+  // Die Projekte stimmen dann, nur Jahresspannen fehlen — die UI weist darauf hin.
+  getProjects: () => request<{ projects: Project[]; degraded?: string }>("/projects"),
   createProject: (name: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
   patchProject: (projectId: string, payload: { name?: string; pinned?: boolean }) =>
     request<{ project: Project }>(`/projects/${encodeURIComponent(projectId)}`, {
@@ -267,8 +270,11 @@ export const api = {
       `/projects/${encodeURIComponent(projectId)}/primary-paper`,
       { method: "PUT", body: JSON.stringify({ paper_id: paperId }) }
     ),
+  // `degraded`: der Datei-Scan hat geklappt, aber die DB war nicht lesbar — dann
+  // fehlen Grauquellen und Paper ohne PDF. Frueher wurde das stillschweigend
+  // verschluckt, die Liste sah einfach kuerzer aus.
   getExtractionLibrary: (query = "", projectId?: string) =>
-    request<{ items: ExtractionLibraryItem[]; total: number }>("/extraction/library", {
+    request<{ items: ExtractionLibraryItem[]; total: number; degraded?: string }>("/extraction/library", {
       query: { query, project_id: projectId || undefined }
     }),
   parseExtractionPdf: (payload: { paper_id: string; pdf_path?: string; parser?: string }) =>
@@ -1185,4 +1191,92 @@ export async function exportResearchTree(
     warnings = [];
   }
   return { blob, filename, format, warnings };
+}
+
+// --------------------------------------------------------------------------- //
+// Projekt-Bundles: ein Projekt exportieren / importieren                       //
+// --------------------------------------------------------------------------- //
+
+export type BundlePreview = {
+  project: string;
+  exported_at: string;
+  app_version: string;
+  bundle_version: number;
+  includes_pdfs: boolean;
+  counts: Record<string, number>;
+  papers_existing: number;
+  papers_new: number;
+  project_exists: boolean;
+  warnings: string[];
+};
+
+export type BundleImportReport = {
+  project: string;
+  mode: string;
+  papers_imported: number;
+  papers_skipped: number;
+  extractions_imported: number;
+  grey_sources_imported: number;
+  embeddings_imported: number;
+  pdfs_imported: number;
+  paper_count: number;
+  warnings: string[];
+};
+
+/** Lädt das Projekt-Bundle als ZIP herunter (inkl. Dateiname aus dem Header). */
+export async function exportProjectBundle(
+  projectId: string,
+  includePdfs = false,
+): Promise<{ blob: Blob; filename: string }> {
+  const target = new URL(`/projects/${encodeURIComponent(projectId)}/export`, API_BASE_URL);
+  target.searchParams.set("include_pdfs", String(includePdfs));
+  let response: Response;
+  try {
+    response = await fetch(target.toString());
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, (await response.text()) || `Backend error ${response.status}`);
+  }
+  const blob = await response.blob();
+  const match = /filename="?([^"]+)"?/.exec(response.headers.get("Content-Disposition") ?? "");
+  return { blob, filename: match?.[1] ?? `paperkg-export_${projectId}.zip` };
+}
+
+/** Schickt das ZIP als Rohkörper — der Router streamt es in eine Temp-Datei. */
+async function postBundle<T>(path: string, file: File, query: Record<string, string>): Promise<T> {
+  const target = new URL(path, API_BASE_URL);
+  Object.entries(query).forEach(([key, value]) => value && target.searchParams.set(key, value));
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: file,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  const payload = response.headers.get("content-type")?.includes("application/json")
+    ? await response.json()
+    : await response.text();
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : payload;
+    throw new ApiError(response.status, detail || `Backend error ${response.status}`);
+  }
+  return payload as T;
+}
+
+export function previewProjectBundle(file: File) {
+  return postBundle<{ preview: BundlePreview }>("/bundles/preview", file, {});
+}
+
+export function importProjectBundle(file: File, mode: "merge" | "replace", targetProject?: string) {
+  return postBundle<{ report: BundleImportReport }>("/bundles/import", file, {
+    mode,
+    ...(targetProject ? { target_project: targetProject } : {}),
+  });
 }

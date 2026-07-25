@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Briefcase, FileSearch, Import as ImportIcon } from "lucide-react";
 
 import { api } from "../api";
+import { breakdownLabel, computeExtractionCounts } from "../extractionCounts";
 import { m } from "../motion";
 import { useAppState } from "../state";
 
@@ -90,9 +91,10 @@ export function PipelineGraph({ stage, onStageSelect }: { stage: ResearchStage; 
   const activeProjectName = projects.find((project) => project.id === activeProject)?.name;
   const paperTotal = papersQuery.data?.total;
 
-  const extractionItems = extractionQuery.data?.items ?? [];
-  const pdfItems = extractionItems.filter((item) => item.source_type !== "grey" && item.pdf_path && item.pdf_available !== false);
-  const extractedCount = pdfItems.filter((item) => item.latest_extraction_status === "success").length;
+  // Dieselbe Formel wie die Extraktionsseite (frontend/src/extractionCounts.ts).
+  // Vorher zaehlte die Kachel nur PDFs, der Batch-Knopf zusaetzlich Abstract-only —
+  // zwei Zahlen fuer denselben Vorgang, ohne dass der Unterschied erkennbar war.
+  const counts = computeExtractionCounts(extractionQuery.data?.items ?? []);
 
   return (
     <div className="pipeline-graph" role="group" aria-label="Forschungs-Pipeline">
@@ -120,8 +122,8 @@ export function PipelineGraph({ stage, onStageSelect }: { stage: ResearchStage; 
         ariaLabel="Stufe Extraktion"
         icon={<FileSearch size={18} />}
         label="Extraktion"
-        value={extractionQuery.isPending ? "…" : `${extractedCount}/${pdfItems.length}`}
-        hint="PDFs mit Ergebnis"
+        value={extractionQuery.isPending ? "…" : `${counts.extracted}/${counts.extractable}`}
+        hint={extractionQuery.isPending ? "Paper mit Ergebnis" : breakdownLabel(counts)}
         onClick={() => onStageSelect("extraktion")}
       />
     </div>
