@@ -82,6 +82,12 @@ bridge/uitars/node_modules/
 # src-tauri/defaults/ ARE tracked (source).
 /src-tauri/sidecar/
 
+# CodeSearch (einvendorter Rust-Workspace) — Quellen sind getrackt, Build nicht.
+/codesearch/target/
+# Code-Graph-Indizes: eine SQLite-Datei pro Code-Projekt, ~11 MB pro mittlerem
+# Repo. Reiner Cache — wird per POST /codegraph/{id}/index neu gebaut.
+data/codegraph/
+
 # Generated knowledge/UI artifacts
 .streamlit/
 graphify-out/

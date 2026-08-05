@@ -19,6 +19,14 @@ PROJECT_SCOPED_TABLES: tuple[str, ...] = (
     "parallel_sessions",
     "analysis_runs",
     "datasets",
+    "code_paper_links",
+    "code_answers",
+    # Gespräche über den Code hängen an einem Forschungsprojekt (Papers als
+    # zusätzliche Quelle). Ohne diesen Eintrag zeigten sie nach einer
+    # Projektumbenennung auf einen Namen, den es nicht mehr gibt.
+    # ``code_chat_turns`` steht bewusst nicht hier: die Züge hängen am Gespräch,
+    # nicht am Projekt.
+    "code_chats",
 )
 
 

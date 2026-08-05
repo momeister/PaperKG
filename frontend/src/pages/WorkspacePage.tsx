@@ -63,6 +63,7 @@ import { EmptyState } from "../components/EmptyState";
 import { GreySourceView } from "../components/GreySourceView";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
+import { isGarbledExcerpt } from "../excerptSanity";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
 import type {
@@ -1338,6 +1339,15 @@ export function WorkspacePage() {
         }
         setNextTurnIsNew(true);
         setQuestion("");
+        // Sofort leeren: die alte Konversation verschwindet unmittelbar, die
+        // nächste Frage füllt die Anzeige wieder auf (neuer Turn).
+        setHistory([]);
+        setActiveTurnId("");
+        saveAssistantSession(scopedProjectId, { history: [], activeTurnId: "" }, { allowEmpty: true });
+        // Hydration-Effekt neu anstoßen, damit der geleerte Server-Stand als
+        // autoritativ bestätigt wird (idempotent — raced der debounced PUT noch,
+        // landet er kurz danach und der nächste Interaktions-Save ist wieder leer).
+        setSessionReloadNonce((n) => n + 1);
         logAction("Neues Gespräch", "Die nächste Frage startet eine neue Session — Weiterfragen bleibt aktiv.");
         return { handled: true };
       case "selected":
@@ -1497,6 +1507,14 @@ export function WorkspacePage() {
       return;
     }
     const newTurn = options.newTurn ?? nextTurnIsNew;
+    // Neuer Turn → Chatfläche sofort leeren, damit die alte Antwort verschwindet
+    // und der Nutzer einen sichtbaren "neuer Chat"-Zustand sieht, während die
+    // neue Antwort noch generiert wird (statt die alte bis zum onSuccess stehen
+    // zu lassen). Gilt für beide Pfade: normales answerMutation und runAutoResearch.
+    if (newTurn) {
+      setHistory([]);
+      setActiveTurnId("");
+    }
     // Auto-Recherche übernimmt Antwort + (bei schwacher Antwort) Paper-/Web-Harvest in
     // einem gestreamten Lauf — der normale Antwort-/Web-Pfad entfällt dann.
     if (options.auto ?? autoResearch) {
@@ -2132,6 +2150,64 @@ export function WorkspacePage() {
     }
   }
 
+  // Same download path as ingestCitedSource, but keyed only on a paper id (the "missing"
+  // branch of the citation click, where we have no VerificationSource object). On success
+  // the PDF pane switches from the abstract limbo to the loaded paper.
+  async function ingestMissingCited(paperId: string) {
+    if (!paperId || isGreySourcePaperId(paperId)) {
+      return;
+    }
+    if (ingestedPdfIds.has(paperId)) {
+      setSourceIngestStatus("Diese Quelle ist bereits geladen.");
+      return;
+    }
+    if (ingestingPaperId) {
+      setSourceIngestStatus(
+        ingestingPaperId === paperId
+          ? "Quelle wird bereits heruntergeladen …"
+          : "Es wird bereits eine andere Quelle heruntergeladen — bitte warten."
+      );
+      return;
+    }
+    setIngestingPaperId(paperId);
+    setSourceIngestStatus(`Quelle "${paperId}" wird heruntergeladen und extrahiert …`);
+    try {
+      const res = await api.paperIngest({
+        paper_id: paperId,
+        project_id: activeProject || undefined,
+        provider: provider || undefined,
+        model: model || undefined
+      });
+      if (res.has_local_pdf) {
+        setIngestedPdfIds((prev) => new Set(prev).add(paperId));
+        void queryClient.invalidateQueries({ queryKey: ["papers"] });
+        if (isRealProject) {
+          void queryClient.invalidateQueries({ queryKey: ["workspace-project-paper-ids", activeProject] });
+        }
+        setSourceIngestStatus(`PDF zu "${paperId}" geladen – Extraktion läuft im Hintergrund.`);
+        // Switch the PDF pane out of the "missing" limbo so the freshly downloaded
+        // PDF renders. We find the now-loaded paper in pdfPapers; if it isn't there
+        // yet (query still refetching), fall back to an assistant-style target so
+        // the placeholder doesn't reappear.
+        const found = pdfPapers.find((p) => workspacePaperId(normalizeWorkspacePaper(p)) === paperId);
+        if (found) {
+          setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(found) });
+        }
+      } else if (res.external_url) {
+        const saved = await api.addGreySourceFromUrl(activeProject as string, res.external_url);
+        await queryClient.invalidateQueries({ queryKey: ["grey-sources", activeProject] });
+        setPdfTarget({ kind: "grey", source: saved.saved });
+        setSourceIngestStatus(`Quelle "${saved.saved.title || saved.saved.url}" als Webquelle geöffnet.`);
+      } else {
+        setSourceIngestStatus("Für diese Quelle ist kein PDF verfügbar.");
+      }
+    } catch (error) {
+      setSourceIngestStatus(error instanceof Error ? error.message : "Quelle konnte nicht geladen werden.");
+    } finally {
+      setIngestingPaperId((current) => (current === paperId ? null : current));
+    }
+  }
+
   function openSelectedAssistantPdf() {
     if (!selectedSource) {
       return;
@@ -2692,6 +2768,12 @@ export function WorkspacePage() {
       evidence?.reference_text ||
       "";
     if (!support) {
+      return "";
+    }
+    // Defense-in-depth: don't feed a reversed/garbled PDF excerpt to the rewrite
+    // LLM — small models echo it verbatim and emit chain-of-thought. Returning
+    // "" keeps the original statement intact instead of corrupting it.
+    if (isGarbledExcerpt(support)) {
       return "";
     }
     try {
@@ -3308,6 +3390,9 @@ export function WorkspacePage() {
             activeEvidenceIndex={pdfView.activeEvidenceIndex}
             onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
             onCollapse={() => setPdfOpen(false)}
+            onIngestMissing={pdfTarget?.kind === "missing" ? ingestMissingCited : undefined}
+            ingestPending={pdfTarget?.kind === "missing" ? ingestingPaperId === pdfTarget.paperId : false}
+            ingestStatus={pdfTarget?.kind === "missing" ? sourceIngestStatus : undefined}
           />
         )
       ) : (

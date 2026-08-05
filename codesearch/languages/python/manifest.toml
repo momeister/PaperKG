@@ -1,0 +1,31 @@
+display = "Python"
+extensions = ["py", "pyi", "pyw"]
+comment_prefixes = ["#"]
+# Python and Ruby put documentation in the first string of the body rather than
+# in a comment above the definition.
+doc_style = "string_first"
+
+# Nodes that add a branch. Cyclomatic complexity is their count plus one.
+decision_nodes = [
+  "if_statement", "elif_clause", "while_statement", "for_statement",
+  "except_clause", "with_statement", "conditional_expression",
+  "boolean_operator", "assert_statement", "case_clause",
+]
+block_nodes = ["block"]
+
+test_prefixes = ["test_"]
+test_suffixes = ["_test"]
+entry_names = ["main", "__main__"]
+
+# Substring matches against the callee text at a call site. Deliberately blunt:
+# a false "reads files" is a cheap mistake, a missed one is not.
+[effects]
+file_read = ["open(", "read_text", "read_bytes", "readlines", "Path(", "glob", "listdir"]
+file_write = ["write_text", "write_bytes", "writelines", "mkdir", "makedirs", "remove", "rmtree", "rename"]
+network = ["requests.", "httpx.", "urllib", "aiohttp", "socket.", "urlopen", "session.get", "session.post"]
+database = ["execute", "executemany", "cursor", "commit", "session.query", "objects.filter", "objects.get", "fetchall", "fetchone"]
+process_spawn = ["subprocess.", "Popen", "os.system", "os.exec", "multiprocessing."]
+console = ["print(", "logging.", "logger.", "sys.stdout", "sys.stderr", "warnings.warn"]
+randomness = ["random.", "secrets.", "uuid4", "shuffle", "randint"]
+time = ["datetime.now", "time.time", "utcnow", "monotonic", "perf_counter", "sleep"]
+environment = ["os.environ", "getenv", "os.getenv", "dotenv"]

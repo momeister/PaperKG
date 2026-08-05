@@ -1,0 +1,1565 @@
+/* ------------------------------------------------------------------------- */
+/* Code-Graph-Seite (/code)                                                   */
+/*                                                                            */
+/* Namensraum .cgp-* ("CodeGraph Page"). .cg-* gehört den geteilten Widgets    */
+/* (auch von der Werkstatt benutzt), .flow-* der Paper-GraphPage.              */
+/*                                                                            */
+/* Nur var(--…)-Tokens und color-mix() — keine data-theme-Selektoren, keine    */
+/* Literale. Damit folgen alle sechs Themes und beide Schemata von selbst.     */
+/* Die --wk-*-Aliase stehen in styles.css auch auf .codegraph-page, damit die  */
+/* wiederverwendeten .wk-btn/.wk-iconbtn/.wk-resize hier funktionieren.        */
+/* ------------------------------------------------------------------------- */
+
+/* Flex statt Raster — mit Absicht. Ein `grid-template-rows: auto auto 1fr`
+   zählt Zeilen nach Kindern, und die Fortschrittszeile gibt es nur beim
+   Indizieren: ohne sie rutschte der Körper in die Inhaltszeile, die 1fr-Zeile
+   blieb leer, und die untere Fensterhälfte war weiss. Eine Flexspalte kennt
+   keine Positionen, nur „fest" und „nimmt den Rest" — dieselbe Anordnung wie
+   in der Werkstatt. */
+.codegraph-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 64px);
+  min-height: 0;
+  padding: 12px 14px 14px;
+  overflow: hidden;
+}
+
+.cgp-head,
+.cgp-progress {
+  flex: 0 0 auto;
+}
+
+/* Ankreuzfelder: die globale input-Regel gibt jedem Feld width:100% und
+   min-height:34px. In der Werkstatt greift das nicht (dort sind alle Felder
+   eigens gestylt), hier schon — aus dem Häkchen wurde ein grosses Quadrat. */
+.codegraph-page input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+}
+
+/* --- Kopfzeile ----------------------------------------------------------- */
+
+.cgp-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cgp-head-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent);
+}
+
+.cgp-head-title > div {
+  display: grid;
+}
+
+.cgp-head-title span {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cgp-head-title h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--ink);
+}
+
+.cgp-head-project {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.cgp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+}
+
+.cgp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+.cgp-dot--ready { background: var(--green); }
+.cgp-dot--failed { background: var(--red); }
+.cgp-dot--indexing { background: var(--amber); }
+
+.cgp-spacer { flex: 1 1 auto; }
+
+.cgp-progress {
+  margin: 0;
+}
+
+/* --- Rahmen und Flächen -------------------------------------------------- */
+
+.cgp-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cgp-body--single {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  padding: 24px;
+}
+
+.cgp-slot {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cgp-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+}
+
+.cgp-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  font-size: var(--text-sm);
+}
+
+.cgp-pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 12px;
+}
+
+.cgp-center-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cgp-views button { font-size: var(--text-xs); }
+
+.cgp-depth {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.cgp-depth select {
+  width: auto;
+  min-height: 26px;
+  padding: 2px 6px;
+}
+
+.cgp-picking {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.cgp-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.cgp-linkish {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.cgp-linkish:hover { color: var(--accent); text-decoration: underline; }
+
+.cgp-iconlink {
+  border: none;
+  background: none;
+  padding: 0 4px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.cgp-iconlink:hover { color: var(--accent); }
+
+.cgp-mini-select {
+  width: auto;
+  min-height: 26px;
+  padding: 2px 6px;
+  font-size: var(--text-xs);
+}
+
+.cgp-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.cgp-inline-check input { width: auto; min-height: 0; }
+
+.cgp-count {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+/* --- Navigator ----------------------------------------------------------- */
+
+.cgp-nav-search {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cgp-facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cgp-facet {
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.cgp-facet:hover { background: var(--surface-hover); color: var(--text); }
+.cgp-facet--on {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cgp-facet-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
+}
+.cgp-facet-group:last-of-type { border-right: none; }
+
+/* In der Werkstatt stehen Name und Fundstelle nebeneinander, jeder auf halber
+   Spaltenbreite — bei 170 px bleibt von `ExtractionMixin.save_extraction_result`
+   nichts Lesbares übrig. Hier bekommen sie je eine eigene Zeile über die volle
+   Breite. Umbrechen wäre die schlechtere Antwort: der Text bräche mitten im
+   Bezeichner. Nur in diesem Panel — das geteilte Widget bleibt unverändert. */
+.cgp-navigator .cg-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+.cgp-navigator .cg-row-main,
+.cgp-navigator .cg-row-meta {
+  width: 100%;
+  text-align: left;
+}
+
+.cgp-facet-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+/* --- Karte --------------------------------------------------------------- */
+
+.cgp-map {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.cgp-map-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cgp-map-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  font-size: var(--text-xs);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
+}
+.cgp-map-banner--info { background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.cgp-map-banner--error { background: color-mix(in srgb, var(--red) 14%, transparent); }
+
+.cgp-map-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  /* React Flow bringt eine eigene Palette mit und kennt unsere sechs Themes
+     nicht. `colorMode` schaltet nur zwischen seinem Hell und seinem Dunkel —
+     im Nacht-Theme blieben Minimap und Zoomknöpfe weisse Kästen. Über die
+     dokumentierten --xy-*-Variablen folgt es unseren Tokens. */
+  --xy-background-color: var(--surface);
+  --xy-minimap-background-color: var(--surface-2);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-hover);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-color-hover: var(--accent);
+  --xy-controls-button-border-color: var(--line);
+  --xy-edge-stroke: var(--muted);
+  --xy-attribution-background-color: transparent;
+}
+.cgp-map-canvas .react-flow { width: 100%; height: 100%; }
+.cgp-map-canvas .react-flow__controls {
+  box-shadow: var(--shadow-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.cgp-legend {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.cgp-legend-marks { margin: 0; }
+.cgp-legend-dash { display: inline-flex; align-items: center; gap: 6px; }
+.cgp-legend-dash line { stroke: var(--muted); }
+
+/* Knoten. Die Farbe sagt die Art, die Breite die Relevanz, der Rahmen den
+   Zustand. Eine dynamische Lücke sieht bewusst anders aus als alles andere. */
+.cgp-node {
+  display: grid;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.cgp-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.cgp-node-kind {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.cgp-node-expand {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.cgp-node-expand:hover { color: var(--accent); }
+
+.cgp-node-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cgp-node-bar {
+  display: block;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.cgp-node-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.cgp-node--function,
+.cgp-node--method { border-left-color: var(--accent); }
+.cgp-node--class,
+.cgp-node--interface { border-left-color: var(--accent-2); }
+.cgp-node--file,
+.cgp-node--module { border-left-color: var(--muted); }
+.cgp-node--route { border-left-color: var(--blue); }
+.cgp-node--test { border-left-color: var(--green); }
+.cgp-node--db_table,
+.cgp-node--db_column,
+.cgp-node--config_key { border-left-color: var(--amber); }
+.cgp-node--external_package {
+  border-left-color: var(--line);
+  background: transparent;
+  box-shadow: none;
+}
+
+.cgp-node--gap {
+  border-style: dashed;
+  border-left-color: var(--red);
+  color: var(--red);
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 6px,
+    color-mix(in srgb, var(--red) 9%, transparent) 6px 12px
+  );
+}
+
+.cgp-node--focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.cgp-node--selected {
+  border-color: var(--accent-strong, var(--accent));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.cgp-handle {
+  width: 5px;
+  height: 5px;
+  border: none;
+  background: var(--line);
+}
+
+/* Kanten. Die Deckkraft und die Strichbreite stehen im Inline-Style (aus
+   edgeStyleFor); hier nur die Farbe je Gruppe. */
+.cgp-edge--reference .react-flow__edge-path { stroke: var(--accent); }
+.cgp-edge--structure .react-flow__edge-path { stroke: var(--muted); }
+.cgp-edge--type .react-flow__edge-path { stroke: var(--accent-2); }
+.cgp-edge--runtime .react-flow__edge-path { stroke: var(--amber); }
+.cgp-edge .react-flow__edge-text {
+  font-size: 9px;
+  fill: var(--muted);
+}
+
+/* Über CSS, nicht über Props: React Flow schriebe Prop-Farben als
+   `fill`-Attribut, und dort löst kein var(--…) auf. */
+.cgp-minimap {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.cgp-minimap .react-flow__minimap-mask {
+  fill: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+.cgp-minimap .react-flow__minimap-node {
+  fill: var(--accent);
+  stroke: var(--line);
+}
+.cgp-minimap .react-flow__minimap-node[data-kind="dynamic_gap"] {
+  fill: var(--red);
+}
+
+/* --- Kantentabelle ------------------------------------------------------- */
+
+.cgp-edge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.cgp-edge-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  vertical-align: top;
+}
+
+.cgp-edge-conf { width: 18px; }
+.cgp-edge-pair {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+}
+.cgp-edge-kind { color: var(--muted); white-space: nowrap; }
+.cgp-edge-evidence { text-align: right; }
+.cgp-edge-row--active { background: var(--accent-soft); }
+
+/* --- Inspektor ----------------------------------------------------------- */
+
+.cgp-inspector-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cgp-inspector-loc { display: block; margin-bottom: 8px; }
+
+/* Gedeckelt: eine Signatur mit dreissig Parametern ist eine Wand, die alles
+   Weitere aus dem Blick schiebt. Sie bleibt vollständig, aber im eigenen
+   Scrollbereich. */
+.cgp-sig {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  max-height: 8.5em;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cgp-doc { max-width: none; }
+
+.cgp-params {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+.cgp-params td { padding: 2px 6px 2px 0; }
+
+.cgp-metrics { gap: 6px; }
+.cgp-metrics .metric-card { padding: 7px 9px; }
+.cgp-metrics .metric-card strong { font-size: var(--text-md); }
+
+.cgp-chip--warn {
+  background: color-mix(in srgb, var(--amber) 16%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+}
+.cgp-chip--ok {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+}
+
+.cgp-stale { margin-bottom: 6px; }
+
+.cgp-source {
+  margin: 0;
+  max-height: 340px;
+  overflow: auto;
+  padding: 6px 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.cgp-source-line { display: block; padding: 0 8px; white-space: pre; }
+.cgp-source-line--focus {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.cgp-source-gutter {
+  display: inline-block;
+  width: 4ch;
+  margin-right: 10px;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+}
+
+/* --- Pfad ---------------------------------------------------------------- */
+
+.cgp-path-ends {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  margin: 0 0 10px;
+}
+
+.cgp-path-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 5px;
+  font-size: var(--text-xs);
+}
+.cgp-path-steps li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cgp-path-loc { margin-left: auto; }
+
+/* --- Fragen -------------------------------------------------------------- */
+
+.cgp-ask-pane .cg-ask { flex: 1 1 auto; min-height: 0; }
+
+.cgp-ask-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin-bottom: 6px;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+.cgp-ask-context code { font-family: var(--font-mono); font-size: 11px; }
+.cgp-ask-context button {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.cgp-ask-context--off {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.cgp-trail-map { margin-left: 8px; }
+
+/* Auf der grossen Seite darf der Text atmen — die .cg-*-Masse sind für eine
+   26-%-Spalte gemacht. Nur diese wenigen Überschreibungen, damit die geteilten
+   Widgets sonst überall identisch aussehen. */
+.cg-roomy .cg-fineprint { max-width: 60ch; }
+.cg-roomy .cg-answer-text { font-size: 13.5px; margin: 8px 12px; }
+.cg-roomy .cg-ask-input textarea { min-height: 64px; }
+
+/* --- LlmPicker ----------------------------------------------------------- */
+
+.llm-picker {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.llm-picker--compact { gap: 8px; }
+.llm-picker--compact label { font-size: 11px; }
+.llm-picker--compact select { min-height: 28px; padding: 3px 6px; }
+.llm-picker--inline { flex-wrap: wrap; }
+.llm-picker--inline label { min-width: 180px; }
+
+/* --- Gerichtete Karte: Achsenbeschriftung und Hervorhebungen ------------- */
+
+/* Die Karte muss selbst sagen, was ihre Seiten bedeuten — sonst bliebe die
+   Richtung eine Konvention, die man kennen muss. */
+.cgp-axis {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  pointer-events: none;
+}
+.cgp-axis--in svg { transform: rotate(180deg); }
+
+/* Relevanter als das betrachtete Symbol. Der Fall, für den es da ist: man hat
+   eine Hilfsfunktion angeklickt und meint die Stelle darunter. */
+.cgp-node--stronger {
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 30%, transparent), var(--shadow-soft);
+}
+.cgp-node-flag {
+  color: var(--amber);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.cgp-node-sig {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Editor -------------------------------------------------------------- */
+
+.cgp-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cgp-editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cgp-editor-scope {
+  flex: 0 0 auto;
+}
+.cgp-editor-scope button {
+  font-size: var(--text-xs);
+  padding: 2px 9px;
+}
+
+.cgp-editor-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  min-width: 0;
+}
+.cgp-editor-path em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.cgp-dirty {
+  font-size: var(--text-xs);
+  color: var(--amber);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--amber) 15%, transparent);
+}
+
+.cgp-editor-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* --- Inspektor: Steckbrief, Datenfluss, Wichtigeres ---------------------- */
+
+.cgp-what h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cgp-explain-btn {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 3px 9px;
+}
+
+.cgp-nodoc {
+  margin: 0 0 6px;
+}
+
+/* Der Steckbrief: aus dem Index zusammengefasst, nicht aus dem Code gelesen.
+   Deshalb sieht er anders aus als der Docstring darüber. */
+.cgp-summary {
+  margin: 0 0 8px;
+  padding-left: 16px;
+  display: grid;
+  gap: 3px;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.cgp-summary li::marker {
+  color: var(--muted);
+}
+
+.cgp-explain-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  margin: 6px 0 0;
+}
+
+.cgp-explanation {
+  margin-top: 8px;
+  padding: 8px 4px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.cgp-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.cgp-flow-side {
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.cgp-flow-side--in {
+  border-left: 3px solid var(--accent);
+}
+.cgp-flow-side--out {
+  border-left: 3px solid var(--accent-2);
+}
+
+.cgp-flow-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.cgp-flow-label--effects {
+  margin-top: 4px;
+}
+
+.cgp-stronger h4 {
+  color: var(--amber);
+  gap: 6px;
+}
+.cgp-stronger .cg-row {
+  align-items: center;
+}
+
+/* Die Zeilen des betrachteten Symbols im Editor. Dezent — es soll den Blick
+   führen, nicht den Code übertönen. */
+.cgp-span-line {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.cgp-span-gutter {
+  background: var(--accent);
+  width: 3px !important;
+  margin-left: 3px;
+}
+
+/* --- Bereichskarte (Cluster) --------------------------------------------- */
+
+/* Eine Kachel ist grösser als ein Symbolknoten, weil sie mehr beantworten muss:
+   Name, Ordner, Zweck, Profil, Grösse, Vermutungsanteil. Ein Bereich, den man
+   anklicken soll, ohne zu wissen, was drin ist, wäre nur ein hübscher Kasten. */
+.cgp-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+}
+.cgp-cluster--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent), var(--shadow-soft);
+}
+/* Ein Name von einem früheren Stand wird gedämpft, nicht versteckt: er ist noch
+   nützlich, aber er ist keine Aussage über den Bereich, der jetzt dort steht. */
+.cgp-cluster--stale {
+  border-style: dashed;
+}
+.cgp-cluster--stale .cgp-cluster-name {
+  color: var(--muted);
+}
+
+.cgp-cluster-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cgp-cluster-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cgp-cluster-flag {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  color: var(--amber);
+}
+.cgp-cluster-open {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 1px 2px;
+}
+.cgp-cluster-open:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Der Pfad steht immer da, auch neben einem Modellnamen — ohne ihn liesse sich
+   „Datenbeschaffung" nicht nachprüfen. */
+.cgp-cluster-path {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cgp-cluster-purpose {
+  font-size: 10.5px;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cgp-cluster-bars {
+  display: flex;
+  gap: 2px;
+  height: 4px;
+  margin-top: 2px;
+}
+.cgp-cluster-bar {
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  min-width: 4px;
+}
+.cgp-cluster-bar--class,
+.cgp-cluster-bar--interface {
+  background: color-mix(in srgb, var(--violet, #8b5cf6) 55%, transparent);
+}
+.cgp-cluster-bar--route,
+.cgp-cluster-bar--db_table {
+  background: color-mix(in srgb, var(--amber) 55%, transparent);
+}
+.cgp-cluster-bar--test {
+  background: color-mix(in srgb, var(--green, #10b981) 55%, transparent);
+}
+
+.cgp-cluster-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+/* Eine Ringkante ist gestrichelt *und* rot: sie ist von der Schichtung
+   ausgenommen, und das darf nicht so aussehen wie eine gewöhnliche Kante. */
+.cgp-cluster-edge--ring path {
+  stroke: var(--red, #ef4444) !important;
+  stroke-dasharray: 3 3 !important;
+}
+
+.cgp-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+.cgp-crumb:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.cgp-crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+.cgp-crumb-sep {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.cgp-map-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border-top: 1px solid var(--line);
+}
+
+.cg-spin {
+  animation: cg-spin 1.1s linear infinite;
+}
+@keyframes cg-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --- Gespräch ------------------------------------------------------------ */
+
+.cgp-chat {
+  min-height: 0;
+}
+.cgp-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cgp-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Die Frage steht als eigener Block über der Antwort, nicht als Zeile darin —
+   in einem Faden muss auf einen Blick klar sein, wo ein Zug anfängt. */
+.cgp-turn-question {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 5px 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+}
+
+.cgp-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.cgp-activity li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cgp-chat-input {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  flex-wrap: wrap;
+}
+.cgp-chat-input textarea {
+  flex: 1 1 160px;
+  min-width: 0;
+  resize: vertical;
+  font-size: var(--text-sm);
+}
+
+/* --- Trefferliste unter einer Antwort ------------------------------------ */
+
+.cgp-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.cgp-focus-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-xs);
+}
+.cgp-focus-group {
+  display: grid;
+  gap: 2px;
+}
+.cgp-focus-area {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: none;
+}
+
+/* Der Grund, aus dem eine Zeile hier steht. „Zitiert" und „nur gefunden" sind
+   verschieden starke Aussagen und dürfen nicht gleich aussehen — das ist
+   dieselbe Regel wie ●◐○ bei den Kanten, nur eine Ebene höher. */
+.cgp-why {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: help;
+}
+.cgp-why--zitiert {
+  color: var(--green, #10b981);
+  border-color: color-mix(in srgb, var(--green, #10b981) 45%, transparent);
+  background: color-mix(in srgb, var(--green, #10b981) 12%, transparent);
+}
+.cgp-why--spur {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.cgp-why--nachgeschlagen {
+  color: var(--text);
+}
+.cgp-why--vorabsuche {
+  opacity: 0.75;
+  border-style: dashed;
+}
+
+/* --- Karte über eine Trefferliste ---------------------------------------- */
+
+.cgp-feature {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.cgp-feature-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* --- Warum so gebaut ------------------------------------------------------ */
+
+.cgp-why-panel h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Die beiden Hälften müssen auch *optisch* zwei Dinge sein. Ein gemeinsamer
+   Absatz liesse eine Herleitung wie einen Commit-Betreff aussehen. */
+.cgp-why-block {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.cgp-why-block--derived {
+  /* Gestrichelt, wie eine geratene Kante auf der Karte — dieselbe Aussage:
+     das hier ist nicht belegt, sondern abgeleitet. */
+  border-style: dashed;
+  background: transparent;
+}
+
+.cgp-why-tag {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cgp-why-tag--derived {
+  color: var(--accent);
+}
+
+.cgp-commits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-xs);
+}
+.cgp-commits li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cgp-commits code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.cgp-commit-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cgp-kept {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 6px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+.cgp-kept p {
+  margin: 0;
+  grid-column: 1;
+}
+.cgp-kept button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: start;
+}
+/* Überholt heisst: gilt für einen anderen Stand der Datei. Sichtbar, nicht weg. */
+.cgp-kept--stale {
+  border-left-color: var(--muted);
+  opacity: 0.72;
+}
+.cgp-kept--stale em {
+  font-style: normal;
+  color: var(--warn, #d97706);
+}
+
+.cgp-keep {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.cgp-keep textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: vertical;
+  font-size: var(--text-xs);
+}
+
+/* --- Checkpoint-Leiste (Stufe 2) ----------------------------------------- */
+.cg-checkpoint-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border, #d0d6dd);
+  background: var(--surface-1, #f6f7f9);
+  font-size: var(--text-xs, 12px);
+  flex-wrap: wrap;
+  position: relative;
+}
+.cg-ckpt-sichern,
+.cg-ckpt-toggle {
+  border: 1px solid var(--border, #d0d6dd);
+  background: var(--surface, #fff);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.cg-ckpt-sichern:hover,
+.cg-ckpt-toggle:hover {
+  background: var(--surface-2, #eef0f3);
+}
+.cg-ckpt-error {
+  color: var(--danger, #b3261e);
+}
+.cg-ckpt-list {
+  position: absolute;
+  top: 100%;
+  left: 12px;
+  z-index: 20;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d0d6dd);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  max-height: 320px;
+  overflow: auto;
+  min-width: 320px;
+}
+.cg-ckpt-empty {
+  padding: 10px 12px;
+  color: var(--text-muted, #6b7280);
+}
+.cg-ckpt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft, #e7eaee);
+}
+.cg-ckpt-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cg-ckpt-reason {
+  font-weight: 600;
+  font-size: var(--text-xs, 12px);
+}
+.cg-ckpt-label {
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cg-ckpt-time,
+.cg-ckpt-files {
+  font-size: var(--text-xxs, 11px);
+  color: var(--text-muted, #6b7280);
+}
+.cg-ckpt-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.cg-ckpt-actions button {
+  border: 1px solid var(--border, #d0d6dd);
+  background: var(--surface, #fff);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: var(--text-xxs, 11px);
+}
+.cg-ckpt-preview {
+  position: absolute;
+  top: 100%;
+  right: 12px;
+  z-index: 21;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d0d6dd);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  padding: 10px 12px;
+  min-width: 300px;
+  max-width: 420px;
+}
+.cg-ckpt-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.cg-ckpt-preview-list {
+  margin: 0 0 6px;
+  padding-left: 16px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: var(--text-xxs, 11px);
+}
+.cg-ckpt-preview-list code {
+  font-weight: 600;
+  margin-right: 4px;
+}
+.cg-ckpt-preview-note {
+  color: var(--text-muted, #6b7280);
+  font-size: var(--text-xxs, 11px);
+  margin-bottom: 6px;
+}
+.cg-ckpt-apply {
+  width: 100%;
+  border: none;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.cg-ckpt-apply:disabled {
+  opacity: 0.6;
+}
+.cg-ckpt-cancel {
+  border: 1px solid var(--border, #d0d6dd);
+  background: var(--surface, #fff);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+/* --- Auswirkungsanalyse (Stufe 2) ---------------------------------------- */
+.cg-impact {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+.cg-impact-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: var(--text-xs, 12px);
+  color: var(--text-muted, #6b7280);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft, #e7eaee);
+}
+.cg-impact-summary b {
+  color: var(--text, #1f2937);
+  font-size: var(--text-sm, 14px);
+}
+.cg-impact-truncated {
+  color: var(--warn, #b7791f);
+  font-weight: 600;
+}
+.cg-impact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cg-impact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs, 12px);
+}
+.cg-impact-hops {
+  margin-left: auto;
+  color: var(--text-muted, #6b7280);
+}
+.cg-impact-kind {
+  color: var(--text-muted, #6b7280);
+  font-size: var(--text-xxs, 11px);
+}
+.cg-impact-files {
+  width: 100%;
+  font-size: var(--text-xs, 12px);
+  border-collapse: collapse;
+}
+.cg-impact-files th,
+.cg-impact-files td {
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid var(--border-soft, #e7eaee);
+}
+.cg-impact-files th {
+  color: var(--text-muted, #6b7280);
+  font-weight: 600;
+}
+.cg-impact-dialog {
+  position: absolute;
+  inset: 0;
+  background: var(--surface, #fff);
+  border-top: 1px solid var(--border, #d0d6dd);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--text-xs, 12px);
+  z-index: 10;
+}
+.cg-impact-dialog-head b {
+  font-weight: 600;
+}
+.cg-impact-dialog-list {
+  margin: 0;
+  padding-left: 16px;
+  max-height: 140px;
+  overflow: auto;
+  font-size: var(--text-xxs, 11px);
+}
+.cg-impact-skip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted, #6b7280);
+}
+.cg-impact-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+/* --- Spaghetti-Löser (Knäuel) ------------------------------------------------ */
+.cg-tangle { display: flex; flex-direction: column; gap: 12px; padding: 8px 4px; }
+.cg-tangle-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cg-tangle-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 2px 0; }
+.cg-tangle-rules { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.cg-tangle-rule {
+  font-size: 11px; padding: 1px 5px; border-radius: 8px;
+  background: var(--wk-tag-bg, rgba(220, 120, 40, 0.16)); color: var(--wk-tag-fg, #c2410c);
+  font-variant-numeric: tabular-nums;
+}
+.cg-tangle-cyclebar { display: inline-flex; gap: 4px; margin-bottom: 6px; }
+.cg-tangle-cyclebar button { font-size: 12px; padding: 2px 8px; border-radius: 6px; }
+.cg-tangle-cyclebar button.active { background: var(--wk-accent, #2563eb); color: #fff; }
+.cg-tangle-cycles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cg-tangle-cycle { border: 1px dashed var(--wk-border, rgba(120,120,120,0.4)); border-radius: 6px; padding: 6px 8px; }
+.cg-tangle-cycle-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.cg-tangle-cycle-size { font-size: 12px; opacity: 0.85; }
+.cg-tangle-cycle-nodes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.cg-tangle-cycle-edges { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cg-tangle-cycle-edges li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.cg-tangle-edge-kind { opacity: 0.7; font-size: 11px; }
+.cg-tangle-propose { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.cg-tangle-activity { font-size: 12px; opacity: 0.8; }
+.cg-tangle-proposal { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.cg-tangle-begruendung { margin: 0; font-size: 13px; }
+.cg-tangle-errors { list-style: none; margin: 0; padding: 6px 8px; border-radius: 6px;
+  background: rgba(220, 60, 60, 0.12); color: #b91c1c; font-size: 12px; }
+.cg-tangle-dateien { display: flex; flex-wrap: wrap; gap: 6px; }
+.cg-tangle-dateien code { font-size: 12px; }
+.cg-tangle-deleted { color: #b91c1c; }
+.cg-tangle-applied { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }

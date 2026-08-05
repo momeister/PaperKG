@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import { ChevronLeft, ChevronRight, ExternalLink, Languages, Layers, MapPin, Maximize2, PanelRightClose, Plus, Search, StickyNote, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Languages, Layers, Loader2, MapPin, Maximize2, PanelRightClose, Plus, Search, StickyNote, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
@@ -72,6 +72,12 @@ type PdfPaneProps = {
   activeEvidenceIndex?: number;
   onActiveEvidenceChange?: (index: number) => void;
   onCollapse?: () => void;
+  onIngestMissing?: (paperId: string) => void;
+  ingestPending?: boolean;
+  /** Status text from the ingest flow (success / error / progress hint). Shown
+   *  inside the "Kein PDF verfügbar" placeholder so the user sees feedback right
+   *  where they clicked "PDF nachladen". */
+  ingestStatus?: string;
 };
 
 export function PdfPane({
@@ -82,7 +88,10 @@ export function PdfPane({
   evidences = [],
   activeEvidenceIndex = 0,
   onActiveEvidenceChange,
-  onCollapse
+  onCollapse,
+  onIngestMissing,
+  ingestPending,
+  ingestStatus
 }: PdfPaneProps) {
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [pageCount, setPageCount] = useState<number>(0);
@@ -637,6 +646,27 @@ export function PdfPane({
                 <a className="pdf-placeholder-link" href={sourceMeta.external_url} target="_blank" rel="noreferrer">
                   Quelle öffnen ↗
                 </a>
+              ) : null}
+              {onIngestMissing && metaPaperId ? (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={ingestPending}
+                  onClick={() => onIngestMissing(metaPaperId)}
+                >
+                  {ingestPending ? (
+                    <>
+                      <Loader2 size={14} className="spin" /> Lädt…
+                    </>
+                  ) : (
+                    "PDF nachladen"
+                  )}
+                </button>
+              ) : null}
+              {ingestStatus ? (
+                <p className={ingestPending ? "pdf-ingest-status pdf-ingest-status--pending" : "pdf-ingest-status"}>
+                  {ingestStatus}
+                </p>
               ) : null}
             </>
           ) : "Quelle wählen"}

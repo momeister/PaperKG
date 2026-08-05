@@ -349,6 +349,24 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
 def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
     if not request.items:
         raise HTTPException(status_code=400, detail="Select at least one PDF.")
+    # Job-Zeile sofort anlegen, bevor irgendetwas Langsames passiert. Das Frontend
+    # erzeugt die job_id selbst und pollt /extraction/batch/{id}/items ab dem
+    # Abschicken — wird die Zeile erst in process_papers geschrieben (nach der
+    # PDF-Aufloesung), antwortet jeder Poll bis dahin mit 404.
+    if request.job_id:
+        try:
+            with MetadataDB(request.metadata_db_path) as db:
+                if not db.get_batch_job(request.job_id):
+                    db.upsert_batch_job(
+                        job_id=request.job_id,
+                        status="processing",
+                        papers_total=len(request.items),
+                        papers_processed=0,
+                        papers_failed=0,
+                    )
+        except Exception:
+            # Reine Sichtbarkeits-Optimierung: process_papers legt die Zeile ohnehin an.
+            logger.debug("Vorab-Registrierung des Batch-Jobs fehlgeschlagen", exc_info=True)
     pdf_paths: dict[str, str] = {}
     abstract_texts: dict[str, str] = {}
     for item in request.items:
@@ -438,6 +456,59 @@ def extraction_history(
     with MetadataDB(metadata_db_path) as db:
         items = db.get_paper_extractions(paper_id, limit=limit) if paper_id.strip() else db.list_extraction_results(limit=limit)
     return {"items": items, "total": len(items)}
+
+
+@router.get("/extraction/quality")
+def extraction_quality(
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+    paper_id: str = "",
+    limit: int = Query(default=50, ge=1, le=500),
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        items = db.list_extraction_quality(paper_id or None, limit=limit)
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/extraction/results/{result_id}")
+def get_extraction_result_route(
+    result_id: int,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        data = db.get_extraction_result(result_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Extraction result not found")
+    return data
+
+
+@router.get("/extraction/results/{result_id}/raw")
+def get_extraction_result_raw(
+    result_id: int,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        data = db.get_extraction_result(result_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Extraction result not found")
+    raw = data.get("raw_response")
+    if isinstance(raw, (dict, list)):
+        raw = json.dumps(raw, ensure_ascii=False, indent=2)
+    return {"result_id": result_id, "raw_response": raw}
+
+
+@router.get("/extraction/compare")
+def extraction_compare(
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
+    paper_id: str = Query(..., min_length=1),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> dict[str, Any]:
+    with MetadataDB(metadata_db_path) as db:
+        items = db.get_paper_extractions(paper_id, limit=limit)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        key = str(item.get("llm_model") or item.get("llm_provider") or "unknown")
+        groups.setdefault(key, []).append(item)
+    return {"paper_id": paper_id, "groups": groups, "total": len(items)}
 
 
 @router.get("/extraction/vocabulary")

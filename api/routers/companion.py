@@ -45,6 +45,9 @@ class CompanionAskRequest(BaseModel):
     # Quellen-Modus: ground the answer in local paper hits and/or a web search.
     use_papers: bool = False
     use_web: bool = False
+    # Code-Graph eines Werkstatt-Projekts als dritte Quelle (Stufe 6).
+    use_code: bool = False
+    code_project_id: str | None = None
     # Optional durable chat: persist question + answer into this companion session.
     session_id: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
@@ -59,6 +62,9 @@ class CompanionGuideRequest(BaseModel):
     model: str | None = None
     use_papers: bool = False
     use_web: bool = False
+    # Code-Graph eines Werkstatt-Projekts als dritte Quelle (Stufe 6).
+    use_code: bool = False
+    code_project_id: str | None = None
     session_id: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
@@ -116,6 +122,9 @@ class GuideStartRequest(BaseModel):
     monitor: int | None = None
     use_papers: bool = False
     use_web: bool = False
+    # Code-Graph eines Werkstatt-Projekts als dritte Quelle (Stufe 6).
+    use_code: bool = False
+    code_project_id: str | None = None
     session_id: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
@@ -182,7 +191,11 @@ async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
         params["debug_dir"] = str(cfg.get("debug_dir") or "data/companion_debug")
     history = [turn.model_dump() for turn in request.history]
     context_blocks, sources = await pm._companion_context(
-        request.question, request.use_papers, request.use_web
+        request.question,
+        request.use_papers,
+        request.use_web,
+        request.use_code,
+        request.code_project_id,
     )
     try:
         result = await asyncio.to_thread(
@@ -215,7 +228,11 @@ async def companion_ask(request: CompanionAskRequest) -> dict[str, Any]:
     params = pm._companion_llm_params(request.provider, request.model)
     history = [turn.model_dump() for turn in request.history]
     context_blocks, sources = await pm._companion_context(
-        request.question, request.use_papers, request.use_web
+        request.question,
+        request.use_papers,
+        request.use_web,
+        request.use_code,
+        request.code_project_id,
     )
     try:
         answer = await asyncio.to_thread(
@@ -405,6 +422,8 @@ async def self_drive_step(request: SelfDriveStepRequest) -> dict[str, Any]:
                 query,
                 bool(lookup_cfg.get("use_papers", False)),
                 bool(lookup_cfg.get("use_web", True)),
+                bool(lookup_cfg.get("use_code", False)),
+                lookup_cfg.get("code_project_id"),
             )
             self_drive.inject_lookup_result(session, query, blocks)
             _persist_message(
@@ -470,9 +489,13 @@ async def guide_start(request: GuideStartRequest) -> dict[str, Any]:
     verify_cfg = _companion_sub_config("verify")
     params = pm._companion_llm_params(request.provider, request.model)
     context_blocks: list[str] = []
-    if request.use_papers or request.use_web:
+    if request.use_papers or request.use_web or request.use_code:
         context_blocks, _sources = await pm._companion_context(
-            request.goal, request.use_papers, request.use_web
+            request.goal,
+            request.use_papers,
+            request.use_web,
+            request.use_code,
+            request.code_project_id,
         )
     session = pm._GUIDE_STORE.create(
         goal=request.goal,

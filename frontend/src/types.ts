@@ -219,6 +219,10 @@ export type CitationLink = {
   score?: number;
   context?: string;
   approximate?: boolean;
+  /** Three-level confidence label. `high` = exact/strong match, `medium` = usable
+   * lexical match, `low` = weak/no overlap (UI shows as approximate). Backward
+   * compat: `approximate` is also set when confidence == "low". */
+  confidence?: "high" | "medium" | "low";
   /** "model" when the LLM itself bound this citation to an evidence item ([pid#N]). */
   binding?: string;
 };
@@ -472,6 +476,58 @@ export type ExtractionHistoryItem = {
   method_candidates?: Array<Record<string, unknown>>;
   relations?: Array<Record<string, unknown>>;
   quality_warnings?: string[];
+  error_message?: string | null;
+};
+
+export type ExtractionQualityRow = {
+  id?: number;
+  paper_id: string;
+  concept_count?: number | null;
+  method_count?: number | null;
+  claim_count?: number | null;
+  has_formulas?: boolean | null;
+  parse_quality?: string | null;
+  call_1_tokens_used?: number | null;
+  call_2_tokens_used?: number | null;
+  duration_seconds?: number | null;
+  model?: string | null;
+  provider?: string | null;
+  context_policy?: string | null;
+  whole_context_used?: boolean | null;
+  chunk_count?: number | null;
+  estimated_prompt_tokens?: number | null;
+  context_margin_tokens?: number | null;
+  context_fallback_reason?: string | null;
+  timestamp?: string | null;
+};
+
+export type ExtractionResultDetail = {
+  id: number;
+  paper_id: string;
+  paper_type?: string | null;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+  extraction_status?: string | null;
+  extraction_timestamp?: string | null;
+  extraction_duration_seconds?: number | null;
+  concepts?: Array<Record<string, unknown>>;
+  methods?: Array<Record<string, unknown>>;
+  concept_candidates?: Array<Record<string, unknown>>;
+  method_candidates?: Array<Record<string, unknown>>;
+  relations?: Array<Record<string, unknown>>;
+  claims?: Array<Record<string, unknown>>;
+  cross_domain_hints?: Array<Record<string, unknown>>;
+  terminology_conflicts?: Array<Record<string, unknown>>;
+  temporal_coverage?: Record<string, unknown>;
+  mathematical_content?: Record<string, unknown>;
+  language_detected?: string | null;
+  quality_warnings?: string[];
+  metadata_status?: string | null;
+  blocking_errors?: string[];
+  candidate_count?: number | null;
+  extraction_diagnostics?: Record<string, unknown>;
+  context_diagnostics?: Record<string, unknown>;
+  raw_response?: unknown;
   error_message?: string | null;
 };
 
@@ -1044,6 +1100,75 @@ export type GitDiff = {
   error?: string | null;
 };
 
+// --- Git-Checkpoints (Stufe 2) — ein Weg zurueck, ohne die Stage anzufassen ---
+export type CheckpointReason =
+  | "manual"
+  | "auto_symbol_write"
+  | "auto_file_write"
+  | "auto_refactor"
+  | "auto_sandbox_apply"
+  | "pre_restore";
+
+export type Checkpoint = {
+  id: string;
+  code_project_id: string;
+  ref_name: string;
+  commit_sha: string;
+  tree_sha: string | null;
+  parent_sha: string | null;
+  label: string | null;
+  reason: CheckpointReason | string;
+  file_count: number;
+  created_timestamp: string | null;
+};
+
+export type CheckpointResult = {
+  checkpoint: Checkpoint | null;
+  reason: string;
+  error?: string | null;
+};
+
+export type CheckpointDiffEntry = { status: string; path: string };
+
+export type CheckpointRestorePlan = {
+  available: boolean;
+  entries: CheckpointDiffEntry[];
+  plan_hash: string;
+  commit_sha: string;
+};
+
+export type CheckpointRestoreResult = {
+  applied: boolean;
+  reason?: string;
+  commit_sha?: string;
+  backup_ref?: string | null;
+  backup_sha?: string | null;
+  entries?: { path: string; status: string; action: string; reason?: string }[];
+};
+
+// --- Was-wäre-wenn-Sandbox (Stufe 2, git worktree) ---
+export type Sandbox = {
+  id: string;
+  code_project_id: string;
+  checkpoint_id: string | null;
+  base_sha: string | null;
+  path: string | null;
+  status: string;
+  test_command: string | null;
+  last_exit_code: number | null;
+  last_run_timestamp: string | null;
+  created_timestamp: string | null;
+};
+
+export type SandboxRunResult = {
+  returncode: number;
+  stdout: string;
+  stderr: string;
+  timed_out: boolean;
+  duration_s: number;
+  command: string[];
+};
+
 // --- Zitat-Nachcheck (Claim gegen Quelle prüfen) ---
 export type ClaimCheckVerdict = "supported" | "partially_supported" | "not_supported" | "insufficient_evidence";
 
@@ -1154,4 +1279,765 @@ export type PdfAnnotation = {
   color?: string | null;
   created_timestamp?: string;
   updated_timestamp?: string;
+};
+
+// --- Code-Graph (CodeSearch) -------------------------------------------------
+// Spiegel der Rust-Strukturen aus codesearch/crates/cs-graph. Zwei Dinge sind
+// hier nicht verhandelbar:
+//
+//   * `CodeNodeId` ist ein **String** (16 Hex-Zeichen). Es ist ein 64-Bit-Hash;
+//     als `number` verlöre er in JavaScript stillschweigend seine unteren Bits
+//     und zeigte auf ein anderes Symbol.
+//   * Jede Beziehung trägt `confidence` und ihre Belegstelle. Wer eine Kante
+//     anzeigt, ohne beides danebenzustellen, macht aus einer Vermutung eine
+//     Tatsache — genau das, was dieses Werkzeug verhindern soll.
+
+export type CodeNodeId = string;
+
+/** Wie sicher ist diese Beziehung? Geordnet: measured schlägt alles. */
+export type CodeConfidence = "guessed" | "resolved" | "verified" | "measured";
+
+export type CodeNodeKind =
+  | "file" | "module" | "class" | "interface" | "function" | "method" | "field"
+  | "global" | "route" | "db_table" | "db_column" | "test" | "config_key"
+  | "external_package" | "dynamic_gap";
+
+export type CodeEdgeKind =
+  | "contains" | "calls" | "imports" | "inherits" | "implements" | "reads"
+  | "writes" | "param_type" | "returns_type" | "throws" | "tested_by"
+  | "touches_table" | "handles_route" | "gated_by";
+
+/**
+ * Dieselben Arten als Werte, in Anzeigereihenfolge. Die `satisfies`-Klausel
+ * sorgt dafür, dass ein neuer Name im Typ oben hier einen Fehler auslöst statt
+ * still zu fehlen — beide Listen spiegeln `cs-core/src/lib.rs:140-236`, ebenso
+ * wie `ALL_EDGE_KINDS`/`ALL_NODE_KINDS` in `api/routers/codegraph.py`.
+ */
+export const CODE_EDGE_KINDS = [
+  "calls", "reads", "writes", "contains", "imports", "inherits", "implements",
+  "param_type", "returns_type", "throws", "tested_by", "touches_table",
+  "handles_route", "gated_by",
+] as const satisfies readonly CodeEdgeKind[];
+
+export const CODE_NODE_KINDS = [
+  "function", "method", "class", "interface", "module", "file", "field",
+  "global", "route", "test", "db_table", "db_column", "config_key",
+  "external_package", "dynamic_gap",
+] as const satisfies readonly CodeNodeKind[];
+
+export type CodeDirection = "in" | "out" | "both";
+
+export type CodeSpan = {
+  start_byte: number;
+  end_byte: number;
+  start_line: number;
+  end_line: number;
+};
+
+export type CodeSymbolHit = {
+  id: CodeNodeId;
+  name: string;
+  qualified: string;
+  kind: CodeNodeKind;
+  lang: string;
+  path: string;
+  line: number;
+  relevance: number;
+};
+
+export type CodeTextHit = {
+  path: string;
+  line: number;
+  text: string;
+  in_symbol: CodeNodeId | null;
+};
+
+export type CodeParam = {
+  name: string;
+  type_name?: string | null;
+  default?: string | null;
+};
+
+export type CodeFacts = {
+  signature: string;
+  params: CodeParam[];
+  returns?: string | null;
+  throws: string[];
+  side_effects: string[];
+  complexity: number;
+  loc: number;
+  max_nesting: number;
+  callers: number;
+  callees: number;
+  pure?: boolean | null;
+  weakest_edge?: CodeConfidence | null;
+};
+
+export type CodeMetrics = {
+  pagerank: number;
+  fan_in: number;
+  fan_out: number;
+  reach_depth?: number | null;
+  churn: number;
+  risk: number;
+  authors: number;
+  last_touched?: number | null;
+  coverage?: number | null;
+  hits?: number | null;
+  relevance: number;
+};
+
+export type CodeNodeDetail = {
+  id: CodeNodeId;
+  name: string;
+  qualified: string;
+  kind: CodeNodeKind;
+  lang: string;
+  path: string;
+  span: CodeSpan;
+  parent: CodeNodeId | null;
+  doc?: string | null;
+  facts?: CodeFacts | null;
+  metrics: CodeMetrics;
+};
+
+/** Ein Nachbar im Graphen — samt Sicherheitsstufe und Fundstelle des Belegs. */
+export type CodeNeighbour = {
+  node: CodeSymbolHit;
+  kind: CodeEdgeKind;
+  confidence: CodeConfidence;
+  evidence_path: string;
+  evidence_line: number;
+  /** >1 heißt: der Name passt auf mehrere Ziele, es ist eine Vermutung. */
+  candidates: number;
+  occurrences: number;
+};
+
+/**
+ * Eine Kante im Ausschnitt. `from`/`to` sind Hex-Strings — nie `Number()`.
+ *
+ * `evidence_path`/`evidence_line` zeigen auf die *Aufrufstelle*, nicht auf das
+ * Ziel: „hier steht der Beleg für diese Beziehung".
+ */
+export type CodeSliceEdge = {
+  from: CodeNodeId;
+  to: CodeNodeId;
+  kind: CodeEdgeKind;
+  confidence: CodeConfidence;
+  occurrences: number;
+  evidence_line: number;
+  evidence_path: string;
+};
+
+export type CodeGraphSlice = {
+  nodes: CodeSymbolHit[];
+  edges: CodeSliceEdge[];
+  /** Das Budget war erschöpft — der Ausschnitt ist gekürzt, nicht vollständig. */
+  truncated: boolean;
+};
+
+export type CodePathStep = {
+  id: CodeNodeId;
+  name: string;
+  qualified: string;
+  path: string;
+  line: number;
+};
+
+/** `null` heißt „kein **Aufruf**pfad" — verfolgt werden nur calls/reads/writes. */
+export type CodePathResult = { path: CodePathStep[] | null };
+
+// --- Auswirkungsanalyse (Stufe 2) — „was bricht, wenn ich das ändere?" ---
+export type CodeImpactNode = {
+  node: CodeSymbolHit;
+  /** Hop-Distanz vom geänderten Symbol; 1 = direkter Aufrufer. */
+  hops: number;
+  /** Schwächste Sicherheitsstufe entlang des besten Pfades. */
+  confidence: CodeConfidence;
+};
+
+export type CodeImpactFile = {
+  path: string;
+  symbols: number;
+  churn: number;
+  risk: number;
+};
+
+export type CodeImpact = {
+  root: CodeNodeId;
+  max_depth: number;
+  reached: CodeImpactNode[];
+  direct_callers: CodeNeighbour[];
+  tests: CodeSymbolHit[];
+  dynamic_gaps: CodeSymbolHit[];
+  files: CodeImpactFile[];
+  truncated: boolean;
+  edge_kinds: string[];
+};
+
+// --- Spaghetti-Löser (Stufe 2) — Diagnose ohne LLM, Vorschlag mit LLM ---
+export type HotspotRule = {
+  /** Welche Regel gerissen wurde: ``loc``/``complexity``/``max_nesting``/``fan_in``/``fan_out``/``churn``. */
+  rule: string;
+  /** Der gemessene Wert — das Belegprinzip auf Zahlen. */
+  value: number;
+  threshold: number;
+};
+
+export type Hotspot = {
+  node: CodeSymbolHit;
+  loc: number;
+  complexity: number;
+  max_nesting: number;
+  fan_in: number;
+  fan_out: number;
+  churn: number;
+  risk: number;
+  rules: HotspotRule[];
+};
+
+export type CycleEdge = {
+  from: CodeNodeId;
+  to: CodeNodeId;
+  kind: string;
+  confidence: CodeConfidence;
+  evidence_path: string;
+  evidence_line: number;
+};
+
+export type CycleNode = {
+  id: CodeNodeId;
+  path: string;
+  name: string;
+  kind: string;
+  line: number;
+};
+
+export type Cycle = {
+  level: "file" | "symbol";
+  size: number;
+  nodes: CycleNode[];
+  edges: CycleEdge[];
+  weakest: CodeConfidence;
+};
+
+export type RefactorProposal = {
+  node_id: CodeNodeId;
+  begruendung: string;
+  dateien: { pfad: string; inhalt: string }[];
+  geloescht: string[];
+  valid: boolean;
+  errors: string[];
+  provider: string;
+  model: string;
+};
+
+// --- Diagramme ---------------------------------------------------------------
+// Auch hier gilt die Regel: jede Kante trägt Sicherheitsstufe und Belegstelle.
+// Ein Diagramm ist das Autoritativste, was ein Werkzeug ausgeben kann — ohne die
+// Marker würde es eine geratene Kante in eine gezeichnete Tatsache verwandeln.
+
+export type CodeDiagramMember = {
+  name: string;
+  kind: CodeNodeKind;
+  signature?: string | null;
+};
+
+export type CodeDiagramClass = {
+  id: CodeNodeId;
+  name: string;
+  path: string;
+  line: number;
+  kind: CodeNodeKind;
+  members: CodeDiagramMember[];
+};
+
+export type CodeDiagramEdge = {
+  from: string;
+  to: string;
+  kind: CodeEdgeKind;
+  confidence: CodeConfidence;
+  evidence_path: string;
+  evidence_line: number;
+};
+
+export type CodeSequenceStep = {
+  from: string;
+  to: string;
+  to_id: CodeNodeId;
+  confidence: CodeConfidence;
+  candidates: number;
+  evidence_path: string;
+  evidence_line: number;
+};
+
+export type CodeDiagram = {
+  classes: CodeDiagramClass[];
+  inherits: CodeDiagramEdge[];
+  sequence: CodeSequenceStep[];
+};
+
+export type CodeBlueprint = {
+  focus: CodeNodeDetail;
+  callers: CodeNeighbour[];
+  callees: CodeNeighbour[];
+  children: CodeNeighbour[];
+};
+
+export type CodeStats = {
+  files: number;
+  parsed_files: number;
+  nodes: number;
+  edges: number;
+  guessed_edges: number;
+  dynamic_gaps: number;
+};
+
+export type CodeHotFile = {
+  path: string;
+  churn: number;
+  risk: number;
+};
+
+export type CodeOverview = {
+  stats: CodeStats;
+  important: CodeSymbolHit[];
+  hot_files: CodeHotFile[];
+  dependencies: CodeSymbolHit[];
+  gaps: CodeSymbolHit[];
+};
+
+/**
+ * Ein Bereich des Projekts — ein Pfad-Präfix und alles darunter.
+ *
+ * Die Identität ist der `path`, nicht eine ID: Bereiche sind Ordner, und ein
+ * Ordner ist über seinen Pfad eindeutig und im Deep-Link lesbar.
+ */
+export type CodeCluster = {
+  path: string;
+  /** Ordnername oder, wenn hinterlegt, der vom Modell vergebene Name. */
+  label: string;
+  depth: number;
+  has_children: boolean;
+  symbols: number;
+  files: number;
+  kinds: [CodeNodeKind, number][];
+  relevance: number;
+  /** Anteil geratener ausgehender Beziehungen, 0..1. */
+  guessed_share: number;
+  top_symbols: CodeSymbolHit[];
+  fingerprint: string;
+  /** `directory` = Ordnername, `llm` = vom Modell benannt. */
+  label_source: "directory" | "llm";
+  /** Ein Satz zum Zweck — nur bei `label_source === "llm"`. */
+  purpose: string | null;
+  /** Der hinterlegte Name passt nicht mehr zur jetzigen Gestalt des Bereichs. */
+  label_stale: boolean;
+};
+
+/**
+ * Eine aufsummierte Beziehung zwischen zwei Bereichen.
+ *
+ * `weakest` ist die **schwächste** enthaltene Sicherheitsstufe, nicht die
+ * häufigste: neunzig belegte und zehn geratene Kanten ergeben `guessed`. Sonst
+ * würde auf genau der Zoomstufe, auf der niemand nachsehen kann, aus einer
+ * Vermutung eine Tatsache.
+ */
+export type CodeClusterEdge = {
+  from: string;
+  to: string;
+  count: number;
+  occurrences: number;
+  weakest: CodeConfidence;
+  kinds: [CodeEdgeKind, number][];
+};
+
+export type CodeClusterLevel = {
+  prefix: string;
+  parent: string | null;
+  nodes: CodeCluster[];
+  edges: CodeClusterEdge[];
+};
+
+export type CodeClusterLabel = {
+  id: string;
+  cluster_path: string;
+  label: string;
+  purpose: string | null;
+  source: string;
+};
+
+export type CodeClusterNameEvent =
+  | { event: "activity"; text: string }
+  | { event: "failed"; error: string; kind?: string }
+  | { event: "done"; labels: CodeClusterLabel[]; skipped?: string };
+
+/**
+ * Ein Symbol, das zu einer Frage gehört — mit dem Grund, warum es dasteht.
+ *
+ * `why` ist nicht Zierde. „zitiert" heisst, die Stelle steht belegt in der
+ * Antwort; „vorab-suche" heisst nur, dass sie im Kontext lag und das Modell sie
+ * vielleicht nie gelesen hat. Ohne diesen Unterschied wäre die Trefferliste
+ * eine Behauptung mit dem Aussehen eines Ergebnisses.
+ */
+export type CodeFocusNode = {
+  id: CodeNodeId;
+  name: string;
+  qualified: string;
+  kind: CodeNodeKind;
+  path: string;
+  line: number;
+  relevance: number;
+  why: "zitiert" | "spur" | "nachgeschlagen" | "vorab-suche";
+};
+
+export type CodeChat = {
+  id: string;
+  code_project_id: string;
+  project_id: string | null;
+  title: string | null;
+  /** Die Rust-Sitzung: ein Gespräch = eine Lizenz zum Zitieren. */
+  session_key: string;
+  created_timestamp?: string;
+  updated_timestamp?: string;
+};
+
+export type CodeChatTurn = {
+  id: string;
+  chat_id: string;
+  ordinal: number;
+  question: string;
+  answer: string;
+  citations: CodeCitation[];
+  trail: CodeTrailStep[];
+  focus_nodes: CodeFocusNode[];
+  papers: CodePaperEvidence[];
+  verdict: CodeVerdict | null;
+  tool_calls: number;
+  truncated: boolean;
+  provider: string | null;
+  model: string | null;
+  /** Dieses Modell lief nicht auf diesem Rechner (`:cloud`). */
+  remote_model: boolean;
+  created_timestamp?: string;
+};
+
+export type CodeIndexStatus = {
+  code_project_id: string;
+  name?: string | null;
+  path?: string | null;
+  binary_available: boolean;
+  binary_hint?: string | null;
+  index_exists: boolean;
+  db_path: string;
+  status: "none" | "pending" | "indexing" | "ready" | "failed";
+  stats: CodeStats;
+  skipped: Record<string, number>;
+  duration_ms?: number | null;
+  commits_walked?: number | null;
+  error_message?: string | null;
+  last_indexed_timestamp?: string | null;
+};
+
+/** Phasennamen kommen unverändert aus cs-workspace. */
+export type CodeIndexPhase =
+  | "scanning" | "parsing" | "resolving" | "history" | "ranking" | "done";
+
+export type CodeIndexEvent =
+  | { event: "started"; code_project_id: string }
+  | { event: "progress"; phase: CodeIndexPhase; done: number; total: number; detail: string }
+  | { event: "failed"; error: string }
+  | {
+      event: "done";
+      report: {
+        files_seen: number;
+        files_parsed: number;
+        files_reused: number;
+        files_removed: number;
+        skipped: Record<string, number>;
+        duration_ms: number;
+        commits_walked: number;
+        history_truncated: boolean;
+      };
+      stats: CodeStats;
+    };
+
+export type CodeSourceText = {
+  path: string;
+  text: string;
+  /** Datei hat sich seit dem Indizieren geändert — Zeilennummern passen nicht mehr. */
+  stale: boolean;
+};
+
+/** Der Quelltext *einer Funktion*, nicht der Datei. */
+export type CodeSymbolSource = {
+  node_id: CodeNodeId;
+  qualified: string | null;
+  lang: string | null;
+  path: string;
+  start_line: number;
+  end_line: number;
+  text: string;
+  /**
+   * Der Index kennt einen älteren Stand — die Zeilennummern zeigen woandershin.
+   * Dann wird angezeigt, aber nicht geschrieben.
+   */
+  stale: boolean;
+  /** Zustand der Datei beim Lesen; muss beim Schreiben noch passen. */
+  content_hash: string;
+};
+
+export type CodeSymbolWrite = {
+  node_id: CodeNodeId;
+  path: string;
+  start_line: number;
+  end_line: number;
+  written: boolean;
+  content_hash: string;
+  /** Nach dem Schreiben zeigen die Zeilennummern im Graphen woandershin. */
+  index_stale: boolean;
+};
+
+export type CodeTerminalPosition = {
+  path: string;
+  line: number;
+  node_id: CodeNodeId | null;
+  qualified: string | null;
+};
+
+// --- Der Begleiter: geprüfte Antworten ---------------------------------------
+// Belege werden hier **geprüft, nicht erbeten**. Der Status jedes Zitats kommt
+// aus `cs_llm::citation` (vier Prüfungen: Datei im Index, Zeilen in dieser
+// Sitzung nachgeschlagen, Datei seither unverändert, Zitat byte-gleich) und
+// muss in der Anzeige sichtbar bleiben — ein ungeprüftes Zitat, das aussieht wie
+// ein geprüftes, ist schlimmer als gar keins.
+
+export type CodeCitationStatus =
+  /** Abgerufen, aktuell, wörtlich — der einzige Status, der als Beleg zählt. */
+  | "verified"
+  /** Die Datei gibt es, diese Zeilen hat das Modell aber nie gesehen. */
+  | "not_retrieved"
+  /** Datei seit dem Indizieren geändert — die Zeilennummern bedeuten nichts mehr. */
+  | "stale"
+  /** Keine solche Datei im Index. */
+  | "unknown_file";
+
+export type CodeVerdict = "sound" | "uncited" | "broken";
+
+export type CodeCitation = {
+  path: string;
+  from_line: number;
+  to_line: number;
+  status: CodeCitationStatus;
+  /** Zeichenversätze im Antworttext (im Backend von Bytes auf JS umgerechnet). */
+  start: number;
+  end: number;
+};
+
+export type CodeTrailStep = {
+  path: string;
+  line: number;
+  reason: string;
+  node_id: CodeNodeId | null;
+  /** Falsch heißt: der Schritt zeigt auf Code, den das Modell nie gesehen hat. */
+  verified: boolean;
+};
+
+export type CodePaperEvidence = {
+  paper_id: string;
+  title: string;
+  year: number | null;
+  snippets: string[];
+};
+
+export type CodeAnswer = {
+  id?: string | null;
+  question: string;
+  answer: string;
+  trail_text: string;
+  citations: CodeCitation[];
+  trail: CodeTrailStep[];
+  verdict: CodeVerdict;
+  verdict_label: string;
+  is_clean: boolean;
+  quote_mismatches: string[];
+  uncited_sentences: number;
+  tool_calls: number;
+  truncated: boolean;
+  /** Der Anbieter kann kein Tool-Calling — die Antwort entstand ohne Werkzeuge. */
+  tool_calling_fallback: boolean;
+  provider: string;
+  model: string;
+  papers: CodePaperEvidence[];
+  paper_citations: string[];
+  /** Anzahl nackter `[1]`-Verweise. Laut CLAUDE.md ein Qualitätsfehler. */
+  bare_citations: number;
+  /** Alle Symbole, die zu dieser Frage gehören — je mit `why`. */
+  focus_nodes?: CodeFocusNode[];
+  /** Nur im Chat gesetzt: Platz im Gespräch. */
+  ordinal?: number;
+  /** Nur im Chat gesetzt: das Modell lief nicht auf diesem Rechner. */
+  remote_model?: boolean;
+  persist_error?: string | null;
+};
+
+/** Historieneintrag aus `code_answers` — dieselben Felder, aus der DB gelesen. */
+export type CodeAnswerRecord = {
+  id: string;
+  code_project_id: string;
+  project_id?: string | null;
+  question: string;
+  answer: string;
+  citations: CodeCitation[];
+  trail: CodeTrailStep[];
+  verdict: CodeVerdict | "";
+  tool_calls: number;
+  provider?: string | null;
+  model?: string | null;
+  created_timestamp?: string;
+};
+
+/** Erklärung eines einzelnen Symbols — dieselbe Beleg-Prüfung wie eine Antwort. */
+export type CodeExplanation = {
+  node_id: CodeNodeId;
+  text: string;
+  citations: CodeCitation[];
+  verdict: CodeVerdict | null;
+  verdict_label: string | null;
+  is_clean: boolean;
+  quote_mismatches: string[];
+  provider: string;
+  model: string;
+};
+
+export type CodeExplainEvent =
+  | { event: "activity"; text: string }
+  | { event: "failed"; error: string; kind?: string }
+  | { event: "done"; answer: CodeExplanation };
+
+// --- Spaghetti-Löser: Vorschlag (SSE) und Probelauf (SSE) ---
+export type CodeRefactorEvent =
+  | { event: "activity"; text: string }
+  | { event: "failed"; error: string; kind?: string; raw?: string }
+  | { event: "done"; proposal: RefactorProposal };
+
+export type CodeRefactorAppliedEntry = { path: string; action: string; reason?: string };
+export type CodeRefactorApplied = {
+  written: CodeRefactorAppliedEntry[];
+  deleted: CodeRefactorAppliedEntry[];
+};
+
+export type CodeRefactorTryEvent =
+  | { event: "activity"; text: string }
+  | { event: "applied"; applied: CodeRefactorApplied }
+  | { event: "failed"; error: string; errors?: string[]; applied?: CodeRefactorApplied }
+  | { event: "done"; sandbox_id: string; run: SandboxRunResult; applied: CodeRefactorApplied; node_id: CodeNodeId };
+
+/**
+ * „Warum wurde das so gebaut" — die zwei Hälften, absichtlich zwei Typen.
+ *
+ * Der Prompt einer erzeugenden KI ist nirgends aufgezeichnet. Was es gibt, ist
+ * *Aufgezeichnetes* (git über genau diese Zeilen, selbst hinterlegte
+ * Begründungen) und *Hergeleitetes* (zwei Sätze eines Modells). Ein gemeinsamer
+ * Typ lüde dazu ein, beides in einen Absatz zu rendern — und dann liesse sich
+ * eine erfundene Absicht nicht mehr von einem Commit-Betreff unterscheiden.
+ */
+export type CodeCommit = {
+  hash: string;
+  author: string;
+  date: string;
+  subject: string;
+};
+
+export type CodeRationale = {
+  id: string;
+  code_project_id: string;
+  rel_path: string;
+  start_line: number | null;
+  end_line: number | null;
+  symbol_id: string | null;
+  text: string;
+  content_hash: string | null;
+  author: string | null;
+  created_timestamp?: string | null;
+  /** Datei hat sich seit dem Festhalten geändert — die Begründung ist überholt. */
+  stale: boolean;
+};
+
+export type CodeRecordedRationale = {
+  node_id: CodeNodeId;
+  path: string;
+  start_line: number;
+  end_line: number;
+  history: {
+    available: boolean;
+    /** Warum es nichts gibt: `no_git` | `no_repo` | `no_commits` | `untracked` | `error`. */
+    reason: string | null;
+    error?: string | null;
+    commits: CodeCommit[];
+  };
+  notes: CodeRationale[];
+};
+
+/** Die hergeleitete Hälfte. `kind: "derived"` steht dran, damit es drangeschrieben wird. */
+export type CodeDerivedRationale = {
+  node_id: CodeNodeId;
+  path: string;
+  start_line: number;
+  end_line: number;
+  kind: "derived";
+  text: string;
+  citations: CodeCitation[];
+  verdict: CodeVerdict | null;
+  verdict_label: string | null;
+  is_clean: boolean;
+  quote_mismatches: string[];
+  /** Worauf die zwei Sätze beruhen — Anzahl je Quelle, nicht „vertrau mir". */
+  based_on: { tests: number; callers: number; commits: number; notes: number };
+  provider: string;
+  model: string;
+};
+
+export type CodeWhyEvent =
+  | { event: "activity"; text: string }
+  | { event: "failed"; error: string; kind?: string }
+  | { event: "done"; answer: CodeDerivedRationale };
+
+export type CodeAskEvent =
+  | { event: "activity"; text: string }
+  | { event: "failed"; error: string; kind?: string }
+  | { event: "done"; answer: CodeAnswer };
+
+/** Ein Code-Zitat in einer Notiz. Liegt in `note_citations` neben den Papern. */
+export type CodeNoteCitation = {
+  id: string;
+  note_id: string;
+  /** Synthetisch: `code:<projekt>:<pfad>:<zeile>` — so lesen alte Abfragen weiter. */
+  paper_id: string;
+  title?: string | null;
+  source_kind: "code";
+  code_project_id: string;
+  rel_path: string;
+  start_line: number;
+  end_line: number;
+  reference_text?: string | null;
+  content_hash?: string | null;
+  /** Datei seit dem Zitieren geändert — die Zeilennummer zeigt woandershin. */
+  stale?: boolean;
+  /** Datei ganz weg. */
+  missing?: boolean;
+};
+
+export type CodePaperLink = {
+  id: string;
+  code_project_id: string;
+  project_id?: string | null;
+  paper_id?: string | null;
+  symbol_id?: string | null;
+  rel_path?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  kind: string;
+  note?: string | null;
+  created_timestamp?: string;
 };

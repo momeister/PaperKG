@@ -124,11 +124,22 @@ class NotesMixin(_Base):
         return True
 
     def add_note_citation(self, note_id: str, citation: dict[str, Any]) -> dict[str, Any]:
+        """Ein Zitat an eine Notiz hängen — aus einem Paper oder aus dem Code.
+
+        Beides in einer Tabelle: ``source_kind`` unterscheidet, ``paper_id``
+        bleibt gefüllt (bei Code mit der synthetischen ID
+        ``code:<projekt>:<pfad>:<zeile>``), damit alle bestehenden Leser
+        unverändert weiterlaufen. Der ``content_hash`` ist der Zustand der Datei
+        beim Zitieren — nur damit lässt sich später sagen, dass eine
+        Zeilennummer nicht mehr dorthin zeigt, wo sie einmal hinzeigte.
+        """
         citation_id = str(citation.get("id") or self._stable_note_citation_id(note_id, citation))
+        source_kind = str(citation.get("source_kind") or "paper")
         self._execute("""
             INSERT INTO note_citations
-            (id, note_id, paper_id, title, kind, reference_text, pdf_excerpt, evidence_id, evidence_index, created_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, note_id, paper_id, title, kind, reference_text, pdf_excerpt, evidence_id, evidence_index,
+             source_kind, code_project_id, rel_path, start_line, end_line, content_hash, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 paper_id = EXCLUDED.paper_id,
                 title = EXCLUDED.title,
@@ -136,7 +147,13 @@ class NotesMixin(_Base):
                 reference_text = EXCLUDED.reference_text,
                 pdf_excerpt = EXCLUDED.pdf_excerpt,
                 evidence_id = EXCLUDED.evidence_id,
-                evidence_index = EXCLUDED.evidence_index
+                evidence_index = EXCLUDED.evidence_index,
+                source_kind = EXCLUDED.source_kind,
+                code_project_id = EXCLUDED.code_project_id,
+                rel_path = EXCLUDED.rel_path,
+                start_line = EXCLUDED.start_line,
+                end_line = EXCLUDED.end_line,
+                content_hash = EXCLUDED.content_hash
         """, [
             citation_id,
             note_id,
@@ -147,9 +164,22 @@ class NotesMixin(_Base):
             citation.get("pdf_excerpt"),
             citation.get("evidence_id"),
             int(citation.get("evidence_index") or 0),
+            source_kind,
+            citation.get("code_project_id"),
+            citation.get("rel_path"),
+            self._coerce_line(citation.get("start_line")),
+            self._coerce_line(citation.get("end_line")),
+            citation.get("content_hash"),
             datetime.now(),
         ])
         return self.get_note_citation(citation_id) or {"id": citation_id}
+
+    @staticmethod
+    def _coerce_line(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
     def _stable_note_citation_id(self, note_id: str, citation: dict[str, Any]) -> str:
         paper_id = str(citation.get("paper_id") or "")
@@ -157,8 +187,19 @@ class NotesMixin(_Base):
         excerpt = self._normalize_citation_text(str(citation.get("pdf_excerpt") or ""))
         evidence_id = str(citation.get("evidence_id") or "")
         evidence_index = str(citation.get("evidence_index") or 0)
-        basis = "|".join([note_id, paper_id, evidence_id, reference[:500], excerpt[:500], evidence_index])
-        return f"cite_{uuid.uuid5(uuid.NAMESPACE_URL, basis).hex}"
+        parts = [note_id, paper_id, evidence_id, reference[:500], excerpt[:500], evidence_index]
+        # Der Zeilenbereich gehört in die Identität: zweimal dieselbe Datei an
+        # verschiedenen Stellen zu zitieren, sind zwei Zitate, keine Korrektur
+        # des ersten. Nur anhängen, wenn es überhaupt eine Codestelle gibt —
+        # sonst bekämen alle bestehenden Paper-Zitate neue IDs, und das nächste
+        # Anhängen legte eine Dublette an, statt die Zeile zu aktualisieren.
+        code_span = [
+            str(citation.get(key) or "")
+            for key in ("code_project_id", "rel_path", "start_line", "end_line")
+        ]
+        if any(code_span):
+            parts.extend(code_span)
+        return f"cite_{uuid.uuid5(uuid.NAMESPACE_URL, '|'.join(parts)).hex}"
 
     @staticmethod
     def _normalize_citation_text(value: str) -> str:

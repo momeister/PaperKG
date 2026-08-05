@@ -4,7 +4,8 @@
     "targets": ["nsis"],
     "resources": [
       "defaults/*",
-      "sidecar/sciencekg-backend/**/*"
+      "sidecar/sciencekg-backend/**/*",
+      "sidecar/codesearch/*"
     ]
   }
 }

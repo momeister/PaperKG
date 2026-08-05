@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, RefreshCcw } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
+import { LlmPicker } from "../components/LlmPicker";
 import { Status } from "../components/Status";
 import { ThemePicker } from "../components/ThemePicker";
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP, useAppState } from "../state";
@@ -31,20 +32,16 @@ export function SettingsPage() {
             API Base URL
             <input value={API_BASE_URL} readOnly />
           </label>
-          <label>
-            Provider
-            <select value={provider ?? ""} onChange={(event) => setProvider(event.target.value || undefined)}>
-              {(providersQuery.data?.providers ?? []).map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Modell
-            <input value={model ?? ""} onChange={(event) => setModel(event.target.value || undefined)} placeholder="Default" />
-          </label>
+          {/* Dieselbe Auswahl wie in der Kopfzeile — vorher stand hier ein
+              Freitextfeld für das Modell, sodass ein Tippfehler erst beim
+              nächsten LLM-Aufruf auffiel. */}
+          <LlmPicker
+            variant="inline"
+            provider={provider}
+            model={model}
+            onProviderChange={setProvider}
+            onModelChange={setModel}
+          />
           <label>
             Schriftgröße ({Math.round(fontScale * 100)}%)
             <div className="font-scale-setting">

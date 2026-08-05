@@ -1,0 +1,13 @@
+[package]
+name = "cs-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+# Handles the ConPTY / Unix pty split, which is the entire reason this is not
+# just std::process::Command: a shell needs a terminal, not a pipe, or it turns
+# off colour, disables prompts and buffers everything.
+portable-pty = "0.9"

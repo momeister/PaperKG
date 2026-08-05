@@ -1,0 +1,26 @@
+display = "PHP"
+extensions = ["php", "phtml"]
+comment_prefixes = ["//", "#", "/*", "*"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if_statement", "else_if_clause", "while_statement", "for_statement",
+  "foreach_statement", "do_statement", "case_statement", "catch_clause",
+  "conditional_expression", "binary_expression",
+]
+block_nodes = ["compound_statement"]
+
+test_prefixes = ["test"]
+test_suffixes = ["Test"]
+entry_names = ["main", "handle", "__invoke"]
+
+[effects]
+file_read = ["file_get_contents", "fopen", "fread", "fgets", "glob(", "scandir"]
+file_write = ["file_put_contents", "fwrite", "unlink", "mkdir", "rename"]
+network = ["curl_", "file_get_contents('http", "Http::", "GuzzleHttp", "fsockopen"]
+database = ["->query", "->execute", "PDO", "mysqli_", "DB::", "->where", "->save"]
+process_spawn = ["exec(", "shell_exec", "system(", "proc_open", "passthru"]
+console = ["echo ", "print ", "var_dump", "error_log", "Log::"]
+randomness = ["rand(", "mt_rand", "random_bytes", "uniqid"]
+time = ["time()", "date(", "microtime", "new DateTime", "sleep("]
+environment = ["getenv", "$_ENV", "env("]

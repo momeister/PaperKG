@@ -1,0 +1,26 @@
+display = "Go"
+extensions = ["go"]
+comment_prefixes = ["//"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if_statement", "for_statement", "expression_switch_statement",
+  "type_switch_statement", "select_statement", "communication_case",
+  "expression_case", "type_case", "binary_expression",
+]
+block_nodes = ["block"]
+
+test_prefixes = ["Test", "Benchmark", "Fuzz", "Example"]
+test_suffixes = ["_test"]
+entry_names = ["main", "init"]
+
+[effects]
+file_read = ["os.Open", "os.ReadFile", "ioutil.Read", "bufio.NewReader"]
+file_write = ["os.Create", "os.WriteFile", "ioutil.Write", "os.Remove", "os.Mkdir"]
+network = ["http.Get", "http.Post", "http.Client", "net.Dial", "grpc.", "http.NewRequest"]
+database = ["db.Query", "db.Exec", "QueryRow", "Prepare", "gorm.", "sqlx."]
+process_spawn = ["exec.Command", "os.StartProcess", "syscall.Exec"]
+console = ["fmt.Print", "log.", "os.Stdout", "os.Stderr"]
+randomness = ["rand.", "uuid.New", "crypto/rand"]
+time = ["time.Now", "time.Since", "time.Sleep", "time.After"]
+environment = ["os.Getenv", "os.LookupEnv", "os.Environ"]

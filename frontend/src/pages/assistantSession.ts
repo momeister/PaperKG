@@ -83,7 +83,11 @@ export function saveAssistantSession(
   try {
     // localStorage is only a fast boot cache; the payloads (verification excerpts)
     // regularly exceed its quota, which used to lose whole conversations on reload.
-    window.localStorage.setItem(assistantStorageKey(projectId), JSON.stringify(payload));
+    // Skip the local wipe on an *empty* save unless the caller explicitly opted in
+    // (allowEmpty) — otherwise a rejected server PUT would also poison the cache.
+    if (payload.history.length || options.allowEmpty) {
+      window.localStorage.setItem(assistantStorageKey(projectId), JSON.stringify(payload));
+    }
   } catch {
     // Quota exceeded or storage disabled — the server copy below still persists.
   }

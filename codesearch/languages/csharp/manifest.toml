@@ -1,0 +1,26 @@
+display = "C#"
+extensions = ["cs"]
+comment_prefixes = ["//", "/*", "*", "///"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if_statement", "while_statement", "for_statement", "for_each_statement",
+  "do_statement", "switch_section", "catch_clause", "conditional_expression",
+  "binary_expression",
+]
+block_nodes = ["block"]
+
+test_prefixes = ["Test"]
+test_suffixes = ["Test", "Tests"]
+entry_names = ["Main"]
+
+[effects]
+file_read = ["File.Read", "StreamReader", "File.Open", "Directory.GetFiles"]
+file_write = ["File.Write", "StreamWriter", "File.Create", "File.Delete", "Directory.Create"]
+network = ["HttpClient", "WebClient", "WebRequest", "Socket("]
+database = ["ExecuteReader", "ExecuteNonQuery", "SqlCommand", "DbContext", "FromSql", "SaveChanges"]
+process_spawn = ["Process.Start", "ProcessStartInfo"]
+console = ["Console.", "Debug.", "logger.", "_logger."]
+randomness = ["new Random", "Guid.NewGuid", "RandomNumberGenerator"]
+time = ["DateTime.Now", "DateTime.UtcNow", "Stopwatch", "Task.Delay", "Thread.Sleep"]
+environment = ["Environment.GetEnvironmentVariable", "Configuration["]

@@ -18,13 +18,19 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
 
 
-def strip_reasoning_blocks(text: str) -> str:
+def strip_reasoning_blocks(
+	text: str, *, metadata: dict[str, Any] | None = None
+) -> str:
 	cleaned = _THINK_BLOCK_RE.sub("", str(text or ""))
 	open_match = _THINK_OPEN_RE.search(cleaned)
 	if open_match:
 		# Unterminated think block: the model hit its token limit while reasoning.
 		# Everything after <think> is reasoning, not answer.
 		cleaned = cleaned[: open_match.start()]
+		if metadata is not None:
+			# Reasoning models (deepseek-r1, o3) burn their whole budget thinking
+			# fairly often; the caller must distinguish that from "no answer".
+			metadata["reasoning_truncated"] = True
 	return cleaned.strip()
 
 
@@ -38,6 +44,22 @@ class GenerationSettings:
 	repeat_penalty: float | None = 1.05
 	seed: int | None = None
 	extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolCall:
+	"""Ein Werkzeugaufruf, so wie ein Anbieter ihn geliefert hat.
+
+	``arguments`` bleibt absichtlich der **rohe JSON-String**: OpenAI, LM Studio
+	und NVIDIA liefern ihn so, Ollama und Anthropic liefern ein Objekt, das hier
+	wieder serialisiert wird. Wer die Argumente an eine Gegenstelle weiterreicht,
+	die selbst parst (der Code-Graph tut genau das), soll nicht erst raten
+	müssen, ob er ein Dict oder einen Text in der Hand hält.
+	"""
+
+	id: str
+	name: str
+	arguments: str
 
 
 @dataclass
@@ -235,6 +257,15 @@ class LLMRouter:
 		elif "mistral" in model_lower:
 			settings.temperature = min(settings.temperature, 0.15)
 			settings.top_p = min(settings.top_p, 0.9)
+		elif "deepseek" in model_lower:
+			# Reasoning-Varianten (r1, reasoner) brauchen hoehere Temperatur — unter
+			# 0.5 fangen sie an, sich zu wiederholen (Herstellerempfehlung 0.6).
+			if "r1" in model_lower or "reason" in model_lower:
+				settings.temperature = max(settings.temperature, 0.6)
+				settings.top_p = min(settings.top_p, 0.95)
+			else:
+				settings.temperature = min(settings.temperature, 0.3)
+				settings.top_p = min(settings.top_p, 0.9)
 
 		if refresh and cfg.provider_type == "ollama":
 			model_settings = self.discover_ollama_model_settings(cfg, settings.model)
@@ -298,6 +329,74 @@ class LLMRouter:
 			return self._chat_openai_compatible(cfg, messages, settings, request_timeout_seconds)
 
 		raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
+
+	def chat_with_tools(
+		self,
+		messages: list[dict[str, Any]],
+		tools: list[dict[str, Any]] | None,
+		provider: str | None = None,
+		overrides: dict[str, Any] | None = None,
+	) -> tuple[str | None, list[ToolCall]]:
+		"""Wie :meth:`chat`, aber mit Werkzeugen — Text *und* Aufrufe zurück.
+
+		Bewusst eine Schwestermethode und keine Erweiterung von :meth:`chat`:
+		``chat()`` gibt einen ``str`` zurück und wird im ganzen Repo so benutzt;
+		ein anderer Rückgabetyp wäre ein Bruch quer durch alles.
+
+		``messages`` ist immer in **OpenAI-Form** — auch für Anthropic und Ollama,
+		die hier übersetzt werden. Ein Aufrufer, der die Werkzeugschleife fährt,
+		soll nicht pro Anbieter eine andere Nachrichtenform bauen müssen; er hängt
+		die Antwort als ``{"role": "assistant", "tool_calls": [...]}`` und jedes
+		Ergebnis als ``{"role": "tool", "tool_call_id": ..., "content": ...}`` an.
+
+		Antwortet ein Server auf ``tools`` mit 400/422 — nicht jedes lokale Modell
+		kann Tool-Calling, und manche Server lehnen das Feld ab, statt es zu
+		ignorieren —, wird der Aufruf ohne Werkzeuge wiederholt. Dann steht
+		``tool_calling_fallback`` in :attr:`last_response_metadata`, und der
+		Aufrufer weiss, dass er auf Prompt-and-Parse umschalten muss.
+		"""
+		provider_name = provider or self.default_provider
+		cfg = self.provider_config(provider_name)
+		settings = self._merged_settings(cfg.settings, overrides)
+		request_timeout_seconds = float((overrides or {}).get("timeout_seconds", cfg.timeout_seconds))
+
+		if cfg.provider_type == "ollama":
+			message = self._ollama_request(cfg, messages, settings, request_timeout_seconds, tools)
+			return self._openai_style_result(message)
+		if cfg.provider_type == "anthropic":
+			return self._anthropic_request(cfg, messages, settings, request_timeout_seconds, tools)
+		if cfg.provider_type in {"openai_compatible", "lm_studio", "openai", "nvidia"}:
+			message = self._openai_request(cfg, messages, settings, request_timeout_seconds, tools)
+			return self._openai_style_result(message)
+
+		raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
+
+	def _openai_style_result(self, message: dict[str, Any]) -> tuple[str | None, list[ToolCall]]:
+		content = str(message.get("content", "") or "")
+		if not content.strip():
+			content = str(message.get("reasoning_content", "") or "")
+			self.last_response_metadata["reasoning_fallback"] = bool(content.strip())
+		text = strip_reasoning_blocks(content, metadata=self.last_response_metadata)
+		return (text or None), self._tool_calls_from_openai(message)
+
+	@staticmethod
+	def _tool_calls_from_openai(message: dict[str, Any]) -> list[ToolCall]:
+		calls: list[ToolCall] = []
+		for index, raw in enumerate(message.get("tool_calls") or []):
+			if not isinstance(raw, dict):
+				continue
+			function = raw.get("function") or {}
+			name = str(function.get("name") or "")
+			if not name:
+				continue
+			arguments = function.get("arguments")
+			if not isinstance(arguments, str):
+				# Ollama liefert ein Objekt; die Gegenstelle bekommt trotzdem Text.
+				arguments = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
+			# Ollama vergibt keine Aufruf-IDs. Eine synthetische reicht: sie muss
+			# nur das Ergebnis wieder seinem Aufruf zuordnen koennen.
+			calls.append(ToolCall(id=str(raw.get("id") or f"call_{index}"), name=name, arguments=arguments))
+		return calls
 
 	def check_provider_auth(
 		self,
@@ -393,13 +492,51 @@ class LLMRouter:
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:
+		message = self._ollama_request(cfg, messages, settings, request_timeout_seconds)
+		content = str(message.get("content", "") or "")
+		if not content.strip():
+			# Ollama legt den Chain-of-Thought Reasoning-Modelle (deepseek-r1) in
+			# ``message.thinking`` und laesst ``content`` leer — dasselbe Bild wie
+			# ``reasoning_content`` auf dem OpenAI-Pfad.
+			content = str(message.get("thinking", "") or "")
+			self.last_response_metadata["reasoning_fallback"] = bool(content.strip())
+		return strip_reasoning_blocks(content, metadata=self.last_response_metadata)
+
+	def _ollama_request(
+		self,
+		cfg: ProviderConfig,
+		messages: list[dict[str, Any]],
+		settings: GenerationSettings,
+		request_timeout_seconds: float,
+		tools: list[dict[str, Any]] | None = None,
+	) -> dict[str, Any]:
+		"""Ein Aufruf gegen ``/api/chat`` — liefert die ganze ``message`` zurueck.
+
+		:meth:`chat` braucht davon nur ``content``, die Werkzeugschleife braucht
+		zusaetzlich ``tool_calls``. Deshalb die ganze Nachricht.
+		"""
 		messages = [self._ollama_message(message) for message in messages]
 		extra_options = dict(settings.extra)
 		keep_alive = extra_options.pop("keep_alive", "0s")
 		response_format = extra_options.pop("format", None)
 		json_mode = bool(extra_options.pop("json_mode", False))
 		extra_options.pop("response_format", None)
-		extra_options.pop("chat_template_kwargs", None)
+		# ``chat_template_kwargs`` ist ein OpenAI/LM-Studio-Konstrukt; Ollama kennt
+		# es nicht. Werfen war die alte Loesung — damit hatte ``enable_thinking:
+		# false`` fuer ein Reasoning-Modell (deepseek) unter Ollama *keine* Wirkung.
+		# Ollama schaltet Denken seit 0.5+0 ueber das Top-Level-Feld ``think``
+		# (POST /api/chat). Also uebersetzen, nicht verwerfen.
+		chat_template_kwargs = extra_options.pop("chat_template_kwargs", None)
+		if isinstance(chat_template_kwargs, dict):
+			enable_thinking = chat_template_kwargs.get("enable_thinking")
+			if enable_thinking is False:
+				payload_think = False
+			elif enable_thinking is True:
+				payload_think = True
+			else:
+				payload_think = None
+		else:
+			payload_think = None
 		payload: dict[str, Any] = {
 			"model": settings.model,
 			"messages": messages,
@@ -418,13 +555,33 @@ class LLMRouter:
 			payload["format"] = response_format
 		elif json_mode:
 			payload["format"] = "json"
+		if payload_think is not None:
+			payload["think"] = payload_think
 		payload["options"] = self._drop_none_values(payload["options"])
 		if settings.seed is not None:
 			payload["options"]["seed"] = settings.seed
+		if tools:
+			payload["tools"] = tools
 
 		client = self._client_for(request_timeout_seconds)
-		response = client.post(f"{cfg.base_url.rstrip('/')}/api/chat", json=payload)
-		response.raise_for_status()
+		endpoint = f"{cfg.base_url.rstrip('/')}/api/chat"
+		tool_calling_fallback = False
+		response = client.post(endpoint, json=payload)
+		try:
+			response.raise_for_status()
+		except httpx.HTTPStatusError as exc:
+			# Nicht jedes Ollama-Modell kann Werkzeuge; einige Versionen lehnen
+			# das Feld mit 400 ab, statt es zu ignorieren. Dann ohne wiederholen —
+			# der Aufrufer sieht den Vermerk und faellt auf Prompt-and-Parse zurueck.
+			if "tools" not in payload or exc.response.status_code not in {400, 422}:
+				raise self._http_status_runtime_error(exc) from exc
+			fallback_payload = {key: value for key, value in payload.items() if key != "tools"}
+			response = client.post(endpoint, json=fallback_payload)
+			try:
+				response.raise_for_status()
+			except httpx.HTTPStatusError as fallback_exc:
+				raise self._http_status_runtime_error(fallback_exc) from fallback_exc
+			tool_calling_fallback = True
 		data = response.json()
 		self.last_response_metadata = {
 			"provider_type": "ollama",
@@ -433,13 +590,33 @@ class LLMRouter:
 			"total_duration": data.get("total_duration"),
 			"load_duration": data.get("load_duration"),
 			"done_reason": data.get("done_reason"),
+			"tool_calling_fallback": tool_calling_fallback,
+			"reasoning_fallback": False,
+			"reasoning_truncated": False,
 		}
-		message = data.get("message") or {}
-		return strip_reasoning_blocks(str(message.get("content", "")))
+		return data.get("message") or {}
 
 	@classmethod
 	def _ollama_message(cls, message: dict[str, Any]) -> dict[str, Any]:
 		"""Translate an OpenAI-style parts message into Ollama's content + images shape."""
+		if message.get("tool_calls"):
+			# Ollama will die Argumente als Objekt, OpenAI liefert sie als String.
+			# Ohne diese Ruecknahme sieht das Modell in der naechsten Runde seinen
+			# eigenen Aufruf als Zeichenkette und ruft munter noch einmal auf.
+			return {
+				**message,
+				"content": cls._flatten_text_content(message.get("content")),
+				"tool_calls": [
+					{
+						"function": {
+							"name": str((call.get("function") or {}).get("name", "")),
+							"arguments": cls._loads_or_empty((call.get("function") or {}).get("arguments")),
+						}
+					}
+					for call in message["tool_calls"]
+					if isinstance(call, dict)
+				],
+			}
 		content = message.get("content")
 		if not isinstance(content, list):
 			return message
@@ -467,14 +644,18 @@ class LLMRouter:
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:
-		system_parts: list[str] = []
-		chat_messages: list[dict[str, Any]] = []
-		for message in messages:
-			role = str(message.get("role", "user"))
-			if role == "system":
-				system_parts.append(self._flatten_text_content(message.get("content")))
-			else:
-				chat_messages.append({"role": role, "content": self._anthropic_content(message.get("content"))})
+		text, _calls = self._anthropic_request(cfg, messages, settings, request_timeout_seconds)
+		return text or ""
+
+	def _anthropic_request(
+		self,
+		cfg: ProviderConfig,
+		messages: list[dict[str, Any]],
+		settings: GenerationSettings,
+		request_timeout_seconds: float,
+		tools: list[dict[str, Any]] | None = None,
+	) -> tuple[str | None, list[ToolCall]]:
+		system_text, chat_messages = self._anthropic_messages(messages)
 
 		# Sampling params (temperature/top_p/seed) are deliberately omitted: newer Claude
 		# models reject non-default combinations with 400, and defaults work everywhere.
@@ -483,9 +664,11 @@ class LLMRouter:
 			"max_tokens": settings.max_tokens,
 			"messages": chat_messages,
 		}
-		system_text = "\n\n".join(part for part in system_parts if part)
 		if system_text:
 			payload["system"] = system_text
+		converted_tools = self._anthropic_tools(tools)
+		if converted_tools:
+			payload["tools"] = converted_tools
 
 		headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
 		if cfg.api_key:
@@ -503,6 +686,8 @@ class LLMRouter:
 			"usage": data.get("usage") or {},
 			"stop_reason": data.get("stop_reason"),
 			"model": data.get("model"),
+			"tool_calling_fallback": False,
+			"reasoning_truncated": False,
 		}
 		# Content may open with non-text blocks (e.g. thinking), so join all text blocks
 		# instead of indexing content[0].
@@ -512,7 +697,98 @@ class LLMRouter:
 			for block in blocks
 			if isinstance(block, dict) and block.get("type") == "text"
 		)
-		return strip_reasoning_blocks(text)
+		calls = [
+			ToolCall(
+				id=str(block.get("id") or ""),
+				name=str(block.get("name") or ""),
+				arguments=json.dumps(block.get("input") or {}, ensure_ascii=False),
+			)
+			for block in blocks
+			if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name")
+		]
+		cleaned = strip_reasoning_blocks(text, metadata=self.last_response_metadata)
+		return (cleaned or None), calls
+
+	@staticmethod
+	def _anthropic_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+		"""OpenAI-Funktionsschema → Anthropics ``input_schema``-Form."""
+		converted: list[dict[str, Any]] = []
+		for tool in tools or []:
+			if not isinstance(tool, dict):
+				continue
+			function = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+			name = str(function.get("name") or "")
+			if not name:
+				continue
+			converted.append(
+				{
+					"name": name,
+					"description": str(function.get("description") or ""),
+					"input_schema": function.get("parameters") or {"type": "object", "properties": {}},
+				}
+			)
+		return converted
+
+	@classmethod
+	def _anthropic_messages(cls, messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+		"""OpenAI-Nachrichten → (System-Text, Anthropic-Nachrichten).
+
+		Der einzige heikle Punkt sind die Werkzeug-Ergebnisse: bei OpenAI ist jedes
+		eine eigene ``tool``-Nachricht, Anthropic erwartet sie als Bloecke *einer*
+		``user``-Nachricht. Zwei Ergebnisse hintereinander als zwei Nachrichten zu
+		schicken, verletzt den Rollenwechsel und wird abgelehnt.
+		"""
+		system_parts: list[str] = []
+		chat_messages: list[dict[str, Any]] = []
+		for message in messages:
+			role = str(message.get("role", "user"))
+			if role == "system":
+				system_parts.append(cls._flatten_text_content(message.get("content")))
+				continue
+			if role == "tool":
+				block = {
+					"type": "tool_result",
+					"tool_use_id": str(message.get("tool_call_id") or ""),
+					"content": cls._flatten_text_content(message.get("content")),
+				}
+				last = chat_messages[-1] if chat_messages else None
+				if last and last["role"] == "user" and isinstance(last["content"], list):
+					last["content"].append(block)
+				else:
+					chat_messages.append({"role": "user", "content": [block]})
+				continue
+			if role == "assistant" and message.get("tool_calls"):
+				blocks: list[dict[str, Any]] = []
+				text = cls._flatten_text_content(message.get("content"))
+				if text.strip():
+					blocks.append({"type": "text", "text": text})
+				for call in message["tool_calls"]:
+					if not isinstance(call, dict):
+						continue
+					function = call.get("function") or {}
+					blocks.append(
+						{
+							"type": "tool_use",
+							"id": str(call.get("id") or ""),
+							"name": str(function.get("name") or ""),
+							"input": cls._loads_or_empty(function.get("arguments")),
+						}
+					)
+				chat_messages.append({"role": "assistant", "content": blocks})
+				continue
+			chat_messages.append({"role": role, "content": cls._anthropic_content(message.get("content"))})
+		return "\n\n".join(part for part in system_parts if part), chat_messages
+
+	@staticmethod
+	def _loads_or_empty(raw: Any) -> dict[str, Any]:
+		"""Werkzeug-Argumente als Objekt — egal, in welcher Form sie ankamen."""
+		if isinstance(raw, dict):
+			return raw
+		try:
+			parsed = json.loads(str(raw or "{}"))
+		except json.JSONDecodeError:
+			return {}
+		return parsed if isinstance(parsed, dict) else {}
 
 	@staticmethod
 	def _split_data_url(url: str) -> tuple[str, str]:
@@ -564,6 +840,31 @@ class LLMRouter:
 		settings: GenerationSettings,
 		request_timeout_seconds: float,
 	) -> str:
+		message = self._openai_request(cfg, messages, settings, request_timeout_seconds)
+		content = str(message.get("content", "") or "")
+		if not content.strip():
+			# Some LM Studio builds put the entire output of reasoning models into
+			# `reasoning_content` and leave `content` empty. Callers that must not
+			# show raw chain-of-thought (e.g. the Desktop Companion) check this flag:
+			# combined with finish_reason == "length" it means the model burned its
+			# whole token budget thinking and never produced an answer.
+			content = str(message.get("reasoning_content", "") or "")
+			self.last_response_metadata["reasoning_fallback"] = bool(content.strip())
+		return strip_reasoning_blocks(content, metadata=self.last_response_metadata)
+
+	def _openai_request(
+		self,
+		cfg: ProviderConfig,
+		messages: list[dict[str, Any]],
+		settings: GenerationSettings,
+		request_timeout_seconds: float,
+		tools: list[dict[str, Any]] | None = None,
+	) -> dict[str, Any]:
+		"""Ein Aufruf gegen ``/chat/completions`` — liefert die ganze ``message``.
+
+		:meth:`chat` braucht davon nur ``content``, die Werkzeugschleife braucht
+		``tool_calls``. Der Text wird deshalb erst beim Aufrufer herausgezogen.
+		"""
 		extra_options = dict(settings.extra)
 		response_format = extra_options.pop("response_format", None)
 		json_mode = bool(extra_options.pop("json_mode", False))
@@ -608,6 +909,9 @@ class LLMRouter:
 			payload["response_format"] = {"type": "json_object"}
 		if settings.seed is not None:
 			payload["seed"] = settings.seed
+		if tools:
+			payload["tools"] = tools
+			payload["tool_choice"] = "auto"
 
 		headers = {"Content-Type": "application/json"}
 		if cfg.api_key:
@@ -615,43 +919,57 @@ class LLMRouter:
 
 		endpoint = f"{cfg.base_url.rstrip('/')}/chat/completions"
 		client = self._client_for(request_timeout_seconds)
-		response = client.post(endpoint, headers=headers, json=payload)
-		response_format_fallback = False
-		try:
-			response.raise_for_status()
-		except httpx.HTTPStatusError as exc:
-			if "response_format" not in payload or exc.response.status_code not in {400, 422}:
-				raise self._http_status_runtime_error(exc) from exc
-			fallback_payload = dict(payload)
-			fallback_payload.pop("response_format", None)
-			response = client.post(endpoint, headers=headers, json=fallback_payload)
+		flags = {"response_format_fallback": False, "tool_calling_fallback": False}
+		attempt = payload
+		while True:
+			response = client.post(endpoint, headers=headers, json=attempt)
 			try:
 				response.raise_for_status()
-			except httpx.HTTPStatusError as fallback_exc:
-				raise self._http_status_runtime_error(fallback_exc) from fallback_exc
-			response_format_fallback = True
+				break
+			except httpx.HTTPStatusError as exc:
+				reduced = self._reduce_payload(attempt, exc.response.status_code, flags)
+				if reduced is None:
+					raise self._http_status_runtime_error(exc) from exc
+				attempt = reduced
 		data = response.json()
 		choices = data.get("choices") or []
 		self.last_response_metadata = {
 			"provider_type": cfg.provider_type,
 			"usage": data.get("usage") or {},
 			"finish_reason": choices[0].get("finish_reason") if choices else None,
-			"response_format_fallback": response_format_fallback,
 			"reasoning_fallback": False,
+			"reasoning_truncated": False,
+			**flags,
 		}
 		if not choices:
-			return ""
-		message = choices[0].get("message") or {}
-		content = str(message.get("content", "") or "")
-		if not content.strip():
-			# Some LM Studio builds put the entire output of reasoning models into
-			# `reasoning_content` and leave `content` empty. Callers that must not
-			# show raw chain-of-thought (e.g. the Desktop Companion) check this flag:
-			# combined with finish_reason == "length" it means the model burned its
-			# whole token budget thinking and never produced an answer.
-			content = str(message.get("reasoning_content", "") or "")
-			self.last_response_metadata["reasoning_fallback"] = bool(content.strip())
-		return strip_reasoning_blocks(content)
+			return {}
+		return choices[0].get("message") or {}
+
+	@staticmethod
+	def _reduce_payload(
+		payload: dict[str, Any], status_code: int, flags: dict[str, bool]
+	) -> dict[str, Any] | None:
+		"""Nimmt einzeln weg, was ein Server mit 400/422 abgelehnt haben kann.
+
+		Reihenfolge: erst ``tools`` (nicht jedes lokale Modell kann Tool-Calling,
+		und manche Server lehnen das Feld ab, statt es zu ignorieren), dann
+		``response_format``. ``None`` heisst: nichts mehr wegzunehmen — dann ist
+		es ein echter Fehler und muss durchschlagen, statt unter einem Rueckfall
+		begraben zu werden.
+		"""
+		if status_code not in {400, 422}:
+			return None
+		reduced = dict(payload)
+		if "tools" in reduced:
+			reduced.pop("tools", None)
+			reduced.pop("tool_choice", None)
+			flags["tool_calling_fallback"] = True
+			return reduced
+		if "response_format" in reduced:
+			reduced.pop("response_format", None)
+			flags["response_format_fallback"] = True
+			return reduced
+		return None
 
 	@staticmethod
 	def _nvidia_chat_template_kwargs(model: str, value: Any) -> dict[str, Any] | None:

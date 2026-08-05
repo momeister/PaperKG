@@ -180,6 +180,265 @@ data, revise, copy Markdown). Config: the `analysis:` block in `config.yaml` (`t
 `seed`). **No sandbox** — the subprocess runs with backend rights (like the Werkstatt terminal /
 Jupyter); a Docker `--network none` mode is a later option.
 
+### Code-Graph (CodeSearch)
+Der Code-Graph beantwortet zu einem Werkstatt-Projekt die Frage, die der Editor nicht beantwortet:
+*warum ist das so*. Grundlage ist der einvendorte Rust-Workspace **`codesearch/`** (tree-sitter
+für 13 Sprachen, dreistufige Auflösung, PageRank + git-Churn). Er hat **zwei Oberflächen**:
+
+- **`/code`** (`frontend/src/pages/codegraph/`, eigener Sidebar-Eintrag in der Gruppe „Arbeiten") ist die
+  grosse: Navigator mit Facetten über alle 15 Symbolarten links, in der Mitte **Bereiche** |
+  **Karte** (`@xyflow/react`, gespeist aus `graph_slice`) | **Code** | **Diagramm** | **Pfad** und unter
+  der Karte die Kantentabelle, rechts Inspektor und **Gespräch**. Deep-Link
+  `?project=&node=<hex>&view=&cluster=&depth=&edges=&q=&to=`; das Projekt teilt sich den
+  `localStorage`-Schlüssel `sciencekg.werkstatt.project` mit der Werkstatt.
+  Karte, Inspektor und Gespräch haben je einen ⤢-Knopf, der die Nebenspalten einklappt — nur einer kann
+  gross sein, sonst müsste man raten, welcher Klick was zurücksetzt.
+- **„Bereiche" ist der Einstieg, nicht die Karte** (`ClusterMapPanel.tsx`, `clusterLayout.ts`): ohne
+  `?node=` beginnt die Seite mit der Cluster-Landkarte statt mit einer Suchmaske — wer ein fremdes
+  Projekt öffnet, weiss noch nicht, wonach er sucht. Ein Cluster ist ein **Pfad-Präfix**, der Rollup ist
+  reines SQL (`cs-graph/src/cluster.rs`, `clusters`/`cluster_edges`/`cluster_members` in `serve.rs`) und
+  wird **nie persistiert**, kann also nicht veralten. Eine aggregierte Kante trägt die **schwächste**
+  enthaltene Sicherheitsstufe (Minimum von `conf_rank`, nicht den Modus — sonst würde eine Vermutung auf
+  der Zoomstufe zur Tatsache, auf der sie niemand prüfen kann) und lässt sich per Klick in die echten
+  Kanten mit `datei:zeile` aufklappen (`ClusterEvidencePanel.tsx`). Das Layout ist eine
+  **Abhängigkeitsschichtung** mit deterministischem Zyklenbruch; Rückkanten sind rot gestrichelt und
+  ausgewiesen. Der LLM benennt nur (`codegraph/clusters.py`, `code_cluster_labels`, SSE
+  `POST …/clusters/name`) — die Struktur ist vom Modell nicht beeinflussbar, und ohne Modell steht
+  überall der Ordnername. Ein `fingerprint` über die *Gestalt* des Clusters (nicht den Dateiinhalt)
+  entwertet einen Namen nach echter Veränderung, nicht nach jeder geänderten Zeile.
+- **Der Code-Tab ist ein echter Editor mit zwei Betriebsarten** (`CodeEditorPanel.tsx` →
+  `MonacoHost.tsx` + `SymbolEditor`/`FileEditor`; Monaco `lazy` *innerhalb* der schon lazy geladenen
+  Seite und **genau einmal** importiert — der Entry-Chunk, den fünf Webviews parsen, bleibt frei; deshalb
+  hängt der Stift-Knopf in der Chat-Trefferliste und im Inspektor nur die Mittelspalte um, statt einen
+  zweiten Editor einzuhängen). **Funktion** ist der Standard und schreibt über
+  `PATCH /codegraph/{id}/symbol/{node_id}/source`: der Zeilenbereich kommt aus dem Graphen (nicht vom
+  Client — ein länger offener Tab schriebe sonst an die falsche Stelle), der `content_hash` ist eine
+  optimistische Sperre (**409** statt stillem Überschreiben), und ein **veralteter Index** ist ebenfalls
+  409, weil die Zeilennummern dann woandershin zeigen. `_splice_lines` erhält die Zeilenenden der Datei
+  (CRLF bleibt CRLF, sonst sähe jede Zeile im git-Diff geändert aus) und setzt am Dateiende keinen
+  Umbruch dazu. **Datei** ist das bisherige Verhalten über `PUT /workspaces/{id}/file`. Danach steht der
+  Hinweis, dass der Index den alten Stand kennt, samt Knopf zum Neuindizieren.
+- **Der Inspektor beantwortet vier Fragen in dieser Reihenfolge**: *wofür ist das da* (Docstring, dazu
+  ein **immer vorhandener Steckbrief** aus `summary.ts` — vorher stand hier nichts, wenn im Code kein
+  Kommentar stand; plus „erklären" für eine LLM-Erklärung), *warum ist das so gebaut* (siehe unten),
+  *was geht rein und was kommt raus* (Parameter links, Rückgabe/Ausnahmen/Nebenwirkungen rechts),
+  *worauf beruht das* (Zahlen, Nachbarn).
+  Ist ein Nachbar deutlich relevanter als das Betrachtete, wird das gesagt — man klickt oft eine
+  Hilfsfunktion an und meint die Stelle darunter (`strongerNeighbours`, auf der Karte ▲).
+- **„Warum wurde das so gebaut?"** (`codegraph/rationale.py`, `CodeWhyPanel.tsx`) hat **zwei Hälften,
+  die nie in einem Absatz landen**. Der Grund ist ein Ehrlichkeitsvorbehalt: der Prompt einer
+  erzeugenden KI ist in diesem Repository nirgends aufgezeichnet, und eine erfundene *Absicht* fällt —
+  anders als eine erfundene `datei:zeile` — beim Nachschlagen nicht auf.
+  *Aufgezeichnet* (`GET /codegraph/{id}/why/{node_id}`, ohne Modell, sofort da) ist
+  `workspace/manager.py::git_log_for_lines` — `git log -L<von>,<bis>:<datei>`, also die Commits über
+  **genau diese Zeilen** statt der ganzen Datei — plus die selbst hinterlegten Begründungen aus
+  `code_rationale` (`POST`/`DELETE …/rationale`, `content_hash` → `stale` wie bei `note_citations`).
+  Die vier „es gibt nichts"-Fälle (`no_git`/`no_repo`/`no_commits`/`untracked`) werden über
+  **Rückgabewerte** unterschieden, nicht über den Meldungstext: git ist übersetzt, und auf einem
+  deutschen System hiesse eine Suche nach englischen Wortfetzen „Fehler", wo nur nichts aufgezeichnet
+  ist. *Hergeleitet* (`POST …/why/{node_id}`, SSE) sind genau zwei Sätze aus Code, Tests, Aufrufern und
+  Commit-Betreffen, gestrichelt umrandet wie eine geratene Kante, mit `verify_citations` geprüft, mit
+  `based_on`-Zahlen daneben und **nicht persistiert**. Tests werden über die **Symbolart**
+  `NodeKind::Test` der Aufrufer gefunden, nicht über die Kantenart `tested_by`: die ist in `cs-core`
+  deklariert, wird aber nirgends erzeugt, und eine Abfrage darauf sähe aus wie „keine Tests".
+- **`POST /codegraph/{id}/explain/{node_id}`** (`codegraph/explain.py`, SSE) erklärt ein einzelnes Symbol.
+  Getrennt von `/ask`, weil hier nicht gesucht, sondern nachgeschlagen wird: `get_node` liefert Fakten
+  *und* Quelltext, und genau dieses Nachschlagen ist die Lizenz zum Zitieren. Ohne Werkzeuge (der
+  Kontext steht schon im Prompt), mit `verify_citations` wie jede andere Antwort, ohne Persistenz — eine
+  Erklärung veraltet mit der nächsten Dateiänderung.
+- **Das Gespräch** (`CodeChatPanel.tsx`, `code_chats`/`code_chat_turns`, `POST …/chats/{id}/ask` als
+  SSE) ist die rechte Spalte von `/code` und beantwortet die andere Frageform: *wo passiert Feature X*.
+  Antwort **plus Trefferliste plus Karte** — ein Absatz allein ist auf diese Frage keine Antwort. Jeder
+  Eintrag der Trefferliste trägt, **warum** er dort steht (`zitiert` > `spur` > `nachgeschlagen` >
+  `vorab-suche`), weil „belegt zitiert" und „lag im Kontext" sonst gleich aussähen; „auf der Karte
+  zeigen" baut daraus eine Mehrwurzel-Karte (`useMultiFocusMap`, `pickMapRoots` — höchstens
+  `MAX_MAP_ROOTS = 8` Wurzeln, jede kostet zwei Anfragen, und wie viele es insgesamt waren steht
+  daneben). Zwei Dinge dahinter sind heikel und deshalb ausdrücklich: `context_build` nimmt ein
+  **`extend`** (Standard weiter `false`), damit die *Zitierlizenz mit dem Gespräch wächst* statt mit
+  jeder Frage zu verfallen — eine Rückfrage darf zitieren, was Runde eins gezeigt bekam; und
+  `build_with(broad=true)` fährt Namens- **und** Volltextsuche immer zusammen statt Volltext nur als
+  Notnagel, plus `GERMAN_TO_CODE` in `cs-llm/src/context.rs` (~45 Stämme: `passwor` → `password`/`hash`/
+  `credential`), weil „Wo werden die Passwörter verschlüsselt?" in einer englischen Codebasis sonst nie
+  ankommt. **Kein Embedding-Index** — er wäre ein zweiter, alternder Bestand neben einem exakten und
+  bräche die Offline-Zusage.
+- **Der Tab in der Werkstatt** (`frontend/src/pages/CodeGraphPanel.tsx`, dritter `resultTab` in
+  `WorkstationPage.tsx`) und `CodeAskPanel.tsx` (Einzelfrage) bleiben unverändert für das Nachschlagen
+  *neben dem Editor* — in einer 26 % breiten Spalte ist ein Faden mit Trefferliste falsch. Beide teilen sich
+  `pages/codegraph/shared.tsx` (`Confidence`, `Relevance`, `SymbolRow`, `NeighbourList`,
+  `ConfidenceLegend`, `useCodeIndex`) — die Marker ●◐○◆ und die Bezeichnungen sind Vokabular und dürfen
+  nicht zweimal existieren.
+
+### Code-Graph Stufe 2 — Schreiben, ohne dass Schreiben gefährlich wird
+
+Stufe 1 („Verstehen") macht den Code lesbar. Stufe 2 macht das Werkzeug
+**schreibfähig**, und dermassen, dass jeder Schreibschritt einen Rückweg hat
+und eine Änderung *vor* der Ausführung zeigt, was sie mitreisst. Vier Bausteine,
+die aufeinander aufbauen; alle fail-soft ohne `cs`-Binary **und** ohne LLM.
+
+- **Git-Checkpoints** (`workspace/checkpoints.py`, `POST /workspaces/{id}/checkpoints`,
+  `PATCH /codegraph/{id}/symbol/{node_id}/source` und `PUT /workspaces/{id}/file` lösen
+  automatisch aus). Ein Checkpoint berührt **weder HEAD noch Index noch Arbeitsbaum**
+  des Nutzers: alternative Index-Datei via `GIT_INDEX_FILE=<tmp>` → `git add -A` →
+  `write-tree` → `commit-tree [-p HEAD]` → `update-ref refs/paperkg/checkpoints/<id>`.
+  Die Refs liegen bewusst unter `refs/paperkg/`, damit `git gc` die Objekte nicht
+  einsammelt. Repo ohne Commits (kein HEAD) → elternloser Commit. `.gitignore` wird
+  respektiert (eine ignorierte, aber wichtige Datei ist **nicht** gesichert — das
+  steht in der UI). Rücksprung: Vorschau (`plan_hash`) → Bestätigung → vorher einen
+  `pre_restore`-Checkpoint → pfadweises `git restore --source=<sha> --worktree`.
+  Aufräumen: pro Projekt die letzten 50 automatischen behalten, manuelle nie.
+  Tabelle `code_checkpoints` in der DuckDB; **nicht** in `PROJECT_SCOPED_TABLES`.
+- **Auswirkungsanalyse** (`GET /codegraph/{id}/impact/{node_id}`, `ImpactPanel.tsx`,
+  Mittelspalten-Tab „Auswirkung"). `Graph::impact` in `cs-graph/src/query.rs` läuft
+  **rückwärts** (`WITH RECURSIVE back`), mit Hop-Distanz und mitgeführter schwächster
+  Sicherheit (`MIN(conf_rank)` auf dem Pfad, `MAX` über Pfade — eine Kette mit einer
+  geratenen Kante ist geraten; ein verifizierter Weg genügt). `tests` über
+  `kind='test'` (nicht `tested_by`, die nie erzeugt wird), `dynamic_gaps` als
+  ausdrückliche Grenze, `truncated` sichtbar. **Vorschaltdialog** beim Speichern im
+  Code-Editor (`CodeEditorPanel.tsx::gateSave`, localStorage `sciencekg.code.impactSkip`).
+  Mitgefixt: `cs-index/src/parse.rs` klassifiziert `test_*`-**Methoden** als `Test`
+  (war nur `Function`) → `SCHEMA_VERSION` 2 → alter Index wird verworfen.
+- **Was-wäre-wenn-Sandbox** (`workspace/sandbox.py`, `/workspaces/{id}/sandboxes*`,
+  `SandboxPanel.tsx`, Tab „Probelauf"). `git worktree add --detach
+  data/sandboxes/<id> <checkpoint_sha>` — nur ein Checkpoint-Commit sichert die
+  unversionierten Änderungen; ein Worktree auf `HEAD` verlöre sie. Ignorierte Ordner
+  (`node_modules`, `.venv`, `target`) fehlen im Worktree (nicht verlinkt — ein Symlink
+  machte Sandbox-Schreiben im Original wirksam). Testbefehl erkannt
+  (pytest/npm/cargo), argv-Liste ohne Shell, Timeout. Übernahme in den Hauptbaum nur
+  auf Knopfdruck, mit Checkpoint davor. Tabelle `code_sandboxes`. Der Pool
+  (`codegraph/pool.py`) indexiert einen Sandbox-Stand unter
+  `data/codegraph/<id>__sb_<sandbox_id>/` ohne Rust-Änderung.
+- **Spaghetti-Löser** (Tab „Knäuel", `TanglePanel.tsx`). Diagnose ohne LLM:
+  `GET /codegraph/{id}/hotspots` (`Graph::hotspots` in `cs-graph/src/hotspots.rs` —
+  jede Fundstelle trägt, *welche* Regel sie gerissen hat und mit welchem Messwert;
+  `churn=0` fällt auf das obere Dezil dieses Index) und
+  `GET /codegraph/{id}/cycles?level=file|symbol` (`Graph::cycles` in
+  `cs-graph/src/cycles.rs` — iterativer Tarjan-SCC, Dateien über `Imports`, Symbole
+  über `Calls`, jeder Ring mit Belegkanten und schwächster Sicherheit; ein
+  `build_*_adjacency`-Zweig pro Ebene). Vorschlag mit LLM:
+  `POST /codegraph/{id}/refactor/{node_id}` (SSE, `codegraph/refactor.py`) verlangt
+  JSON mit **vollständigem neuem Dateiinhalt** (keine Zeilenoperationen) und prüft
+  Pfade (`resolve_within` — `../../etc/passwd` fällt) + Python-Syntax (`compile`)
+  in `validate_proposal`, **bevor** etwas geschrieben wird. `POST …/refactor/{node_id}/try`
+  wendet den geprüften Vorschlag in einer Sandbox an + läuft den Testbefehl (SSE);
+  Übernahme ist der getrennte `…/sandboxes/{id}/apply`-Schritt. Systemprompt wörtlich
+  in `codegraph/refactor.py:SYSTEM_PROMPT`.
+
+Zwei Konventionen aus Stufe 2, die tragend sind: **Checkpoints** werden vor jedem
+Schreiben gezogen (`auto_symbol_write`/`auto_file_write`/`auto_refactor`/
+`auto_sandbox_apply`/`pre_restore`), und ein Fehlschlag blockiert das Schreiben
+**nicht** — die Antwort trägt `checkpoint: null` und `checkpoint_reason`, und die UI
+sagt es statt es zu verschweigen (git ist lokalisiert, deshalb Rückgabewerte, nicht
+Meldungstexte — wie `git_log_for_lines`). Und **keine erfundene Gesamtnote** bei
+Hotspots: jede Fundstelle führt ihre gerissene Regel und ihren Messwert, das
+Belegprinzip auf Zahlen übertragen.
+
+**Die Karte ist gerichtet, nicht kräftebasiert** (`columnLayout.ts`): wer aufruft steht links, was
+aufgerufen wird rechts, das betrachtete Symbol in der Mitte. Bei einem Aufrufgraphen *ist* die Richtung
+die Aussage; ein Knäuel, in dem man Pfeilspitzen einzeln absucht, beantwortet die Frage nicht, für die
+man die Karte aufgemacht hat. Das Layout läuft synchron (eine Sortierung je Spalte, keine Simulation —
+ein Worker brächte nur Verzögerung), ist deterministisch, und eine Spalte mit mehr als zwölf Knoten
+zerfällt in Unterspalten *vom Fokus weg*, damit aus zweiundzwanzig Aufrufern kein fensterhoher Streifen
+wird.
+
+Drei weitere Dinge sind Messung, nicht Geschmack: die Karte fragt **nie `direction=both`**
+(`Graph::slice` trägt im Both-Zweig auch eingehende Kanten als ausgehende ein,
+`cs-graph/src/query.rs:411` — in einer Liste unauffällig, auf einer Pfeilkarte falsch; ausserdem wäre die
+Seite eines Knotens dann gar nicht mehr feststellbar); ein Zusammenführen über `MAX_MAP_NODES = 600` wird
+**ganz** verworfen statt halb angewandt, weil ein halb erweiterter Graph aussieht wie ein vollständiger;
+und `contains` ist standardmässig aus (eine Datei enthält hunderte Symbole). Reine Helfer liegen in
+`codeMap.ts`, `columnLayout.ts` und `summary.ts` und sind getestet.
+
+**Die Regel des Werkzeugs: keine Kante ohne Beleg.** Jede Beziehung trägt ihre Quellzeile *und* ihre
+Sicherheitsstufe — `verified` ● / `resolved` ◐ / `guessed` ○ / `measured` ◆ —, und was statisch nicht
+auflösbar ist (Reflection, `eval`, DI), steht als `dynamic_gap` sichtbar im Graphen statt zu fehlen. Jede
+Anzeige muss beides danebenstellen; ohne das ist eine geratene Kante von einer belegten nicht zu
+unterscheiden, und das Werkzeug verliert seinen Zweck. Der Vermutungsanteil steht dauerhaft in der Tableiste.
+
+- **Die Naht ist `cs serve`** (`codesearch/crates/cs-workspace/src/serve.rs`): NDJSON über stdin/stdout,
+  eine Zeile rein, eine Zeile raus, Fortschritt als `{"event":"progress"}`-Zeilen dazwischen. Bewusst kein
+  HTTP (kein Port, kein Auth, keine neue Rust-Abhängigkeit; das Kind stirbt mit dem Elternprozess).
+  `Server::call` ist von der stdio-Schleife getrennt, damit die Dispatch-Tabelle testbar bleibt.
+- **Python-Seite `codegraph/`**: `binary.py` (wo liegt `cs`), `rpc.py` (ein Kindprozess), `pool.py` (ein
+  lebendes Kind je Projekt, Leerlauf-Räumung), `service.py` (Indizieren + Buchführung), `positions.py`.
+  In `rpc.py` liest ein **Thread** stdout in eine Queue — ein blockierendes `readline` im Aufrufer hieße,
+  dass ein hängendes Kind das Backend mitnimmt (derselbe Keil wie beim PDF-Parsen). Läuft ein Aufruf in den
+  Timeout, wird der Client **beendet**: käme die Antwort später doch, würde sie dem *nächsten* Aufruf
+  zugeordnet und das Protokoll wäre dauerhaft verschoben.
+- **Indizes liegen unter `data/codegraph/<code_project_id>/index.csdb`**, nie im Repository des Nutzers.
+  Dafür gibt es `Workspace::open_with_db` — `Workspace::open` verdrahtet `<root>/.codesearch/`, was in
+  fremden Checkouts Müll hinterließe. Reiner Cache: gitignored, per `DELETE /codegraph/{id}/index` weg,
+  **nicht** Teil von Projekt-Bundles (wie Kuzu). Eigene SQLite-Dateien, weil DuckDB genau einen Schreiber
+  verträgt und diese hier ein Kindprozess schreibt; in `metadata.duckdb` steht nur die Buchführung
+  (`code_indexes`, `code_paper_links`, `code_answers`).
+- **Kantenarten und Symbolarten werden validiert, nicht durchgereicht.** `ALL_EDGE_KINDS`/`ALL_NODE_KINDS`
+  in `api/routers/codegraph.py` spiegeln `cs-core/src/lib.rs:140-236`; `EdgeKind::from_str` verwirft auf
+  der Rust-Seite still, was es nicht kennt, und fällt dann auf einen Standardsatz zurück — ohne die
+  Prüfung sähe `?edges=call` aus wie ein Ergebnis. Die Routen `GET …/neighbours/{id}` (alle 14
+  Kantenarten, `blueprint` kennt nur drei), `GET …/path?from=&to=` (kürzester **Aufruf**pfad; `null`
+  heisst nicht „keine Beziehung", die Rekursion verfolgt nur calls/reads/writes) und `GET …/top?kind=`
+  (auch route/db_table/test/config_key/dynamic_gap, die `overview` fest verdrahtet weglässt) machen
+  erreichbar, was vorher indiziert und an der API-Grenze verworfen wurde.
+- **Knoten-IDs sind immer Hex-Strings**, nie Zahlen. Es sind 64-Bit-blake3-Hashes; als JS-`number` verlieren
+  sie stillschweigend ihre unteren Bits und zeigen auf ein anderes Symbol. Durchgesetzt in
+  `cs-core/src/ids.rs` (eigenes `Serialize`/`Deserialize` statt `#[serde(transparent)]`), mit Test.
+- **Die Belegprüfung bleibt in Rust.** `tool_call` (die 8 Graph-Werkzeuge), `context_build` und
+  `verify_citations` teilen sich eine `Session` pro Gespräch — die *Lizenz zum Zitieren*: zitiert werden darf
+  nur, was in derselben Sitzung nachgeschlagen wurde. Ein Modell könnte sonst eine echte Datei mit einer
+  plausiblen Zeilennummer erfinden. Vier Prüfungen: Datei im Index? Zeilen nachgeschlagen? Datei seither
+  unverändert? Wörtliches Zitat byte-gleich? (`cs-llm/src/citation.rs`, Tests in `tests/hallucination.rs`.)
+- **Der Begleiter** (`codegraph/companion.py`, `POST /codegraph/{id}/ask` als SSE, Fragen-Tab in
+  `CodeAskPanel.tsx` — Anbieter/Modell kommen aus `components/LlmPicker.tsx`, dieselbe Komponente wie in
+  der Kopfzeile; „erbt global" sendet `null`, damit der Router bei `config.yaml` bleibt statt eine alte
+  Wahl einzufrieren) fährt die Werkzeugschleife: `session_reset` → `context_build` → `tool_specs` →
+  `LLMRouter.chat_with_tools` → `tool_call` → `verify_citations`. Systemprompt wörtlich aus
+  `cs-llm/src/lib.rs`. Drei Dinge stehen dort aus Messung, nicht aus Geschmack: **Werkzeuge nur bei dünner
+  Vorab-Suche** (`matched_by_name`/`symbols`) — mit vollständigem Kontext *und* Werkzeugen schlägt ein
+  kleines lokales Modell trotzdem neunmal nach; **`MAX_ROUNDS = 3`**, weil jede Runde den gewachsenen
+  Prompt neu verarbeitet; und die **Byte→UTF-16-Umrechnung** der Zitat-Versätze (`_utf16_offsets`), weil
+  Rust in Bytes und JavaScript in UTF-16 zählt und die Beleg-Chips sonst um jedes Umlaut-Byte verrutschen.
+  Ein Spur-Schritt auf nie abgerufenen Code wird **markiert, nicht entfernt**. Geprüfte Antworten landen
+  in `code_answers` (`GET/DELETE …/answers`).
+- **`LLMRouter.chat_with_tools`** ist die Schwestermethode zu `chat()` (die gibt `str` zurück und wird
+  überall so benutzt — ein anderer Rückgabetyp wäre ein Bruch quer durchs Repo). Aufrufer schreiben immer
+  **OpenAI-Nachrichten**; Anthropic (`tool_use`/`tool_result`-Blöcke, aufeinanderfolgende Ergebnisse in
+  *einer* `user`-Nachricht) und Ollama (Argumente als Objekt, nicht als String) werden im Router
+  übersetzt. 400/422 auf `tools` → einmal ohne wiederholen und `tool_calling_fallback` in
+  `last_response_metadata` vermerken; ohne den Vermerk hielte der Aufrufer eine werkzeuglose Antwort für
+  eine Entscheidung des Modells. Tests: `tests/test_llm_router_tools.py`.
+- **Diagramme** (`class_diagram`/`sequence_diagram` in `serve.rs`, `GET …/diagram/{node_id}?kind=`,
+  `CodeDiagramPanel.tsx` mit dynamisch importiertem mermaid). Ein Bild ist das Autoritativste, was das
+  Werkzeug ausgeben kann — deshalb ist eine geratene Kante **gestrichelt** *und* steht zusätzlich in einer
+  Liste mit ●◐○ und `datei:zeile`. Das Bild allein ließe sich nicht nachprüfen.
+- **Papers ↔ Code**: `use_papers` im Fragen-Tab hängt `HybridRetriever`-Auszüge in den Prompt und schaltet
+  `PAPERS_PROMPT` dazu. Papers werden mit `[arxiv:…]` zitiert, Code mit `pfad:zeile`; ein nacktes `[1]`
+  wird gezählt und gemeldet (`bare_citations`), wie `CLAUDE.md` es verlangt. Eine Paper-ID, die nicht
+  abgerufen wurde, zählt nicht als Zitat.
+- **Code-Zitate in Notizen** ohne zweite Tabelle: `POST …/cite` schreibt nach `note_citations` mit
+  `source_kind='code'`, der synthetischen `paper_id` `code:<projekt>:<pfad>:<zeile>` (die Spalte ist
+  `NOT NULL`, alle bestehenden Leser laufen unverändert weiter) und dem `content_hash` der Datei zum
+  Zeitpunkt des Zitierens. `GET …/citations?note_id=` vergleicht ihn mit dem aktuellen Stand → `stale`.
+  Der Zeilenbereich gehört in die Zitat-ID, aber **nur wenn gesetzt** — sonst bekämen alle bestehenden
+  Paper-Zitate neue IDs und das nächste Anhängen legte Dubletten an.
+- **Terminal-Sprungmarken**: `codegraph/positions.py` (Port von `cs_pty::find_positions`, ohne Regex) hängt
+  am selben Ausgabe-Puffer wie die Dev-URL-Erkennung in `WorkstationPage.tsx`. Die *Ablehnungen* sind der
+  Inhalt — `14:30 Uhr`, `Verhältnis 3:1`, `107 Tests` dürfen keine Dateipositionen werden.
+- **Angedockt**: der Desktop-Companion kennt `use_code` + `code_project_id` neben `use_papers`/`use_web`
+  (`_companion_context` in `api/product_main.py`, Schalter im Overlay); die Analyse-Werkstatt nimmt
+  `code_project_id` und bekommt Kennzahlen + wichtigste Symbole als Planer-Kontext
+  (`_code_graph_context` in `api/routers/analysis.py`) — damit wird das Repository selbst zum Gegenstand
+  einer Analyse. Beides fail-soft: ohne Binary oder Index gibt es eben keinen Zusatz.
+- Ohne gebautes Binary ist nichts kaputt: `GET /codegraph/{id}` meldet `binary_available: false` samt
+  Baubefehl, das Panel zeigt den Hinweis, der Rest der App läuft. Bauen:
+  `python packaging/build_codesearch.py` (→ `src-tauri/sidecar/codesearch/`, als Tauri-Resource gebündelt).
+  Der Build braucht **kein** libwebkit2gtk — die einzige Crate, die `tauri` zog, war CodeSearchs eigene
+  Desktop-Schale, und die wurde nicht mit einvendoret.
+- `codesearch/` ist ab dem Import die maßgebliche Kopie (Upstream hat kein git-Remote). Tests:
+  `cargo test --manifest-path codesearch/Cargo.toml --workspace`, `tests/test_codegraph.py` und
+  `tests/test_codegraph_companion.py` (beide überspringen sich selbst ohne Binary),
+  `tests/test_llm_router_tools.py` (offline), `frontend/src/pages/CodeAskPanel.test.tsx` +
+  `CodeDiagramPanel.test.ts` sowie in `pages/codegraph/` `codeMap.test.ts`, `columnLayout.test.ts`,
+  `clusterLayout.test.ts`, `summary.test.ts` und `useCodeMap.test.tsx`.
+
 ### Datensätze (dataset registries)
 Alongside papers, the app harvests **dataset references** from free registries via
 `harvester/dataset_clients.py` (`search_datasets` aggregates Zenodo, Figshare, Dryad,
@@ -283,6 +542,21 @@ python -m quality.phase4_eval --provider lm_studio --output data/eval/phase4_lm_
   Everything that counts "how many papers can I extract?" goes through **`frontend/src/extractionCounts.ts`** —
   one formula for the page badge, the batch panel and the pipeline tile, because two independent counts (PDF-only
   vs. PDF+abstract) read as a contradiction.
+- **PDF-Parsing läuft im Kindprozess** (`parsing/pdf_guard.py` + `parsing/pdf_child.py`). Eine einzelne Seite
+  mit grosser Vektor-Grafik lässt pdfplumber *und* pypdf unbegrenzt Speicher allokieren, ohne je fertig zu
+  werden (gemessen an einem 19-MB-EuropePMC-PDF: ~11 MB/s, kein Ende) — im Backend-Prozess endete das in
+  10 GB RSS, totem uvicorn-Listener und OOM. `MarkerParser.parse()` ist deshalb nur noch die Schutzhülle,
+  der echte Parser heisst `parse_direct()`. Grenzen kommen aus dem `parsing:`-Block in `config.yaml`: das
+  RAM-Budget skaliert mit dem *freien* Speicher (`memory_fraction`, geklemmt zwischen `memory_min_mb` und
+  `memory_max_mb`), der Timeout ist absichtlich gross (`pdf_timeout_seconds`, Default 40 min), weil auf
+  langsamer Hardware auch legitime PDFs lange brauchen. Jede fertige Seite wird sofort in eine JSONL-Datei
+  geschrieben, damit ein abgeschossenes Kind nicht alles verliert (Seiten 0–21 bleiben, wenn Seite 22 hängt).
+  Bei `sys.frozen` (PyInstaller-Sidecar) gibt es keinen `-m`-Start, dort wird ungeschützt geparst.
+  **Nicht** `multiprocessing` verwenden: `spawn` importiert im Kind das `__main__` des Elternprozesses neu —
+  unter uvicorn ist das dessen CLI-Modul.
+- **`POST /extraction/batch` legt die `batch_jobs`-Zeile sofort an**, bevor PDFs aufgelöst werden. Das
+  Frontend erzeugt die `job_id` selbst (`ExtractionPage.tsx`) und pollt `/extraction/batch/{id}/items` ab
+  dem Abschicken; wird die Zeile erst in `process_papers` geschrieben, antwortet jeder Poll bis dahin 404.
 - **LLM failures are classified in `query/llm_errors.py`** (`quota | rate_limit | auth | context_length |
   connection | empty | unknown`). The kind rides through `batch_job_items.error_message` /
   `extraction_results.error_message` as a `"[llm:<kind>] …"` prefix (`tag_error`/`parse_tagged_error`, mirrored in

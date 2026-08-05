@@ -1,0 +1,25 @@
+display = "Ruby"
+extensions = ["rb", "rake", "gemspec"]
+comment_prefixes = ["#"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if", "elsif", "unless", "while", "until", "for", "when", "rescue",
+  "conditional", "binary",
+]
+block_nodes = ["body_statement", "block", "do_block"]
+
+test_prefixes = ["test_"]
+test_suffixes = ["_test", "_spec"]
+entry_names = ["main", "call"]
+
+[effects]
+file_read = ["File.read", "File.open", "IO.read", "Dir.glob", "readlines"]
+file_write = ["File.write", "File.delete", "FileUtils.", "Dir.mkdir"]
+network = ["Net::HTTP", "HTTParty", "RestClient", "Faraday", "TCPSocket"]
+database = ["ActiveRecord", "where(", "find_by", "execute(", "save!", "update!"]
+process_spawn = ["system(", "spawn(", "Process.", "exec(", "`"]
+console = ["puts", "print", "pp ", "logger.", "Rails.logger", "warn"]
+randomness = ["rand(", "SecureRandom", "shuffle", "sample"]
+time = ["Time.now", "Date.today", "DateTime.now", "sleep"]
+environment = ["ENV[", "ENV.fetch"]

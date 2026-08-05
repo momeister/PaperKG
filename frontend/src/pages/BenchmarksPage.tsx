@@ -4,6 +4,7 @@ import { FlaskConical, Gauge, Play, Trash2 } from "lucide-react";
 
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { LlmPicker } from "../components/LlmPicker";
 import { MetricCard } from "../components/MetricCard";
 import { Status } from "../components/Status";
 import { useAppState } from "../state";
@@ -23,7 +24,6 @@ export function BenchmarksPage() {
   const providers = providersQuery.data?.providers ?? [];
   const activeProviderName = provider || globalProvider || providersQuery.data?.default_provider || providers[0]?.name || "";
   const activeProvider = providers.find((entry) => entry.name === activeProviderName);
-  const modelOptions = activeProvider?.models ?? [];
   const activeModel = model || globalModel || activeProvider?.default_model || "";
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["benchmark-runs"] });
@@ -99,29 +99,21 @@ export function BenchmarksPage() {
             </div>
             <Gauge size={18} />
           </div>
-          <div className="benchmark-model-row">
-            <label>
-              Provider
-              <select value={activeProviderName} onChange={(event) => { setProvider(event.target.value); setModel(""); }}>
-                {providers.map((entry) => (
-                  <option key={entry.name} value={entry.name}>
-                    {entry.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Modell
-              <select value={activeModel} onChange={(event) => setModel(event.target.value)}>
-                {activeModel && !modelOptions.includes(activeModel) ? <option value={activeModel}>{activeModel}</option> : null}
-                {modelOptions.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {/* Erbt die globale Wahl, solange nichts eigenes gesetzt ist. Die
+              Modellliste enthält jetzt auch die *erkannten* Modelle — vorher
+              standen hier nur die aus config.yaml, und ein frisch in LM Studio
+              geladenes Modell war nicht auswählbar. */}
+          <LlmPicker
+            variant="inline"
+            provider={provider || undefined}
+            model={model || undefined}
+            onProviderChange={(next) => {
+              setProvider(next ?? "");
+              setModel("");
+            }}
+            onModelChange={(next) => setModel(next ?? "")}
+            inheritFrom={{ provider: globalProvider, model: globalModel }}
+          />
           <div className="button-row">
             <button
               className="button button-primary"

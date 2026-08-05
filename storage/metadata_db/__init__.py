@@ -15,6 +15,7 @@ from storage.metadata_db.notes import NotesMixin
 from storage.metadata_db.grey_sources import GreySourcesMixin
 from storage.metadata_db.sessions import SessionsMixin
 from storage.metadata_db.code_projects import CodeProjectsMixin
+from storage.metadata_db.codegraph import CodeGraphMixin
 from storage.metadata_db.analysis import AnalysisMixin
 from storage.metadata_db.datasets import DatasetsMixin
 from storage.metadata_db.pdf_annotations import PdfAnnotationsMixin
@@ -23,7 +24,7 @@ from storage.metadata_db.companion import CompanionMixin
 from storage.metadata_db.project_scope import ProjectScopeMixin
 
 
-class MetadataDB(SchemaMixin, PapersMixin, ExtractionMixin, BatchMixin, EmbeddingsMixin, NotesMixin, GreySourcesMixin, SessionsMixin, CodeProjectsMixin, AnalysisMixin, DatasetsMixin, PdfAnnotationsMixin, BenchmarkMixin, CompanionMixin, ProjectScopeMixin, MetadataDBBase):
+class MetadataDB(SchemaMixin, PapersMixin, ExtractionMixin, BatchMixin, EmbeddingsMixin, NotesMixin, GreySourcesMixin, SessionsMixin, CodeProjectsMixin, CodeGraphMixin, AnalysisMixin, DatasetsMixin, PdfAnnotationsMixin, BenchmarkMixin, CompanionMixin, ProjectScopeMixin, MetadataDBBase):
     """Full DuckDB metadata store (see domain mixins for grouped methods)."""
 
 

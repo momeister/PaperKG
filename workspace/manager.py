@@ -291,8 +291,11 @@ def git_available() -> bool:
     return shutil.which("git") is not None
 
 
-def _run_git(root: Path, args: list[str]) -> tuple[int, str, str]:
+def _run_git(
+    root: Path, args: list[str], *, env: dict[str, str] | None = None
+) -> tuple[int, str, str]:
     try:
+        run_env = {**os.environ, **env} if env else None
         proc = subprocess.run(
             ["git", *args],
             cwd=str(root),
@@ -301,6 +304,7 @@ def _run_git(root: Path, args: list[str]) -> tuple[int, str, str]:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            env=run_env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)
@@ -337,6 +341,80 @@ def git_status(root: Path) -> dict[str, Any]:
             "code": (x + y).strip(),
         })
     return {"available": True, "is_repo": True, "files": files}
+
+
+#: Trennzeichen für ``--format``. Ein Zeichen, das in Autorennamen und
+#: Commit-Betreffen nicht vorkommt — ``|`` täte es, kommt aber in Betreffen
+#: durchaus vor ("fix: a|b").
+_LOG_SEP = "\x1f"
+
+
+def git_log_for_lines(
+    root: Path,
+    relpath: str,
+    start_line: int,
+    end_line: int,
+    *,
+    limit: int = 12,
+) -> dict[str, Any]:
+    """Welche Commits haben *genau diese Zeilen* angefasst?
+
+    Das ist die einzige belastbare Antwort auf „warum wurde das so gebaut" — sie
+    ist **aufgezeichnet**, nicht hergeleitet. ``git log -L`` folgt dem
+    Zeilenbereich über Umbenennungen und Verschiebungen hinweg, was ein
+    ``git log -- datei`` nicht tut.
+
+    Vier Fälle müssen sauber durchkommen statt zu werfen; alle vier sind
+    Normalzustände und keine Fehler:
+
+    * kein ``git`` auf dem Rechner → ``reason: "no_git"``
+    * kein Repository (ein einfach geöffneter Ordner) → ``reason: "no_repo"``
+    * Repository ohne Commits → ``reason: "no_commits"``
+    * Datei nie committet → ``reason: "untracked"``
+
+    Die letzten beiden werden über **Rückgabewerte** unterschieden, nicht über
+    den Text der Fehlermeldung: ``git`` ist übersetzt, und auf einem deutschen
+    System sagt es „Ihr aktueller Branch hat noch keine Commits" statt
+    ``fatal: your current branch … does not have any commits yet``. Eine Suche
+    nach englischen Wortfetzen fiele dort auf ``reason: "error"`` zurück, und
+    die Oberfläche zeigte einen Fehler, wo nur nichts aufgezeichnet ist.
+    """
+    if not git_available():
+        return {"available": False, "reason": "no_git", "commits": []}
+    if not is_git_repo(root):
+        return {"available": False, "reason": "no_repo", "commits": []}
+    if _run_git(root, ["rev-parse", "--verify", "-q", "HEAD"])[0] != 0:
+        return {"available": False, "reason": "no_commits", "commits": []}
+    if _run_git(root, ["ls-files", "--error-unmatch", "--", relpath])[0] != 0:
+        return {"available": False, "reason": "untracked", "commits": []}
+
+    start = max(1, int(start_line))
+    end = max(start, int(end_line))
+    code, out, err = _run_git(
+        root,
+        [
+            "log",
+            f"-L{start},{end}:{relpath}",
+            "--no-patch",
+            f"--format=%h{_LOG_SEP}%an{_LOG_SEP}%ad{_LOG_SEP}%s",
+            "--date=short",
+            f"-{max(1, int(limit))}",
+        ],
+    )
+    if code != 0:
+        return {"available": False, "reason": "error", "error": err.strip(), "commits": []}
+
+    commits: list[dict[str, str]] = []
+    for line in out.splitlines():
+        if _LOG_SEP not in line:
+            continue
+        parts = line.split(_LOG_SEP, 3)
+        if len(parts) < 4:
+            continue
+        commits.append(
+            {"hash": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]}
+        )
+    return {"available": True, "reason": None, "commits": commits}
 
 
 def git_diff(root: Path, relpath: str | None = None) -> dict[str, Any]:

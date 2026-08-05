@@ -1,0 +1,27 @@
+display = "Rust"
+extensions = ["rs"]
+comment_prefixes = ["//", "///", "//!"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if_expression", "match_arm", "while_expression", "loop_expression",
+  "for_expression", "binary_expression", "if_let_expression", "try_expression",
+]
+block_nodes = ["block"]
+# `impl Edge { fn new }` makes `new` into `Edge.new`.
+qualifier_nodes = ["impl_item"]
+
+test_prefixes = ["test_"]
+test_suffixes = ["_test"]
+entry_names = ["main"]
+
+[effects]
+file_read = ["File::open", "read_to_string", "fs::read", "read_dir", "BufReader"]
+file_write = ["File::create", "fs::write", "write_all", "create_dir", "remove_file", "rename"]
+network = ["reqwest", "TcpStream", "hyper::", "ureq", "TcpListener"]
+database = ["query(", "execute(", "prepare(", "sqlx::", "diesel::", "rusqlite"]
+process_spawn = ["Command::new", "process::Command", "spawn("]
+console = ["println!", "eprintln!", "print!", "tracing::", "log::", "dbg!"]
+randomness = ["rand::", "thread_rng", "Uuid::new"]
+time = ["Instant::now", "SystemTime::now", "Utc::now", "sleep("]
+environment = ["env::var", "env::vars", "std::env"]

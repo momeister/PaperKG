@@ -14,7 +14,8 @@ import {
   PanelLeftOpen,
   Settings,
   SlidersHorizontal,
-  Telescope
+  Telescope,
+  Waypoints
 } from "lucide-react";
 
 import { api, API_BASE_URL } from "./api";
@@ -22,8 +23,10 @@ import { MotionProvider } from "./motion";
 import { AppStateContext, clampFontScale, FONT_SCALE_STEP, normalizeTheme, THEME_META } from "./state";
 import type { LlmParams, Theme } from "./state";
 import { ConstellationMark } from "./components/ConstellationMark";
+import { LlmPicker } from "./components/LlmPicker";
 import { Status } from "./components/Status";
 import { ThemePicker } from "./components/ThemePicker";
+import { useLlmProviders } from "./hooks/useLlmProviders";
 // The overlay-family pages stay statically imported: they render in the four extra
 // Tauri windows (early returns below, never through <Routes>) and must appear
 // instantly — the control border/pointer ring can't wait for a chunk fetch.
@@ -46,12 +49,18 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ de
 const WorkspacePage = lazy(() => import("./pages/WorkspacePage").then((m) => ({ default: m.WorkspacePage })));
 const WorkstationPage = lazy(() => import("./pages/WorkstationPage").then((m) => ({ default: m.WorkstationPage })));
 const JupyterPage = lazy(() => import("./pages/JupyterPage").then((m) => ({ default: m.JupyterPage })));
+const CodeGraphPage = lazy(() => import("./pages/codegraph/CodeGraphPage").then((m) => ({ default: m.CodeGraphPage })));
 
 const navigation = [
   { to: "/forschung", label: "Forschung", icon: Telescope, group: "Erkunden" },
   { to: "/library", label: "Library", icon: Library, group: "Erkunden" },
   { to: "/workspace", label: "Arbeitsplatz", icon: Columns3, group: "Arbeiten" },
   { to: "/werkstatt", label: "Werkstatt", icon: Code2, group: "Arbeiten" },
+  // Gruppe "Arbeiten", nicht "Analyse": dort steht schon /graph, der Wissensgraph
+  // über Papers. Zwei Einträge namens "Graph" untereinander wären das Erste, was
+  // man verwechselt — hier steht der Code-Graph neben der Werkstatt, deren
+  // Projekte er erklärt.
+  { to: "/code", label: "Code-Graph", icon: Waypoints, group: "Arbeiten" },
   { to: "/jupyter", label: "Jupyter", icon: Notebook, group: "Arbeiten" },
   { to: "/graph", label: "Graph", icon: GitBranch, group: "Analyse" },
   { to: "/quality", label: "Quality", icon: BarChart3, group: "Analyse" },
@@ -110,19 +119,11 @@ export default function App() {
 
   const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: api.getProjects, enabled: !skipHeavyQueries });
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.getHealth, refetchInterval: 30000, enabled: !skipHeavyQueries });
-  const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders, enabled: !skipHeavyQueries });
-  // Local providers (LM Studio, Ollama) know their loaded models best — discover them
-  // live instead of relying on the static list in config.yaml.
-  const activeProviderInfo = providersQuery.data?.providers.find((item) => item.name === provider);
-  const supportsDiscovery = ["lm_studio", "ollama", "openai_compatible", "openai", "nvidia"].includes(
-    activeProviderInfo?.provider_type ?? ""
-  );
-  const discoveredModelsQuery = useQuery({
-    queryKey: ["models-discovered", provider],
-    queryFn: () => api.discoverModels(provider as string),
-    enabled: Boolean(provider) && supportsDiscovery && !skipHeavyQueries,
-    staleTime: 60_000,
-    retry: false
+  // Anbieter/Modelle: eine Quelle für die ganze App (siehe hooks/useLlmProviders).
+  // Lokale Anbieter (LM Studio, Ollama) wissen am besten, was gerade geladen ist —
+  // deshalb wird live erkannt statt der statischen Liste aus config.yaml zu glauben.
+  const { defaultProvider, selectedProvider } = useLlmProviders(provider, model, {
+    enabled: !skipHeavyQueries
   });
 
   useEffect(() => {
@@ -136,10 +137,10 @@ export default function App() {
   }, [activeProject, projectsQuery.data?.projects]);
 
   useEffect(() => {
-    if (!provider && providersQuery.data?.default_provider) {
-      setProvider(providersQuery.data.default_provider);
+    if (!provider && defaultProvider) {
+      setProvider(defaultProvider);
     }
-  }, [provider, providersQuery.data?.default_provider]);
+  }, [provider, defaultProvider]);
 
   useEffect(() => {
     activeProject ? localStorage.setItem("sciencekg.project", activeProject) : localStorage.removeItem("sciencekg.project");
@@ -186,17 +187,6 @@ export default function App() {
   const setFontScale = (scale: number) => setFontScaleState(clampFontScale(scale));
   const adjustFontScale = (delta: number) => setFontScaleState((current) => clampFontScale(current + delta));
 
-  const selectedProvider = providersQuery.data?.providers.find((item) => item.name === provider);
-  const modelOptions = useMemo(() => {
-    const merged = [...(discoveredModelsQuery.data?.models ?? []), ...(selectedProvider?.models ?? [])];
-    if (selectedProvider?.default_model) {
-      merged.push(selectedProvider.default_model);
-    }
-    if (model) {
-      merged.push(model);
-    }
-    return Array.from(new Set(merged.filter(Boolean)));
-  }, [discoveredModelsQuery.data?.models, selectedProvider, model]);
   const state = useMemo(
     () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, setTheme, toggleTheme, fontScale, setFontScale }),
     [activeProject, provider, model, llmParams, theme, fontScale]
@@ -278,27 +268,14 @@ export default function App() {
                   ))}
                 </select>
               </label>
-              <label>
-                Provider
-                <select value={provider ?? ""} onChange={(event) => setProvider(event.target.value || undefined)}>
-                  {(providersQuery.data?.providers ?? []).map((item) => (
-                    <option key={item.name} value={item.name}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="topbar-model">
-                Modell
-                <select value={model ?? selectedProvider?.default_model ?? ""} onChange={(event) => setModel(event.target.value || undefined)}>
-                  {modelOptions.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {discoveredModelsQuery.isFetching ? <span className="topbar-hint">erkenne Modelle…</span> : null}
+              <LlmPicker
+                variant="topbar"
+                provider={provider}
+                model={model}
+                onProviderChange={setProvider}
+                onModelChange={setModel}
+                enabled={!skipHeavyQueries}
+              />
             </div>
             <div className="topbar-health">
               <Status value={healthQuery.data?.status ?? "loading"} />
@@ -412,6 +389,7 @@ export default function App() {
               <Route path="/notes" element={<Navigate to="/workspace" replace />} />
               <Route path="/workspace" element={<WorkspacePage />} />
               <Route path="/werkstatt" element={<WorkstationPage />} />
+              <Route path="/code" element={<CodeGraphPage />} />
               <Route path="/jupyter" element={<JupyterPage />} />
               <Route path="/overlay" element={<OverlayPage />} />
               <Route path="/control-border" element={<ControlBorderPage />} />

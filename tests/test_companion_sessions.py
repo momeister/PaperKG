@@ -200,7 +200,7 @@ def test_selfdrive_lookup_loop_resolves_and_replans(monkeypatch, tmp_path) -> No
     router = _FakeRouter(lookup_reply, click_reply)
     client = _client(monkeypatch, router, _SD_CFG)
 
-    async def _fake_context(question, use_papers, use_web):  # noqa: ARG001
+    async def _fake_context(question, use_papers, use_web, use_code=False, code_project_id=None):  # noqa: ARG001
         return ["(Web: example.org) Anleitung — Fenster > Ebenen"], [
             {"type": "web", "url": "https://example.org", "title": "Anleitung"}
         ]
@@ -242,7 +242,7 @@ def test_selfdrive_lookup_loop_resolves_and_replans(monkeypatch, tmp_path) -> No
 
 
 def test_selfdrive_answer_endpoint(monkeypatch, tmp_path) -> None:
-    db_path = str(tmp_path / "meta.duckdb")
+    _db_path = str(tmp_path / "meta.duckdb")
     click_reply = json.dumps(
         {"thought": "ok", "action": {"type": "click", "x": 10, "y": 10, "label": "X"}, "done": False}
     )

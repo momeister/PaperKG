@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BookOpenCheck, ChevronDown, ChevronRight, Database, FileSearch, FilterX, Globe, ListChecks, Play, Plus, RefreshCw, Search, X } from "lucide-react";
 
@@ -902,10 +902,34 @@ function ExtractionClaims({ items }: { items: Array<Record<string, unknown>> }) 
 
 function ExtractionHistoryTable({ items }: { items: ExtractionHistoryItem[] }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+  const [rawText, setRawText] = useState<string | null>(null);
+  const [rawLoading, setRawLoading] = useState(false);
   const selected = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
+  useEffect(() => {
+    setShowRaw(false);
+    setRawText(null);
+  }, [selectedId]);
   if (!items.length) {
     return <EmptyState title="Keine History" />;
   }
+  const loadRaw = async (id: number) => {
+    if (rawText !== null) {
+      setShowRaw((v) => !v);
+      return;
+    }
+    setRawLoading(true);
+    try {
+      const res = await api.getExtractionResultRaw(id);
+      setRawText(res.raw_response ?? "(leer)");
+      setShowRaw(true);
+    } catch (error) {
+      setRawText(error instanceof Error ? error.message : String(error));
+      setShowRaw(true);
+    } finally {
+      setRawLoading(false);
+    }
+  };
   return (
     <div className="extraction-history-layout">
       <div className="data-table extraction-history-table">
@@ -932,10 +956,24 @@ function ExtractionHistoryTable({ items }: { items: ExtractionHistoryItem[] }) {
         <div className="extraction-history-detail">
           <strong>{selected.paper_id}</strong>
           <span>{selected.extraction_timestamp ?? ""}</span>
+          <div className="extraction-meta-strip">
+            <span>{selected.llm_provider ?? "?"}</span>
+            <span>{selected.llm_model ?? "?"}</span>
+            {selected.extraction_duration_seconds != null ? <span>{selected.extraction_duration_seconds.toFixed(1)}s</span> : null}
+            {selected.paper_type ? <span>{selected.paper_type}</span> : null}
+          </div>
           {selected.error_message ? <div className="inline-error">{selected.error_message}</div> : null}
           <ExtractionItems title="Concepts" items={selected.concepts ?? []} />
           <ExtractionItems title="Methods" items={selected.methods ?? []} />
           <ExtractionClaims items={selected.claims ?? []} />
+          <div className="extraction-history-raw-toggle">
+            <button type="button" className="ghost-button" onClick={() => loadRaw(selected.id)} disabled={rawLoading}>
+              {rawLoading ? "lade…" : showRaw ? "Raw ausblenden" : "Raw anzeigen"}
+            </button>
+          </div>
+          {showRaw && rawText !== null ? (
+            <pre className="extraction-raw-block">{rawText}</pre>
+          ) : null}
         </div>
       ) : null}
     </div>

@@ -43,6 +43,23 @@ export function evidenceLocationUncertain(
   return located === "approx_region" || located === "term_overlap_only";
 }
 
+/** Resolve a citation link's confidence to a three-level label, combining the
+ * backend `confidence` field with verification-location uncertainty. The latter
+ * can only downgrade, never upgrade. */
+export function confidenceForLink(
+  link: { confidence?: "high" | "medium" | "low"; approximate?: boolean } | null | undefined,
+  source: VerificationSource | null | undefined,
+  evidence: VerificationSource["evidence"][number] | null | undefined
+): "high" | "medium" | "low" {
+  const backend = link?.confidence;
+  const uncertain = evidenceLocationUncertain(source, evidence);
+  if (backend === "high") return uncertain ? "medium" : "high";
+  if (backend === "medium") return uncertain ? "medium" : "medium";
+  if (backend === "low") return "low";
+  // Backward compat: no backend confidence field — derive from approximate flag.
+  return (link?.approximate || uncertain) ? "low" : "high";
+}
+
 
 export async function verificationSourcesFor(payload: Answer): Promise<VerificationSource[]> {
   // The pdf_if_fits path already ships a full verification report with the answer —
@@ -360,10 +377,26 @@ export function uncitedTextSegments(
   } else if (segments.length) {
     segments[segments.length - 1].last = true;
   }
-  return segments.map((segment) => {
+  // Block-coverage: a citation at the end of a block covers every sentence in
+  // the same block (no paragraph break between them). A new "uncited unit"
+  // starts only at a paragraph break (\n\n). So a middle sentence between two
+  // citations in the same paragraph is NOT uncited. The leading fragment of a
+  // block is covered by a preceding citation only when it opens that block.
+  return segments.map((segment, index) => {
     const coveredByPrev = segment.first && prevIsCitation;
-    const coveredByNext = segment.last && nextIsCitation;
-    return { text: segment.text, uncited: !coveredByPrev && !coveredByNext && isSubstantialStatement(segment.text) };
+    // A segment is covered by the next citation when no paragraph break
+    // separates them. Check the tail of `part` after this segment for a blank
+    // line; if there is none, the next citation (if any) covers this segment.
+    const segmentEndOffset = segments
+      .slice(0, index + 1)
+      .reduce((sum, seg) => sum + seg.text.length, 0);
+    const tail = part.slice(segmentEndOffset);
+    const paragraphBreakBeforeNext = /\n\s*\n/.test(tail);
+    const coveredByNext = nextIsCitation && !paragraphBreakBeforeNext;
+    return {
+      text: segment.text,
+      uncited: !coveredByPrev && !coveredByNext && isSubstantialStatement(segment.text),
+    };
   });
 }
 
@@ -666,23 +699,28 @@ export function citationMetasFor(
       }
       seenIndices.add(linkedIndex);
       resolvedAny = true;
+      const linkedEvidence = source.evidence[linkedIndex];
+      const confidence = confidenceForLink(link, source, linkedEvidence);
       metas.push({
         source,
         evidenceIndex: linkedIndex,
-        evidenceId: source.evidence[linkedIndex]?.evidence_id,
-        // Verification uncertainty (not found in PDF / fuzzy region) marks the chip
-        // too, so confidently-but-wrongly matched citations get warned proactively.
-        approximate: Boolean(link.approximate) || evidenceLocationUncertain(source, source.evidence[linkedIndex])
+        evidenceId: linkedEvidence?.evidence_id,
+        confidence,
+        // Backward-compat flag: low confidence (or verification uncertainty) is
+        // still surfaced as `approximate` for callers that only read that field.
+        approximate: confidence === "low" || evidenceLocationUncertain(source, linkedEvidence)
       });
     }
     if (!resolvedAny) {
       const evidenceIndex = bestEvidenceIndex(source, context);
+      const fallbackEvidence = source.evidence[evidenceIndex];
+      const confidence = confidenceForLink(resolvedLinks[0], source, fallbackEvidence);
       metas.push({
         source,
         evidenceIndex,
-        evidenceId: source.evidence[evidenceIndex]?.evidence_id,
-        approximate:
-          Boolean(resolvedLinks[0]?.approximate) || evidenceLocationUncertain(source, source.evidence[evidenceIndex])
+        evidenceId: fallbackEvidence?.evidence_id,
+        confidence,
+        approximate: confidence === "low" || evidenceLocationUncertain(source, fallbackEvidence)
       });
     }
   }

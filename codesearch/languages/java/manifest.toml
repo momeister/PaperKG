@@ -1,0 +1,26 @@
+display = "Java"
+extensions = ["java"]
+comment_prefixes = ["//", "/*", "*", "/**"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if_statement", "while_statement", "for_statement", "enhanced_for_statement",
+  "do_statement", "switch_label", "catch_clause", "ternary_expression",
+  "binary_expression",
+]
+block_nodes = ["block"]
+
+test_prefixes = ["test"]
+test_suffixes = ["Test", "Tests", "IT"]
+entry_names = ["main"]
+
+[effects]
+file_read = ["Files.read", "FileInputStream", "BufferedReader", "Scanner("]
+file_write = ["Files.write", "FileOutputStream", "FileWriter", "Files.delete", "mkdir"]
+network = ["HttpClient", "URLConnection", "RestTemplate", "WebClient", "Socket("]
+database = ["executeQuery", "executeUpdate", "prepareStatement", "createQuery", "repository.", "entityManager"]
+process_spawn = ["ProcessBuilder", "Runtime.getRuntime"]
+console = ["System.out", "System.err", "logger.", "log."]
+randomness = ["Math.random", "new Random", "UUID.randomUUID"]
+time = ["System.currentTimeMillis", "LocalDate.now", "Instant.now", "nanoTime", "Thread.sleep"]
+environment = ["System.getenv", "System.getProperty"]

@@ -1,0 +1,28 @@
+display = "TSX"
+extensions = ["tsx"]
+comment_prefixes = ["//", "/*", "*"]
+doc_style = "leading_comment"
+
+# TSX shares TypeScript's tag query — the grammars differ only in JSX handling,
+# and JSX elements are not symbols. See registry.rs.
+decision_nodes = [
+  "if_statement", "while_statement", "for_statement", "for_in_statement",
+  "do_statement", "switch_case", "catch_clause", "ternary_expression",
+  "binary_expression",
+]
+block_nodes = ["statement_block"]
+
+test_prefixes = ["test", "it", "describe"]
+test_suffixes = [".test", ".spec"]
+entry_names = ["main", "App"]
+
+[effects]
+file_read = ["readFile", "readFileSync"]
+file_write = ["writeFile", "writeFileSync"]
+network = ["fetch(", "axios", "useQuery", "useSWR", "WebSocket"]
+database = ["query(", "prisma.", "findMany"]
+process_spawn = ["child_process", "spawn("]
+console = ["console."]
+randomness = ["Math.random", "randomUUID"]
+time = ["Date.now", "new Date", "setTimeout", "setInterval"]
+environment = ["process.env", "import.meta.env"]

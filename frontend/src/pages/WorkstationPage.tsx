@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
@@ -35,9 +35,15 @@ import {
 import { PreviewPane, normalizePreviewUrl } from "../components/PreviewPane";
 import { THEME_META, useAppState } from "../state";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
-import { isTauri } from "../native";
+import { isTauri, pickFolder } from "../native";
 import { languageForPath } from "../monaco-setup";
-import type { CodeProject, FileTreeNode, GitStatus } from "../types";
+import type { CodeProject, CodeTerminalPosition, FileTreeNode, GitStatus } from "../types";
+
+// Lazy: der Code-Graph wird erst beim Öffnen seines Tabs gebraucht, und der
+// Entry-Chunk wird von fünf Webviews geparst.
+const CodeGraphPanel = lazy(() =>
+  import("./CodeGraphPanel").then((module) => ({ default: module.CodeGraphPanel })),
+);
 
 const SELECTED_KEY = "sciencekg.werkstatt.project";
 const MODE_KEY = "sciencekg.werkstatt.mode";
@@ -138,7 +144,7 @@ export function WorkstationPage() {
   const [editorValue, setEditorValue] = useState<string>("");
   const [savedValue, setSavedValue] = useState<string>("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [resultTab, setResultTab] = useState<"changes" | "diff">("changes");
+  const [resultTab, setResultTab] = useState<"changes" | "diff" | "graph">("changes");
   // Terminal-Aussehen ist bewusst getrennt vom App-Theme einstellbar — viele
   // arbeiten auch in einer hellen Oberflaeche lieber in einer dunklen Shell.
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearance>(loadTerminalAppearance);
@@ -155,18 +161,26 @@ export function WorkstationPage() {
   // disables auto-fill once the user edits the address bar by hand.
   const urlBufferRef = useRef("");
   const userTouchedPreviewRef = useRef(false);
+  // Sprungmarken aus der Terminal-Ausgabe (`datei:zeile`).
+  const jumpBufferRef = useRef("");
+  const jumpTimerRef = useRef<number | undefined>(undefined);
+  const [jumpTargets, setJumpTargets] = useState<CodeTerminalPosition[]>([]);
 
   const workspacesQuery = useQuery({ queryKey: ["werkstatt", "list"], queryFn: api.werkstatt.list });
   const projects = workspacesQuery.data?.projects ?? [];
 
-  // Deep-Link (z.B. aus der Analyse-Werkstatt): /werkstatt?project=<id>&file=<pfad>
-  // wählt das Projekt aus und öffnet die Datei samt aufgeklapptem Baumpfad.
+  // Deep-Link (z.B. aus der Analyse-Werkstatt oder dem Code-Graph):
+  // /werkstatt?project=<id>&file=<pfad>[&line=<n>] wählt das Projekt aus und
+  // öffnet die Datei samt aufgeklapptem Baumpfad. Ohne `line` landet man am
+  // Dateianfang — bei einer 900-Zeilen-Datei ist das der falsche Ort, wenn der
+  // Absender genau weiss, welche Zeile er meint.
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
     const wanted = searchParams.get("project");
     if (!wanted || !projects.length) return;
     if (!projects.some((p) => p.id === wanted)) return;
     const file = searchParams.get("file");
+    const line = Number(searchParams.get("line") ?? 0);
     setProjectId(wanted);
     if (file) {
       setExpanded((current) => {
@@ -178,7 +192,7 @@ export function WorkstationPage() {
         }
         return next;
       });
-      void openFile(file, wanted);
+      void (line > 0 ? openAtLine(file, line, wanted) : openFile(file, wanted));
     }
     setSearchParams({}, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -238,8 +252,11 @@ export function WorkstationPage() {
   }
 
   // Auto-detect the dev-server URL from terminal output, unless the user took
-  // manual control of the address bar.
+  // manual control of the address bar. Der zweite Leser sucht im selben Strom
+  // nach `datei:zeile` — ein fehlgeschlagener Test soll anklickbar sein, statt
+  // abgetippt zu werden.
   function handleTerminalOutput(text: string) {
+    collectJumpPositions(text);
     if (userTouchedPreviewRef.current) return;
     const buffer = (urlBufferRef.current + text).slice(-1000);
     urlBufferRef.current = buffer;
@@ -247,6 +264,30 @@ export function WorkstationPage() {
     if (!match) return;
     const found = normalizePreviewUrl(match[0]);
     setPreviewUrl((current) => (current === found ? current : found));
+  }
+
+  /**
+   * Sammelt Terminal-Ausgabe zeilenweise und lässt sie vom Backend auf
+   * Sprungmarken absuchen.
+   *
+   * Entprellt, weil ein laufender Testdurchlauf sonst pro Chunk eine Anfrage
+   * auslöste. Gesucht wird erst, wenn die Ausgabe kurz still ist — das ist
+   * ohnehin der Moment, in dem man auf das Ergebnis schaut.
+   */
+  function collectJumpPositions(text: string) {
+    if (!projectId) return;
+    jumpBufferRef.current = (jumpBufferRef.current + text).slice(-8000);
+    window.clearTimeout(jumpTimerRef.current);
+    jumpTimerRef.current = window.setTimeout(() => {
+      const chunk = jumpBufferRef.current;
+      jumpBufferRef.current = "";
+      if (!chunk.trim()) return;
+      api.codegraph
+        .positions(projectId, chunk, 8)
+        .then((found) => setJumpTargets(found))
+        // Kein Index, kein Binary, kein Problem: die Leiste bleibt dann leer.
+        .catch(() => undefined);
+    }, 700);
   }
 
   function handlePreviewUrlChange(next: string) {
@@ -272,6 +313,29 @@ export function WorkstationPage() {
     } catch (error) {
       notify(error instanceof Error ? error.message : "Datei konnte nicht geladen werden.");
     }
+  }
+
+  /**
+   * Datei öffnen und auf eine Zeile springen.
+   *
+   * Das ist der Sinn des Code-Graphen in der Werkstatt: ein Aufrufer, eine
+   * Belegstelle oder eine Zeile aus der Terminal-Ausgabe ist nichts, was man
+   * abtippt, sondern etwas, das man anklickt. Der Sprung wartet auf das Laden,
+   * weil Monaco vorher noch das alte Modell hält.
+   */
+  async function openAtLine(path: string, line: number, pid: string | null = projectId) {
+    await openFile(path, pid);
+    const editor = editorRef.current as {
+      revealLineInCenter?: (line: number) => void;
+      setPosition?: (position: { lineNumber: number; column: number }) => void;
+      focus?: () => void;
+    } | null;
+    if (!editor || line < 1) return;
+    window.requestAnimationFrame(() => {
+      editor.revealLineInCenter?.(line);
+      editor.setPosition?.({ lineNumber: line, column: 1 });
+      editor.focus?.();
+    });
   }
 
   const saveMutation = useMutation({
@@ -307,6 +371,29 @@ export function WorkstationPage() {
     },
     onError: (error) => notify(error instanceof Error ? error.message : "Ordner konnte nicht geöffnet werden."),
   });
+
+  /**
+   * „Ordner": in der Desktop-App der native Systemdialog (Explorer / Finder /
+   * GTK-Dateidialog), im Browser weiterhin das Pfad-Eingabefeld — ein Webview
+   * bekommt einen echten Verzeichnispfad nicht zu sehen.
+   */
+  async function handleOpenFolderClick() {
+    setShowNewProject(false);
+    if (!isTauri()) {
+      setShowOpenFolder((value) => !value);
+      return;
+    }
+    setShowOpenFolder(false);
+    try {
+      const picked = await pickFolder();
+      if (picked) openFolderMutation.mutate(picked);
+    } catch (error) {
+      // Dialog nicht verfügbar (alte Shell ohne `pick_folder`): Eingabefeld als
+      // Rückfallweg zeigen, statt den Knopf wirkungslos verpuffen zu lassen.
+      setShowOpenFolder(true);
+      notify(error instanceof Error ? error.message : "Ordner-Dialog nicht verfügbar.");
+    }
+  }
 
   const createFileMutation = useMutation({
     mutationFn: (path: string) => api.werkstatt.createFile(projectId as string, path),
@@ -507,11 +594,26 @@ export function WorkstationPage() {
           <button className={resultTab === "diff" ? "active" : ""} onClick={() => setResultTab("diff")}>
             Diff
           </button>
+          <button
+            className={resultTab === "graph" ? "active" : ""}
+            onClick={() => setResultTab("graph")}
+            title="Symbole, Aufrufer und Belege dieses Projekts"
+          >
+            Code-Graph
+          </button>
           <button className="wk-iconbtn" title="Aktualisieren" onClick={() => refreshProject()}>
             <RefreshCw size={14} />
           </button>
         </div>
-        {resultTab === "changes" ? (
+        {resultTab === "graph" ? (
+          <Suspense fallback={<p className="muted" style={{ padding: "0.75rem" }}>wird geladen …</p>}>
+            <CodeGraphPanel
+              projectId={projectId}
+              onOpenSymbol={openAtLine}
+              researchProjectId={activeProject ?? null}
+            />
+          </Suspense>
+        ) : resultTab === "changes" ? (
           <div className="werkstatt-changes">
             {!gitStatus?.available ? (
               <p className="muted">Git nicht verfügbar.</p>
@@ -540,16 +642,18 @@ export function WorkstationPage() {
             <DiffView diff={diffQuery.data?.diff ?? ""} />
           </div>
         )}
-        <div className="werkstatt-results-foot">
-          <button
-            className="wk-btn"
-            disabled={insertMutation.isPending}
-            title="Diff als Notiz in den Workspace einfügen"
-            onClick={insertDiffIntoWorkspace}
-          >
-            <Send size={15} /> Diff in Workspace
-          </button>
-        </div>
+        {resultTab !== "graph" && (
+          <div className="werkstatt-results-foot">
+            <button
+              className="wk-btn"
+              disabled={insertMutation.isPending}
+              title="Diff als Notiz in den Workspace einfügen"
+              onClick={insertDiffIntoWorkspace}
+            >
+              <Send size={15} /> Diff in Workspace
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -579,6 +683,26 @@ export function WorkstationPage() {
             ))}
           </select>
         </div>
+        {jumpTargets.length > 0 && (
+          // Was das Terminal gerade ausgegeben hat, als Sprungziele. Ein Stacktrace
+          // wird damit zu etwas, das man anklickt.
+          <div className="wk-jumpbar" title="Aus der Terminal-Ausgabe erkannt">
+            {jumpTargets.map((target) => (
+              <button
+                key={`${target.path}:${target.line}`}
+                className="wk-jumpchip"
+                onClick={() => openAtLine(target.path, target.line)}
+                title={target.qualified ? `${target.qualified} — ${target.path}:${target.line}` : undefined}
+              >
+                {target.qualified ?? target.path.split("/").pop()}
+                <span>:{target.line}</span>
+              </button>
+            ))}
+            <button className="wk-jumpclear" onClick={() => setJumpTargets([])} title="Ausblenden">
+              ×
+            </button>
+          </div>
+        )}
         <TerminalTabs key={path} cwd={path} appearance={terminalAppearance} onOutput={handleTerminalOutput} />
       </div>
     );
@@ -652,10 +776,8 @@ export function WorkstationPage() {
             className="wk-iconbtn wk-iconbtn--label"
             type="button"
             title="Bestehenden Ordner öffnen"
-            onClick={() => {
-              setShowOpenFolder((v) => !v);
-              setShowNewProject(false);
-            }}
+            disabled={openFolderMutation.isPending}
+            onClick={() => void handleOpenFolderClick()}
           >
             <FolderGit2 size={15} /> <span>Ordner</span>
           </button>

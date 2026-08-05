@@ -24,6 +24,11 @@ log = "0.4"
 tauri = { version = "2.11.3", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
+# Nativer Ordner-Auswahldialog für „Ordner öffnen" in der Werkstatt: der echte
+# Explorer/Finder/GTK-Dialog des Systems statt eines Pfad-Eingabefelds. Wird nur
+# aus Rust benutzt (Command `pick_folder`), deshalb ohne JS-Paket und ohne
+# zusätzlichen Capability-Eintrag — Permissions gelten nur für IPC-Aufrufe.
+tauri-plugin-dialog = "2"
 # AI-Cursor overlay (R1): global hotkey to toggle the always-on-top window.
 tauri-plugin-global-shortcut = "2"
 # Embedded Code-Werkstatt terminal: cross-platform PTY (Windows ConPTY / Unix).

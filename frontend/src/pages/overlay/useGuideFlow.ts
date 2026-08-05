@@ -23,6 +23,8 @@ type GuideFlowOptions = {
   model?: string;
   usePapers: boolean;
   useWeb: boolean;
+  useCode: boolean;
+  codeProjectId: string;
   /** Ref-getter (not state) — the durable session may be created in the same tick. */
   getDbSessionId: () => string | null;
   onEntry: (entry: OverlayChatEntry) => void;
@@ -151,6 +153,8 @@ export function useGuideFlow(options: GuideFlowOptions) {
         monitor: opts.monitor ? Number(opts.monitor) : null,
         use_papers: opts.usePapers,
         use_web: opts.useWeb,
+        use_code: opts.useCode,
+        code_project_id: opts.codeProjectId || null,
         session_id: opts.getDbSessionId(),
       });
       if (started.error || !started.guide_id) {

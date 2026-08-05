@@ -13,6 +13,13 @@ import type {
   FileContent,
   GitStatus,
   GitDiff,
+  Checkpoint,
+  CheckpointResult,
+  CheckpointDiffEntry,
+  CheckpointRestorePlan,
+  CheckpointRestoreResult,
+  Sandbox,
+  SandboxRunResult,
   AnalysisRun,
   ClaimCheckResult,
   Dataset,
@@ -25,6 +32,8 @@ import type {
   DeepResearchResponse,
   DiscoveryResponse,
   ExtractionHistoryItem,
+  ExtractionQualityRow,
+  ExtractionResultDetail,
   GreySource,
   ReferenceExtractResponse,
   ExtractionLibraryItem,
@@ -327,6 +336,14 @@ export const api = {
     request<{ job_id: string; status: string }>(`/extraction/batch/${jobId}/cancel`, { method: "POST", body: "{}" }),
   getExtractionHistory: (paperId = "") =>
     request<{ items: ExtractionHistoryItem[]; total: number }>("/extraction/history", { query: { paper_id: paperId } }),
+  getExtractionQuality: (paperId = "", limit = 50) =>
+    request<{ items: ExtractionQualityRow[]; total: number }>("/extraction/quality", { query: { paper_id: paperId, limit } }),
+  getExtractionResult: (resultId: number) =>
+    request<ExtractionResultDetail>(`/extraction/results/${resultId}`),
+  getExtractionResultRaw: (resultId: number) =>
+    request<{ result_id: number; raw_response: string | null }>(`/extraction/results/${resultId}/raw`),
+  compareExtractions: (paperId: string, limit = 50) =>
+    request<{ paper_id: string; groups: Record<string, ExtractionHistoryItem[]>; total: number }>("/extraction/compare", { query: { paper_id: paperId, limit } }),
   getExtractionVocabulary: () => request<{ items: VocabularyEntry[]; total: number }>("/extraction/vocabulary"),
   addExtractionVocabulary: (payload: { canonical_label: string; aliases: string[]; openalx_id?: string; domain?: string }) =>
     request<{ items: VocabularyEntry[]; total: number }>("/extraction/vocabulary", {
@@ -653,6 +670,344 @@ export const api = {
       request<GitStatus>(`/workspaces/${encodeURIComponent(projectId)}/git/status`),
     gitDiff: (projectId: string, path?: string) =>
       request<GitDiff>(`/workspaces/${encodeURIComponent(projectId)}/git/diff`, { query: { path } }),
+    listCheckpoints: (projectId: string) =>
+      request<{ project_id: string; checkpoints: Checkpoint[] }>(
+        `/workspaces/${encodeURIComponent(projectId)}/checkpoints`,
+      ),
+    createCheckpoint: (projectId: string, label: string) =>
+      request<CheckpointResult>(`/workspaces/${encodeURIComponent(projectId)}/checkpoints`, {
+        method: "POST",
+        body: JSON.stringify({ label }),
+      }),
+    checkpointRestorePreview: (projectId: string, checkpointId: string) =>
+      request<{ project_id: string; checkpoint: Checkpoint; plan: CheckpointRestorePlan }>(
+        `/workspaces/${encodeURIComponent(projectId)}/checkpoints/${encodeURIComponent(checkpointId)}/restore/preview`,
+      ),
+    restoreCheckpoint: (projectId: string, checkpointId: string, planHash: string) =>
+      request<CheckpointRestoreResult>(
+        `/workspaces/${encodeURIComponent(projectId)}/checkpoints/${encodeURIComponent(checkpointId)}/restore`,
+        { method: "POST", body: JSON.stringify({ plan_hash: planHash }) },
+      ),
+    checkpointDiff: (projectId: string, checkpointId: string) =>
+      request<{ available: boolean; entries: CheckpointDiffEntry[]; error?: string }>(
+        `/workspaces/${encodeURIComponent(projectId)}/checkpoints/${encodeURIComponent(checkpointId)}/diff`,
+      ),
+    deleteCheckpoint: (projectId: string, checkpointId: string) =>
+      request<{ project_id: string; checkpoint_id: string; removed: boolean }>(
+        `/workspaces/${encodeURIComponent(projectId)}/checkpoints/${encodeURIComponent(checkpointId)}`,
+        { method: "DELETE" },
+      ),
+    listSandboxes: (projectId: string) =>
+      request<{ project_id: string; sandboxes: Sandbox[] }>(
+        `/workspaces/${encodeURIComponent(projectId)}/sandboxes`,
+      ),
+    createSandbox: (projectId: string, checkpointId: string, testCommand?: string) =>
+      request<{ project_id: string; sandbox: Sandbox }>(
+        `/workspaces/${encodeURIComponent(projectId)}/sandboxes`,
+        { method: "POST", body: JSON.stringify({ checkpoint_id: checkpointId, test_command: testCommand }) },
+      ),
+    runSandbox: (projectId: string, sandboxId: string, command?: string, timeout = 300) =>
+      request<{ project_id: string; sandbox_id: string; run: SandboxRunResult }>(
+        `/workspaces/${encodeURIComponent(projectId)}/sandboxes/${encodeURIComponent(sandboxId)}/run`,
+        { method: "POST", body: JSON.stringify({ command, timeout }) },
+      ),
+    sandboxDiff: (projectId: string, sandboxId: string) =>
+      request<{ available: boolean; entries: CheckpointDiffEntry[]; note?: string }>(
+        `/workspaces/${encodeURIComponent(projectId)}/sandboxes/${encodeURIComponent(sandboxId)}/diff`,
+      ),
+    applySandbox: (projectId: string, sandboxId: string) =>
+      request<{ applied: boolean; entries?: { path: string; status: string; action: string }[] }>(
+        `/workspaces/${encodeURIComponent(projectId)}/sandboxes/${encodeURIComponent(sandboxId)}/apply`,
+        { method: "POST" },
+      ),
+    deleteSandbox: (projectId: string, sandboxId: string) =>
+      request<{ project_id: string; sandbox_id: string; removed: boolean }>(
+        `/workspaces/${encodeURIComponent(projectId)}/sandboxes/${encodeURIComponent(sandboxId)}`,
+        { method: "DELETE" },
+      ),
+  },
+
+  // --- Code-Graph (CodeSearch: Symbole, Beziehungen, Belege) ---
+  // Knoten-IDs sind immer Hex-Strings — siehe types.ts, CodeNodeId.
+  codegraph: {
+    status: (projectId: string) =>
+      request<import("./types").CodeIndexStatus>(`/codegraph/${encodeURIComponent(projectId)}`),
+    dropIndex: (projectId: string) =>
+      request<{ code_project_id: string; removed: boolean }>(
+        `/codegraph/${encodeURIComponent(projectId)}/index`,
+        { method: "DELETE" },
+      ),
+    overview: (projectId: string) =>
+      request<import("./types").CodeOverview>(`/codegraph/${encodeURIComponent(projectId)}/overview`),
+    /**
+     * Woraus besteht das Projekt — eine Ebene der Bereichskarte.
+     *
+     * `prefix` ist leer für die oberste Ebene und geht dann Pfadsegment für
+     * Pfadsegment tiefer. Die Struktur kommt aus dem Index, nicht aus einem
+     * Modell; der Name kann von einem stammen und sagt dann, dass er es tut.
+     */
+    clusters: (projectId: string, prefix = "", edges?: import("./types").CodeEdgeKind[]) =>
+      request<import("./types").CodeClusterLevel>(
+        `/codegraph/${encodeURIComponent(projectId)}/clusters`,
+        { query: { prefix, edges: edges?.length ? edges.join(",") : undefined } },
+      ),
+    /** Die echten Kanten hinter einer aufsummierten — der Beleg zur Zahl am Pfeil. */
+    clusterEdge: (
+      projectId: string,
+      from: string,
+      to: string,
+      edges?: import("./types").CodeEdgeKind[],
+      limit = 60,
+    ) =>
+      request<import("./types").CodeNeighbour[]>(
+        `/codegraph/${encodeURIComponent(projectId)}/clusters/edge`,
+        { query: { from, to, edges: edges?.length ? edges.join(",") : undefined, limit } },
+      ),
+    /** Die wichtigsten Symbole eines Bereichs — der Übergang zur Symbolkarte. */
+    clusterMembers: (projectId: string, prefix: string, limit = 30) =>
+      request<import("./types").CodeSymbolHit[]>(
+        `/codegraph/${encodeURIComponent(projectId)}/clusters/members`,
+        { query: { prefix, limit } },
+      ),
+    // --- Gespräche über den Code ---
+    chats: (projectId: string, limit = 50) =>
+      request<{ code_project_id: string; chats: import("./types").CodeChat[] }>(
+        `/codegraph/${encodeURIComponent(projectId)}/chats`,
+        { query: { limit } },
+      ),
+    createChat: (projectId: string, payload: { title?: string; project_id?: string | null }) =>
+      request<import("./types").CodeChat>(`/codegraph/${encodeURIComponent(projectId)}/chats`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    chat: (projectId: string, chatId: string) =>
+      request<{ chat: import("./types").CodeChat; turns: import("./types").CodeChatTurn[] }>(
+        `/codegraph/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`,
+      ),
+    removeChat: (projectId: string, chatId: string) =>
+      request<{ id: string; deleted: boolean }>(
+        `/codegraph/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`,
+        { method: "DELETE" },
+      ),
+    search: (projectId: string, q: string, kind?: string, limit = 40) =>
+      request<import("./types").CodeSymbolHit[]>(`/codegraph/${encodeURIComponent(projectId)}/search`, {
+        query: { q, kind, limit },
+      }),
+    searchText: (projectId: string, q: string, limit = 20) =>
+      request<import("./types").CodeTextHit[]>(`/codegraph/${encodeURIComponent(projectId)}/search/text`, {
+        query: { q, limit },
+      }),
+    node: (projectId: string, nodeId: string) =>
+      request<import("./types").CodeNodeDetail>(
+        `/codegraph/${encodeURIComponent(projectId)}/node/${encodeURIComponent(nodeId)}`,
+      ),
+    blueprint: (projectId: string, nodeId: string) =>
+      request<import("./types").CodeBlueprint>(
+        `/codegraph/${encodeURIComponent(projectId)}/blueprint/${encodeURIComponent(nodeId)}`,
+      ),
+    /**
+     * Ausschnitt um ein Symbol, für die Karte.
+     *
+     * `direction` steht bewusst auf `"out"` statt `"both"`: `Graph::slice` trägt
+     * im Both-Zweig auch eingehende Kanten als ausgehende ein
+     * (cs-graph/src/query.rs:411) — in einer Liste unauffällig, auf einer
+     * Pfeilkarte falsch. Wer beide Richtungen braucht, fragt zweimal.
+     */
+    slice: (
+      projectId: string,
+      nodeId: string,
+      opts: {
+        depth?: number;
+        direction?: import("./types").CodeDirection;
+        budget?: number;
+        edges?: import("./types").CodeEdgeKind[];
+      } = {},
+    ) =>
+      request<import("./types").CodeGraphSlice>(
+        `/codegraph/${encodeURIComponent(projectId)}/slice/${encodeURIComponent(nodeId)}`,
+        {
+          query: {
+            depth: opts.depth ?? 1,
+            direction: opts.direction ?? "out",
+            budget: opts.budget ?? 400,
+            edges: opts.edges?.length ? opts.edges.join(",") : undefined,
+          },
+        },
+      ),
+    /** Ein Sprung über *alle* Kantenarten — `blueprint` kennt nur drei. */
+    neighbours: (
+      projectId: string,
+      nodeId: string,
+      opts: {
+        direction?: import("./types").CodeDirection;
+        edges?: import("./types").CodeEdgeKind[] | "all";
+      } = {},
+    ) =>
+      request<import("./types").CodeNeighbour[]>(
+        `/codegraph/${encodeURIComponent(projectId)}/neighbours/${encodeURIComponent(nodeId)}`,
+        {
+          query: {
+            direction: opts.direction ?? "both",
+            edges: opts.edges === "all" ? "all" : opts.edges?.length ? opts.edges.join(",") : undefined,
+          },
+        },
+      ),
+    /** Kürzester **Aufruf**pfad. `path: null` heißt nicht „keine Beziehung". */
+    path: (projectId: string, fromId: string, toId: string, maxDepth = 12) =>
+      request<import("./types").CodePathResult>(`/codegraph/${encodeURIComponent(projectId)}/path`, {
+        query: { from: fromId, to: toId, max_depth: maxDepth },
+      }),
+    /** Auswirkungsanalyse — wer wird von einer Änderung mitrissen (vor der Ausführung). */
+    impact: (
+      projectId: string,
+      nodeId: string,
+      opts: { depth?: number; budget?: number; edges?: import("./types").CodeEdgeKind[] } = {},
+    ) =>
+      request<import("./types").CodeImpact>(
+        `/codegraph/${encodeURIComponent(projectId)}/impact/${encodeURIComponent(nodeId)}`,
+        {
+          query: {
+            depth: opts.depth ?? 3,
+            budget: opts.budget ?? 400,
+            edges: opts.edges?.length ? opts.edges.join(",") : undefined,
+          },
+        },
+      ),
+    /** Spaghetti-Hotspots — Symbole, die eine gemessene Regel reißen. Ohne LLM. */
+    hotspots: (
+      projectId: string,
+      opts: {
+        loc?: number; complexity?: number; max_nesting?: number;
+        fan_in?: number; fan_out?: number; churn?: number; limit?: number;
+      } = {},
+    ) =>
+      request<import("./types").Hotspot[]>(
+        `/codegraph/${encodeURIComponent(projectId)}/hotspots`,
+        {
+          query: {
+            loc: opts.loc ?? 200, complexity: opts.complexity ?? 15,
+            max_nesting: opts.max_nesting ?? 5, fan_in: opts.fan_in ?? 30,
+            fan_out: opts.fan_out ?? 25, churn: opts.churn ?? 0, limit: opts.limit ?? 50,
+          },
+        },
+      ),
+    /** Ringe im Abhängigkeitsgraph — Tarjan-SCC mit Belegkanten. Ohne LLM. */
+    cycles: (
+      projectId: string,
+      opts: { level?: "file" | "symbol"; edges?: import("./types").CodeEdgeKind[] } = {},
+    ) =>
+      request<{ code_project_id: string; level: string; cycles: import("./types").Cycle[] }>(
+        `/codegraph/${encodeURIComponent(projectId)}/cycles`,
+        {
+          query: {
+            level: opts.level ?? "file",
+            edges: opts.edges?.length ? opts.edges.join(",") : undefined,
+          },
+        },
+      ),
+    /** Wichtigste Symbole je Art — auch die zwölf, die `overview` weglässt. */
+    top: (projectId: string, kinds?: import("./types").CodeNodeKind[], limit = 30) =>
+      request<import("./types").CodeSymbolHit[]>(`/codegraph/${encodeURIComponent(projectId)}/top`, {
+        query: { kind: kinds?.length ? kinds.join(",") : undefined, limit },
+      }),
+    diagram: (projectId: string, nodeId: string, kind: "class" | "sequence", depth = 2) =>
+      request<import("./types").CodeDiagram>(
+        `/codegraph/${encodeURIComponent(projectId)}/diagram/${encodeURIComponent(nodeId)}`,
+        { query: { kind, depth } },
+      ),
+    source: (projectId: string, path: string) =>
+      request<import("./types").CodeSourceText>(`/codegraph/${encodeURIComponent(projectId)}/source`, {
+        query: { path },
+      }),
+    /** Die aufgezeichnete Hälfte von „warum so gebaut" — git und eigene Notizen. */
+    recordedRationale: (projectId: string, nodeId: string) =>
+      request<import("./types").CodeRecordedRationale>(
+        `/codegraph/${encodeURIComponent(projectId)}/why/${encodeURIComponent(nodeId)}`,
+      ),
+    addRationale: (
+      projectId: string,
+      payload: { text: string; symbol_id?: string; rel_path?: string; author?: string },
+    ) =>
+      request<import("./types").CodeRationale>(
+        `/codegraph/${encodeURIComponent(projectId)}/rationale`,
+        { method: "POST", body: JSON.stringify(payload) },
+      ),
+    removeRationale: (projectId: string, rationaleId: string) =>
+      request<{ id: string; deleted: boolean }>(
+        `/codegraph/${encodeURIComponent(projectId)}/rationale/${encodeURIComponent(rationaleId)}`,
+        { method: "DELETE" },
+      ),
+    /** Nur die Zeilen einer Funktion — samt Hash als optimistischer Sperre. */
+    symbolSource: (projectId: string, nodeId: string) =>
+      request<import("./types").CodeSymbolSource>(
+        `/codegraph/${encodeURIComponent(projectId)}/symbol/${encodeURIComponent(nodeId)}/source`,
+      ),
+    /**
+     * Dieselben Zeilen zurückschreiben.
+     *
+     * Der Zeilenbereich wird **nicht** mitgeschickt: er kommt im Backend aus dem
+     * Graphen. Ein Panel, das eine Weile offen stand, kennt womöglich einen
+     * alten Bereich und schriebe an die falsche Stelle.
+     */
+    writeSymbolSource: (
+      projectId: string,
+      nodeId: string,
+      payload: { text: string; content_hash: string },
+    ) =>
+      request<import("./types").CodeSymbolWrite>(
+        `/codegraph/${encodeURIComponent(projectId)}/symbol/${encodeURIComponent(nodeId)}/source`,
+        { method: "PATCH", body: JSON.stringify(payload) },
+      ),
+    positions: (projectId: string, text: string, limit = 8) =>
+      request<import("./types").CodeTerminalPosition[]>(
+        `/codegraph/${encodeURIComponent(projectId)}/positions`,
+        { method: "POST", body: JSON.stringify({ text, limit }) },
+      ),
+    cite: (
+      projectId: string,
+      payload: {
+        note_id: string;
+        rel_path: string;
+        start_line: number;
+        end_line?: number;
+        title?: string;
+        reference_text?: string;
+      },
+    ) =>
+      request<import("./types").CodeNoteCitation>(
+        `/codegraph/${encodeURIComponent(projectId)}/cite`,
+        { method: "POST", body: JSON.stringify(payload) },
+      ),
+    citations: (projectId: string, noteId: string) =>
+      request<{ code_project_id: string; note_id: string; citations: import("./types").CodeNoteCitation[] }>(
+        `/codegraph/${encodeURIComponent(projectId)}/citations`,
+        { query: { note_id: noteId } },
+      ),
+    answers: (projectId: string, limit = 30) =>
+      request<{ code_project_id: string; answers: import("./types").CodeAnswerRecord[] }>(
+        `/codegraph/${encodeURIComponent(projectId)}/answers`,
+        { query: { limit } },
+      ),
+    removeAnswer: (projectId: string, answerId: string) =>
+      request<{ id: string; deleted: boolean }>(
+        `/codegraph/${encodeURIComponent(projectId)}/answers/${encodeURIComponent(answerId)}`,
+        { method: "DELETE" },
+      ),
+    links: (projectId: string, researchProjectId?: string | null) =>
+      request<{ code_project_id: string; links: import("./types").CodePaperLink[] }>(
+        `/codegraph/${encodeURIComponent(projectId)}/links`,
+        { query: { project_id: researchProjectId ?? undefined } },
+      ),
+    addLink: (projectId: string, payload: Partial<import("./types").CodePaperLink>) =>
+      request<import("./types").CodePaperLink>(`/codegraph/${encodeURIComponent(projectId)}/links`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    removeLink: (projectId: string, linkId: string) =>
+      request<{ id: string; deleted: boolean }>(
+        `/codegraph/${encodeURIComponent(projectId)}/links/${encodeURIComponent(linkId)}`,
+        { method: "DELETE" },
+      ),
   },
 
   // --- Analyse-Werkstatt (reproduzierbare, provenance-tragende Skript-Läufe) ---
@@ -742,6 +1097,8 @@ export interface AnalysisRunRequest {
   paper_ids?: string[];
   dataset_ids?: string[];
   context?: string | null;
+  /** Werkstatt-Projekt, dessen Code-Graph als Planer-Kontext dazukommt. */
+  code_project_id?: string | null;
 }
 
 export interface AnalysisReviseRequest {
@@ -1011,6 +1368,9 @@ export const guideCompanion = (payload: {
   model?: string | null;
   use_papers?: boolean;
   use_web?: boolean;
+  /** Code-Graph eines Werkstatt-Projekts als dritte Quelle. */
+  use_code?: boolean;
+  code_project_id?: string | null;
   session_id?: string | null;
 }) =>
   request<CompanionGuideResult>("/companion/guide", {
@@ -1029,6 +1389,9 @@ export const askCompanion = (payload: {
   model?: string | null;
   use_papers?: boolean;
   use_web?: boolean;
+  /** Code-Graph eines Werkstatt-Projekts als dritte Quelle. */
+  use_code?: boolean;
+  code_project_id?: string | null;
   session_id?: string | null;
 }) =>
   request<CompanionAskResult>("/companion/ask", {
@@ -1078,6 +1441,9 @@ export const startGuide = (payload: {
   monitor?: number | null;
   use_papers?: boolean;
   use_web?: boolean;
+  /** Code-Graph eines Werkstatt-Projekts als dritte Quelle. */
+  use_code?: boolean;
+  code_project_id?: string | null;
   session_id?: string | null;
 }) =>
   request<import("./types").GuideStartResult>("/companion/guide/start", {
@@ -1279,4 +1645,205 @@ export function importProjectBundle(file: File, mode: "merge" | "replace", targe
     mode,
     ...(targetProject ? { target_project: targetProject } : {}),
   });
+}
+
+/** Stream POST /codegraph/{id}/index: Indizieren mit Fortschritt.
+ *
+ * Ein großes Repository braucht Sekunden bis Minuten. Ohne die Zwischenmeldungen
+ * wäre das von einem Hänger nicht zu unterscheiden — deshalb SSE und nicht ein
+ * langes POST, das irgendwann antwortet. */
+export async function streamCodeGraphIndex(
+  projectId: string,
+  onEvent: (event: import("./types").CodeIndexEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(`/codegraph/${encodeURIComponent(projectId)}/index`, undefined, onEvent, signal);
+}
+
+/** Erklärung zu einem Symbol. Wie `streamCodeAsk`, nur ohne Frage. */
+export async function streamCodeExplain(
+  projectId: string,
+  nodeId: string,
+  payload: { provider?: string | null; model?: string | null },
+  onEvent: (event: import("./types").CodeExplainEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(
+    `/codegraph/${encodeURIComponent(projectId)}/explain/${encodeURIComponent(nodeId)}`,
+    payload,
+    onEvent as (event: unknown) => void,
+    signal,
+  );
+}
+
+/** Stream POST /codegraph/{id}/refactor/{nodeId}: ein Refactor-Vorschlag (geprüft). */
+export async function streamCodeRefactorPropose(
+  projectId: string,
+  nodeId: string,
+  payload: { provider?: string | null; model?: string | null },
+  onEvent: (event: import("./types").CodeRefactorEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(
+    `/codegraph/${encodeURIComponent(projectId)}/refactor/${encodeURIComponent(nodeId)}`,
+    payload,
+    onEvent as (event: unknown) => void,
+    signal,
+  );
+}
+
+/** Stream POST /codegraph/{id}/refactor/{nodeId}/try: Vorschlag in Sandbox anwenden + testen. */
+export async function streamCodeRefactorTry(
+  projectId: string,
+  nodeId: string,
+  payload: {
+    proposal: import("./types").RefactorProposal;
+    sandbox_id?: string | null;
+    test_command?: string | null;
+    timeout?: number;
+  },
+  onEvent: (event: import("./types").CodeRefactorTryEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(
+    `/codegraph/${encodeURIComponent(projectId)}/refactor/${encodeURIComponent(nodeId)}/try`,
+    payload,
+    onEvent as (event: unknown) => void,
+    signal,
+  );
+}
+
+/**
+ * Die *hergeleitete* Hälfte von „warum wurde das so gebaut".
+ *
+ * Die aufgezeichnete Hälfte holt `api.codegraph.recordedRationale` — sie braucht
+ * kein Modell und steht deshalb sofort da, auch ohne Netz. Getrennt zu halten
+ * ist der Punkt der ganzen Funktion: eine Herleitung darf nie aussehen wie ein
+ * Beleg.
+ */
+export async function streamCodeWhy(
+  projectId: string,
+  nodeId: string,
+  payload: { provider?: string | null; model?: string | null },
+  onEvent: (event: import("./types").CodeWhyEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(
+    `/codegraph/${encodeURIComponent(projectId)}/why/${encodeURIComponent(nodeId)}`,
+    payload,
+    onEvent as (event: unknown) => void,
+    signal,
+  );
+}
+
+/** Stream POST /codegraph/{id}/ask: der Begleiter, während er nachschlägt.
+ *
+ * Die Aktivitätszeilen sind der Grund für den Strom. Beim Zusehen, *wo* der
+ * Begleiter nachsieht, entsteht das Vertrauen in die Antwort — ein Spinner sagt
+ * „warte", diese Zeilen sagen „ich habe hier nachgesehen". */
+export async function streamCodeAsk(
+  projectId: string,
+  payload: {
+    question: string;
+    session?: string;
+    provider?: string | null;
+    model?: string | null;
+    project_id?: string | null;
+    paper_ids?: string[] | null;
+    use_papers?: boolean;
+  },
+  onEvent: (event: import("./types").CodeAskEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(`/codegraph/${encodeURIComponent(projectId)}/ask`, payload, onEvent, signal);
+}
+
+/** Stream POST /codegraph/{id}/chats/{chatId}/ask: ein Zug im Gespräch.
+ *
+ * Wie `streamCodeAsk`, nur dass der Verlauf serverseitig aus den bisherigen
+ * Zügen kommt — der Client schickt ihn nicht mit, damit „was durfte zitiert
+ * werden" nicht vom Client behauptet werden kann. */
+export async function streamCodeChat(
+  projectId: string,
+  chatId: string,
+  payload: {
+    question: string;
+    provider?: string | null;
+    model?: string | null;
+    project_id?: string | null;
+    paper_ids?: string[] | null;
+    use_papers?: boolean;
+  },
+  onEvent: (event: import("./types").CodeAskEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(
+    `/codegraph/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}/ask`,
+    payload,
+    onEvent,
+    signal,
+  );
+}
+
+/** Stream POST /codegraph/{id}/clusters/name: eine Ebene benennen lassen.
+ *
+ * Die Karte wartet nicht darauf. Sie steht mit Ordnernamen, und die Namen des
+ * Modells kommen nach — fällt das Modell aus, fehlt nur die Beschriftung. */
+export async function streamClusterNames(
+  projectId: string,
+  payload: { prefix?: string; provider?: string | null; model?: string | null; force?: boolean },
+  onEvent: (event: import("./types").CodeClusterNameEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  await streamCodeGraphSse(
+    `/codegraph/${encodeURIComponent(projectId)}/clusters/name`,
+    payload,
+    onEvent,
+    signal,
+  );
+}
+
+/** Gemeinsames SSE-Lesen für beide Code-Graph-Ströme. */
+async function streamCodeGraphSse<T>(
+  path: string,
+  body: unknown | undefined,
+  onEvent: (event: T) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const target = new URL(path, API_BASE_URL);
+  let response: Response;
+  try {
+    response = await fetch(target.toString(), {
+      method: "POST",
+      signal,
+      ...(body === undefined
+        ? {}
+        : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, text || `Backend error ${response.status}`);
+  }
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        onEvent(JSON.parse(line.slice(6)) as T);
+      } catch {
+        // Eine unlesbare Zeile darf den Rest des Laufs nicht mitnehmen.
+      }
+    }
+  }
 }

@@ -31,6 +31,9 @@ class AnalysisRunRequest(BaseModel):
     paper_ids: list[str] = Field(default_factory=list)
     dataset_ids: list[str] = Field(default_factory=list)
     context: str | None = Field(default=None, max_length=8000)
+    #: Werkstatt-Projekt, dessen Code-Graph als Kontext dazukommt — für Fragen
+    #: über ein Repository selbst („zeichne die Komplexitätsverteilung").
+    code_project_id: str | None = None
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
@@ -57,11 +60,65 @@ def _analysis_defaults() -> dict[str, Any]:
     }
 
 
+def _code_graph_context(db: MetadataDB, code_project_id: str | None) -> str | None:
+    """Kennzahlen und wichtigste Symbole eines Repositories als Planer-Kontext.
+
+    Damit wird das Repository selbst zum Gegenstand einer Analyse („zeichne die
+    Komplexitätsverteilung dieses Projekts"). Bewusst nur der Überblick und
+    nicht der ganze Graph: der Planer schreibt ein Skript, er soll nicht den
+    Code lesen.
+
+    Fail-soft: ohne gebautes ``cs``-Binary oder ohne Index gibt es hier eben
+    keinen Zusatz, und der Lauf passiert trotzdem.
+    """
+    if not code_project_id:
+        return None
+    try:
+        from codegraph import service as code_service
+
+        project = db.get_code_project(str(code_project_id))
+        if project is None:
+            return None
+        overview = code_service.query(project, "overview", {}) or {}
+    except Exception:  # noqa: BLE001 — Zusatzkontext, kein Muss
+        return None
+
+    stats = overview.get("stats") or {}
+    lines = [
+        f"Code-Projekt: {project.get('name')} ({project.get('path')})",
+        "Kennzahlen: "
+        + ", ".join(
+            f"{key}={stats.get(key, 0)}"
+            for key in ("files", "parsed_files", "nodes", "edges", "guessed_edges", "dynamic_gaps")
+        ),
+    ]
+    important = overview.get("important") or []
+    if important:
+        lines.append(
+            "Wichtigste Symbole: "
+            + ", ".join(f"{item.get('qualified')} ({item.get('path')})" for item in important[:10])
+        )
+    hot = overview.get("hot_files") or []
+    if hot:
+        lines.append(
+            "Häufig geänderte Dateien: "
+            + ", ".join(f"{item.get('path')} ({item.get('churn')}×)" for item in hot[:10])
+        )
+    return "\n".join(lines)
+
+
 def _analysis_context(
-    db: MetadataDB, paper_ids: list[str], dataset_ids: list[str], extra: str | None
+    db: MetadataDB,
+    paper_ids: list[str],
+    dataset_ids: list[str],
+    extra: str | None,
+    code_project_id: str | None = None,
 ) -> str | None:
     """Build a compact fachlicher-context block from cited papers, datasets + free text."""
     parts: list[str] = []
+    code_block = _code_graph_context(db, code_project_id)
+    if code_block:
+        parts.append(code_block)
     for pid in (paper_ids or [])[:12]:
         try:
             paper = db.get_paper(pid)
@@ -106,7 +163,13 @@ def create_analysis_run(request: AnalysisRunRequest) -> dict[str, Any]:
     """Plan, execute and persist a reproducible analysis run. Returns run + artifacts."""
     defaults = _analysis_defaults()
     with MetadataDB(request.metadata_db_path) as db:
-        context = _analysis_context(db, request.paper_ids, request.dataset_ids, request.context)
+        context = _analysis_context(
+            db,
+            request.paper_ids,
+            request.dataset_ids,
+            request.context,
+            request.code_project_id,
+        )
         try:
             run = analysis_service.create_run(
                 db,

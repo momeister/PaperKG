@@ -131,7 +131,9 @@ class Evidence:
         object.__setattr__(
             self,
             "evidence_id",
-            _stable_evidence_id(self.paper_id, self.kind, self.field, self.text, self.metadata),
+            _stable_evidence_id(
+                self.paper_id, self.kind, self.field, self.text, self.metadata
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -243,7 +245,11 @@ class KGRetriever:
 
         with MetadataDB(self.metadata_db_path) as db:
             papers = db.list_papers(limit=self.max_papers)
-            extractions = db.list_extraction_results(limit=self.max_extractions) if include_extractions else []
+            extractions = (
+                db.list_extraction_results(limit=self.max_extractions)
+                if include_extractions
+                else []
+            )
             token_weights = _query_token_weights(tokens, papers, extractions)
             for record in papers:
                 pid = paper_id(record)
@@ -257,20 +263,36 @@ class KGRetriever:
                     raw_pid = str(extraction.get("paper_id") or "")
                     if not raw_pid:
                         continue
-                    resolved = db.resolve_paper(raw_pid) if hasattr(db, "resolve_paper") else None
+                    resolved = (
+                        db.resolve_paper(raw_pid)
+                        if hasattr(db, "resolve_paper")
+                        else None
+                    )
                     pid = paper_id(resolved) if resolved is not None else raw_pid
-                    if not _paper_id_allowed(pid, allowed_ids) and not _paper_id_allowed(raw_pid, allowed_ids):
+                    if not _paper_id_allowed(
+                        pid, allowed_ids
+                    ) and not _paper_id_allowed(raw_pid, allowed_ids):
                         continue
-                    record = paper_cache.get(pid) or resolved or db.get_paper(pid) or {"id": pid}
+                    record = (
+                        paper_cache.get(pid)
+                        or resolved
+                        or db.get_paper(pid)
+                        or {"id": pid}
+                    )
                     paper_cache[pid] = record
-                    for evidence in _evidence_from_extraction(extraction, query, tokens, token_weights):
+                    for evidence in _evidence_from_extraction(
+                        extraction, query, tokens, token_weights
+                    ):
                         evidence = Evidence(
                             paper_id=pid,
                             kind=evidence.kind,
                             text=evidence.text,
                             score=evidence.score,
                             field=evidence.field,
-                            metadata={**evidence.metadata, "raw_extraction_paper_id": raw_pid},
+                            metadata={
+                                **evidence.metadata,
+                                "raw_extraction_paper_id": raw_pid,
+                            },
                         )
                         self._hit_for(hits, record, pid).add_evidence(evidence)
 
@@ -292,7 +314,9 @@ class KGRetriever:
             "extractions": extractions,
         }
 
-    def paper_neighborhood(self, paper_id_value: str, limit: int = 20) -> dict[str, Any] | None:
+    def paper_neighborhood(
+        self, paper_id_value: str, limit: int = 20
+    ) -> dict[str, Any] | None:
         with MetadataDB(self.metadata_db_path) as db:
             record = _find_paper(db, paper_id_value)
             if record is None:
@@ -303,8 +327,7 @@ class KGRetriever:
         by_id = {paper_id(item): item for item in papers}
         source_refs = set(extract_citation_ids(record))
         citations = [
-            _paper_stub_or_source(ref_id, by_id)
-            for ref_id in sorted(source_refs)
+            _paper_stub_or_source(ref_id, by_id) for ref_id in sorted(source_refs)
         ][:limit]
 
         cited_by = []
@@ -377,7 +400,9 @@ class KGRetriever:
         doi = str(record.get("doi") or "")
         score = (
             _score_text(query, tokens, title, weight=4.0, token_weights=token_weights)
-            + _score_text(query, tokens, abstract, weight=1.5, token_weights=token_weights)
+            + _score_text(
+                query, tokens, abstract, weight=1.5, token_weights=token_weights
+            )
             + _score_text(query, tokens, doi, weight=2.0, token_weights=token_weights)
         )
         if score <= 0:
@@ -404,7 +429,11 @@ class KGRetriever:
         record: dict[str, Any],
         fallback_id: str,
     ) -> SearchHit:
-        pid = paper_id(record) if record.get("source") and record.get("source_id") else str(record.get("id") or fallback_id)
+        pid = (
+            paper_id(record)
+            if record.get("source") and record.get("source_id")
+            else str(record.get("id") or fallback_id)
+        )
         if pid not in hits:
             hits[pid] = SearchHit(source=_source_from_paper({**record, "id": pid}))
         return hits[pid]
@@ -424,14 +453,18 @@ def _find_paper(db: MetadataDB, paper_id_value: str) -> dict[str, Any] | None:
     return None
 
 
-def _latest_successful_extraction(extractions: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _latest_successful_extraction(
+    extractions: list[dict[str, Any]]
+) -> dict[str, Any] | None:
     for extraction in extractions:
         if extraction.get("extraction_status") == "success":
             return extraction
     return extractions[0] if extractions else None
 
 
-def _paper_stub_or_source(ref_id: str, papers_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _paper_stub_or_source(
+    ref_id: str, papers_by_id: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     record = papers_by_id.get(ref_id)
     if record is not None:
         return _source_from_paper(record).to_dict()
@@ -439,7 +472,11 @@ def _paper_stub_or_source(ref_id: str, papers_by_id: dict[str, dict[str, Any]]) 
 
 
 def _source_from_paper(record: dict[str, Any]) -> Source:
-    pid = str(record.get("id") or paper_id(record) if record.get("source") and record.get("source_id") else record.get("id") or "")
+    pid = str(
+        record.get("id") or paper_id(record)
+        if record.get("source") and record.get("source_id")
+        else record.get("id") or ""
+    )
     return Source(
         paper_id=pid,
         title=str(record.get("title") or ""),
@@ -469,9 +506,28 @@ def _evidence_from_extraction(
     for field_name, kind, weight in fields:
         for item in _iter_items(extraction.get(field_name)):
             text = _item_text(item)
-            score = _score_text(query, tokens, text, weight=weight, token_weights=token_weights)
+            score = _score_text(
+                query, tokens, text, weight=weight, token_weights=token_weights
+            )
             if score <= 0:
                 continue
+            # Carry a `context` so the answer-time citation linker
+            # (`_evidence_claim_contexts` → exact-context stage 1) can reconnect a
+            # sentence to the very claim it draws on, instead of falling back to
+            # lexical overlap and being flagged `approximate`. Use the most
+            # statement-like field available — `statement`/`label`/`context` if
+            # present, else the full text — so the match is on the claim wording
+            # the model actually saw, not the snippet.
+            statement_context = ""
+            if isinstance(item, dict):
+                for key in ("statement", "label", "context", "description"):
+                    value = str(item.get(key) or "").strip()
+                    if value:
+                        statement_context = value
+                        break
+            if not statement_context:
+                statement_context = text
+            base_metadata = item if isinstance(item, dict) else {}
             evidence.append(
                 Evidence(
                     paper_id=pid,
@@ -479,7 +535,7 @@ def _evidence_from_extraction(
                     field=field_name,
                     text=_snippet(text, tokens) or text,
                     score=score,
-                    metadata=item if isinstance(item, dict) else {},
+                    metadata={**base_metadata, "context": statement_context},
                 )
             )
     return evidence
@@ -574,8 +630,7 @@ def _query_token_weights(
         pid = paper_id(record)
         paper_text_by_id.setdefault(pid, []).append(
             " ".join(
-                str(record.get(field) or "")
-                for field in ["title", "abstract", "doi"]
+                str(record.get(field) or "") for field in ["title", "abstract", "doi"]
             )
         )
 
@@ -591,7 +646,9 @@ def _query_token_weights(
             ("cross_domain_hints", "cross_domain_hint", 2.0),
             ("terminology_conflicts", "terminology_conflict", 1.5),
         ]:
-            parts.extend(_item_text(item) for item in _iter_items(extraction.get(field_name)))
+            parts.extend(
+                _item_text(item) for item in _iter_items(extraction.get(field_name))
+            )
         paper_text_by_id.setdefault(pid, []).append(" ".join(parts))
 
     paper_count = max(len(paper_text_by_id), 1)
@@ -603,7 +660,8 @@ def _query_token_weights(
                 document_frequency[token] += 1
 
     return {
-        token: 1.0 + math.log((paper_count + 1.0) / (document_frequency.get(token, 0) + 1.0))
+        token: 1.0
+        + math.log((paper_count + 1.0) / (document_frequency.get(token, 0) + 1.0))
         for token in tokens
     }
 
@@ -626,17 +684,20 @@ def _score_text(
         return 0.0
 
     query_has_specific_terms = any(token not in LOW_SIGNAL_TERMS for token in tokens)
-    matched_specific_terms = [token for token in matched if token not in LOW_SIGNAL_TERMS]
+    matched_specific_terms = [
+        token for token in matched if token not in LOW_SIGNAL_TERMS
+    ]
     if query_has_specific_terms and not matched_specific_terms:
         return 0.0
 
     token_weights = token_weights or {}
-    specific_score = sum(token_weights.get(token, 1.0) for token in matched_specific_terms)
-    low_signal_score = sum(token_weights.get(token, 1.0) for token in matched if token in LOW_SIGNAL_TERMS)
-    score = weight * (
-        specific_score
-        + 0.25 * low_signal_score
+    specific_score = sum(
+        token_weights.get(token, 1.0) for token in matched_specific_terms
     )
+    low_signal_score = sum(
+        token_weights.get(token, 1.0) for token in matched if token in LOW_SIGNAL_TERMS
+    )
+    score = weight * (specific_score + 0.25 * low_signal_score)
     query_norm = _normalize(query)
     text_norm = _normalize(text)
     if query_norm and query_norm in text_norm:
@@ -668,7 +729,7 @@ def _ranking_weights() -> dict[str, float]:
 
         with open("config.yaml", "r", encoding="utf-8") as handle:
             cfg = yaml.safe_load(handle) or {}
-        block = ((cfg.get("retrieval") or {}).get("ranking") or {})
+        block = (cfg.get("retrieval") or {}).get("ranking") or {}
         for key in weights:
             if block.get(key) is not None:
                 weights[key] = float(block[key])
@@ -747,18 +808,29 @@ def _rank_hits(hits: Iterable[SearchHit], tokens: list[str]) -> list[SearchHit]:
 
 
 def _normalized_paper_id_set(paper_ids: list[str] | set[str] | None) -> set[str]:
-    return {_normalize_paper_identifier(item) for item in (paper_ids or []) if str(item or "").strip()}
+    return {
+        _normalize_paper_identifier(item)
+        for item in (paper_ids or [])
+        if str(item or "").strip()
+    }
 
 
 def _paper_id_allowed(paper_id_value: str, allowed_ids: set[str]) -> bool:
     if not allowed_ids:
         return True
     normalized = _normalize_paper_identifier(paper_id_value)
-    return any(normalized == allowed or normalized.endswith(allowed) or allowed.endswith(normalized) for allowed in allowed_ids)
+    return any(
+        normalized == allowed
+        or normalized.endswith(allowed)
+        or allowed.endswith(normalized)
+        for allowed in allowed_ids
+    )
 
 
 def _normalize_paper_identifier(value: str) -> str:
-    normalized = re.sub(r"^https?://arxiv\.org/abs/", "arxiv:", str(value or "").lower())
+    normalized = re.sub(
+        r"^https?://arxiv\.org/abs/", "arxiv:", str(value or "").lower()
+    )
     return re.sub(r"\s+", "", normalized)
 
 

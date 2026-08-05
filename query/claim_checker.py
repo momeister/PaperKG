@@ -118,6 +118,12 @@ def _gather_source_text(
         excerpts.append(shown)
         if origin == "none":
             origin = "shown_evidence"
+    # Defense-in-depth: drop reversed PDF-column artefacts a second time. This
+    # catches the grey-source `evidence` pool, the abstract fallback and the
+    # shown-evidence path — all of which bypass source_verifier.best_excerpts.
+    from query.excerpt_sanity import filter_sane_excerpts
+
+    excerpts = filter_sane_excerpts(excerpts)
     return excerpts, origin
 
 

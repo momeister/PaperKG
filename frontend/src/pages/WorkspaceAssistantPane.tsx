@@ -1148,7 +1148,15 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                 ))}
               </div>
             ) : (
-              !deepMode && !parallelMode ? <EmptyState title="Keine Antwort" /> : null
+              !deepMode && !parallelMode ? (
+                answerMutation.isPending || autoProgress ? (
+                  <div className="answer-blocks" ref={answerBlocksRef}>
+                    <div className="scope-status">
+                      <Loader2 size={13} className="spin" /> Antwort wird erstellt …
+                    </div>
+                  </div>
+                ) : <EmptyState title="Keine Antwort" />
+              ) : null
             )}
             {answerSelection ? (
               <div

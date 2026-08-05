@@ -121,6 +121,7 @@ export type CitationMeta = {
   evidenceIndex: number;
   evidenceId?: string;
   approximate?: boolean;
+  confidence?: "high" | "medium" | "low";
 };
 
 /** Zusatzinfos beim Übernehmen eines Zitats in die Notiz. */

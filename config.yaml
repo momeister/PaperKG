@@ -167,19 +167,28 @@ llm:
 
   # Supported providers: ollama, lm_studio, openai, openai_compatible, gemini, nvidia
   providers:
-    # Ollama - Local open-source models
+    # Ollama - local models, plus the ":cloud" tier of an Ollama Pro subscription.
+    #
+    # ":cloud" models are reached through the same local endpoint but are executed
+    # on Ollama's servers -- the prompt (paper full text, source code) leaves this
+    # machine. They are offered, never forced: every model without the suffix runs
+    # locally, and a fully local setup stays possible at all times.
     ollama:
       provider_type: "ollama"
       base_url: "http://localhost:11434"
       api_key: null  # Ollama doesn't require API key
       timeout_seconds: 1800
       models:
-        - "qwen3.6:35b"
-        - "llama3.1:8b"
-        - "mistral-small:latest"
-      
+        - "qwen3.5:9b"              # local
+        - "qwen3.5:4b"              # local
+        - "deepseek-v4-flash:cloud" # runs on Ollama's servers
+        - "glm-5.2:cloud"           # runs on Ollama's servers
+        - "kimi-k3:cloud"           # runs on Ollama's servers
+
       # Model and Generation Settings
-      model: "qwen3.6:35b"
+      # Default stays local on purpose: switching it to a ":cloud" model would move
+      # every extraction off this machine without anyone choosing that.
+      model: "qwen3.5:9b"
       temperature: 0.2          # Lower = more deterministic
       top_p: 0.95               # Nucleus sampling
       max_tokens: 16384         # Max output tokens for structured extraction
@@ -378,6 +387,22 @@ llm:
     result_backend: "redis://localhost:6379/1"
     task_queue: "sciencekg.extraction"
 
+# PDF-Parsing-Schutz (parsing/pdf_guard.py). Einzelne Seiten mit riesigen
+# Vektor-Grafiken bringen pdfplumber *und* pypdf dazu, endlos Speicher zu
+# allokieren, ohne fertig zu werden; ungeschützt reisst das den Backend-Prozess
+# per OOM mit. Deshalb laeuft das Parsen in einem eigenen Prozess.
+parsing:
+  guard_enabled: true
+  # Grosszuegig: auf langsamer Hardware darf ein dickes PDF lange brauchen.
+  # Abgebrochen werden soll nur, was ohnehin nie fertig wird — dafuer ist in
+  # der Praxis das RAM-Limit der Ausloeser, nicht die Zeit.
+  pdf_timeout_seconds: 2400        # 40 Minuten pro PDF
+  # Anteil des *aktuell freien* RAM, den der Parser-Kindprozess nutzen darf.
+  # Dynamisch, damit ein 8-GB-Laptop und eine 64-GB-Workstation beide passen.
+  memory_fraction: 0.6
+  memory_min_mb: 1024              # Untergrenze: normale PDFs muessen immer durchgehen
+  memory_max_mb: 16384             # Obergrenze: ein Ausreisser darf die Maschine nicht ins Swappen ziehen
+
 embedding:
   backend: "hash-fallback"
   model: "BAAI/bge-m3"
@@ -525,6 +550,11 @@ companion:
       enabled: true
       use_web: true
       use_papers: false
+      # Dritte Quelle: der Code-Graph eines Werkstatt-Projekts. Braucht beides —
+      # den Schalter und die Projekt-ID —, weil sonst nicht feststeht, *welches*
+      # Repository gemeint ist.
+      use_code: false
+      code_project_id: null
       max_per_session: 3
 
 # Analyse-Werkstatt (WP1): reproduzierbare, lokale Ausführung KI-geschriebener
@@ -544,3 +574,23 @@ analysis:
 # ~/Documents/PaperKG-Projekte. `~` and $ENV are expanded.
 code_workspaces:
   base_dir: "~/Documents/PaperKG-Projekte"
+
+# Code-Graph (CodeSearch): baut aus einem Werkstatt-Projekt einen belegpflichtigen
+# Symbolgraphen — jede Kante trägt ihre Quellzeile und ihre Sicherheitsstufe
+# (verifiziert/aufgelöst/vermutet), Unauflösbares steht als sichtbare Lücke drin.
+# Die Analyse ist Rust (codesearch/) und läuft als Kindprozess `cs serve`.
+#
+# `binary` leer lassen: dann wird der Reihe nach gesucht — $SCIENCEKG_CODESEARCH_BIN,
+# das gebündelte Sidecar, codesearch/target/release/cs, PATH. Fehlt es überall,
+# bleibt nur dieser eine Tab leer; alles andere im Programm läuft weiter.
+#
+# Die Indizes liegen bewusst NICHT im Repository des Nutzers (kein `.codesearch/`
+# in fremden Checkouts), sondern als eine SQLite-Datei je Projekt unter index_dir.
+# Sie sind reiner Cache: löschbar, wiederherstellbar, nicht Teil von Bundles.
+codesearch:
+  binary: null            # null = automatisch suchen
+  index_dir: "data/codegraph"
+  index_timeout_seconds: 3600   # ganze Repos dürfen dauern; Abbruch erst danach
+  rpc_timeout_seconds: 120      # einzelne Abfrage (Suche, Bauplan, …)
+  idle_seconds: 600             # danach wird ein ungenutzter Kindprozess beendet
+  max_clients: 8                # gleichzeitig offene Projekte

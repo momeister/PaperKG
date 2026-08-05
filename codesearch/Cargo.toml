@@ -1,0 +1,73 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cs-core",
+    "crates/cs-graph",
+    "crates/cs-index",
+    "crates/cs-resolve",
+    "crates/cs-git",
+    "crates/cs-rank",
+    "crates/cs-workspace",
+    "crates/cs-llm",
+    "crates/cs-pty",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[workspace.dependencies]
+cs-core = { path = "crates/cs-core" }
+cs-graph = { path = "crates/cs-graph" }
+cs-index = { path = "crates/cs-index" }
+cs-resolve = { path = "crates/cs-resolve" }
+cs-rank = { path = "crates/cs-rank" }
+cs-git = { path = "crates/cs-git" }
+cs-workspace = { path = "crates/cs-workspace" }
+cs-llm = { path = "crates/cs-llm" }
+cs-pty = { path = "crates/cs-pty" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+# Trimmed to the history walk we actually do. The full default set pulls in
+# networking, worktree and status machinery that would roughly double build time
+# for features CodeSearch never touches.
+gix = { version = "0.86", default-features = false, features = ["sha1", "max-performance-safe", "blob-diff"] }
+rayon = "1.10"
+blake3 = "1.5"
+ignore = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.9"
+tree-sitter = "0.26"
+
+# Grammar set. Pinned centrally so a single ABI mismatch cannot creep in
+# through a transitive bump — see docs/languages.md.
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-java = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-php = "0.24"
+tree-sitter-bash = "0.25"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# Grammars are enormous generated C files. Building them unoptimised makes
+# indexing roughly ten times slower, which is very visible in dev.
+[profile.dev.package."*"]
+opt-level = 2

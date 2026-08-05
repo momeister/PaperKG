@@ -241,10 +241,26 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Zitate zeigen seit dem Code-Graph nicht mehr nur auf Paper, sondern auch
+        # auf Codestellen. Statt einer zweiten Tabelle bekommt diese die paar
+        # Spalten dazu: ``source_kind`` unterscheidet, alles andere ist nur bei
+        # 'code' gefüllt. ``paper_id`` bleibt NOT NULL und trägt dann die
+        # synthetische ID ``code:<projekt>:<pfad>:<zeile>`` — so lesen alle
+        # bestehenden Abfragen unverändert weiter.
+        #
+        # ``content_hash`` ist der blake3-Hash der Datei zum Zeitpunkt des
+        # Zitierens. Weicht er später ab, ist das Zitat veraltet und wird als
+        # solches angezeigt, statt eine alte Zeilennummer als aktuell auszugeben.
         self._add_missing_columns(
             "note_citations",
             {
                 "evidence_id": "VARCHAR",
+                "source_kind": "VARCHAR",
+                "code_project_id": "VARCHAR",
+                "rel_path": "VARCHAR",
+                "start_line": "INTEGER",
+                "end_line": "INTEGER",
+                "content_hash": "VARCHAR",
             },
         )
 
@@ -566,6 +582,237 @@ class SchemaMixin(_Base):
             )
         """)
 
+        # Code-Graph: Buchführung über die CodeSearch-Indizes. Der Index selbst ist
+        # eine eigene SQLite-Datei unter data/codegraph/<id>/index.csdb — bewusst
+        # NICHT hier drin: DuckDB verträgt genau einen Schreiber, und der Index wird
+        # von einem Kindprozess (cs serve) geschrieben. Hier steht nur, dass es ihn
+        # gibt und wie er ausgefallen ist.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_indexes (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                db_path VARCHAR NOT NULL,
+                status VARCHAR DEFAULT 'pending',
+                files INTEGER DEFAULT 0,
+                parsed_files INTEGER DEFAULT 0,
+                nodes INTEGER DEFAULT 0,
+                edges INTEGER DEFAULT 0,
+                guessed_edges INTEGER DEFAULT 0,
+                dynamic_gaps INTEGER DEFAULT 0,
+                duration_ms BIGINT DEFAULT 0,
+                commits_walked INTEGER DEFAULT 0,
+                skipped_json TEXT,
+                error_message VARCHAR,
+                last_indexed_timestamp TIMESTAMP,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Paper ↔ Code: die Brücke zwischen Methode und Implementierung. Ein Eintrag
+        # sagt „dieses Repo (oder dieses Symbol) gehört zu diesem Paper" und macht
+        # damit Antworten möglich, die beides gleichzeitig belegen.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_paper_links (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                project_id VARCHAR,
+                paper_id VARCHAR,
+                symbol_id VARCHAR,
+                rel_path VARCHAR,
+                start_line INTEGER,
+                end_line INTEGER,
+                kind VARCHAR DEFAULT 'implements',
+                note TEXT,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Geprüfte Code-Antworten. Das Urteil (sound/uncited/broken) und die
+        # Belegliste werden mitgespeichert, weil eine Antwort ohne ihre Prüfung
+        # nur eine Behauptung ist.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_answers (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                project_id VARCHAR,
+                question TEXT,
+                answer TEXT,
+                citations_json TEXT,
+                trail_json TEXT,
+                verdict VARCHAR,
+                tool_calls INTEGER DEFAULT 0,
+                provider VARCHAR,
+                model VARCHAR,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Gespräche über den Code. Getrennt von ``code_answers``, weil das dort
+        # eine flache Antwortliste *ist*: ``GET …/answers`` liest sie, der
+        # Desktop-Begleiter und der Analyse-Planer greifen darauf zu. Zeilen mit
+        # einer Gesprächszugehörigkeit hineinzumischen, gäbe ihnen dort
+        # Geschwister ohne Reihenfolge. ``POST /ask`` schreibt weiter
+        # ``code_answers``, der Chat schreibt hierher — nichts doppelt.
+        #
+        # ``session_key`` ist die Sitzung auf der Rust-Seite: **ein Gespräch =
+        # eine Lizenz zum Zitieren**. Sie wächst mit dem Gespräch und endet mit
+        # ihm, nicht mit der einzelnen Frage.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_chats (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                project_id VARCHAR,
+                title VARCHAR,
+                session_key VARCHAR NOT NULL,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_chats_project ON code_chats(code_project_id)"
+        )
+
+        # Ein Zug im Gespräch. ``focus_nodes_json`` ist die Trefferliste — alle
+        # Symbole, die zu der Frage gehören, jeweils mit ihrer Herkunft: ob sie
+        # zitiert, nachgeschlagen oder nur vorab gesucht wurden. Ohne die
+        # Herkunft wäre die Liste eine unbegründete Behauptung.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_chat_turns (
+                id VARCHAR PRIMARY KEY,
+                chat_id VARCHAR NOT NULL,
+                ordinal INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT,
+                citations_json TEXT,
+                trail_json TEXT,
+                focus_nodes_json TEXT,
+                papers_json TEXT,
+                verdict VARCHAR,
+                tool_calls INTEGER DEFAULT 0,
+                truncated BOOLEAN DEFAULT FALSE,
+                provider VARCHAR,
+                model VARCHAR,
+                remote_model BOOLEAN DEFAULT FALSE,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_chat_turns_chat ON code_chat_turns(chat_id)"
+        )
+
+        # Namen für die Bereiche der Cluster-Landkarte. Die *Struktur* der Karte
+        # kommt aus SQL über den Index (Ordner-Rollup) und steht nie hier — nur
+        # die vom Modell vergebene Beschriftung, die reiner Komfort ist.
+        #
+        # ``fingerprint`` ist der Grund, warum das kein stiller Falschstand wird:
+        # er beschreibt die *Gestalt* des Clusters (Symbolzahl, Art-Histogramm,
+        # wichtigste Symbole). Passt er nach einem Reindizieren nicht mehr, gilt
+        # der Name als überholt und die Karte zeigt wieder den Ordnernamen.
+        # Absichtlich nicht der Dateiinhalt: sonst verlöre ein Bereich seinen
+        # Namen, sobald jemand irgendwo eine Zeile ändert.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_cluster_labels (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                cluster_path VARCHAR NOT NULL,
+                fingerprint VARCHAR NOT NULL,
+                label VARCHAR NOT NULL,
+                purpose TEXT,
+                source VARCHAR DEFAULT 'llm',
+                provider VARCHAR,
+                model VARCHAR,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_cluster_labels_project "
+            "ON code_cluster_labels(code_project_id)"
+        )
+
+        # Selbst hinterlegte Begründungen: „warum wurde das so gebaut".
+        #
+        # Der Prompt einer erzeugenden KI ist in diesem Repository nirgends
+        # aufgezeichnet, und ein Werkzeug, das so täte, als könne es ihn
+        # rekonstruieren, wäre genau die unbelegte Behauptung, gegen die der
+        # ganze Rest gebaut ist. Was es stattdessen gibt: git (aufgezeichnet),
+        # eine Herleitung aus dem Code (als solche gekennzeichnet, nicht
+        # gespeichert) — und diese Tabelle, damit es ab jetzt eine Aufzeichnung
+        # gibt.
+        #
+        # ``content_hash`` wie bei ``note_citations``: ändert sich die Datei,
+        # gilt die Begründung als **veraltet**, statt weiter als Tatsache über
+        # Code behauptet zu werden, den sie nie gesehen hat.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_rationale (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                rel_path VARCHAR NOT NULL,
+                start_line INTEGER,
+                end_line INTEGER,
+                symbol_id VARCHAR,
+                text TEXT NOT NULL,
+                content_hash VARCHAR,
+                author VARCHAR,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_rationale_project "
+            "ON code_rationale(code_project_id)"
+        )
+
+        # Code-Graph Stufe 2: Git-Checkpoints. Ein Checkpoint ist ein Commit
+        # unter ``refs/paperkg/checkpoints/<id>`` (siehe ``workspace/checkpoints.py``),
+        # der weder HEAD noch den Index des Nutzers beruehrt. Hier steht nur die
+        # Buchfuehrung; die eigentlichen Objekte liegen im Repo des Nutzers und
+        # werden ueber die Ref vor ``git gc`` geschuetzt. Haengt an
+        # ``code_project_id`` (nicht an einem Forschungs-``project_id``) → *nicht*
+        # in ``PROJECT_SCOPED_TABLES``.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_checkpoints (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                ref_name VARCHAR NOT NULL,
+                commit_sha VARCHAR NOT NULL,
+                tree_sha VARCHAR,
+                parent_sha VARCHAR,
+                label TEXT,
+                reason VARCHAR,
+                file_count INTEGER DEFAULT 0,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_checkpoints_project "
+            "ON code_checkpoints(code_project_id)"
+        )
+
+        # Code-Graph Stufe 2: Was-wäre-wenn-Sandboxen (git worktree). Eine
+        # Sandbox ist eine isolierte Kopie unter ``data/sandboxes/<id>``, auf
+        # einem Checkpoint-Commit angelegt. Hier steht nur die Buchfuehrung
+        # (Befehl, letzter Exit-Code, Basis-Checkpoint); der Worktree selbst
+        # liegt im Repo des Nutzers (.git/worktrees) + unter data/. Haengt an
+        # ``code_project_id`` → nicht in ``PROJECT_SCOPED_TABLES``.
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS code_sandboxes (
+                id VARCHAR PRIMARY KEY,
+                code_project_id VARCHAR NOT NULL,
+                checkpoint_id VARCHAR,
+                base_sha VARCHAR,
+                path VARCHAR,
+                status VARCHAR DEFAULT 'created',
+                test_command VARCHAR,
+                last_exit_code INTEGER,
+                last_run_timestamp TIMESTAMP,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_sandboxes_project "
+            "ON code_sandboxes(code_project_id)"
+        )
+
         # Datensätze (WP2): mit Papern gesammelte Forschungs-Datensätze (Metadaten +
         # Link/DOI/Lizenz). Große Daten werden NICHT auto-heruntergeladen (Privacy) —
         # nur die nachvollziehbare Referenz. Nutzbar als Eingabe für die Analyse-Werkstatt.
@@ -628,6 +875,10 @@ class SchemaMixin(_Base):
         self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_runs_project ON analysis_runs(project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_artifacts_run ON analysis_artifacts(run_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_code_indexes_project ON code_indexes(code_project_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_code_paper_links_code ON code_paper_links(code_project_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_code_paper_links_paper ON code_paper_links(paper_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_code_answers_code ON code_answers(code_project_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_pdf_annotations_paper ON pdf_annotations(paper_id)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_companion_sessions_kind ON companion_sessions(kind)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_companion_messages_session ON companion_messages(session_id)")

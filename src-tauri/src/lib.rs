@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod agent_bridge;
@@ -43,6 +44,29 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|err| err.to_string())
+}
+
+/// Nativer Ordner-Auswahldialog für „Ordner öffnen" in der Werkstatt. Liefert den
+/// gewählten Pfad, oder `None` wenn der Nutzer abbricht. Ein Webview kann keinen
+/// Verzeichnis-Dialog öffnen (`<input webkitdirectory>` lädt *Dateien* hoch und
+/// gibt den Pfad nie preis), deshalb muss das über die Shell laufen.
+///
+/// Bewusst `async`: der Dialog meldet sein Ergebnis per Callback, und ein
+/// synchrones Command läuft in Tauri 2 auf dem Main-Thread — dort blockierend auf
+/// das Ergebnis zu warten hieße, genau den Thread zu blockieren, den der Dialog
+/// selbst zum Laufen braucht. Das Warten liegt deshalb in `spawn_blocking`.
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog().file().pick_folder(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let picked = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(picked
+        .and_then(|path| path.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 /// Handle to the FastAPI sidecar so it can be killed on exit.
@@ -199,6 +223,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(terminal::TerminalState::default())
         .manage(jupyter::JupyterState::default())
         .manage(agent_bridge::AgentBridgeState::default())
@@ -210,6 +235,7 @@ pub fn run() {
         .manage(click_watch::ClickWatchState::default())
         .invoke_handler(tauri::generate_handler![
             open_external,
+            pick_folder,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_resize,

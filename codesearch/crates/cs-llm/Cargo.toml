@@ -1,0 +1,21 @@
+[package]
+name = "cs-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cs-core.workspace = true
+cs-graph.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# rustls rather than the system TLS stack: one fewer thing to differ between
+# Linux, Windows and macOS, and the app is local-first anyway.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+tempfile = "3"
+cs-workspace.workspace = true

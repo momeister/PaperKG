@@ -737,7 +737,11 @@ def best_excerpts(
             break
         if extra not in excerpts:
             excerpts.append(extra)
-    return excerpts[:max_excerpts]
+    # Drop reversed/garbled PDF-column-extraction artefacts before they enter the
+    # evidence pipeline — see query/excerpt_sanity.py for the rationale.
+    from query.excerpt_sanity import filter_sane_excerpts
+
+    return filter_sane_excerpts(excerpts[:max_excerpts])
 
 
 def highlightable_terms(text: str) -> list[str]:

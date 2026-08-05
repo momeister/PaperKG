@@ -6,6 +6,7 @@ pm.llm_router (Test-Patch-Surface).
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -17,6 +18,62 @@ DEFAULT_METADATA_DB_PATH = "data/metadata.duckdb"
 DEFAULT_PDF_BASE_DIR = "data/pdfs"
 
 router = APIRouter()
+
+
+# Small local models (gemini-3.1-flash-lite & friends) tend to emit a short
+# chain-of-thought preamble before the rewritten sentence despite being told
+# not to. Stripping it post-hoc keeps the rewrite usable instead of leaking
+# "Vielleicht ist die Quelle eine andere? …" into the user's note.
+_COT_PREAMBLE_STARTS: tuple[str, ...] = (
+    "vielleicht",
+    "ich ",
+    "wir ",
+    "die quelle",
+    "die aussage",
+    "quelle ",
+    "aber ",
+    "das ",
+    "hier ",
+    "zuerst",
+    "zunächst",
+    "nun ",
+    "ok ",
+    "also ",
+    "gedanke",
+    "überleg",
+    "ueberleg",
+    "analyse",
+    "schritt",
+    "die umformulierte",
+    "der umformulierte",
+    "meine antwort",
+    "die korrekte",
+    "der korrekte",
+)
+# Preamble typically ends at the first ". " / "? " / ": " followed by a
+# capitalized sentence start. We keep the rest verbatim.
+_PREAMBLE_END_RE = re.compile(r"[.?]\s+(?=[A-ZÄÖÜ])|:\s+(?=[A-ZÄÖÜ])")
+
+
+def _strip_cot_preamble(text: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    # Iterate: while the leading sentence starts with a COT marker, drop it.
+    # Preambles like "Vielleicht ist die Quelle…? Die Quelle ist… . Ich kenne
+    # diese Quelle nicht. Die umformulierte Aussage lautet: …" need every
+    # COT-style sentence removed, not just the first.
+    while text:
+        lowered = text.lower()
+        if not any(lowered.startswith(p) for p in _COT_PREAMBLE_STARTS):
+            return text
+        # Find the first sentence boundary (. ? ! followed by space + capital).
+        match = _PREAMBLE_END_RE.search(text)
+        if not match:
+            # Whole remaining text is one COT sentence — nothing salvageable.
+            return ""
+        text = text[match.end():].strip()
+    return text
 
 
 class RewriteRequest(BaseModel):
@@ -58,7 +115,11 @@ def rewrite_text(request: RewriteRequest) -> dict[str, Any]:
                     "content": (
                         "Du bist ein praeziser wissenschaftlicher Schreibassistent. "
                         "Schreibe nur den gegebenen Text um, fuege keine neuen Fakten, "
-                        "Quellen oder Zitate hinzu und erhalte vorhandene Zitationsmarker."
+                        "Quellen oder Zitate hinzu und erhalte vorhandene Zitationsmarker. "
+                        "Antworte AUSSCHLIESSLICH mit dem umgeschriebenen Text. Keine "
+                        "Erklaerungen, keine Ueberlegungen, keine Vorab-Analyse, kein "
+                        "Wiederholen des Inputs, kein Einleitungssatz. Beginne direkt mit "
+                        "dem ersten Wort des Ergebnisses."
                     ),
                 },
                 {
@@ -71,7 +132,10 @@ def rewrite_text(request: RewriteRequest) -> dict[str, Any]:
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Rewrite failed: {exc}") from exc
-    return {"text": str(text or "").strip(), "model": overrides.get("model") or pm.llm_router.provider_default_model(request.provider)}
+    return {
+        "text": _strip_cot_preamble(text),
+        "model": overrides.get("model") or pm.llm_router.provider_default_model(request.provider),
+    }
 
 
 @router.post("/assistant/claim-check")

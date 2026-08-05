@@ -76,6 +76,8 @@ from api.routers import analysis as _analysis_router  # noqa: E402
 app.include_router(_analysis_router.router)
 from api.routers import workspaces as _workspaces_router  # noqa: E402
 app.include_router(_workspaces_router.router)
+from api.routers import codegraph as _codegraph_router  # noqa: E402
+app.include_router(_codegraph_router.router)
 from api.routers import pdf_annotations as _pdf_annotations_router  # noqa: E402
 app.include_router(_pdf_annotations_router.router)
 from api.routers import parallel as _parallel_router  # noqa: E402
@@ -293,12 +295,17 @@ def _companion_llm_params(provider: str | None, model: str | None) -> dict[str, 
 
 
 async def _companion_context(
-    question: str, use_papers: bool, use_web: bool
+    question: str,
+    use_papers: bool,
+    use_web: bool,
+    use_code: bool = False,
+    code_project_id: str | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Optional grounding for companion answers (Quellen-Modus): local paper hits
-    (KG + embeddings via HybridRetriever) and/or web-search results (titles +
-    snippets only — no page fetches, latency-friendly). Best-effort on both paths:
-    any failure yields an empty context so the screen answer still happens."""
+    (KG + embeddings via HybridRetriever), web-search results (titles + snippets
+    only — no page fetches, latency-friendly) and/or the code graph of a selected
+    Werkstatt project. Best-effort on every path: any failure yields an empty
+    context so the screen answer still happens."""
     blocks: list[str] = []
     sources: list[dict[str, Any]] = []
     if use_papers:
@@ -328,6 +335,30 @@ async def _companion_context(
                 clean_snippet, _flags = sanitize_web_text(hit.snippet or hit.title, max_len=400)
                 blocks.append(f"(Web: {hit.url}) {hit.title} — {clean_snippet}")
                 sources.append({"type": "web", "url": hit.url, "title": hit.title})
+        except Exception:  # noqa: BLE001 - grounding is best-effort
+            pass
+    if use_code and code_project_id:
+        try:
+            def _code_context() -> str:
+                from codegraph import service
+                from storage.metadata_db import MetadataDB
+
+                with MetadataDB(DEFAULT_METADATA_DB_PATH) as db:
+                    project = db.get_code_project(str(code_project_id))
+                if project is None:
+                    return ""
+                # Dieselbe deterministische Vorab-Suche wie im Code-Begleiter —
+                # die wahrscheinlichen Symbole samt Quelltext, in einem Aufruf.
+                retrieval = service.query(
+                    project, "context_build", {"question": question, "session": "companion"}
+                ) or {}
+                return str(retrieval.get("context") or "")
+
+            context = await asyncio.to_thread(_code_context)
+            if context:
+                # Gedeckelt: der Companion-Prompt trägt schon ein Bildschirmfoto.
+                blocks.append(f"(Code-Graph) {context[:4000]}")
+                sources.append({"type": "code", "id": str(code_project_id), "title": "Code-Graph"})
         except Exception:  # noqa: BLE001 - grounding is best-effort
             pass
     return blocks, sources

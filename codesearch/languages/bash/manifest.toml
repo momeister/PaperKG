@@ -1,0 +1,22 @@
+display = "Bash"
+extensions = ["sh", "bash", "zsh"]
+comment_prefixes = ["#"]
+doc_style = "leading_comment"
+
+decision_nodes = ["if_statement", "elif_clause", "while_statement", "for_statement", "case_item"]
+block_nodes = ["compound_statement", "do_group"]
+
+test_prefixes = ["test_"]
+test_suffixes = ["_test"]
+entry_names = ["main"]
+
+[effects]
+file_read = ["cat ", "read ", "source ", "find ", "ls "]
+file_write = ["tee ", "rm ", "mkdir ", "mv ", "cp ", "touch "]
+network = ["curl ", "wget ", "ssh ", "scp ", "nc "]
+database = ["psql", "mysql ", "sqlite3"]
+process_spawn = ["exec ", "eval ", "xargs", "nohup"]
+console = ["echo ", "printf ", "print "]
+randomness = ["RANDOM", "uuidgen", "shuf"]
+time = ["date ", "sleep "]
+environment = ["export ", "env ", "printenv"]

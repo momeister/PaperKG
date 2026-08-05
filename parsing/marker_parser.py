@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,9 @@ try:
 	from pypdf import PdfReader
 except Exception:  # pragma: no cover - optional dependency
 	PdfReader = None
+
+
+PAGE_BREAK = "\n\n---PAGE BREAK---\n\n"
 
 
 @dataclass
@@ -330,12 +334,78 @@ class MarkerParser:
 
 	name = "marker"
 
+	@staticmethod
+	def build_document(paper_id: str, text: str, page_count: int, meta: dict[str, Any]) -> ParsedDocument:
+		"""Ergebnis aus rohen Feldern bauen — genutzt von parsing.pdf_guard."""
+		return ParsedDocument(
+			paper_id=paper_id,
+			parser=MarkerParser.name,
+			text=text,
+			page_count=page_count,
+			meta=meta,
+		)
+
 	def parse(self, file_path: str | Path, paper_id: str) -> ParsedDocument:
+		"""Parsen mit Schutzhülle (eigener Prozess, RAM-/Zeitgrenze).
+
+		Einzelne PDF-Seiten mit riesigen Vektor-Grafiken bringen pdfplumber *und*
+		pypdf dazu, endlos Speicher zu fressen, ohne fertig zu werden — das hat
+		früher das ganze Backend mit in den OOM gezogen. Siehe parsing/pdf_guard.py.
+		"""
+		from parsing.pdf_guard import guarded_parse
+
+		return guarded_parse(file_path, paper_id)
+
+	def parse_direct(
+		self,
+		file_path: str | Path,
+		paper_id: str,
+		progress_path: str | None = None,
+	) -> ParsedDocument:
+		"""Der eigentliche Parser, ohne Schutzhülle.
+
+		`progress_path`: optionale JSONL-Datei, in die jede fertige Seite sofort
+		geschrieben wird. Wird der Prozess mittendrin abgeschossen, kann der
+		Aufrufer daraus die bereits geparsten Seiten retten.
+		"""
 		path = Path(file_path)
 		text = ""
 		page_count = 0
 		metadata: dict[str, Any] = {"source_path": str(path)}
+		progress_handle = None
+		if progress_path:
+			try:
+				progress_handle = open(progress_path, "w", encoding="utf-8")
+			except OSError:
+				progress_handle = None
 
+		def _record_page(index: int, page_text: str) -> None:
+			if progress_handle is None:
+				return
+			try:
+				progress_handle.write(json.dumps({"page": index, "text": page_text}) + "\n")
+				progress_handle.flush()
+			except Exception:
+				pass
+
+		try:
+			return self._parse_pdf(path, paper_id, text, page_count, metadata, _record_page)
+		finally:
+			if progress_handle is not None:
+				try:
+					progress_handle.close()
+				except Exception:
+					pass
+
+	def _parse_pdf(
+		self,
+		path: Path,
+		paper_id: str,
+		text: str,
+		page_count: int,
+		metadata: dict[str, Any],
+		record_page,
+	) -> ParsedDocument:
 		if path.suffix.lower() == ".pdf":
 			# Try pdfplumber first (best quality for text extraction)
 			if pdfplumber is not None:
@@ -344,7 +414,7 @@ class MarkerParser:
 						page_texts: list[str] = []
 						columns_used = 0
 						char_reconstructed = 0
-						for page in pdf.pages:
+						for page_index, page in enumerate(pdf.pages):
 							naive_text = page.extract_text() or ""
 							words: list[dict[str, Any]] | None = None
 							recon_text: str | None = None
@@ -358,7 +428,9 @@ class MarkerParser:
 							if recon_text is not None and naive_text and len(recon_text) < 0.9 * len(naive_text):
 								recon_text = None
 							if recon_text is not None:
-								page_texts.append(_repair_glued_parens(_join_hyphenated_linebreaks(recon_text)))
+								rendered = _repair_glued_parens(_join_hyphenated_linebreaks(recon_text))
+								page_texts.append(rendered)
+								record_page(page_index, rendered)
 								columns_used += 1
 							else:
 								# Prefer pdfplumber's own text: the char-gap reconstruction
@@ -372,8 +444,18 @@ class MarkerParser:
 										spaced = candidate
 										char_reconstructed += 1
 								page_text = spaced or naive_text or (_words_to_text(words) if words else "")
-								page_texts.append(_repair_glued_parens(_join_hyphenated_linebreaks(page_text)))
-						text = "\n\n---PAGE BREAK---\n\n".join(page_texts).strip()
+								rendered = _repair_glued_parens(_join_hyphenated_linebreaks(page_text))
+								page_texts.append(rendered)
+								record_page(page_index, rendered)
+							# pdfplumber cacht die geparsten Objekte jeder angefassten Seite bis
+							# zum Schliessen des Dokuments. Ohne dieses Leeren wächst der Speicher
+							# über das ganze PDF hinweg monoton mit (gemessen: 46 MB konstant mit
+							# flush_cache gegen unbegrenztes Wachstum ohne).
+							try:
+								page.flush_cache()
+							except Exception:
+								pass
+						text = PAGE_BREAK.join(page_texts).strip()
 						page_count = len(pdf.pages)
 						metadata["extraction_method"] = "pdfplumber_columns" if columns_used else "pdfplumber"
 						metadata["chars_extracted"] = len(text)
@@ -396,9 +478,11 @@ class MarkerParser:
 				try:
 					reader = PdfReader(str(path))
 					page_texts: list[str] = []
-					for page in reader.pages:
-						page_texts.append(_join_hyphenated_linebreaks(page.extract_text() or ""))
-					text = "\n\n---PAGE BREAK---\n\n".join(page_texts).strip()
+					for page_index, page in enumerate(reader.pages):
+						rendered = _join_hyphenated_linebreaks(page.extract_text() or "")
+						page_texts.append(rendered)
+						record_page(page_index, rendered)
+					text = PAGE_BREAK.join(page_texts).strip()
 					page_count = len(reader.pages)
 					metadata["extraction_method"] = "pypdf"
 					metadata["chars_extracted"] = len(text)

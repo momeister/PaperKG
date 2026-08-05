@@ -121,6 +121,15 @@ export function OverlayPage() {
     () => localStorage.getItem("sciencekg.companion.papers") === "1",
   );
   const [useWeb, setUseWeb] = useState(() => localStorage.getItem("sciencekg.companion.web") === "1");
+  // Dritte Quelle: der Code-Graph eines Werkstatt-Projekts. Braucht beides —
+  // ohne Projekt-ID steht nicht fest, *welches* Repository gemeint ist.
+  const [useCode, setUseCode] = useState(
+    () => localStorage.getItem("sciencekg.companion.code") === "1",
+  );
+  const [codeProjectId, setCodeProjectId] = useState<string>(
+    () => localStorage.getItem("sciencekg.companion.codeProject") ?? "",
+  );
+  const [codeProjects, setCodeProjects] = useState<{ id: string; name: string }[]>([]);
   const [autopilot, setAutopilot] = useState(true);
 
   // Legacy UI-TARS bridge state (Selbst-Steuerung sub-toggle, unchanged behaviour).
@@ -153,6 +162,8 @@ export function OverlayPage() {
     model: companionModel || undefined,
     usePapers,
     useWeb,
+    useCode,
+    codeProjectId,
     getDbSessionId,
     onEntry: addEntry,
     onError: reportError,
@@ -223,6 +234,25 @@ export function OverlayPage() {
       ? localStorage.setItem("sciencekg.companion.web", "1")
       : localStorage.removeItem("sciencekg.companion.web");
   }, [useWeb]);
+  useEffect(() => {
+    useCode
+      ? localStorage.setItem("sciencekg.companion.code", "1")
+      : localStorage.removeItem("sciencekg.companion.code");
+  }, [useCode]);
+  useEffect(() => {
+    codeProjectId
+      ? localStorage.setItem("sciencekg.companion.codeProject", codeProjectId)
+      : localStorage.removeItem("sciencekg.companion.codeProject");
+  }, [codeProjectId]);
+  useEffect(() => {
+    // Die Liste erst holen, wenn der Schalter an ist — der Overlay soll ohne
+    // Code-Quelle keine Anfrage kosten.
+    if (!useCode || codeProjects.length > 0) return;
+    api.werkstatt
+      .list()
+      .then((list) => setCodeProjects(list.projects.map((item) => ({ id: item.id, name: item.name }))))
+      .catch(() => setCodeProjects([]));
+  }, [useCode, codeProjects.length]);
   useEffect(() => {
     selfDriveNative
       ? localStorage.setItem("sciencekg.selfdrive.native", "1")
@@ -480,6 +510,8 @@ export function OverlayPage() {
           model,
           use_papers: usePapers,
           use_web: useWeb,
+          use_code: useCode,
+          code_project_id: codeProjectId || null,
           session_id: sessionId,
         });
         addEntry({
@@ -508,6 +540,8 @@ export function OverlayPage() {
         model,
         use_papers: usePapers,
         use_web: useWeb,
+        use_code: useCode,
+        code_project_id: codeProjectId || null,
         session_id: sessionId,
       });
       if (res.error) {
@@ -774,6 +808,30 @@ export function OverlayPage() {
             >
               🌐 Web
             </button>
+            <button
+              className={`button button-compact overlay-source-toggle ${useCode ? "overlay-source-toggle--active" : ""}`}
+              type="button"
+              aria-pressed={useCode}
+              title="Code-Graph eines Werkstatt-Projekts einbeziehen (Symbole, Aufrufer, Quelltext)"
+              onClick={() => setUseCode((prev) => !prev)}
+            >
+              💻 Code
+            </button>
+            {useCode ? (
+              <select
+                className="overlay-picker-select"
+                value={codeProjectId}
+                onChange={(event) => setCodeProjectId(event.target.value)}
+                title="Welches Werkstatt-Projekt?"
+              >
+                <option value="">Projekt wählen …</option>
+                {codeProjects.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             {discovering ? <Loader2 size={13} className="overlay-spin overlay-picker-spin" /> : null}
           </div>
           {companionProvider === "anthropic" ? (

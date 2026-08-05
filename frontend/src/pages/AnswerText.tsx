@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   AlertTriangle,
   Bold,
   Bot,
@@ -63,6 +64,8 @@ import {
   answerLimitFor,
   citationContext,
   citationHoverTextRange,
+  leadingSentenceRange,
+  trailingSentenceRange,
   citationMetasFor,
   citationQuoteFromParts,
   citationSegmentFromParts,
@@ -191,6 +194,7 @@ export function AnswerText({
     segment: string;
     siblings: CitationMeta[];
     approximate: boolean;
+    confidence: "high" | "medium" | "low";
     left: number;
     top: number;
     width: number;
@@ -294,6 +298,7 @@ export function AnswerText({
       segment,
       siblings,
       approximate: Boolean(meta.approximate),
+      confidence: meta.confidence ?? (Boolean(meta.approximate) ? "low" : "high"),
       left,
       top,
       width
@@ -448,9 +453,19 @@ export function AnswerText({
         const match = /^\[([^\]]+)\]$/.exec(part);
         if (!match) {
           const highlightRange = contextCitation ? citationHoverTextRange(parts, index, contextCitation.key) : null;
-          if (highlightRange) {
+          if (highlightRange && contextCitation) {
+            // Strip ‹unsourced› markers before rendering so they never surface as
+            // visible text — even on the hover-highlight path. Recompute the
+            // highlight range on the cleaned part (marker offsets shift positions).
+            const { cleaned: cleanedPart } = stripUnsourcedMarkers(part);
+            const cleanedRange = cleanedPart.length === part.length
+              ? highlightRange
+              : (contextCitation.key === `${parts[index - 1] ?? ""}-${index - 1}` ||
+                  contextCitation.key.startsWith(`${parts[index - 1] ?? ""}-${index - 1}-`)
+                  ? leadingSentenceRange(cleanedPart)
+                  : trailingSentenceRange(cleanedPart));
             return (
-              <span key={`${part}-${index}`}>{renderCitationContextPart(part, highlightRange, contextCitation ? colorVarsForPaperId(contextCitationPaperId, contextCitation.evidenceIndex) : undefined)}</span>
+              <span key={`${part}-${index}`}>{renderCitationContextPart(cleanedPart, cleanedRange, colorVarsForPaperId(contextCitationPaperId, contextCitation.evidenceIndex))}</span>
             );
           }
           if (markUncited && parts.length > 1) {
@@ -459,6 +474,13 @@ export function AnswerText({
                 {renderUncitedPart(part, isCitationPart(parts[index - 1]), isCitationPart(parts[index + 1]))}
               </span>
             );
+          }
+          // Defensive: strip markers even outside the uncited-marking mode so a
+          // backend marker never leaks as visible text. Without markUncited there
+          // is no underline, but the markers themselves must not render either.
+          if (part.includes(UNSOURCED_OPEN)) {
+            const { cleaned: cleanedPart } = stripUnsourcedMarkers(part);
+            return <span key={`${part}-${index}`}>{cleanedPart}</span>;
           }
           return <span key={`${part}-${index}`}>{part}</span>;
         }
@@ -528,10 +550,10 @@ export function AnswerText({
                         }
                         onPointerLeave={scheduleCitationHoverClose}
                         style={chipColorVars}
-                        title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}${meta.approximate ? " - Ungefähre Zuordnung" : ""}`}
+                        title={`${meta.source.title || meta.source.paper_id} - Zitat ${meta.evidenceIndex + 1}${meta.confidence === "low" ? " - Ungefähre Zuordnung" : meta.confidence === "medium" ? " - Weniger sichere Zuordnung" : ""}`}
                       >
                         <span className="citation-index">{label}</span>
-                        {meta.approximate ? <AlertTriangle size={11} className="citation-approx-icon" aria-label="Unsichere Zuordnung" /> : null}
+                        {meta.confidence === "low" ? <AlertTriangle size={11} className="citation-approx-icon" aria-label="Unsichere Zuordnung" /> : meta.confidence === "medium" ? <AlertCircle size={11} className="citation-medium-icon" aria-label="Weniger sichere Zuordnung" /> : null}
                         <span className="citation-paper">{shortCitationLabel(meta.source.title || meta.source.paper_id)}</span>
                       </button>
                     );
@@ -605,9 +627,13 @@ export function AnswerText({
                 <span className="citation-hover-card__legacy" aria-hidden="true">
                   {hoverCitation.label} | {hoverCitation.source.evidence[hoverCitation.evidenceIndex]?.kind || "Evidence"} | {hoverCitation.source.paper_id}
                 </span>
-                {hoverCitation.approximate ? (
+                {hoverCitation.confidence === "low" ? (
                   <span className="citation-hover-card__warn">
                     <AlertTriangle size={12} /> Unsichere Zuordnung — dieser Beleg passt womöglich nicht zur Aussage. Mit „Nachchecken" prüfen.
+                  </span>
+                ) : hoverCitation.confidence === "medium" ? (
+                  <span className="citation-hover-card__warn citation-hover-card__warn--medium">
+                    <AlertCircle size={12} /> Weniger sichere Zuordnung — der Beleg passt wahrscheinlich, ist aber nur lexikalisch verknüpft.
                   </span>
                 ) : null}
                 <p>{hoverCitation.text}</p>
@@ -766,15 +792,64 @@ function claimVerdictIcon(verdict: ClaimCheckResult["verdict"]) {
   }
 }
 
-function renderUncitedPart(part: string, prevIsCitation: boolean, nextIsCitation: boolean) {
-  const segments = uncitedTextSegments(part, prevIsCitation, nextIsCitation);
-  if (!segments.some((segment) => segment.uncited)) {
-    return part;
+const UNSOURCED_OPEN = "‹unsourced›";
+const UNSOURCED_CLOSE = "‹/unsourced›";
+
+/**
+ * Strip the backend `‹unsourced›...‹/unsourced›` markers from `value` and
+ * return the cleaned text plus the (cleaned) offsets that were wrapped — those
+ * ranges are "uncited" regardless of the block-coverage heuristic and should
+ * render with the dashed underline. Used both by the uncited render path and
+ * by the citation-hover highlight path so hovering a chip never surfaces the
+ * raw markers as visible text.
+ */
+function stripUnsourcedMarkers(value: string): {
+  cleaned: string;
+  ranges: Array<{ start: number; end: number }>;
+} {
+  if (!value.includes(UNSOURCED_OPEN)) {
+    return { cleaned: value, ranges: [] };
   }
+  const ranges: Array<{ start: number; end: number }> = [];
+  let searchFrom = 0;
+  let rebuilt = "";
+  while (true) {
+    const startIdx = value.indexOf(UNSOURCED_OPEN, searchFrom);
+    if (startIdx < 0) {
+      rebuilt += value.slice(searchFrom);
+      break;
+    }
+    rebuilt += value.slice(searchFrom, startIdx);
+    const contentStart = startIdx + UNSOURCED_OPEN.length;
+    const endIdx = value.indexOf(UNSOURCED_CLOSE, contentStart);
+    const contentEnd = endIdx < 0 ? value.length : endIdx;
+    const content = value.slice(contentStart, contentEnd);
+    ranges.push({ start: rebuilt.length, end: rebuilt.length + content.length });
+    rebuilt += content;
+    searchFrom = endIdx < 0 ? value.length : endIdx + UNSOURCED_CLOSE.length;
+  }
+  return { cleaned: rebuilt, ranges };
+}
+
+function renderUncitedPart(part: string, prevIsCitation: boolean, nextIsCitation: boolean) {
+  // Backend safety layer may have wrapped unsourced sentences in
+  // ‹unsourced›...‹/unsourced› markers. Render those as flagged spans and
+  // remove the markers from the visible text.
+  const { cleaned, ranges: unsourcedRanges } = stripUnsourcedMarkers(part);
+  const segments = uncitedTextSegments(cleaned, prevIsCitation, nextIsCitation);
+  // Mark unsourced ranges (from backend) as uncited too, merging with the
+  // block-coverage heuristic from uncitedTextSegments.
+  const isWithinUnsourced = (offset: number, length: number) =>
+    unsourcedRanges.some(
+      (range) => offset < range.end && offset + length > range.start
+    );
   return (
     <>
-      {segments.map((segment, index) =>
-        segment.uncited ? (
+      {segments.map((segment, index) => {
+        const segStart = segments.slice(0, index).reduce((sum, seg) => sum + seg.text.length, 0);
+        const segEnd = segStart + segment.text.length;
+        const flagged = segment.uncited || isWithinUnsourced(segStart, segEnd - segStart);
+        return flagged ? (
           <span
             key={`${segment.text.slice(0, 24)}-${index}`}
             className="uncited-sentence"
@@ -784,8 +859,8 @@ function renderUncitedPart(part: string, prevIsCitation: boolean, nextIsCitation
           </span>
         ) : (
           <span key={`${segment.text.slice(0, 24)}-${index}`}>{segment.text}</span>
-        )
-      )}
+        );
+      })}
     </>
   );
 }

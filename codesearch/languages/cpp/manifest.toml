@@ -1,0 +1,27 @@
+display = "C++"
+extensions = ["cc", "cpp", "cxx", "hpp", "hh", "hxx"]
+comment_prefixes = ["//", "/*", "*"]
+doc_style = "leading_comment"
+
+decision_nodes = [
+  "if_statement", "while_statement", "for_statement", "for_range_loop",
+  "do_statement", "case_statement", "catch_clause", "conditional_expression",
+  "binary_expression",
+]
+block_nodes = ["compound_statement"]
+qualifier_nodes = ["namespace_definition"]
+
+test_prefixes = ["Test", "test_"]
+test_suffixes = ["_test", "Test"]
+entry_names = ["main"]
+
+[effects]
+file_read = ["ifstream", "fopen", "fread", "fgets", "std::filesystem"]
+file_write = ["ofstream", "fwrite", "fprintf", "remove(", "rename("]
+network = ["socket(", "connect(", "curl_", "boost::asio"]
+database = ["sqlite3_", "PQexec", "mysql_query", "execute("]
+process_spawn = ["fork(", "exec", "system(", "popen("]
+console = ["std::cout", "std::cerr", "printf", "spdlog"]
+randomness = ["rand(", "mt19937", "random_device"]
+time = ["chrono::", "time(", "clock(", "sleep_for"]
+environment = ["getenv", "setenv"]

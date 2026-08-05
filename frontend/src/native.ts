@@ -66,6 +66,17 @@ export async function openExternal(target: string): Promise<void> {
 }
 
 /**
+ * Nativen Ordner-Auswahldialog öffnen (Explorer / Finder / GTK-Dateidialog).
+ * `null` = abgebrochen *oder* Web-Modus — beides heißt für den Aufrufer „kein
+ * Pfad", nur der Web-Fall braucht danach noch das Eingabefeld als Rückfallweg.
+ */
+export async function pickFolder(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const picked = await nativeInvoke<string | null>("pick_folder");
+  return picked ?? null;
+}
+
+/**
  * Route external-intent navigations to the OS when running under Tauri:
  *  - clicks on `<a target="_blank">` (external sites, PDF links, …)
  *  - programmatic `window.open(...)` calls for http(s)/file URLs
