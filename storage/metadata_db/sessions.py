@@ -221,17 +221,26 @@ class SessionsMixin(_Base):
         )
 
     def create_parallel_session(
-        self, project_id: str | None, question: str, session_id: str | None = None
+        self,
+        project_id: str | None,
+        question: str,
+        session_id: str | None = None,
+        task_id: str | None = None,
+        creativity_level: int | None = None,
     ) -> dict[str, Any]:
         now = datetime.now()
         sid = session_id or f"par_{uuid.uuid4().hex}"
         self._execute("""
             INSERT INTO parallel_sessions
             (id, project_id, question, status, synthesis_markdown, synthesis_payload,
+             task_id, creativity_level,
              created_timestamp, updated_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [sid, str(project_id) if project_id else None, str(question or ""),
-              "active", None, None, now, now])
+              "active", None, None,
+              str(task_id) if task_id else None,
+              int(creativity_level) if creativity_level is not None else None,
+              now, now])
         return self.get_parallel_session(sid) or {"id": sid, "variants": []}
 
     def get_parallel_session(self, session_id: str) -> dict[str, Any] | None:
@@ -289,6 +298,8 @@ class SessionsMixin(_Base):
         synthesis_payload: dict[str, Any] | None = None,
         overview_markdown: str | None = None,
         overview_payload: dict[str, Any] | None = None,
+        task_id: str | None = None,
+        creativity_level: int | None = None,
     ) -> dict[str, Any] | None:
         current = self.get_parallel_session(session_id)
         if current is None:
@@ -298,15 +309,25 @@ class SessionsMixin(_Base):
         next_payload = synthesis_payload if synthesis_payload is not None else current.get("synthesis_payload")
         next_overview_md = overview_markdown if overview_markdown is not None else current.get("overview_markdown")
         next_overview_payload = overview_payload if overview_payload is not None else current.get("overview_payload")
+        next_task_id = task_id if task_id is not None else current.get("task_id")
+        next_creativity = (
+            creativity_level
+            if creativity_level is not None
+            else current.get("creativity_level")
+        )
         self._execute("""
             UPDATE parallel_sessions
             SET status = ?, synthesis_markdown = ?, synthesis_payload = ?,
-                overview_markdown = ?, overview_payload = ?, updated_timestamp = ?
+                overview_markdown = ?, overview_payload = ?,
+                task_id = ?, creativity_level = ?,
+                updated_timestamp = ?
             WHERE id = ?
         """, [next_status, next_md,
               json.dumps(next_payload) if next_payload is not None else None,
               next_overview_md,
               json.dumps(next_overview_payload) if next_overview_payload is not None else None,
+              next_task_id,
+              int(next_creativity) if next_creativity is not None else None,
               datetime.now(), str(session_id)])
         return self.get_parallel_session(session_id)
 
@@ -422,6 +443,7 @@ class SessionsMixin(_Base):
         variant_id: str | None = None,
         position: int | None = None,
         stage_id: str | None = None,
+        user_steps: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         now = datetime.now()
         vid = variant_id or f"var_{uuid.uuid4().hex}"
@@ -434,12 +456,14 @@ class SessionsMixin(_Base):
         self._execute("""
             INSERT INTO parallel_variants
             (id, session_id, stage_id, name, approach, rationale, suggested_prompt, origin, status,
-             position, created_timestamp, updated_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             position, user_steps, created_timestamp, updated_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [vid, str(session_id), str(stage_id) if stage_id else None,
               str(name or "Variante"), str(approach or ""),
               str(rationale or ""), str(suggested_prompt or ""), str(origin or "ai"),
-              str(status or "vorgeschlagen"), int(position), now, now])
+              str(status or "vorgeschlagen"), int(position),
+              json.dumps(user_steps) if user_steps is not None else None,
+              now, now])
         self._touch_parallel_session(session_id)
         return self.get_parallel_variant(vid)
 
@@ -449,6 +473,7 @@ class SessionsMixin(_Base):
             return None
         cols = [desc[0] for desc in self.conn.description]
         variant = dict(zip(cols, row))
+        variant["user_steps"] = self._decode_json(variant.get("user_steps"), []) or []
         variant["entries"] = self.list_parallel_entries(variant_id=variant_id)
         return variant
 
@@ -459,21 +484,109 @@ class SessionsMixin(_Base):
             [str(session_id)],
         ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
-        return [dict(zip(cols, row)) for row in rows]
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            rec = dict(zip(cols, row))
+            rec["user_steps"] = self._decode_json(rec.get("user_steps"), []) or []
+            out.append(rec)
+        return out
 
     def update_parallel_variant(self, variant_id: str, **fields: Any) -> dict[str, Any] | None:
         current = self.get_parallel_variant(variant_id)
         if current is None:
             return None
-        allowed = ("name", "approach", "rationale", "suggested_prompt", "origin", "status", "position", "stage_id")
+        allowed = (
+            "name", "approach", "rationale", "suggested_prompt", "origin", "status",
+            "position", "stage_id", "user_steps", "rejection_reason",
+        )
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return current
+        if "user_steps" in updates:
+            updates["user_steps"] = json.dumps(updates["user_steps"])
         set_clause = ", ".join(f"{k} = ?" for k in updates) + ", updated_timestamp = ?"
         params = list(updates.values()) + [datetime.now(), str(variant_id)]
         self._execute(f"UPDATE parallel_variants SET {set_clause} WHERE id = ?", params)
         self._touch_parallel_session(str(current.get("session_id")))
         return self.get_parallel_variant(variant_id)
+
+    # ------------------------------------------------------------------ #
+    # Task-Focused mode: interactive "Wie umsetzen"-Steps                 #
+    # (Professor-Metapher: pro Variant eine Liste von Steps, die der     #
+    # User annehmen/ablehnen/Ergebnis zeigen kann). Steps leben in        #
+    # ``user_steps`` JSON; dieser Abschnitt kapselt den Zugriff.         #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _new_step_id() -> str:
+        return f"step_{uuid.uuid4().hex}"
+
+    def add_parallel_variant_step(
+        self,
+        variant_id: str,
+        text: str,
+        *,
+        step_id: str | None = None,
+        status: str = "vorgeschlagen",
+        origin: str = "ai",
+    ) -> dict[str, Any] | None:
+        """Append a step to a variant's ``user_steps`` list."""
+        variant = self.get_parallel_variant(variant_id)
+        if variant is None:
+            return None
+        steps = list(variant.get("user_steps") or [])
+        step = {
+            "id": step_id or self._new_step_id(),
+            "text": str(text or "").strip(),
+            "status": str(status or "vorgeschlagen"),
+            "origin": str(origin or "ai"),
+            "result": None,
+            "created_timestamp": datetime.now().isoformat(),
+            "updated_timestamp": datetime.now().isoformat(),
+        }
+        steps.append(step)
+        return self.update_parallel_variant(variant_id, user_steps=steps)
+
+    def update_parallel_variant_step(
+        self,
+        variant_id: str,
+        step_id: str,
+        *,
+        text: str | None = None,
+        status: str | None = None,
+        result: Any = None,
+    ) -> dict[str, Any] | None:
+        """Patch a single step by id. Returns the variant (None if step missing)."""
+        variant = self.get_parallel_variant(variant_id)
+        if variant is None:
+            return None
+        steps = list(variant.get("user_steps") or [])
+        found = False
+        for step in steps:
+            if str(step.get("id")) == str(step_id):
+                found = True
+                if text is not None:
+                    step["text"] = str(text).strip()
+                if status is not None:
+                    step["status"] = str(status)
+                if result is not None:
+                    step["result"] = result
+                step["updated_timestamp"] = datetime.now().isoformat()
+                break
+        if not found:
+            return None
+        return self.update_parallel_variant(variant_id, user_steps=steps)
+
+    def delete_parallel_variant_step(self, variant_id: str, step_id: str) -> bool:
+        variant = self.get_parallel_variant(variant_id)
+        if variant is None:
+            return False
+        steps = list(variant.get("user_steps") or [])
+        new_steps = [s for s in steps if str(s.get("id")) != str(step_id)]
+        if len(new_steps) == len(steps):
+            return False
+        self.update_parallel_variant(variant_id, user_steps=new_steps)
+        return True
 
     def delete_parallel_variant(self, variant_id: str) -> bool:
         current = self.get_parallel_variant(variant_id)

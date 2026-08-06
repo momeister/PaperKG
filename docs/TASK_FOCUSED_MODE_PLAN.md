@@ -106,15 +106,17 @@ laufenden Prozess — Download sofort möglich ohne Backend-Neustart.
 
 ### Session 3 — Parallelmodus + Interaktive Steps
 
-- [ ] `parallel.py`: `ParallelStartRequest.task_id` + `creativity_level` (1-5)
-- [ ] `query/parallel_research.py`: Task-Spec-Injection in `propose_overview`,
+- [x] `parallel.py`: `ParallelStartRequest.task_id` + `creativity_level` (1-5)
+- [x] `query/parallel_research.py`: Task-Spec-Injection in `propose_overview`,
       `propose_stages`, `propose_variants`; Slider-Logik (konservativ→aggressiv)
-- [ ] `parallel_variants.user_steps` JSON-Spalte (schema migration)
-- [ ] Interaktive Step-Aktionen: `POST /parallel/variants/{id}/steps`,
+- [x] `parallel_variants.user_steps` JSON-Spalte (schema migration)
+- [x] Interaktive Step-Aktionen: `POST /parallel/variants/{id}/steps`,
       `PATCH/DELETE /parallel/variants/{id}/steps/{step_id}`,
       `POST /parallel/variants/{id}/steps/{step_id}/result`
-- [ ] "Weg nichts für mich" = Variant `rejected` + Grund
-- [ ] Tests + commit
+- [x] "Weg nichts für mich" = Variant `rejected` + Grund
+- [x] Tests + commit
+
+Session 3 abgeschlossen: 912 Tests grün (20 neu), ruff clean, black-formatiert.
 
 ### Session 4 — Frontend
 
@@ -230,8 +232,10 @@ ALTER TABLE parallel_variants ADD COLUMN IF NOT EXISTS user_steps JSON;
 Nach jeder Session: Update dieses Files (`- [x]` setzen, Status-Zeile oben
 ändern). Commit-message-Format: `task-focused: session N — <thema>`.
 
-Letzter Stand: **Session 2 abgeschlossen** — Dataset-Quellen + Kaggle-Login
-stehen (Kaggle/HF/OpenML/UCI/Mendeley-Clients, dataset_clients-Dispatch,
-datasets-Router mit Download + Source-Status, settings-Router mit
-Kaggle/HF-Login in .env, config.yaml + .env.example). 892 Tests grün.
-Nächste Session: Session 3 (Parallelmodus + interaktive Steps).
+Letzter Stand: **Session 3 abgeschlossen** — Parallelmodus + interaktive
+Steps (Task-Spec-Injection in `propose_overview`/`propose_stages`/
+`propose_variants`, 5-Stufen-Creativity-Slider mit temperaturgeführtem
+Override, `parallel_variants.user_steps` JSON-Spalte, Step-Aktionen
+hinzufügen/patchen/löschen/Ergebnis-zeigen, "Weg nichts"-Reject mit Grund,
+Implementationsplan-Export, Task-ID-Bindung der Session). 912 Tests grün.
+Nächste Session: Session 4 (Frontend).

@@ -485,6 +485,12 @@ class SchemaMixin(_Base):
             "parallel_sessions",
             {"overview_markdown": "VARCHAR", "overview_payload": "JSON"},
         )
+        # Task-Focused mode: a parallel session may be bound to a task (Task-Spec)
+        # and carry a creativity level (1-5 slider). Older DBs predate these columns.
+        self._add_missing_columns(
+            "parallel_sessions",
+            {"task_id": "VARCHAR", "creativity_level": "INTEGER"},
+        )
         self._execute(
             """
             CREATE TABLE IF NOT EXISTS parallel_variants (
@@ -501,6 +507,14 @@ class SchemaMixin(_Base):
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
+        )
+        # Task-Focused mode: interactive "Wie umsetzen"-Steps (Professor-Metapher).
+        # ``user_steps`` is a JSON list of step objects ({id, text, status, result,
+        # created_timestamp}). ``rejection_reason`` records a "Weg nichts für mich"
+        # verdict. Older DBs predate both columns.
+        self._add_missing_columns(
+            "parallel_variants",
+            {"user_steps": "JSON", "rejection_reason": "VARCHAR"},
         )
         # Etappen: ein Forschungsvorhaben (= Session) gliedert sich in sequentielle
         # Stages; Varianten hängen an einer Stage. review_* trägt den Professor-

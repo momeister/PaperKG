@@ -16,6 +16,7 @@ same ``citation_links``/``evidence`` shape the frontend already renders. Structu
 reviews additionally carry a ``professor_review`` payload (schema_version 1); if the
 LLM's JSON is unusable they degrade to the plain free-text grounded answer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -26,6 +27,83 @@ from query.kg_retriever import Evidence, Source
 
 MAX_EVIDENCE = 24
 EVIDENCE_SNIPPET_CHARS = 500
+
+
+# --------------------------------------------------------------------------- #
+# Task-Focused mode helpers                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _creativity_hint(level: int) -> str:
+    """Steer the LLM toward mainstream (1) or aggressive cross-domain (5)."""
+    level = max(1, min(5, int(level)))
+    if level <= 1:
+        return "Kreativitätslevel 1: konservativ — Mainstream-Ansätze zuerst, bewährte Pfade."
+    if level == 2:
+        return (
+            "Kreativitätslevel 2: leicht variierend — Mainstream plus eine Alternative."
+        )
+    if level == 3:
+        return "Kreativitätslevel 3: mittig — bewährte und exploratorische Ansätze gemischt."
+    if level == 4:
+        return "Kreativitätslevel 4: explorativ — nicht offensichtliche, aber plausible Ansätze."
+    return (
+        "Kreativitätslevel 5: aggressiv — cross-domain, unkonventionell. "
+        "Ziehe Methoden aus fremden Fachgebieten heran, auch wenn der Bezug erst "
+        "über Metapher/Analogie erkennbar wird. Klare Begründung obligatorisch."
+    )
+
+
+def _task_spec_block(task_spec: dict[str, Any] | None) -> str:
+    """Render a Task-Spec into a prompt block. Empty string if no spec."""
+    if not task_spec:
+        return ""
+    title = str(task_spec.get("title") or "").strip()
+    objective = str(task_spec.get("objective") or "").strip()
+    evaluation = str(task_spec.get("evaluation") or "").strip()
+    rules = task_spec.get("rules") or []
+    constraints = task_spec.get("constraints") or []
+    datasets = task_spec.get("datasets") or []
+    timeline = str(task_spec.get("timeline") or "").strip()
+    parts: list[str] = []
+    if title:
+        parts.append(f"Aufgabe/Titel: {title}")
+    if objective:
+        parts.append(f"Ziel: {objective}")
+    if evaluation:
+        parts.append(f"Bewertung: {evaluation}")
+    if isinstance(rules, list) and rules:
+        parts.append("Regeln:\n" + "\n".join(f"- {r}" for r in rules))
+    if isinstance(constraints, list) and constraints:
+        parts.append("Einschränkungen:\n" + "\n".join(f"- {c}" for c in constraints))
+    if isinstance(datasets, list) and datasets:
+        parts.append("Datasets/Ressourcen:\n" + "\n".join(f"- {d}" for d in datasets))
+    if timeline:
+        parts.append(f"Zeitplan: {timeline}")
+    block = "\n".join(parts).strip()
+    if not block:
+        return ""
+    return "## Aufgabe (Task-Spec)\n" + block + "\n\n"
+
+
+def _extract_steps(variant_item: dict[str, Any]) -> list[dict[str, str]]:
+    """Pull ``implementation_steps`` (Session 3 schema) out of an LLM variant dict."""
+    raw = variant_item.get("implementation_steps")
+    if not isinstance(raw, list):
+        return []
+    steps: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            steps.append(
+                {
+                    "text": str(item.get("text") or item.get("step") or "").strip(),
+                    "rationale": str(item.get("rationale") or "").strip(),
+                    "citation": str(item.get("citation") or "").strip(),
+                }
+            )
+        elif isinstance(item, str) and item.strip():
+            steps.append({"text": item.strip(), "rationale": "", "citation": ""})
+    return [s for s in steps if s["text"]]
 
 
 def _gather_evidence(
@@ -64,18 +142,31 @@ def propose_variants(
     provider: str | None = None,
     model: str | None = None,
     stage: dict[str, Any] | None = None,
-) -> list[dict[str, str]]:
+    task_spec: dict[str, Any] | None = None,
+    creativity_level: int | None = None,
+) -> list[dict[str, Any]]:
     """Propose ``n`` grounded variants for a problem. Each is a plain-field dict:
-    ``{name, approach, rationale, suggested_prompt}`` (texts may contain [arxiv:...]).
-    With ``stage`` the variants target that Etappe only."""
+    ``{name, approach, rationale, suggested_prompt, implementation_steps}`` (texts may
+    contain [arxiv:...]). With ``stage`` the variants target that Etappe only.
+
+    Task-Focused mode: when ``task_spec`` is given, the spec is injected into the prompt
+    and each variant carries ``implementation_steps`` (a list of
+    ``{text, rationale, citation}``) — the interactive "Wie umsetzen"-Steps the user
+    accepts/rejects. ``creativity_level`` (1-5) steers mainstream vs cross-domain."""
     evidence, _ = _gather_evidence(retriever, question, paper_ids=paper_ids, limit=10)
     block = _evidence_block(evidence) or "(keine lokale Evidenz gefunden)"
+    task_block = _task_spec_block(task_spec)
+    creativity_hint = (
+        _creativity_hint(creativity_level) if creativity_level is not None else ""
+    )
     system = (
         "Du bist ein Forschungsassistent, der für ein Software-/Forschungsproblem mehrere "
         "konkrete, klar unterscheidbare Lösungs-VARIANTEN vorschlägt. Stütze dich auf die "
         "gegebene Evidenz und zitiere Paper-IDs in eckigen Klammern, z. B. [arxiv:1234.5678]. "
         "Erfinde keine Quellen."
     )
+    if creativity_hint:
+        system += "\n" + creativity_hint
     stage_line = ""
     if stage:
         stage_name = str(stage.get("name") or "").strip()
@@ -86,11 +177,21 @@ def propose_variants(
                 + (f" — Ziel: {stage_goal}" if stage_goal else "")
                 + ". Schlage Varianten NUR für diese Etappe vor.\n\n"
             )
+    steps_instruction = ""
+    if task_spec:
+        steps_instruction = (
+            'Jede Variante enthält zusätzlich "implementation_steps": eine Liste von '
+            '{"text": "konkreter Schritt", "rationale": "warum dieser Schritt laut '
+            'Evidenz/Task-Spec sinnvoll ist (mit [Zitaten])", "citation": "[arxiv:...] '
+            'oder leer"}. 3-7 Schritte pro Variante, die aufeinander aufbauen und die '
+            "Variante konkret umsetzbar machen.\n\n"
+        )
     user = (
         f"Problem/Frage:\n{question}\n\n"
-        f"{stage_line}"
+        f"{task_block}{stage_line}"
         f"Lokale Evidenz (Paper-Auszüge):\n{block}\n\n"
-        f"Erzeuge genau {n} Varianten, wie man das angehen könnte. Antworte ausschließlich als "
+        f"Erzeuge genau {n} Varianten, wie man das angehen könnte. {steps_instruction}"
+        "Antworte ausschließlich als "
         "JSON-Objekt in dieser Form:\n"
         '{"variants": [{'
         '"name": "kurzer prägnanter Titel der Variante", '
@@ -100,10 +201,17 @@ def propose_variants(
         "diese Variante umsetzt. Strukturiere ihn klar mit Abschnitten: Kontext (worum geht es), "
         "Ziel, konkrete Schritte (nummeriert), Rahmenbedingungen/Einschränkungen und Was "
         'zurückgemeldet werden soll. Sei spezifisch und umsetzbar."'
-        "}]}\n"
+        + (
+            ', "implementation_steps": [{"text":"...","rationale":"...","citation":"..."}]'
+            if task_spec
+            else ""
+        )
+        + "}]}\n"
         "Nur das JSON, kein Text davor oder danach."
     )
     overrides: dict[str, Any] = {"temperature": 0.4}
+    if creativity_level is not None:
+        overrides["temperature"] = 0.4 + 0.1 * creativity_level
     if model:
         overrides["model"] = model
     try:
@@ -117,16 +225,22 @@ def propose_variants(
     raw = data.get("variants") if isinstance(data, dict) else None
     if not isinstance(raw, list):
         raw = []
-    variants: list[dict[str, str]] = []
+    variants: list[dict[str, Any]] = []
     for item in raw[:n]:
         if not isinstance(item, dict):
             continue
-        variants.append({
-            "name": str(item.get("name") or "").strip() or f"Variante {len(variants) + 1}",
+        variant: dict[str, Any] = {
+            "name": str(item.get("name") or "").strip()
+            or f"Variante {len(variants) + 1}",
             "approach": str(item.get("approach") or "").strip(),
             "rationale": str(item.get("rationale") or "").strip(),
-            "suggested_prompt": str(item.get("prompt") or item.get("suggested_prompt") or "").strip(),
-        })
+            "suggested_prompt": str(
+                item.get("prompt") or item.get("suggested_prompt") or ""
+            ).strip(),
+        }
+        if task_spec:
+            variant["implementation_steps"] = _extract_steps(item)
+        variants.append(variant)
     return variants
 
 
@@ -140,19 +254,31 @@ def propose_stages(
     paper_ids: list[str] | None = None,
     provider: str | None = None,
     model: str | None = None,
+    task_spec: dict[str, Any] | None = None,
+    creativity_level: int | None = None,
 ) -> list[dict[str, str]]:
     """Split a Forschungsvorhaben into 2–``max_n`` sequential Etappen.
 
     Returns plain-field dicts ``{name, goal}``. ``existing_stages`` (when proposing
     additional stages later) is shown to the model to avoid duplicates. Tolerant to
-    bad LLM output — returns ``[]`` on failure so callers can fall back."""
+    bad LLM output — returns ``[]`` on failure so callers can fall back.
+
+    Task-Focused mode: when ``task_spec`` is given, the spec is injected so the
+    Etappen der Aufgabe folgen (z. B. EDA → Baseline → Verbesserung → Submission).
+    ``creativity_level`` (1-5) steers mainstream vs cross-domain."""
     evidence, _ = _gather_evidence(retriever, question, paper_ids=paper_ids, limit=10)
     block = _evidence_block(evidence) or "(keine lokale Evidenz gefunden)"
+    task_block = _task_spec_block(task_spec)
+    creativity_hint = (
+        _creativity_hint(creativity_level) if creativity_level is not None else ""
+    )
     system = (
         "Du bist ein erfahrener Forschungs-Mentor, der ein Forschungsvorhaben in klar "
         "abgegrenzte, sequentielle ETAPPEN gliedert (wie die Arbeitspakete einer "
         "Abschlussarbeit). Stütze dich auf die gegebene Evidenz. Erfinde keine Quellen."
     )
+    if creativity_hint:
+        system += "\n" + creativity_hint
     existing_block = ""
     if existing_stages:
         lines = [
@@ -168,7 +294,7 @@ def propose_stages(
             )
     user = (
         f"Forschungsvorhaben:\n{question}\n\n"
-        f"{existing_block}"
+        f"{task_block}{existing_block}"
         f"Lokale Evidenz (Paper-Auszüge):\n{block}\n\n"
         f"Zerlege dieses Forschungsvorhaben in 2–{max_n} sequentielle ETAPPEN, die "
         "aufeinander aufbauen und am Ende gemeinsam ausgewertet werden können. Antworte "
@@ -180,6 +306,8 @@ def propose_stages(
         "Nur das JSON, kein Text davor oder danach."
     )
     overrides: dict[str, Any] = {"temperature": 0.4}
+    if creativity_level is not None:
+        overrides["temperature"] = 0.4 + 0.1 * creativity_level
     if model:
         overrides["model"] = model
     try:
@@ -214,23 +342,39 @@ def propose_overview(
     provider: str | None = None,
     model: str | None = None,
     metadata_db_path: str = "data/metadata.duckdb",
+    task_spec: dict[str, Any] | None = None,
+    creativity_level: int | None = None,
 ) -> dict[str, Any]:
     """Grounded *explanation* of the problem before the concrete variants.
 
     Returns an ``Answer``-shaped dict (with ``[arxiv:...]`` citations + ``source_verification``,
     so the frontend renders clickable, openable sources). The answer is structured in two
-    sections — what the task is / what to understand, and how to approach it."""
+    sections — what the task is / what to understand, and how to approach it.
+
+    Task-Focused mode: when ``task_spec`` is given, the spec is prepended to the prompt
+    so the explanation die Aufgabe direkt anspricht (Bewertungskriterien, Regeln, Datasets).
+    ``creativity_level`` (1-5) steers the "Wie gehst du ran?"-Abschnitt."""
     responder = GroundedResponder(retriever=retriever, llm_router=llm_router)
+    task_block = _task_spec_block(task_spec)
+    creativity_hint = (
+        _creativity_hint(creativity_level) if creativity_level is not None else ""
+    )
     prompt = (
-        f"Frage/Problem: {question}\n\n"
+        f"{task_block}Frage/Problem: {question}\n\n"
         "Erkläre dem Nutzer dieses Vorhaben gegroundet auf die lokalen Paper. Gliedere deine "
         "Antwort in genau zwei Markdown-Abschnitte mit diesen Überschriften:\n"
         "## Worum geht es?\n"
         "Erkläre, worum es bei der Aufgabe genau geht und was man dafür verstehen sollte "
-        "(zentrale Begriffe, bisheriger Stand, was bereits bekannt ist).\n"
-        "## Wie gehst du ran?\n"
-        "Erkläre Schritt für Schritt, wie man methodisch an die Aufgabe herangeht.\n\n"
-        "Belege beide Abschnitte mit Paper-IDs in eckigen Klammern (z. B. [arxiv:1234.5678]). "
+        "(zentrale Begriffe, bisheriger Stand, was bereits bekannt ist)."
+        + (
+            " Beziehe dabei die Bewertungskriterien und Regeln aus der Task-Spec ein."
+            if task_spec
+            else ""
+        )
+        + "\n## Wie gehst du ran?\n"
+        "Erkläre Schritt für Schritt, wie man methodisch an die Aufgabe herangeht."
+        + (f"\n\n{creativity_hint}" if creativity_hint else "")
+        + "\n\nBelege beide Abschnitte mit Paper-IDs in eckigen Klammern (z. B. [arxiv:1234.5678]). "
         "Schreibe verständlich und konkret, erfinde keine Quellen."
     )
     answer = responder.answer(
@@ -243,6 +387,88 @@ def propose_overview(
         metadata_db_path=metadata_db_path,
     )
     return answer.to_dict()
+
+
+# --------------------------------------------------------------------------- #
+# Task-Focused mode: implementation plan export                               #
+# --------------------------------------------------------------------------- #
+
+
+def build_implementation_plan(
+    session: dict[str, Any],
+    task_spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Sum of all accepted ("Das probiere ich") steps across a session's variants.
+
+    Returns ``{title, objective, variants: [{name, steps: [...]}], plan_markdown}``.
+    The markdown is ready to paste into a note (Session 4 export-as-note)."""
+    title = (
+        str(task_spec.get("title") or "Implementationsplan")
+        if task_spec
+        else "Implementationsplan"
+    )
+    objective = str(task_spec.get("objective") or "") if task_spec else ""
+    variants_out: list[dict[str, Any]] = []
+    for variant in session.get("variants", []) or []:
+        steps_in = list(variant.get("user_steps") or [])
+        if not steps_in:
+            continue
+        accepted = [
+            s
+            for s in steps_in
+            if str(s.get("status") or "") in ("in_progress", "done", "vorgeschlagen")
+            and not s.get("rejected")
+        ]
+        if not accepted:
+            continue
+        steps_out = []
+        for s in accepted:
+            step_obj: dict[str, Any] = {
+                "id": str(s.get("id") or ""),
+                "text": str(s.get("text") or "").strip(),
+                "status": str(s.get("status") or "vorgeschlagen"),
+            }
+            if s.get("rationale"):
+                step_obj["rationale"] = str(s.get("rationale") or "")
+            if s.get("citation"):
+                step_obj["citation"] = str(s.get("citation") or "")
+            if s.get("result"):
+                step_obj["result"] = s.get("result")
+            steps_out.append(step_obj)
+        variants_out.append(
+            {
+                "name": str(variant.get("name") or "Variante"),
+                "approach": str(variant.get("approach") or ""),
+                "steps": steps_out,
+            }
+        )
+    parts: list[str] = [f"# {title}"]
+    if objective:
+        parts.append(f"\n**Ziel:** {objective}")
+    if not variants_out:
+        parts.append(
+            "\n_Noch keine akzeptierten Schritte — markiere Schritte als "
+            '"Das probiere ich", um den Plan aufzubauen._'
+        )
+    for v in variants_out:
+        parts.append(f"\n## {v['name']}")
+        if v["approach"]:
+            parts.append(v["approach"])
+        for idx, s in enumerate(v["steps"], 1):
+            line = f"{idx}. {s['text']}"
+            if s.get("citation"):
+                line += f" ({s['citation']})"
+            if s.get("rationale"):
+                line += f" — {s['rationale']}"
+            parts.append(line)
+            if s.get("result"):
+                parts.append(f"   Ergebnis: {s['result']}")
+    return {
+        "title": title,
+        "objective": objective,
+        "variants": variants_out,
+        "plan_markdown": "\n".join(parts),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -288,7 +514,10 @@ def _professor_chat_json(
         overrides["model"] = model
     try:
         data = llm_router.chat_json(
-            [{"role": "system", "content": _PROFESSOR_SYSTEM}, {"role": "user", "content": user}],
+            [
+                {"role": "system", "content": _PROFESSOR_SYSTEM},
+                {"role": "user", "content": user},
+            ],
             provider=provider,
             overrides=overrides,
         )
@@ -331,7 +560,9 @@ def _render_professor_markdown(review: dict[str, Any], *, kind: str) -> str:
     if kind == "final":
         offen = _str_list(review.get("offene_punkte"))
         if offen:
-            parts.append("### Offene Punkte\n" + "\n".join(f"- {item}" for item in offen))
+            parts.append(
+                "### Offene Punkte\n" + "\n".join(f"- {item}" for item in offen)
+            )
         final = str(review.get("finale_antwort") or "").strip()
         if final:
             parts.append(f"### Finale Antwort\n{final}")
@@ -350,7 +581,11 @@ def _professor_payload(
     """Answer-shaped dict (rich citation UI) + the structured ``professor_review``."""
     payload = citation_payload_for_text(markdown, evidence, sources)
     payload["question"] = question
-    payload["professor_review"] = {"schema_version": PROFESSOR_SCHEMA_VERSION, "kind": kind, **review}
+    payload["professor_review"] = {
+        "schema_version": PROFESSOR_SCHEMA_VERSION,
+        "kind": kind,
+        **review,
+    }
     return payload
 
 
@@ -393,14 +628,22 @@ def professor_review_entry(
     sections; on unusable LLM JSON it degrades to the plain free-text grounded assessment
     (no ``professor_review`` key) so submitting a result never breaks."""
     variant_name = str(variant.get("name") or "Variante")
-    composite = f"{question}\n{variant_name} {variant.get('approach') or ''}\n{user_result}"
-    evidence, sources = _gather_evidence(retriever, composite, paper_ids=paper_ids, limit=8)
+    composite = (
+        f"{question}\n{variant_name} {variant.get('approach') or ''}\n{user_result}"
+    )
+    evidence, sources = _gather_evidence(
+        retriever, composite, paper_ids=paper_ids, limit=8
+    )
     block = _evidence_block(evidence) or "(keine lokale Evidenz gefunden)"
     stage_line = ""
     if stage and str(stage.get("name") or "").strip():
         stage_line = (
             f"Aktuelle Etappe: {str(stage.get('name') or '').strip()}"
-            + (f" — Ziel: {str(stage.get('goal') or '').strip()}" if str(stage.get("goal") or "").strip() else "")
+            + (
+                f" — Ziel: {str(stage.get('goal') or '').strip()}"
+                if str(stage.get("goal") or "").strip()
+                else ""
+            )
             + "\n\n"
         )
     user = (
@@ -470,7 +713,9 @@ def _sanitize_stage_verdicts(
 ) -> list[dict[str, str]]:
     """Coerce varianten_bewertung items; map unknown variant_ids by name."""
     by_id = {str(v.get("id")): str(v.get("name") or "Variante") for v in variants}
-    by_name = {str(v.get("name") or "").strip().lower(): str(v.get("id")) for v in variants}
+    by_name = {
+        str(v.get("name") or "").strip().lower(): str(v.get("id")) for v in variants
+    }
     out: list[dict[str, str]] = []
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
@@ -486,12 +731,14 @@ def _sanitize_stage_verdicts(
             urteil = "anpassen"
         if not vid and not name:
             continue
-        out.append({
-            "variant_id": vid,
-            "name": name or "Variante",
-            "urteil": urteil,
-            "begruendung": str(item.get("begruendung") or "").strip(),
-        })
+        out.append(
+            {
+                "variant_id": vid,
+                "name": name or "Variante",
+                "urteil": urteil,
+                "begruendung": str(item.get("begruendung") or "").strip(),
+            }
+        )
     return out
 
 
@@ -527,9 +774,13 @@ def professor_review_stage(
     free-text grounded answer on unusable LLM JSON."""
     stage_name = str(stage.get("name") or "Etappe")
     stage_goal = str(stage.get("goal") or "").strip()
-    blocks = "\n\n".join(_variant_result_block(v) for v in variants) or "(keine Varianten)"
+    blocks = (
+        "\n\n".join(_variant_result_block(v) for v in variants) or "(keine Varianten)"
+    )
     composite = f"{question}\n{stage_name} {stage_goal}"
-    evidence, sources = _gather_evidence(retriever, composite, paper_ids=paper_ids, limit=10)
+    evidence, sources = _gather_evidence(
+        retriever, composite, paper_ids=paper_ids, limit=10
+    )
     block = _evidence_block(evidence) or "(keine lokale Evidenz gefunden)"
     user = (
         f"Forschungsvorhaben: {question}\n\n"
@@ -562,7 +813,9 @@ def professor_review_stage(
     responder = GroundedResponder(retriever=retriever, llm_router=llm_router)
     prompt = (
         f"Forschungsvorhaben: {question}\n\n"
-        f"Etappe \"{stage_name}\"" + (f" — Ziel: {stage_goal}" if stage_goal else "") + "\n\n"
+        f'Etappe "{stage_name}"'
+        + (f" — Ziel: {stage_goal}" if stage_goal else "")
+        + "\n\n"
         f"Varianten mit Ergebnissen:\n\n{blocks}\n\n"
         "Begutachte diese Etappe wie ein betreuender Professor (gegroundet auf die lokalen "
         "Paper): Zielerreichung, Stärken, Fehler/Probleme, Ideen, nächste Schritte. Zitiere "
@@ -595,7 +848,8 @@ def followup_answer(
     """Grounded answer to a follow-up question asked while a parallel session is open.
 
     Embeds the session's original question as context so it reads as a real follow-up, and
-    returns an ``Answer``-shaped dict with ``[arxiv:...]`` citations + ``source_verification``."""
+    returns an ``Answer``-shaped dict with ``[arxiv:...]`` citations + ``source_verification``.
+    """
     responder = GroundedResponder(retriever=retriever, llm_router=llm_router)
     prompt = (
         f"Ausgangsfrage der Recherche: {original_question}\n\n"
@@ -616,7 +870,9 @@ def followup_answer(
     return answer.to_dict()
 
 
-def _stage_overview_block(stages: list[dict[str, Any]], variants: list[dict[str, Any]]) -> str:
+def _stage_overview_block(
+    stages: list[dict[str, Any]], variants: list[dict[str, Any]]
+) -> str:
     """Roadmap recap + per-stage variants/results + short stage-review excerpt."""
     by_stage: dict[str, list[dict[str, Any]]] = {}
     orphans: list[dict[str, Any]] = []
@@ -635,9 +891,12 @@ def _stage_overview_block(stages: list[dict[str, Any]], variants: list[dict[str,
             f"[Status: {stage.get('status') or 'offen'}]"
             + (f" — Ziel: {goal}" if goal else "")
         )
-        body = "\n\n".join(
-            _variant_result_block(v) for v in by_stage.get(str(stage.get("id")), [])
-        ) or "(keine Varianten)"
+        body = (
+            "\n\n".join(
+                _variant_result_block(v) for v in by_stage.get(str(stage.get("id")), [])
+            )
+            or "(keine Varianten)"
+        )
         review_md = " ".join(str(stage.get("review_markdown") or "").split())[:300]
         review_line = f"\nEtappen-Review (Auszug): {review_md}" if review_md else ""
         parts.append(f"{head}\n{body}{review_line}")
@@ -666,7 +925,9 @@ def synthesize(
     stages = stages or []
     if stages:
         joined = _stage_overview_block(stages, variants)
-        evidence, sources = _gather_evidence(retriever, question, paper_ids=paper_ids, limit=10)
+        evidence, sources = _gather_evidence(
+            retriever, question, paper_ids=paper_ids, limit=10
+        )
         block = _evidence_block(evidence) or "(keine lokale Evidenz gefunden)"
         user = (
             f"Forschungsvorhaben: {question}\n\n"
@@ -687,12 +948,16 @@ def synthesize(
         )
         data = _professor_chat_json(llm_router, user, provider=provider, model=model)
         if isinstance(data, dict):
-            stage_names = {str(s.get("id")): str(s.get("name") or "Etappe") for s in stages}
+            stage_names = {
+                str(s.get("id")): str(s.get("name") or "Etappe") for s in stages
+            }
             fazits = [
                 {
                     "stage_id": str(item.get("stage_id") or "").strip(),
                     "name": str(item.get("name") or "").strip()
-                    or stage_names.get(str(item.get("stage_id") or "").strip(), "Etappe"),
+                    or stage_names.get(
+                        str(item.get("stage_id") or "").strip(), "Etappe"
+                    ),
                     "fazit": str(item.get("fazit") or "").strip(),
                 }
                 for item in (data.get("etappen_zusammenfassung") or [])
@@ -711,7 +976,12 @@ def synthesize(
                 markdown = _render_professor_markdown(review, kind="final")
                 if markdown:
                     return _professor_payload(
-                        markdown, evidence, sources, review, kind="final", question=question
+                        markdown,
+                        evidence,
+                        sources,
+                        review,
+                        kind="final",
+                        question=question,
                     )
     blocks: list[str] = []
     for variant in variants:
@@ -747,7 +1017,9 @@ def synthesize(
     return answer.to_dict()
 
 
-def citation_payload_for_text(text: str, evidence: list[Evidence], sources: list[Source]) -> dict[str, Any]:
+def citation_payload_for_text(
+    text: str, evidence: list[Evidence], sources: list[Source]
+) -> dict[str, Any]:
     """Build an Answer-shaped dict for a free-text fragment (used if a variant's prose
     should be rendered with the rich citation UI). Kept for callers that need it."""
     links = _citation_links_for_answer(text, evidence)
