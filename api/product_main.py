@@ -135,6 +135,9 @@ app.include_router(_tools_router.router)
 from api.routers import notes as _notes_router  # noqa: E402
 
 app.include_router(_notes_router.router)
+from api.routers import settings as _settings_router  # noqa: E402
+
+app.include_router(_settings_router.router)
 from api.routers import review_graph_jobs as _review_graph_jobs_router  # noqa: E402
 
 app.include_router(_review_graph_jobs_router.router)

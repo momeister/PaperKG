@@ -86,18 +86,23 @@ MODIFY:
 
 ### Session 2 — Dataset-Quellen + Kaggle-Login
 
-- [ ] `harvester/kaggle_client.py` (auth via `.env`, Competition- + Dataset-Download)
-- [ ] `harvester/huggingface_datasets_client.py` (frei, optional Token)
-- [ ] `harvester/openml_client.py` (frei)
-- [ ] `harvester/uci_client.py` (scrape)
-- [ ] `harvester/mendeley_client.py` (Catalog-Search, niedrig priorisiert)
-- [ ] `harvester/source_registry.py` (neue Quellen)
-- [ ] `config.yaml` (neue harvester-Sections mit `api_key_env`)
-- [ ] `api/routers/datasets.py` (neuer Dispatch)
-- [ ] `.env.example` (`KAGGLE_USERNAME`, `KAGGLE_KEY`, `HF_TOKEN`)
-- [ ] `api/routers/settings.py` ODER Erweiterung `projects.py`: Kaggle-Login-Endpoint
-      (`POST /settings/kaggle` schreibt Credentials in `.env`)
-- [ ] Tests + commit
+- [x] `harvester/kaggle_client.py` (auth via `.env`, Competition- + Dataset-Download)
+- [x] `harvester/huggingface_datasets_client.py` (frei, optional Token)
+- [x] `harvester/openml_client.py` (frei)
+- [x] `harvester/uci_client.py` (scrape)
+- [x] `harvester/mendeley_client.py` (Catalog-Search, niedrig priorisiert)
+- [x] `harvester/source_registry.py` (neue Quellen via `DATASET_SOURCE_IDS`)
+- [x] `config.yaml` (neue harvester-Sections mit `api_key_env`)
+- [x] `api/routers/datasets.py` (neuer Dispatch + Download-Endpoint + Source-Status)
+- [x] `.env.example` (`KAGGLE_USERNAME`, `KAGGLE_KEY`, `HF_TOKEN`)
+- [x] `api/routers/settings.py` (Kaggle-Login-Endpoint `POST /settings/kaggle`)
+- [x] Tests + commit
+
+Session 2 abgeschlossen: 892 Tests grün (21 neu), ruff clean, black-formatiert.
+Neue Quellen: Kaggle (Competitions + Datasets, auth-pflichtig), Hugging Face
+(optional Token), OpenML (frei), UCI (frei), Mendeley Data (frei).
+Kaggle-Login schreibt Credentials in gitignored `.env`, lädt sie in den
+laufenden Prozess — Download sofort möglich ohne Backend-Neustart.
 
 ### Session 3 — Parallelmodus + Interaktive Steps
 
@@ -225,7 +230,8 @@ ALTER TABLE parallel_variants ADD COLUMN IF NOT EXISTS user_steps JSON;
 Nach jeder Session: Update dieses Files (`- [x]` setzen, Status-Zeile oben
 ändern). Commit-message-Format: `task-focused: session N — <thema>`.
 
-Letzter Stand: **Session 1 abgeschlossen** — Backend Kern steht (tasks-Tabelle,
-tasks-Router, Task-Extractor/Suggester/Planner, discovery + phase4
-Task-Integration, grey source_kind='task'). 871 Tests grün. Nächste Session:
-Session 2 (Dataset-Quellen + Kaggle-Login).
+Letzter Stand: **Session 2 abgeschlossen** — Dataset-Quellen + Kaggle-Login
+stehen (Kaggle/HF/OpenML/UCI/Mendeley-Clients, dataset_clients-Dispatch,
+datasets-Router mit Download + Source-Status, settings-Router mit
+Kaggle/HF-Login in .env, config.yaml + .env.example). 892 Tests grün.
+Nächste Session: Session 3 (Parallelmodus + interaktive Steps).

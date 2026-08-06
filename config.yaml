@@ -109,6 +109,43 @@ harvester:
     requests_per_second: 2.0
     timeout_seconds: 30
 
+  # ── Dataset-Quellen (Task-Focused Mode) ──────────────────────────────────
+  # Diese Quellen liefern Datensätze (nicht Papers) und werden im Datasets-Tab
+  # sowie im Task-Focused Mode durchsuchbar. Auth immer via .env, nie inline.
+
+  # Kaggle — Competitions + Datasets. Login via KAGGLE_USERNAME/KAGGLE_KEY in
+  # .env (gleiche Namen wie das offizielle kaggle-CLI). Ohne Login nur
+  # eingeschränkte Public-Scrape-Suche; Download ist auth-pflichtig.
+  kaggle:
+    base_url: "https://www.kaggle.com/api/v1"
+    api_key_env: "KAGGLE_KEY"          # zugehöriger Username in KAGGLE_USERNAME
+    username_env: "KAGGLE_USERNAME"
+    timeout_seconds: 60
+    # Competition-Daten sind competition-gebunden; UI weist extra darauf hin.
+
+  # Hugging Face Hub — frei durchsuchbar; HF_TOKEN hebt Rate-Limits und gibt
+  # Zugriff auf gated Datasets (die zusätzlich auf der Hub-Seite freigeschaltet
+  # werden müssen). Token optional.
+  huggingface:
+    base_url: "https://huggingface.co/api"
+    api_key_env: "HF_TOKEN"            # optional
+    timeout_seconds: 30
+
+  # OpenML — freie ML-Benchmark-Daten, kein Key nötig.
+  openml:
+    base_url: "https://openml.org/api/v1"
+    timeout_seconds: 30
+
+  # UCI ML Repository — klassische ML-Datensätze, frei, kein Key.
+  uci:
+    base_url: "https://archive.ics.uci.edu/api/v1"
+    timeout_seconds: 30
+
+  # Mendeley Data — freie Katalogsuche (nur Katalog, kein Reference-Manager).
+  mendeley:
+    base_url: "https://api.mendeley.com"
+    timeout_seconds: 30
+
 # Deep research / grey (web) sources. Used only on explicit request; results are
 # project-scoped supplementary context and are never written to the knowledge graph.
 research:
