@@ -383,3 +383,35 @@ class ExtractionMixin(_Base):
         """
         self._execute("DELETE FROM extraction_results")
         self._execute("DELETE FROM entity_review_queue")
+
+    def delete_extractions_for_papers(self, paper_ids: list[str]) -> int:
+        """
+        Delete alle Extraktionsdaten fuer die gegebenen Paper-IDs
+        (Ergebnisse, Qualitaetsscores, Review-Queue, Embeddings,
+        Batch-Job-Items). Harvest-Metadaten und PDFs bleiben erhalten.
+
+        Gibt die Anzahl der geloeschten extraction_results-Zeilen zurueck.
+        """
+        if not paper_ids:
+            return 0
+        ids = [str(pid) for pid in paper_ids if str(pid).strip()]
+        if not ids:
+            return 0
+        placeholders = ",".join(["?"] * len(ids))
+        # DuckDB liefert bei DML keine zuverlaessige rowcount; zaehle vorher.
+        count_row = self._execute(
+            f"SELECT COUNT(*) AS n FROM extraction_results WHERE paper_id IN ({placeholders})", ids
+        ).fetchone()
+        deleted = int(count_row[0]) if count_row else 0
+        self._execute(f"DELETE FROM extraction_results WHERE paper_id IN ({placeholders})", ids)
+        self._execute(f"DELETE FROM extraction_quality WHERE paper_id IN ({placeholders})", ids)
+        self._execute(f"DELETE FROM entity_review_queue WHERE paper_id IN ({placeholders})", ids)
+        try:
+            self._execute(f"DELETE FROM entity_embeddings WHERE paper_id IN ({placeholders})", ids)
+        except Exception:
+            pass
+        try:
+            self._execute(f"DELETE FROM batch_job_items WHERE paper_id IN ({placeholders})", ids)
+        except Exception:
+            pass
+        return deleted

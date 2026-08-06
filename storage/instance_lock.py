@@ -32,6 +32,7 @@ beendeter Prozess) und wird uebernommen.
 
 Abschaltbar mit ``SCIENCEKG_DISABLE_INSTANCE_LOCK=1``.
 """
+
 from __future__ import annotations
 
 import json
@@ -71,7 +72,11 @@ def instance_lock_path(metadata_db_path: str | os.PathLike[str]) -> Path:
 
 
 def _disabled() -> bool:
-    if os.getenv("SCIENCEKG_DISABLE_INSTANCE_LOCK", "").strip().lower() in {"1", "true", "yes"}:
+    if os.getenv("SCIENCEKG_DISABLE_INSTANCE_LOCK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
         return True
     # Die Testsuite startet die App vielfach parallel gegen tmp-Verzeichnisse und
     # soll sich nicht selbst aussperren.
@@ -82,7 +87,9 @@ def _in_container() -> bool:
     if os.path.exists("/.dockerenv"):
         return True
     try:
-        return "docker" in Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="ignore")
+        return "docker" in Path("/proc/1/cgroup").read_text(
+            encoding="utf-8", errors="ignore"
+        )
     except OSError:
         return False
 
@@ -101,11 +108,66 @@ def _read_record(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _pid_alive(pid: int) -> bool:
+    """Plattformübergreifender Liveness-Check für eine PID.
+
+    POSIX: ``os.kill(pid, 0)`` sendet kein Signal, prüft nur die Existenz.
+    ``ProcessLookupError`` → PID tot → wir dürfen sofort übernehmen.
+    ``PermissionError`` → PID lebt (andere UID) → Heartbeat entscheidet.
+
+    Windows: ``OpenProcess`` + ``GetExitCodeProcess`` mit ``STILL_ACTIVE``
+    (259). Schlägt ``OpenProcess`` mit ``ERROR_INVALID_PARAMETER`` fehlt,
+    der Prozess nicht mehr → tot.
+    """
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        # Unbekannter Fehler (z.B. ungültige PID) → sicherheitshalber "lebt",
+        # damit wir nicht einen echten Halter verdrängen.
+        return True
+    return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        STILL_ACTIVE = 259
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # ERROR_INVALID_PARAMETER (87) → Prozess existiert nicht mehr.
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                # API-Fehler → sicherheitshalber "lebt".
+                return True
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        # ctypes nicht verfügbar oder unerwarteter Fehler → Heartbeat entscheiden.
+        return True
+
+
 def describe_holder(record: dict[str, Any] | None) -> str:
     """Menschenlesbare Beschreibung des haltenden Prozesses."""
     if not record:
         return "unbekannter Prozess"
-    where = "in einem Docker-Container" if record.get("container") else f"auf {record.get('hostname', '?')}"
+    where = (
+        "in einem Docker-Container"
+        if record.get("container")
+        else f"auf {record.get('hostname', '?')}"
+    )
     return (
         f"PID {record.get('pid', '?')} {where}, gestartet {record.get('started_at', '?')}"
         f" ({record.get('cmdline', '?')})"
@@ -134,7 +196,7 @@ def _try_flock(fd: int) -> bool:
         return True  # Weder fcntl noch msvcrt: nur der Heartbeat schuetzt.
     try:
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
         return True
     except OSError:
         return False
@@ -173,7 +235,15 @@ class InstanceLock:
         os.fsync(self._fd)
 
     def _foreign_live_holder(self) -> dict[str, Any] | None:
-        """Fremder Halter mit frischem Heartbeat, sonst ``None``."""
+        """Fremder Halter mit frischem Heartbeat, sonst ``None``.
+
+        Fast-Path PID-Liveness: ein Prozess, der vor kurzem (jünger als
+        ``STALE_AFTER_SECONDS``) noch Herzschläge schrieb, aber dessen PID nicht
+        mehr lebt, gilt **sofort** als verwaist. Ohne diesen Pfad würde der
+        Starter bis zu 45 s warten, obwohl der Halter z.B. per ``kill -9`` oder
+        einem Absturz bereits weg ist. Der Heartbeat bleibt in der Datei
+        stehen, weil der Prozess vor dem Aufräumen stirbt.
+        """
         record = _read_record(self.path)
         if not record or record.get("owner_id") == self.owner_id:
             return None
@@ -181,7 +251,16 @@ class InstanceLock:
             age = time.time() - float(record.get("heartbeat") or 0)
         except (TypeError, ValueError):
             return None
-        return record if age < STALE_AFTER_SECONDS else None
+        if age >= STALE_AFTER_SECONDS:
+            return None
+        # PID-Liveness-Check: ist der Halter noch am Leben? Nur wenn die PID
+        # eindeutig tot ist (ProcessLookupError) gilt der Lock als verwaist;
+        # bei PermissionError (andere UID, aber am Leben) oder fehlender PID
+        # entscheiden wir uns für den Heartbeat.
+        pid = record.get("pid")
+        if isinstance(pid, int) and pid > 0 and not _pid_alive(pid):
+            return None
+        return record
 
     def _run_heartbeat(self) -> None:
         while not self._stop.wait(HEARTBEAT_SECONDS):
@@ -225,7 +304,9 @@ class InstanceLock:
             raise InstanceLockError(self._conflict_message(describe_holder(current)))
 
         self._stop.clear()
-        self._heartbeat = threading.Thread(target=self._run_heartbeat, name="instance-lock", daemon=True)
+        self._heartbeat = threading.Thread(
+            target=self._run_heartbeat, name="instance-lock", daemon=True
+        )
         self._heartbeat.start()
         return True
 

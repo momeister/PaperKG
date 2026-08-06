@@ -1032,6 +1032,134 @@ def test_grounded_responder_retries_empty_reasoning_only_responses() -> None:
         )
 
 
+class OllamaThinkingExhaustedThenAnswerLLMRouter(FakeLLMRouter):
+    """Simulates an Ollama reasoning model (qwen3.5) that spends its whole token
+    budget thinking on the first call, then succeeds on retry with a larger
+    budget. Uses Ollama's ``done_reason``/``reasoning_fallback`` metadata keys
+    instead of OpenAI's ``finish_reason``/``usage`` keys."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_response_metadata = {}
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides}
+        )
+        if len(self.calls) == 1:
+            self.last_response_metadata = {
+                "provider_type": "ollama",
+                "done_reason": "length",
+                "reasoning_fallback": True,
+                "eval_count": int((overrides or {}).get("max_tokens") or 0),
+            }
+            return ""
+        self.last_response_metadata = {
+            "provider_type": "ollama",
+            "done_reason": "stop",
+            "reasoning_fallback": False,
+        }
+        return "Recovered after Ollama thinking-exhaustion retry [p1]."
+
+
+def test_grounded_responder_retries_ollama_thinking_exhausted() -> None:
+    """Ollama reasoning models report exhaustion via ``done_reason=='length'``
+    + ``reasoning_fallback==True``, not via OpenAI's ``finish_reason``/``usage``.
+    The retry path must read those Ollama keys too."""
+    with _phase4_fixture() as db_path:
+        fake_llm = OllamaThinkingExhaustedThenAnswerLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        answer = responder.answer("What uses graph transformer?")
+
+        assert answer.generation_error is None
+        assert answer.answer == "Recovered after Ollama thinking-exhaustion retry [p1]."
+        assert len(fake_llm.calls) == 2
+
+
+class OllamaThinkingExhaustedAlwaysLLMRouter(FakeLLMRouter):
+    """Always thinks until the budget is exhausted — never produces an answer.
+    The responder's ``_raise_if_thinking_exhausted`` guard must turn this into a
+    clean fallback instead of an empty synthesis."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_response_metadata = {
+            "provider_type": "ollama",
+            "done_reason": "length",
+            "reasoning_fallback": True,
+            "eval_count": 1200,
+        }
+
+    def chat(self, messages, provider=None, overrides=None) -> str:
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides}
+        )
+        # Always exhausted — never a usable answer.
+        return ""
+
+
+def test_grounded_responder_thinking_exhausted_guard_fires_fallback() -> None:
+    """When a reasoning model never produces an answer (thinking exhausts the
+    budget on every call), the responder must surface the evidence-only fallback
+    rather than an empty synthesized answer."""
+    with _phase4_fixture() as db_path:
+        fake_llm = OllamaThinkingExhaustedAlwaysLLMRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        answer = responder.answer("What uses graph transformer?")
+
+        # The thinking-exhausted guard raises → the LLM-failed branch catches it
+        # → evidence-only fallback text is returned.
+        assert "Evidence-only fallback" in answer.answer
+        assert "Nachdenken" in (answer.generation_error or "")
+
+
+class QwenReasoningModelRouter(FakeLLMRouter):
+    """A router whose default model is a Qwen3 reasoning model. Used to verify
+    the responder injects ``chat_template_kwargs.enable_thinking=False``."""
+
+    def provider_settings(self, provider=None) -> FakeSettings:
+        return FakeSettings(model="qwen3.5:9b")
+
+
+def test_grounded_responder_disables_thinking_for_qwen3() -> None:
+    """A Qwen3 reasoning model must receive ``chat_template_kwargs.enable_thinking
+    =False`` so the answer budget is spent on the answer, not chain-of-thought."""
+    with _phase4_fixture() as db_path:
+        fake_llm = QwenReasoningModelRouter()
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        responder.answer("What uses graph transformer?")
+
+        overrides = fake_llm.calls[0]["overrides"]
+        assert overrides["extra"]["chat_template_kwargs"]["enable_thinking"] is False
+
+
+def test_grounded_responder_no_thinking_control_for_non_reasoning_model() -> None:
+    """A non-reasoning default model (fake-model) gets no thinking override."""
+    with _phase4_fixture() as db_path:
+        fake_llm = FakeLLMRouter()  # default model is "fake-model"
+        responder = GroundedResponder(
+            retriever=HybridRetriever(KGRetriever(metadata_db_path=db_path)),
+            llm_router=fake_llm,
+        )
+
+        responder.answer("What uses graph transformer?")
+
+        overrides = fake_llm.calls[0]["overrides"]
+        assert "chat_template_kwargs" not in overrides.get("extra", {})
+
+
 def test_grounded_responder_supplements_numeric_claims_for_top_hits() -> None:
     root = Path("test-output") / f"phase4-numeric-claims-{uuid4().hex}"
     root.mkdir(parents=True, exist_ok=True)

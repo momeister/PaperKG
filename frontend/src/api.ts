@@ -334,6 +334,8 @@ export const api = {
     request<{ job_id: string; items: import("./types").BatchJobItem[] }>(`/extraction/batch/${jobId}/items`),
   cancelExtractionBatch: (jobId: string) =>
     request<{ job_id: string; status: string }>(`/extraction/batch/${jobId}/cancel`, { method: "POST", body: "{}" }),
+  deleteExtractionResults: (payload: { paper_ids?: string[]; project_id?: string | null }) =>
+    request<{ deleted: number; paper_ids: string[] }>("/extraction/delete", { method: "POST", body: JSON.stringify(payload) }),
   getExtractionHistory: (paperId = "") =>
     request<{ items: ExtractionHistoryItem[]; total: number }>("/extraction/history", { query: { paper_id: paperId } }),
   getExtractionQuality: (paperId = "", limit = 50) =>

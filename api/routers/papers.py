@@ -141,8 +141,9 @@ def paper_meta(
 ) -> dict[str, Any]:
     """Return metadata for a cited paper that may have no local PDF, so the UI can show its
     abstract and a link to the original source for verification."""
+    clean_id = _strip_citation_fragment(paper_id)
     with MetadataDB(metadata_db_path) as db:
-        paper = db.get_paper(paper_id)
+        paper = db.resolve_paper(clean_id) or db.get_paper(clean_id)
     if not paper:
         raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id}")
     doi = _clean_display_text(paper.get("doi"))
@@ -202,7 +203,8 @@ async def paper_ingest(request: PaperIngestRequest, background_tasks: Background
     web/grey-source view.
     """
     with MetadataDB(request.metadata_db_path) as db:
-        paper = db.get_paper(request.paper_id)
+        clean_id = _strip_citation_fragment(request.paper_id)
+        paper = db.resolve_paper(clean_id) or db.get_paper(clean_id)
     if not paper:
         raise HTTPException(status_code=404, detail=f"Paper not found: {request.paper_id}")
 
@@ -248,6 +250,19 @@ async def paper_ingest(request: PaperIngestRequest, background_tasks: Background
 def _clean_display_text(value: Any) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return "" if text.lower() in {"", "none", "null", "nan", "undefined"} else text
+
+
+def _strip_citation_fragment(paper_id: str) -> str:
+    """Strip a ``#N`` evidence-binding fragment (e.g. ``crossref:doi#48``) from a cited paper id.
+
+    The LLM appends ``#<index>`` to bind a citation to a piece of evidence; the stored paper id
+    never carries that fragment, so lookups against the raw cited string fail. Drop everything from
+    the first ``#`` onward and trim whitespace.
+    """
+    raw = str(paper_id or "").strip()
+    if "#" not in raw:
+        return raw
+    return raw.split("#", 1)[0].strip() or raw
 
 
 def _paper_filename_from_value(value: Any) -> str:
@@ -425,11 +440,13 @@ def delete_paper(
     projects_path: str | None = None,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
-        paper = db.get_paper(paper_id)
+        clean_id = _strip_citation_fragment(paper_id)
+        paper = db.resolve_paper(clean_id) or db.get_paper(clean_id)
         if not paper:
             raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id}")
+        canonical_id = str(paper.get("id") or clean_id)
         pdf_url = paper.get("pdf_url") or paper.get("pdf_path")
-        deleted = db.delete_paper(paper_id)
+        deleted = db.delete_paper(canonical_id)
     file_deleted = False
     if deleted and pdf_url:
         storage = FileManager(pdf_base_dir)
@@ -438,16 +455,16 @@ def delete_paper(
         all_projects = _load_projects(_projects_path(projects_path))
         changed = False
         for pid, members in all_projects.items():
-            if paper_id in members:
-                all_projects[pid] = [m for m in members if m != paper_id]
+            if canonical_id in members:
+                all_projects[pid] = [m for m in members if m != canonical_id]
                 changed = True
         if changed:
             _save_projects(all_projects, _projects_path(projects_path))
         primary = _load_primary_papers()
-        if any(v == paper_id for v in primary.values()):
-            updated = {k: v for k, v in primary.items() if v != paper_id}
+        if any(v == canonical_id for v in primary.values()):
+            updated = {k: v for k, v in primary.items() if v != canonical_id}
             _save_primary_papers(updated)
-    return {"deleted": deleted, "file_deleted": file_deleted, "id": paper_id}
+    return {"deleted": deleted, "file_deleted": file_deleted, "id": canonical_id}
 
 
 def _latest_extraction_statuses(db: MetadataDB) -> dict[str, str]:

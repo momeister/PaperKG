@@ -57,6 +57,72 @@ STOPWORDS = {
     "what",
     "which",
     "with",
+    # German function words / common question scaffolding. Language-neutral
+    # benefit: these carry no topical signal, so removing them never hurts
+    # non-German queries (English "wie" is not a word, "das" is rare). Kept
+    # small on purpose — only words with zero topical value across domains.
+    "der",
+    "die",
+    "das",
+    "den",
+    "dem",
+    "des",
+    "ein",
+    "eine",
+    "einen",
+    "einem",
+    "einer",
+    "eines",
+    "und",
+    "oder",
+    "aber",
+    "ist",
+    "sind",
+    "war",
+    "waren",
+    "wird",
+    "werden",
+    "hat",
+    "hatte",
+    "haben",
+    "mit",
+    "von",
+    "zu",
+    "zur",
+    "zum",
+    "auf",
+    "im",
+    "in",
+    "an",
+    "bei",
+    "nach",
+    "vor",
+    "über",
+    "unter",
+    "durch",
+    "für",
+    "gegen",
+    "ohne",
+    "aus",
+    "wie",
+    "was",
+    "wer",
+    "wo",
+    "wann",
+    "warum",
+    "welche",
+    "welcher",
+    "welches",
+    "funktioniert",
+    "erklärt",
+    "erkläre",
+    "beschreibt",
+    "beschreibe",
+    "zeigt",
+    "zeige",
+    "sage",
+    "nenne",
+    "gibt",
 }
 
 LOW_SIGNAL_TERMS = {
@@ -251,12 +317,27 @@ class KGRetriever:
                 else []
             )
             token_weights = _query_token_weights(tokens, papers, extractions)
+            # Papers with at least one extraction carrying real claim/concept/method
+            # content. Used to suppress pure-stub papers (empty abstract AND no
+            # substantive extraction) so they cannot rank by title match alone —
+            # a title-only stub has nothing citable to offer a grounded answer.
+            # Alias-aware: a PDF-derived extraction paper_id (e.g.
+            # ``arxiv__<slug>__<id>``) is resolved to its canonical paper id so
+            # the stub filter doesn't accidentally suppress a real paper whose
+            # extraction lives under an alias.
+            substantive_pids = (
+                _substantive_extraction_pids(extractions, db=db, papers=papers)
+                if include_extractions
+                else None
+            )
             for record in papers:
                 pid = paper_id(record)
                 if not _paper_id_allowed(pid, allowed_ids):
                     continue
                 paper_cache[pid] = record
-                self._add_paper_evidence(hits, query, tokens, record, token_weights)
+                self._add_paper_evidence(
+                    hits, query, tokens, record, token_weights, substantive_pids
+                )
 
             if include_extractions:
                 for extraction in extractions:
@@ -272,6 +353,11 @@ class KGRetriever:
                     if not _paper_id_allowed(
                         pid, allowed_ids
                     ) and not _paper_id_allowed(raw_pid, allowed_ids):
+                        continue
+                    # Skip stub extractions (empty claims/concepts/methods): they
+                    # contribute no citable content, so even a title match must not
+                    # promote them into the evidence list.
+                    if substantive_pids is not None and pid not in substantive_pids:
                         continue
                     record = (
                         paper_cache.get(pid)
@@ -393,6 +479,7 @@ class KGRetriever:
         tokens: list[str],
         record: dict[str, Any],
         token_weights: dict[str, float] | None = None,
+        substantive_pids: set[str] | None = None,
     ) -> None:
         pid = paper_id(record)
         title = str(record.get("title") or "")
@@ -407,6 +494,17 @@ class KGRetriever:
         )
         if score <= 0:
             return
+        # Stub suppression: a paper with no abstract AND no substantive extraction
+        # has no citable content. Even if its title matches the query, promoting
+        # it would pollute the evidence list with title-only stubs (e.g. German
+        # "metadata"-model placeholders that were never actually parsed). Skip it
+        # unless the caller disabled extraction (substantive_pids is None → the
+        # extractions weren't loaded, so we can't tell, and we preserve the old
+        # behavior rather than silently dropping everything).
+        if substantive_pids is not None:
+            has_content = bool(abstract.strip()) or pid in substantive_pids
+            if not has_content:
+                return
         text = _snippet(" ".join(item for item in [title, abstract] if item), tokens)
         self._hit_for(hits, record, pid).add_evidence(
             Evidence(
@@ -485,6 +583,105 @@ def _source_from_paper(record: dict[str, Any]) -> Source:
         url=str(record.get("landing_page_url") or record.get("pdf_url") or "") or None,
         citation_count=max(0, _coerce_int(record.get("citation_count")) or 0),
     )
+
+
+_SUBSTANTIVE_EXTRACTION_FIELDS = (
+    "claims",
+    "methods",
+)
+
+
+def _is_title_stub_concept(item_text_value: str, title: str) -> bool:
+    """True when a concept's text is just a restatement of the paper title.
+
+    The ``metadata`` extraction model auto-fills ``concepts`` with the paper's
+    own title (or a leading slice of it). Such a concept carries no citable
+    signal beyond the title itself, so a paper whose only extraction content
+    is a title-stub concept should not surface on title match alone.
+    """
+    if not item_text_value or not title:
+        return False
+    norm_text = re.sub(r"\s+", " ", item_text_value.casefold().strip())
+    norm_title = re.sub(r"\s+", " ", title.casefold().strip())
+    if not norm_text or not norm_title:
+        return False
+    # The metadata model often stores either the full title or a leading slice
+    # of it as the concept label.
+    return (
+        norm_text == norm_title
+        or norm_title.startswith(norm_text)
+        or norm_text.startswith(norm_title)
+    )
+
+
+def _substantive_extraction_pids(
+    extractions: list[dict[str, Any]],
+    db: Any = None,
+    papers: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    """Paper IDs that have at least one extraction with real citable content.
+
+    A stub extraction (the ``metadata``-model rows that auto-fill ``concepts``
+    from the paper title, failed parses, etc.) has empty ``claims`` AND empty
+    ``methods`` and concepts whose label is just the paper title. Such papers
+    have nothing citable to ground an answer on, so the retriever should not
+    surface them on title match alone — see ``_add_paper_evidence``.
+
+    A paper counts as substantive when at least one successful extraction has:
+    * a non-empty ``claims`` or ``methods`` entry, OR
+    * a ``concepts``/``cross_domain_hints`` entry whose text is NOT just the
+      paper title (so real concept-only extractions survive, while
+      title-stub concepts from the ``metadata`` model are rejected).
+
+    When ``db`` has a ``resolve_paper`` method, each extraction's raw
+    ``paper_id`` (which may be a PDF-derived alias like
+    ``arxiv__<slug>__<id>``) is resolved to its canonical paper id so the stub
+    filter doesn't accidentally suppress a real paper whose extraction lives
+    under an alias. ``papers`` lets the caller pass the already-loaded paper
+    records so titles can be looked up without extra DB round-trips.
+    """
+    titles_by_pid: dict[str, str] = {}
+    if papers is not None:
+        for record in papers:
+            titles_by_pid[paper_id(record)] = str(record.get("title") or "")
+    substantive: set[str] = set()
+    for extraction in extractions:
+        if str(extraction.get("extraction_status") or "") not in ("", "success"):
+            continue
+        raw_pid = str(extraction.get("paper_id") or "")
+        if not raw_pid:
+            continue
+        pid = raw_pid
+        title = ""
+        if db is not None and hasattr(db, "resolve_paper"):
+            resolved = db.resolve_paper(raw_pid)
+            if resolved is not None:
+                pid = paper_id(resolved)
+                title = str(resolved.get("title") or "")
+        if not title:
+            title = titles_by_pid.get(pid, "")
+        # claims / methods → always substantive
+        for field in _SUBSTANTIVE_EXTRACTION_FIELDS:
+            for item in _iter_items(extraction.get(field)):
+                if _item_text(item).strip():
+                    substantive.add(pid)
+                    break
+            else:
+                continue
+            break
+        if pid in substantive:
+            continue
+        # concepts / cross_domain_hints → substantive only when NOT a title stub
+        for field in ("concepts", "cross_domain_hints"):
+            for item in _iter_items(extraction.get(field)):
+                text = _item_text(item).strip()
+                if text and not _is_title_stub_concept(text, title):
+                    substantive.add(pid)
+                    break
+            else:
+                continue
+            break
+    return substantive
 
 
 def _evidence_from_extraction(
@@ -585,8 +782,11 @@ def _parse_json(value: str) -> Any | None:
         return None
 
 
+_TOKEN_RE = re.compile(r"[^\W_]+(?:[-_][^\W_]+)*", re.UNICODE)
+
+
 def _tokenize(text: str) -> list[str]:
-    raw_tokens = re.findall(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", (text or "").lower())
+    raw_tokens = _TOKEN_RE.findall((text or "").casefold())
     tokens: list[str] = []
     seen: set[str] = set()
     for raw_token in raw_tokens:

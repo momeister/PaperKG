@@ -73,8 +73,6 @@ import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
 import type {
   Answer,
-  AutoGreySource,
-  AutoHarvestStage,
   CitationLink,
   ClaimCheckResult,
   DeepResearchFinding,
@@ -90,6 +88,7 @@ import type {
   VerificationEvidence,
   VerificationSource
 } from "../types";
+import { AutoResearchProgress as AutoResearchProgressView } from "./AutoResearchProgress";
 import { ParallelResearchPanel, ParallelSessionBrowser } from "./ParallelResearchPanel";
 import { ParallelResultsTab } from "./ParallelResultsTab";
 import {
@@ -118,7 +117,7 @@ import {
   turnContext,
   verificationSourcesFor
 } from "./AssistantPage";
-import type { AssistantAnswerBlock, AssistantTurn, CitationInsertExtras, CitationMeta } from "./AssistantPage";
+import type { AssistantAnswerBlock, AssistantTurn, AutoResearchProgress, CitationInsertExtras, CitationMeta } from "./AssistantPage";
 import type { PaperQuestionScope, WorkspaceActionEntry, WorkspaceCommandDef } from "./WorkspacePage";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
@@ -175,8 +174,10 @@ import {
   WorkspaceNotesAssistant,
 } from "./WorkspaceSubComponents";
 
-/** Eskalationsleiter der Auto-Recherche (Spiegel von query/auto_answer.HARVEST_STAGES). */
-const AUTO_STAGES: { id: AutoHarvestStage; label: string; hint: string }[] = [
+/** Eskalationsleiter der Auto-Recherche (Spiegel von query/auto_answer.HARVEST_STAGES).
+ * Wird pro Stage im neuen AutoResearchProgress-UI zur Anzeige der Vertrauensstufe
+ * genutzt (scientific → trusted → unverified). */
+const AUTO_STAGES: { id: string; label: string; hint: string }[] = [
   { id: "scientific", label: "Wissenschaft", hint: "Paper aus den wissenschaftlichen Quellen" },
   { id: "trusted", label: "Vertrauenswürdig", hint: "Behörden, Hochschulen, Fachverlage" },
   { id: "unverified", label: "Ungeprüft", hint: "Übriges Web — nur wenn die Stufen davor nicht reichen" }
@@ -206,13 +207,7 @@ export interface WorkspaceAssistantPaneProps {
   applyPaletteCommand: (command: WorkspaceCommandDef) => void;
   askAboutSelection: () => void;
   autoAbortRef: MutableRefObject<AbortController | null>;
-  autoProgress: {
-    phase: string;
-    stage?: AutoHarvestStage;
-    relatedTopics: string[];
-    papers: { id: string; title: string }[];
-    grey: AutoGreySource[];
-  } | null;
+  autoProgress: AutoResearchProgress | null;
   autoResearch: boolean;
   chatSettingsOpen: boolean;
   checkAnswerSelection: () => void;
@@ -1024,55 +1019,17 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
               />
             ) : null}
             {!parallelMode && !deepMode && autoProgress ? (
-              <div className="web-offer-card auto-research-card">
-                <Loader2 size={15} className="spin" />
-                <div>
-                  <strong>Auto-Recherche läuft …</strong>
-                  <span>{autoProgress.phase}</span>
-                  {/* Die Leiter sichtbar machen: ungeprüfte Webquellen kommen erst,
-                      wenn Paper und vertrauenswürdige Seiten nicht gereicht haben. */}
-                  <div className="auto-stage-ladder">
-                    {AUTO_STAGES.map((stage, index) => {
-                      const activeIndex = AUTO_STAGES.findIndex((entry) => entry.id === autoProgress.stage);
-                      const state = activeIndex < 0 ? "pending" : index < activeIndex ? "done" : index === activeIndex ? "active" : "pending";
-                      return (
-                        <span key={stage.id} className="auto-stage-chip" data-state={state} title={stage.hint}>
-                          {stage.label}
-                        </span>
-                      );
-                    })}
-                  </div>
-                  {autoProgress.relatedTopics.length ? (
-                    <div className="web-research-topics" style={{ marginTop: "4px" }}>
-                      <span className="muted">Verwandte Themen:</span>
-                      {autoProgress.relatedTopics.slice(0, 8).map((topic) => (
-                        <span className="topic-chip" key={topic}>{topic}</span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {autoProgress.papers.length || autoProgress.grey.length ? (
-                    <span className="muted" style={{ marginTop: "4px" }}>
-                      Bisher: {autoProgress.papers.length} Paper · {autoProgress.grey.length} Web-Quellen
-                    </span>
-                  ) : null}
-                </div>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="Auto-Recherche abbrechen"
-                  title="Auto-Recherche abbrechen"
-                  onClick={() => autoAbortRef.current?.abort()}
-                >
-                  <Square size={14} />
-                </button>
-              </div>
+              <AutoResearchProgressView
+                progress={autoProgress}
+                stages={AUTO_STAGES}
+                onCancel={() => autoAbortRef.current?.abort()}
+              />
             ) : null}
             {!parallelMode && !deepMode && !autoProgress && activeTurn && latestBlock && latestAnswerNeedsWeb && isRealProject && !webMutation.isPending && webOfferDismissedFor !== latestBlock.id ? (
               <div className="web-offer-card">
-                <Globe size={15} />
-                <div>
+                <Globe size={14} />
+                <div title="Soll ich im Internet nachschlagen? Treffer landen als Grauquellen, nicht im Knowledge Graph.">
                   <strong>Lokal keine ausreichende Antwort gefunden.</strong>
-                  <span>Soll ich im Internet nachschlagen? Treffer landen als Grauquellen, nicht im Knowledge Graph.</span>
                 </div>
                 <button
                   className="button button-compact button-primary"
@@ -1084,7 +1041,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                   }}
                   title="Automatisch Paper (mit Extraktion) und Webquellen — auch zu verwandten Themen — laden und neu beantworten"
                 >
-                  <Sparkles size={14} /> Automatisch recherchieren
+                  <Sparkles size={13} /> Automatisch recherchieren
                 </button>
                 <button
                   className="button button-compact"
@@ -1094,16 +1051,60 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                     webMutation.mutate(latestBlock.question);
                   }}
                 >
-                  Nur im Web nachschlagen
+                  Nur im Web
                 </button>
                 <button className="icon-button" type="button" aria-label="Hinweis ausblenden" onClick={() => setWebOfferDismissedFor(latestBlock.id)}>
-                  <X size={14} />
+                  <X size={13} />
                 </button>
               </div>
             ) : null}
             {citationVerifyPending ? (
               <div className="scope-status">
                 <Loader2 size={13} className="spin" /> Prüfe unsichere Zitate gegen die Quellen …
+              </div>
+            ) : null}
+            {!parallelMode && !deepMode && !autoProgress && activeTurn && activeTurn.type === "research" ? (
+              <div className="answer-blocks" ref={answerBlocksRef}>
+                {activeTurn.researchProgress && activeTurn.researchStatus !== "running" ? (
+                  <AutoResearchProgressView
+                    progress={activeTurn.researchProgress}
+                    stages={AUTO_STAGES}
+                    onCancel={() => autoAbortRef.current?.abort()}
+                  />
+                ) : null}
+                {activeTurn.researchStatus === "error" || activeTurn.researchError ? (
+                  <div className="auto-research-error-box">
+                    <AlertTriangle size={14} />
+                    <div>
+                      <strong>Auto-Recherche fehlgeschlagen.</strong>
+                      {activeTurn.researchError ? <span>{activeTurn.researchError}</span> : null}
+                    </div>
+                    <button
+                      className="button button-compact button-primary"
+                      type="button"
+                      onClick={() => void runAutoResearch(activeTurn.question, { scope: paperScope, newTurn: true })}
+                      title="Recherche mit derselben Frage neu starten"
+                    >
+                      <Sparkles size={13} /> Erneut recherchieren
+                    </button>
+                  </div>
+                ) : activeTurn.researchStatus === "running" ? (
+                  <div className="auto-research-error-box">
+                    <AlertTriangle size={14} />
+                    <div>
+                      <strong>Recherche war beim Neuladen aktiv.</strong>
+                      <span>Verbindung abgebrochen — ggf. neu starten.</span>
+                    </div>
+                    <button
+                      className="button button-compact button-primary"
+                      type="button"
+                      onClick={() => void runAutoResearch(activeTurn.question, { scope: paperScope, newTurn: true })}
+                      title="Recherche mit derselben Frage neu starten"
+                    >
+                      <Sparkles size={13} /> Erneut recherchieren
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {!parallelMode && !deepMode && activeTurn && activeTurn.type !== "research_tree" ? (

@@ -10,9 +10,11 @@ Speichern dauerhaft festgeschrieben.
 Die Tests decken beide Pfade ab: eine gesperrte DB darf die Projektliste nicht
 verstecken, und beschaedigte Sidecars muessen laut scheitern statt leer zu wirken.
 """
+
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -52,7 +54,9 @@ def test_write_json_atomic_leaves_no_temp_files(tmp_path: Path) -> None:
     assert [p.name for p in tmp_path.iterdir()] == ["projects.json"]
 
 
-def test_write_json_atomic_keeps_old_file_when_serialisation_fails(tmp_path: Path) -> None:
+def test_write_json_atomic_keeps_old_file_when_serialisation_fails(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "projects.json"
     write_json_atomic(target, {"Projekt A": ["p1"]})
     with pytest.raises(TypeError):
@@ -134,14 +138,25 @@ def test_project_list_survives_a_locked_database(tmp_path: Path) -> None:
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
     with MetadataDB(str(db_path)) as db:
-        db.insert_paper({"id": "p1", "source": "fixture", "source_id": "p1", "title": "T", "year": 2024})
+        db.insert_paper(
+            {
+                "id": "p1",
+                "source": "fixture",
+                "source_id": "p1",
+                "title": "T",
+                "year": 2024,
+            }
+        )
     write_json_atomic(projects_path, {"Mein Projekt": ["p1"]})
 
     with _foreign_lock_holder(db_path):
         with TestClient(product_main.app) as client:
             response = client.get(
                 "/projects",
-                params={"metadata_db_path": str(db_path), "projects_path": str(projects_path)},
+                params={
+                    "metadata_db_path": str(db_path),
+                    "projects_path": str(projects_path),
+                },
             )
 
     assert response.status_code == 200, response.text
@@ -173,7 +188,9 @@ def test_corrupt_projects_json_is_reported_not_silently_emptied(tmp_path: Path) 
         projects_router._load_projects(projects_path)
 
 
-def test_rename_migrates_database_before_touching_projects_json(tmp_path: Path, monkeypatch) -> None:
+def test_rename_migrates_database_before_touching_projects_json(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Schlaegt die DB-Migration fehl, darf projects.json nicht schon umbenannt sein.
 
     Sonst traegt das Projekt den neuen Namen, waehrend grey_sources/notes noch an
@@ -182,7 +199,9 @@ def test_rename_migrates_database_before_touching_projects_json(tmp_path: Path, 
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
     with MetadataDB(str(db_path)) as db:
-        db.add_grey_source("Alt", {"id": "g1", "url": "https://example.org", "title": "Q"})
+        db.add_grey_source(
+            "Alt", {"id": "g1", "url": "https://example.org", "title": "Q"}
+        )
     write_json_atomic(projects_path, {"Alt": ["p1"]})
 
     def _boom(self, *args, **kwargs):
@@ -194,7 +213,10 @@ def test_rename_migrates_database_before_touching_projects_json(tmp_path: Path, 
         response = client.patch(
             "/projects/Alt",
             json={"name": "Neu"},
-            params={"metadata_db_path": str(db_path), "projects_path": str(projects_path)},
+            params={
+                "metadata_db_path": str(db_path),
+                "projects_path": str(projects_path),
+            },
         )
     assert response.status_code == 500
 
@@ -228,7 +250,9 @@ def test_instance_lock_blocks_a_second_backend(tmp_path: Path, monkeypatch) -> N
     second.release()
 
 
-def test_instance_lock_blocks_across_a_container_boundary(tmp_path: Path, monkeypatch) -> None:
+def test_instance_lock_blocks_across_a_container_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Docker Desktop reicht POSIX-Locks nicht durch — nur der Heartbeat greift.
 
     Nachgemessen: bei laufendem Container konnte der Host dieselbe DuckDB
@@ -257,15 +281,17 @@ def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, monkeypatch) -> None:
     lock_file = instance_lock_path(str(db_path))
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     lock_file.write_text(
-        json.dumps({
-            "owner_id": "toter-prozess",
-            "pid": 999999,
-            "hostname": "irgendwo",
-            "container": True,
-            "started_at": "2020-01-01 00:00:00",
-            "heartbeat": time.time() - (STALE_AFTER_SECONDS + 60),
-            "cmdline": "uvicorn",
-        }),
+        json.dumps(
+            {
+                "owner_id": "toter-prozess",
+                "pid": 999999,
+                "hostname": "irgendwo",
+                "container": True,
+                "started_at": "2020-01-01 00:00:00",
+                "heartbeat": time.time() - (STALE_AFTER_SECONDS + 60),
+                "cmdline": "uvicorn",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -282,11 +308,15 @@ def test_the_holder_keeps_its_heartbeat_fresh(tmp_path: Path, monkeypatch) -> No
     lock = InstanceLock(str(db_path))
     lock.acquire()
     try:
-        first = json.loads(instance_lock_path(str(db_path)).read_text(encoding="utf-8"))["heartbeat"]
+        first = json.loads(
+            instance_lock_path(str(db_path)).read_text(encoding="utf-8")
+        )["heartbeat"]
         deadline = time.time() + 3
         while time.time() < deadline:
             time.sleep(0.1)
-            later = json.loads(instance_lock_path(str(db_path)).read_text(encoding="utf-8"))["heartbeat"]
+            later = json.loads(
+                instance_lock_path(str(db_path)).read_text(encoding="utf-8")
+            )["heartbeat"]
             if later > first:
                 break
         else:
@@ -314,3 +344,70 @@ def test_instance_lock_is_disabled_under_pytest(tmp_path: Path) -> None:
     """Ohne diesen Ausstieg wuerde die Testsuite sich selbst aussperren."""
     lock = InstanceLock(str(tmp_path / "metadata.duckdb"))
     assert lock.acquire() is False
+
+
+def test_a_dead_pid_with_fresh_heartbeat_is_taken_over_immediately(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """PID-Liveness-Fast-Path: ein Prozess, der vor kurzem noch Herzschläche
+    schrieb, aber dessen PID nicht mehr lebt, gilt sofort als verwaist —
+    ohne die bis zu 45s Wartezeit des reinen Heartbeat-Algorithmus.
+    """
+    monkeypatch.setattr("storage.instance_lock._disabled", lambda: False)
+    monkeypatch.setattr("storage.instance_lock._try_flock", lambda _fd: True)
+    db_path = tmp_path / "metadata.duckdb"
+    lock_file = instance_lock_path(str(db_path))
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    # PID 99999999 existiert mit an Sicherheit grenzender Wahrscheinlichkeit
+    # nicht, der Heartbeat ist aber frisch (0s alt) — ohne PID-Check wuerde der
+    # Starter bis zu 45s warten.
+    lock_file.write_text(
+        json.dumps(
+            {
+                "owner_id": "toter-prozess",
+                "pid": 99999999,
+                "hostname": "irgendwo",
+                "container": False,
+                "started_at": "2020-01-01 00:00:00",
+                "heartbeat": time.time(),
+                "cmdline": "uvicorn",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lock = InstanceLock(str(db_path))
+    assert lock.acquire() is True
+    lock.release()
+
+
+def test_a_live_pid_with_fresh_heartbeat_still_blocks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Lebende PID mit frischem Heartbeat blockiert weiterhin — der PID-Check
+    verdraengt keinen echten Halter."""
+    monkeypatch.setattr("storage.instance_lock._disabled", lambda: False)
+    monkeypatch.setattr("storage.instance_lock._try_flock", lambda _fd: True)
+    db_path = tmp_path / "metadata.duckdb"
+    lock_file = instance_lock_path(str(db_path))
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    # Eigene PID lebt garantiert.
+    lock_file.write_text(
+        json.dumps(
+            {
+                "owner_id": "lebender-prozess",
+                "pid": os.getpid(),
+                "hostname": "irgendwo",
+                "container": False,
+                "started_at": "2020-01-01 00:00:00",
+                "heartbeat": time.time(),
+                "cmdline": "uvicorn",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lock = InstanceLock(str(db_path))
+    with pytest.raises(InstanceLockError) as excinfo:
+        lock.acquire()
+    assert "bereits" in str(excinfo.value)

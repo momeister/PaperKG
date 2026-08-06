@@ -18,6 +18,7 @@ Stufen die Frage nicht decken konnten.
 Deliberately minimal dependencies — no ``api/`` imports — so it stays importable and
 testable without pulling the FastAPI app into the import graph.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,6 +33,7 @@ from query.auto_harvester import (
 from query.discovery import analyze_topic
 from query.grounded_responder import GroundedResponder
 from query.hybrid_retriever import HybridRetriever
+from query.query_rewriter import QueryRewriter
 
 if TYPE_CHECKING:
     from query.llm_router import LLMRouter
@@ -181,21 +183,56 @@ async def auto_research_answer(
     yield {"status": "answer", "answer": answer_dict}
 
     if not (force or _is_weak_answer(answer_dict)):
-        yield {"status": "done", "answer": answer_dict,
-               "harvest_summary": {"harvested": False, "papers": [], "grey": [], "related_topics": []}}
+        yield {
+            "status": "done",
+            "answer": answer_dict,
+            "harvest_summary": {
+                "harvested": False,
+                "papers": [],
+                "grey": [],
+                "related_topics": [],
+            },
+        }
         return
 
     # The question carries an answer-style hint (e.g. a verbosity instruction); harvest and
     # related-topic analysis must use the *clean* question so the search is not polluted.
     harvest_question = (search_question or question).strip()
 
+    # Cross-language bridge: scientific harvest sources (arXiv, Semantic Scholar, web)
+    # work best with English queries. Rewrite the harvest question to English once and
+    # reuse it for every stage + related-topic analysis. Best-effort: falls back to the
+    # original question on any LLM error. The grounded answer itself still uses the
+    # original question (GroundedResponder rewrites retrieval internally).
+    rewriter = QueryRewriter(llm_router)
+    rewrite = await asyncio.to_thread(
+        rewriter.rewrite, harvest_question, provider, overrides
+    )
+    # Use the LLM-translated English question for harvesting when the rewrite
+    # actually fired. When the rewriter fell back (LLM down / no dict match),
+    # keep the original harvest_question verbatim — harvest sources (arXiv,
+    # Semantic Scholar) treat a case-preserved query better than the lowercased
+    # ``retrieval_query`` token string, and an English question needs no rewrite.
+    if rewrite.used_llm and rewrite.en_query.strip():
+        harvest_query_en = rewrite.en_query.strip()
+    else:
+        harvest_query_en = harvest_question
+
     # 2. Derive related topics to widen the harvest (best-effort; never fatal).
     related_topics: list[str] = []
     try:
-        analysis = await asyncio.to_thread(analyze_topic, llm_router, harvest_question, provider)
-        related_topics = [t for t in (analysis.get("related_topics") or []) if t][:max_related_topics]
+        analysis = await asyncio.to_thread(
+            analyze_topic, llm_router, harvest_query_en, provider
+        )
+        related_topics = [t for t in (analysis.get("related_topics") or []) if t][
+            :max_related_topics
+        ]
     except Exception as exc:  # noqa: BLE001 - planning is optional, keep harvesting
-        yield {"status": "harvest_error", "error": f"Themenanalyse fehlgeschlagen: {exc}", "topic": ""}
+        yield {
+            "status": "harvest_error",
+            "error": f"Themenanalyse fehlgeschlagen: {exc}",
+            "topic": "",
+        }
     yield {"status": "planning", "related_topics": related_topics}
 
     new_paper_ids: list[str] = []
@@ -208,10 +245,16 @@ async def auto_research_answer(
 
     # Topics for every stage: the main question first, then each related topic.
     # Sequential keeps DuckDB's single writer happy (and matches the research-tree loop).
-    topic_plan: list[tuple[str, str, int, int]] = [("main", harvest_question, main_papers, main_grey)]
-    topic_plan += [("related", topic, papers_per_topic, grey_per_topic) for topic in related_topics]
+    topic_plan: list[tuple[str, str, int, int]] = [
+        ("main", harvest_query_en, main_papers, main_grey)
+    ]
+    topic_plan += [
+        ("related", topic, papers_per_topic, grey_per_topic) for topic in related_topics
+    ]
 
-    async def _harvest_papers(topic: str, count: int) -> tuple[list[dict[str, str]], str | None]:
+    async def _harvest_papers(
+        topic: str, count: int
+    ) -> tuple[list[dict[str, str]], str | None]:
         entries: list[dict[str, str]] = []
         try:
             records = await harvest_for_question(
@@ -237,7 +280,9 @@ async def auto_research_answer(
                 harvested_papers.append(entry)
         return entries, None
 
-    async def _harvest_grey(topic: str, count: int, tier: str) -> tuple[list[dict[str, str]], str | None]:
+    async def _harvest_grey(
+        topic: str, count: int, tier: str
+    ) -> tuple[list[dict[str, str]], str | None]:
         entries: list[dict[str, str]] = []
         if count <= 0:
             return entries, None
@@ -280,13 +325,27 @@ async def auto_research_answer(
             if stage_id == "scientific":
                 step_papers, error = await _harvest_papers(topic, n_papers)
             else:
-                step_grey, error = await _harvest_grey(topic, n_grey, str(stage["tier"]))
+                step_grey, error = await _harvest_grey(
+                    topic, n_grey, str(stage["tier"])
+                )
             if error:
-                yield {"status": "harvest_error", "error": error, "topic": topic, "stage": stage_id}
+                yield {
+                    "status": "harvest_error",
+                    "error": error,
+                    "topic": topic,
+                    "stage": stage_id,
+                }
             stage_papers += len(step_papers)
             stage_grey += len(step_grey)
-            yield {"status": "harvesting", "stage": stage_id, "stage_label": stage["label"],
-                   "scope": scope, "topic": topic, "papers": step_papers, "grey": step_grey}
+            yield {
+                "status": "harvesting",
+                "stage": stage_id,
+                "stage_label": stage["label"],
+                "scope": scope,
+                "topic": topic,
+                "papers": step_papers,
+                "grey": step_grey,
+            }
 
         found_here = bool(stage_papers or stage_grey)
         is_last_stage = stage_index == len(HARVEST_STAGES) - 1
@@ -294,19 +353,27 @@ async def auto_research_answer(
             # 4. Re-answer with everything harvested so far. Mirror the research-tree
             # merge: keep existing scope IDs, append the new ones; both empty → None.
             existing_ids = [pid for pid in (paper_ids or []) if pid != "__none__"]
-            effective_paper_ids = (existing_ids + new_paper_ids) if (existing_ids or new_paper_ids) else None
+            effective_paper_ids = (
+                (existing_ids + new_paper_ids)
+                if (existing_ids or new_paper_ids)
+                else None
+            )
             effective_grey_ids = (list(grey_source_ids or []) + new_grey_ids) or None
             yield {"status": "reanswering", "stage": stage_id}
-            answer_dict = await asyncio.to_thread(_answer, effective_paper_ids, effective_grey_ids)
+            answer_dict = await asyncio.to_thread(
+                _answer, effective_paper_ids, effective_grey_ids
+            )
 
         sufficient = found_here and not _is_weak_answer(answer_dict)
-        stage_summaries.append({
-            "stage": stage_id,
-            "label": stage["label"],
-            "papers": stage_papers,
-            "grey": stage_grey,
-            "sufficient": sufficient,
-        })
+        stage_summaries.append(
+            {
+                "stage": stage_id,
+                "label": stage["label"],
+                "papers": stage_papers,
+                "grey": stage_grey,
+                "sufficient": sufficient,
+            }
+        )
         if sufficient or is_last_stage:
             break
 

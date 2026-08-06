@@ -10,6 +10,8 @@ import type {
   ReactNode
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import {
   AlertTriangle,
   Bot,
@@ -68,8 +70,6 @@ import { noteProjectId, projectScopeLabel } from "../projectScope";
 import { useAppState } from "../state";
 import type {
   Answer,
-  AutoGreySource,
-  AutoHarvestStage,
   CitationLink,
   ClaimCheckResult,
   DeepResearchFinding,
@@ -113,7 +113,7 @@ import {
   turnContext,
   verificationSourcesFor
 } from "./AssistantPage";
-import type { CitationInsertExtras, CitationMeta } from "./AssistantPage";
+import type { AutoResearchProgress, AutoResearchStage, CitationInsertExtras, CitationMeta } from "./AssistantPage";
 import { ClarifyDialog } from "./ClarifyDialog";
 import { WorkspaceAssistantPane } from "./WorkspaceAssistantPane";
 import { NotesSurface } from "./NotesPage";
@@ -221,6 +221,12 @@ export function WorkspacePage() {
   const pageRef = useRef<HTMLElement | null>(null);
   const pdfCitationResizeFrameRef = useRef<number | null>(null);
   const greySourceResizeFrameRef = useRef<number | null>(null);
+  // Imperative refs für die 4 Workspace-Spalten-Panels, damit die Toolbar-Buttons
+  // und CollapsedPane-Öffner die Panels programmatisch einklappen/aufklappen können.
+  const navPanelRef = useRef<ImperativePanelHandle>(null);
+  const pdfPanelRef = useRef<ImperativePanelHandle>(null);
+  const assistantPanelRef = useRef<ImperativePanelHandle>(null);
+  const notesPanelRef = useRef<ImperativePanelHandle>(null);
 
   const [navigatorTab, setNavigatorTab] = useState<WorkspaceNavigatorTab>("notes");
   const [notesSnapshot, setNotesSnapshot] = useState<NotesSurfaceSnapshot>(EMPTY_NOTES_SNAPSHOT);
@@ -246,7 +252,7 @@ export function WorkspacePage() {
   const [ingestedPdfIds, setIngestedPdfIds] = useState<Set<string>>(new Set());
   const [ingestingPaperId, setIngestingPaperId] = useState<string | null>(null);
   const [selectedAnswerQuote, setSelectedAnswerQuote] = useState<{ paperId: string; evidenceIndex: number; text: string } | null>(null);
-  const [evidenceOpen, setEvidenceOpen] = useState(true);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [evidenceMode, setEvidenceMode] = useState("auto");
   const [verbosity, setVerbosity] = useState<"kurz" | "standard" | "ausführlich">("standard");
   const [conversationMode, setConversationMode] = useState<"followup" | "new">("followup");
@@ -267,14 +273,11 @@ export function WorkspacePage() {
   // Kritischer Modus (/kritisch): Antworten benennen Limitationen, Risiken und
   // Gegenbelege explizit (answer_style: "kritisch" im Backend).
   const [criticalMode, setCriticalMode] = useState(() => loadWorkspaceBoolean(scopedProjectId, "criticalMode", false));
-  const [autoProgress, setAutoProgress] = useState<{
-    phase: string;
-    /** Aktive Stufe der Eskalation (wissenschaftlich → vertrauenswürdig → ungeprüft). */
-    stage?: AutoHarvestStage;
-    relatedTopics: string[];
-    papers: { id: string; title: string }[];
-    grey: AutoGreySource[];
-  } | null>(null);
+  const [autoProgress, setAutoProgress] = useState<AutoResearchProgress | null>(null);
+  /** Wenn eine Auto-Recherche als Platzhalter-Turn (``type: "research"``) läuft,
+   *  merken wir uns dessen ID, um den Fortschritt in denselben Turn zu schreiben
+   *  und ihn beim ``done``-Event in-place in einen Antwort-Turn umzuwandeln. */
+  const autoResearchTurnRef = useRef<string | null>(null);
   const autoAbortRef = useRef<AbortController | null>(null);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
@@ -350,13 +353,6 @@ export function WorkspacePage() {
   const [notesOpen, setNotesOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "notesOpen", true));
   // Notes pane sub-view: the normal note editor, or the Parallel-Research "Ergebnisse" view.
   const [notesTab, setNotesTab] = useState<"note" | "results">("note");
-  const [navigatorWidth, setNavigatorWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", 180));
-  const [assistantWidth, setAssistantWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "assistantWidth.v3", 420));
-  const [pdfWidth, setPdfWidth] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfWidth.v3", 220));
-  // Live-Breite des Grid-Containers: die gespeicherten Pane-Breiten sind Wunschbreiten;
-  // wird das Fenster schmaler als ihre Summe, schrumpfen die effektiven Breiten mit,
-  // damit keine Pane (v.a. die Notizen) unerreichbar abgeschnitten wird.
-  const [containerWidth, setContainerWidth] = useState(0);
   const [pdfCitationListHeight, setPdfCitationListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", 220));
   const [greySourceListHeight, setGreySourceListHeight] = useState(() => loadWorkspaceNumber(scopedProjectId, "greySourceListHeight", 180));
   const [pdfTarget, setPdfTarget] = useState<WorkspacePdfTarget | null>(null);
@@ -518,12 +514,28 @@ export function WorkspacePage() {
     };
     if (conversationMode === "followup" && !newTurn && activeTurn) {
       const turnId = activeTurn.id;
+      const isResearchTurn = activeTurn.type === "research";
       setHistory((current) =>
         current.map((turn) => {
           if (turn.id !== turnId) {
             return turn;
           }
           const blocks = [...turnBlocks(turn), block];
+          // Platzhalter-Turn der Auto-Recherche wird in-place zu einem normalen
+          // chat-Turn: Antwort-Block dazu, research*-Felder raus (kein Duplikat,
+          // kein ghost-Refresh).
+          if (isResearchTurn) {
+            return {
+              ...turn,
+              type: "chat" as const,
+              answer: payload,
+              verification: mergeVerification(blocks.flatMap((item) => item.verification)),
+              blocks,
+              researchStatus: undefined,
+              researchProgress: undefined,
+              researchError: undefined
+            };
+          }
           return {
             ...turn,
             answer: payload,
@@ -533,7 +545,41 @@ export function WorkspacePage() {
         })
       );
       setActiveTurnId(turnId);
+      // Platzhalter-Turn-Referenz aufloesen: er ist jetzt ein chat-Turn.
+      if (autoResearchTurnRef.current === turnId) {
+        autoResearchTurnRef.current = null;
+      }
       openAssistantSource(sources[0] ?? verification[0] ?? null, 0);
+      return;
+    }
+    // Auto-Recherche mit newTurn=true hat einen Platzhalter-Turn (type:"research")
+    // angelegt. Beim done-Event wandeln wir ihn in-place um, statt einen zweiten
+    // Turn zu erzeugen — sonst waere der Fortschritts-Turn ein Ghost und die Antwort
+    // ein separater Eintrag.
+    const placeholderId = autoResearchTurnRef.current;
+    if (placeholderId) {
+      setHistory((current) =>
+        current.map((turn) => {
+          if (turn.id !== placeholderId) {
+            return turn;
+          }
+          return {
+            ...turn,
+            type: "chat" as const,
+            question: payload.question,
+            answer: payload,
+            verification: sources,
+            createdAt: block.createdAt,
+            blocks: [block],
+            researchStatus: undefined,
+            researchProgress: undefined,
+            researchError: undefined
+          };
+        })
+      );
+      setActiveTurnId(placeholderId);
+      autoResearchTurnRef.current = null;
+      openAssistantSource(sources[0] ?? null, 0);
       return;
     }
     const turn: AssistantTurn = {
@@ -561,7 +607,94 @@ export function WorkspacePage() {
     const controller = new AbortController();
     autoAbortRef.current = controller;
     const greyIds = info.greySourceIds;
-    setAutoProgress({ phase: "Lokale Quellen werden geprüft…", relatedTopics: [], papers: [], grey: [] });
+    const researchQuestion = value;
+    const startedAt = Date.now();
+
+    // Platzhalter-Turn bei newTurn=true: sofort sichtbar, damit eine abgebrochene
+    // oder fehlerhafte Recherche nicht als "Keine Antwort" verschwindet (Bug 3).
+    // Der Turn traegt type:"research" und wird beim done-Event in-place zu einem
+    // chat-Turn umgewandelt. Bei followup (newTurn=false) bleibt der bisherige
+    // Block-anhaengen-Modus unangetastet.
+    let placeholderTurnId: string | null = null;
+    if (opts.newTurn) {
+      placeholderTurnId = `turn_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      autoResearchTurnRef.current = placeholderTurnId;
+      const initialProgress: AutoResearchProgress = {
+        phases: [
+          {
+            id: `stage_${Date.now()}_local`,
+            label: "Lokale Quellen werden geprüft …",
+            scope: "main",
+            status: "active",
+            papers: [],
+            grey: [],
+            startedAt
+          }
+        ],
+        currentPhase: "Lokale Quellen werden geprüft …",
+        question: researchQuestion,
+        startedAt
+      };
+      setAutoProgress(initialProgress);
+      setHistory((current) => [
+        ...current.slice(-24),
+        {
+          id: placeholderTurnId as string,
+          question: researchQuestion,
+          answer: {} as Answer,
+          verification: [],
+          createdAt: new Date(startedAt).toISOString(),
+          type: "research" as const,
+          researchStatus: "running" as const,
+          researchProgress: initialProgress
+        }
+      ]);
+      setActiveTurnId(placeholderTurnId);
+    } else {
+      setAutoProgress({
+        phases: [
+          {
+            id: `stage_${Date.now()}_local`,
+            label: "Lokale Quellen werden geprüft …",
+            scope: "main",
+            status: "active",
+            papers: [],
+            grey: [],
+            startedAt
+          }
+        ],
+        currentPhase: "Lokale Quellen werden geprüft …",
+        question: researchQuestion,
+        startedAt
+      });
+    }
+
+    // Setzt researchProgress sowohl im Live-State als auch im Platzhalter-Turn,
+    // damit ein Reload waehrend der laufenden Recherche den Fortschritt restauriert.
+    const applyProgress = (updater: (prev: AutoResearchProgress | null) => AutoResearchProgress | null) => {
+      setAutoProgress((prev) => {
+        const next = updater(prev);
+        const turnId = autoResearchTurnRef.current;
+        if (turnId && next) {
+          setHistory((cur) => cur.map((t) => (t.id === turnId ? { ...t, researchProgress: next } : t)));
+        }
+        return next;
+      });
+    };
+
+    const markResearchError = (message: string) => {
+      const turnId = autoResearchTurnRef.current;
+      if (turnId) {
+        setHistory((cur) =>
+          cur.map((t) =>
+            t.id === turnId
+              ? { ...t, researchStatus: "error" as const, researchError: message }
+              : t
+          )
+        );
+      }
+    };
+
     const actionId = logAction("Auto-Recherche", `Recherchiere zu „${value}" …`, "pending");
     try {
       await streamAutoAnswer(
@@ -585,50 +718,130 @@ export function WorkspacePage() {
         (event) => {
           switch (event.status) {
             case "answer":
-              setAutoProgress((p) => (p ? { ...p, phase: "Lokale Antwort geprüft …" } : p));
+              applyProgress((p) => (p ? { ...p, currentPhase: "Lokale Antwort geprüft …" } : p));
               break;
             case "planning":
-              setAutoProgress((p) => ({
-                phase: "Verwandte Themen werden abgeleitet …",
-                relatedTopics: event.related_topics ?? [],
-                papers: p?.papers ?? [],
-                grey: p?.grey ?? []
-              }));
+              applyProgress((p) => {
+                if (!p) {
+                  return p;
+                }
+                const planningStage: AutoResearchStage = {
+                  id: `stage_${Date.now()}_planning`,
+                  label: "Verwandte Themen werden abgeleitet …",
+                  scope: "planning",
+                  status: "active",
+                  papers: [],
+                  grey: [],
+                  startedAt: Date.now()
+                };
+                // Vorherige active → done, neue planning-Stage anhaengen.
+                const phases = p.phases.map((s) => (s.status === "active" ? { ...s, status: "done" as const, finishedAt: Date.now() } : s));
+                return { ...p, phases: [...phases, planningStage], currentPhase: planningStage.label };
+              });
               break;
             case "harvesting": {
               const stageLabel = event.stage_label ?? "Quellen";
-              setAutoProgress((p) => ({
-                phase:
-                  event.scope === "main"
+              const evtStage = event.stage;
+              const evtScope = event.scope;
+              const evtTopic = event.topic;
+              applyProgress((p) => {
+                if (!p) {
+                  return p;
+                }
+                const stageKey = evtStage && evtScope === "related" && evtTopic ? `${evtStage}:${evtTopic}` : evtStage ? `${evtStage}:main` : "main";
+                const label =
+                  evtScope === "main"
                     ? `${stageLabel} zur Frage werden geladen …`
-                    : `${stageLabel}: verwandtes Thema „${event.topic}" …`,
-                stage: event.stage ?? p?.stage,
-                relatedTopics: p?.relatedTopics ?? [],
-                papers: [...(p?.papers ?? []), ...(event.papers ?? [])],
-                grey: [...(p?.grey ?? []), ...(event.grey ?? [])]
-              }));
+                    : `${stageLabel}: verwandtes Thema „${evtTopic ?? ""}" …`;
+                let phases = p.phases.slice();
+                let existing = phases.find((s) => s.id === stageKey);
+                if (!existing) {
+                  existing = {
+                    id: stageKey,
+                    label,
+                    scope: evtScope === "related" ? "related" : "main",
+                    topic: evtTopic,
+                    status: "active",
+                    papers: [],
+                    grey: [],
+                    startedAt: Date.now()
+                  };
+                  phases.push(existing);
+                }
+                // Neue papers/grey anhängen (Dedup später via UI oder via id-Set).
+                phases = phases.map((s) => {
+                  if (s.id !== stageKey) {
+                    return s;
+                  }
+                  const seenPaper = new Set(s.papers.map((pp) => pp.id));
+                  const seenGrey = new Set(s.grey.map((gg) => gg.id));
+                  return {
+                    ...s,
+                    papers: [...s.papers, ...(event.papers ?? []).filter((pp) => !seenPaper.has(pp.id))],
+                    grey: [...s.grey, ...(event.grey ?? []).filter((gg) => !seenGrey.has(gg.id))]
+                  };
+                });
+                return { ...p, phases, currentPhase: label };
+              });
               break;
             }
             case "reanswering":
-              setAutoProgress((p) => (p ? { ...p, phase: "Antwort wird mit den neuen Quellen erstellt …", stage: event.stage ?? p.stage } : p));
+              applyProgress((p) => {
+                if (!p) {
+                  return p;
+                }
+                const phases = p.phases.map((s) => (s.status === "active" ? { ...s, status: "done" as const, finishedAt: Date.now() } : s));
+                const reansweringStage: AutoResearchStage = {
+                  id: `stage_${Date.now()}_reanswering`,
+                  label: "Antwort wird mit den neuen Quellen erstellt …",
+                  scope: "reanswering",
+                  status: "active",
+                  papers: [],
+                  grey: [],
+                  startedAt: Date.now()
+                };
+                return { ...p, phases: [...phases, reansweringStage], currentPhase: reansweringStage.label };
+              });
               break;
             case "harvest_error":
+              applyProgress((p) => {
+                if (!p) {
+                  return p;
+                }
+                const phases = p.phases.map((s) => (s.status === "active" ? { ...s, status: "error" as const, error: event.error, finishedAt: Date.now() } : s));
+                return { ...p, phases };
+              });
               logAction("Auto-Recherche", event.error ?? "Ein Rechercheschritt ist fehlgeschlagen.", "error");
               break;
             case "error":
+              applyProgress((p) => {
+                if (!p) {
+                  return p;
+                }
+                const phases = p.phases.map((s) => (s.status === "active" ? { ...s, status: "error" as const, error: event.error, finishedAt: Date.now() } : s));
+                return { ...p, phases };
+              });
+              markResearchError(event.error ?? "Recherche fehlgeschlagen.");
               logAction("Auto-Recherche", event.error ?? "Recherche fehlgeschlagen.", "error");
               break;
             case "done": {
               const summary = event.harvest_summary;
+              applyProgress((p) => {
+                if (!p) {
+                  return p;
+                }
+                const phases = p.phases.map((s) => (s.status === "active" ? { ...s, status: "done" as const, finishedAt: Date.now() } : s));
+                return { ...p, phases, currentPhase: "Abgeschlossen" };
+              });
               if (event.answer) {
                 void commitAnswerTurn(event.answer, opts.newTurn);
+              } else {
+                // done ohne Antwort: Platzhalter-Turn als Fehler markieren, damit er
+                // nicht als "Keine Antwort" verschwindet (Bug 3).
+                markResearchError("Recherche abgeschlossen, aber keine Antwort erhalten.");
               }
-              // Toast darf der Antwort nicht widersprechen: meldet die finale Antwort selbst
-              // noch eine Evidenz-Lücke, nie "reichte aus" behaupten.
-              const gapRemains = answerSuggestsWebSearch(event.answer);
+              const gapRemains = event.answer ? answerSuggestsWebSearch(event.answer) : false;
               const addedCount = (summary?.papers.length ?? 0) + (summary?.grey.length ?? 0);
-              // Welche Stufe die Antwort getragen hat, ist die wichtigste Information:
-              // "reichte wissenschaftlich" vs. "nur ungeprüftes Web".
               const lastStage = summary?.stages?.[summary.stages.length - 1];
               const stageNote = lastStage ? ` Zuletzt: ${lastStage.label}.` : "";
               updateAction(actionId, {
@@ -653,8 +866,17 @@ export function WorkspacePage() {
         controller.signal
       );
     } catch (error) {
-      updateAction(actionId, { status: "error", detail: error instanceof Error ? error.message : String(error) });
+      const aborted = error instanceof DOMException && error.name === "AbortError";
+      const message = aborted ? "Recherche abgebrochen." : error instanceof Error ? error.message : String(error);
+      if (aborted) {
+        markResearchError("Recherche abgebrochen.");
+      } else {
+        markResearchError(message);
+      }
+      updateAction(actionId, { status: "error", detail: message });
     } finally {
+      // Live-State loeschen; der Platzhalter-Turn bleibt mit seinem researchStatus
+      // in der History sichtbar (running bis done-Event umwandelt, sonst error).
       setAutoProgress(null);
       if (autoAbortRef.current === controller) {
         autoAbortRef.current = null;
@@ -1050,6 +1272,20 @@ export function WorkspacePage() {
             setParallelMode(true);
             parallelSessionIdRef.current = activeTurn.id;
             hydrateParallelSessionFromServer(activeTurn.id);
+          } else if (activeTurn?.type === "research") {
+            // Auto-Recherche-Platzhalter-Turn restaurieren. Ein laufender Turn
+            // (researchStatus === "running") kann nach Reload seine SSE-Verbindung
+            // nicht fortsetzen → autoProgress bleibt null, damit die Pane den
+            // "Verbindung abgebrochen"-Hinweis + Retry-Button zeigt (statt ewig
+            // "läuft …"). Ein fehlerhafter oder abgeschlossener Turn restauriert
+            // nur den Platzhalter (AutoResearchProgress + Fehler-Box) ohne Live-
+            // Block, da autoProgress null ist.
+            autoResearchTurnRef.current = activeTurn.id;
+            if (activeTurn.researchStatus === "running") {
+              setAutoProgress(null);
+            } else if (activeTurn.researchProgress) {
+              setAutoProgress(null);
+            }
           }
         }
       });
@@ -1072,22 +1308,6 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "assistantOpen", assistantOpen), [assistantOpen, scopedProjectId]);
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "pdfOpen", pdfOpen), [pdfOpen, scopedProjectId]);
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "notesOpen", notesOpen), [notesOpen, scopedProjectId]);
-  useEffect(() => saveWorkspaceNumber(scopedProjectId, "navigatorWidth.v3", navigatorWidth), [navigatorWidth, scopedProjectId]);
-  useEffect(() => saveWorkspaceNumber(scopedProjectId, "assistantWidth.v3", assistantWidth), [assistantWidth, scopedProjectId]);
-  useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfWidth.v3", pdfWidth), [pdfWidth, scopedProjectId]);
-  // Containerbreite live verfolgen, damit die effektiven Pane-Breiten bei Fenster-Resize
-  // nachziehen (siehe effectivePaneWidths). Ohne das schneidet ein schmaleres Fenster die
-  // rechte Pane ab (overflow: hidden auf .workspace-page) und macht sie unbedienbar.
-  useEffect(() => {
-    const page = pageRef.current;
-    if (!page) return;
-    const update = () => setContainerWidth(page.clientWidth);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(page);
-    return () => observer.disconnect();
-  }, []);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "pdfCitationListHeight", pdfCitationListHeight), [pdfCitationListHeight, scopedProjectId]);
   useEffect(() => saveWorkspaceNumber(scopedProjectId, "greySourceListHeight", greySourceListHeight), [greySourceListHeight, scopedProjectId]);
 
@@ -2233,9 +2453,12 @@ export function WorkspacePage() {
   }
 
   function handleUnresolvedCitationClick(citationId: string) {
+    // Strip a trailing "#N" evidence-binding fragment (e.g. crossref:doi#48) so lookups against
+    // stored paper ids — which never carry the fragment — can succeed.
+    const cleanCitationId = citationId.split("#", 1)[0].trim() || citationId;
     // Grey source citations from the answer pipeline use "grey::<id>" format
-    if (isGreySourcePaperId(citationId)) {
-      const greyId = citationId.slice(6);
+    if (isGreySourcePaperId(cleanCitationId)) {
+      const greyId = cleanCitationId.slice(6);
       const source = greySources.find((s) => s.id === greyId);
       if (source) {
         openGreySource(source);
@@ -2245,7 +2468,7 @@ export function WorkspacePage() {
     // Try to find the paper in the project papers list
     const found = pdfPapers.find((p) => {
       const pid = workspacePaperId(normalizeWorkspacePaper(p));
-      return pid && sameCitation(pid, citationId);
+      return pid && sameCitation(pid, cleanCitationId);
     });
     if (found) {
       const normalized = normalizeWorkspacePaper(found);
@@ -2253,7 +2476,7 @@ export function WorkspacePage() {
       setPdfOpen(true);
       setNavigatorTab("pdfs");
     } else {
-      setPdfTarget({ kind: "missing", paperId: citationId });
+      setPdfTarget({ kind: "missing", paperId: cleanCitationId });
       setPdfOpen(true);
       setNavigatorTab("pdfs");
     }
@@ -3065,58 +3288,6 @@ export function WorkspacePage() {
     openAssistantSource(sources[0] ?? null, 0);
   }
 
-  // Flüssiges Spalten-Resize wie in der Werkstatt: während des Drags wird das Grid
-  // direkt am DOM aktualisiert (kein React-Rerender pro Frame), der Clamp ist dynamisch
-  // gegen die Containerbreite statt eines festen Pixel-Maximums; State erst bei pointerup.
-  function startColumnResize(event: ReactPointerEvent<HTMLDivElement>, column: "nav" | "pdf" | "assistant") {
-    event.preventDefault();
-    const page = pageRef.current;
-    if (!page) return;
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture ist optional; window-Listener übernehmen ohnehin.
-    }
-    const startX = event.clientX;
-    const widths = {
-      nav: navigatorOpen ? navigatorWidth : 46,
-      pdf: centerView !== "pdf" || pdfOpen ? pdfWidth : 46,
-      assistant: assistantOpen ? assistantWidth : 46,
-    };
-    const startWidth = widths[column];
-    const minNotes = notesOpen ? 80 : 46;
-    const othersTotal = (Object.keys(widths) as Array<keyof typeof widths>)
-      .filter((key) => key !== column)
-      .reduce((sum, key) => sum + widths[key], 0);
-    const min = 110;
-    const max = Math.max(min, page.clientWidth - 3 * 6 - othersTotal - minNotes);
-    const notesTemplate = notesOpen ? "minmax(80px, 1fr)" : "46px";
-    let next = startWidth;
-    let frame: number | null = null;
-    const apply = () => {
-      frame = null;
-      const cols = { ...widths, [column]: next };
-      page.style.gridTemplateColumns = `${cols.nav}px 6px ${cols.pdf}px 6px ${cols.assistant}px 6px ${notesTemplate}`;
-    };
-    const move = (moveEvent: globalThis.PointerEvent) => {
-      next = Math.min(max, Math.max(min, startWidth + moveEvent.clientX - startX));
-      if (frame === null) frame = window.requestAnimationFrame(apply);
-    };
-    const setter = column === "nav" ? setNavigatorWidth : column === "pdf" ? setPdfWidth : setAssistantWidth;
-    const stop = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      setter(next);
-    };
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-  }
-
   function startVerticalResize(
     event: ReactPointerEvent<HTMLDivElement>,
     value: number,
@@ -3210,206 +3381,199 @@ export function WorkspacePage() {
     : pdfTarget?.kind === "missing"
       ? "Diese Quelle wurde im Antworttext zitiert, ist aber nicht als PDF im Projekt vorhanden. Sie können das Paper importieren oder als Graue Quelle hinzufügen."
       : undefined;
-  // Wunschbreiten (aus Drag/localStorage) → effektive Breiten, die bei zu schmalem
-  // Container proportional schrumpfen, sodass nav+pdf+assistant+Lücken+Notizen-Minimum
-  // in die Containerbreite passen. Verhindert das Abschneiden der rechten Pane.
-  const pdfExpanded = centerView !== "pdf" || pdfOpen;
-  const effective = useMemo(() => {
-    const navW = navigatorOpen ? navigatorWidth : 46;
-    const pdfW = pdfExpanded ? pdfWidth : 46;
-    const assistW = assistantOpen ? assistantWidth : 46;
-    if (containerWidth <= 0) return { nav: navW, pdf: pdfW, assistant: assistW };
-    const minNotes = notesOpen ? 80 : 46;
-    const needed = navW + pdfW + assistW + 3 * 6 + minNotes;
-    if (needed <= containerWidth) return { nav: navW, pdf: pdfW, assistant: assistW };
-    const MIN_PANE = 90;
-    const shrinkable = [
-      { key: "nav" as const, open: navigatorOpen, w: navW },
-      { key: "pdf" as const, open: pdfExpanded, w: pdfW },
-      { key: "assistant" as const, open: assistantOpen, w: assistW },
-    ].filter((item) => item.open && item.w > MIN_PANE);
-    const headroom = shrinkable.reduce((sum, item) => sum + (item.w - MIN_PANE), 0);
-    const result = { nav: navW, pdf: pdfW, assistant: assistW };
-    if (headroom > 0) {
-      const ratio = Math.min(1, (needed - containerWidth) / headroom);
-      for (const item of shrinkable) {
-        result[item.key] = Math.round(item.w - (item.w - MIN_PANE) * ratio);
-      }
-    }
-    return result;
-  }, [containerWidth, navigatorOpen, pdfExpanded, assistantOpen, notesOpen, navigatorWidth, pdfWidth, assistantWidth]);
-
-  const navColumn = navigatorOpen ? `${effective.nav}px` : "46px";
-  const assistantColumn = assistantOpen ? `${effective.assistant}px` : "46px";
-  const pdfColumn = pdfExpanded ? `${effective.pdf}px` : "46px";
-  const notesColumn = notesOpen ? "minmax(80px, 1fr)" : "46px";
 
   return (
     <section
       ref={pageRef}
       className="workspace-page"
-      style={{
-        gridTemplateColumns: `${navColumn} 6px ${pdfColumn} 6px ${assistantColumn} 6px ${notesColumn}`
-      }}
     >
-      {navigatorOpen ? (
-        <aside className="workspace-nav-pane">
-          <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => setNavigatorOpen(false)} collapseSide="left" />
-          <div className="segmented workspace-nav-tabs" aria-label="Arbeitsplatz Navigation">
-            <button type="button" className={centerView === "pdf" && navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
-              <NotebookPen size={15} />
-              <span>Notizen</span>
-              <strong>{notesSnapshot.notes.length}</strong>
-            </button>
-            <button type="button" className={centerView === "pdf" && navigatorTab === "pdfs" ? "active" : ""} onClick={() => { setNavigatorTab("pdfs"); setCenterView("pdf"); }}>
-              <FileText size={15} />
-              <span>PDFs</span>
-              <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
-            </button>
-            <button type="button" className={`workspace-nav-tab--wide ${centerView === "pdf" && navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => { setNavigatorTab("assistantSessions"); setCenterView("pdf"); }}>
-              <MessageSquareText size={15} />
-              <span>KI-Sessions</span>
-              <strong>{history.length}</strong>
-            </button>
-            <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
-              <FlaskConical size={15} />
-              <span>Analyse</span>
-            </button>
-            <button type="button" className={centerView === "datasets" ? "active" : ""} title="Datensätze aus freien Registries suchen und sammeln" onClick={() => setCenterView("datasets")}>
-              <Database size={15} />
-              <span>Daten</span>
-            </button>
-          </div>
-          {sessionLoadFailed ? (
-            <div className="status-strip status-strip--error">
-              <strong>Sitzung nicht geladen</strong>
-              <span>Backend nicht erreichbar — es wird nichts gespeichert, bis die Verbindung steht.</span>
-            </div>
-          ) : null}
-          <WorkspaceNavigatorBody
-            tab={navigatorTab}
-            query={navigatorQuery}
-            setQuery={setNavigatorQuery}
-            notes={visibleNotes}
-            notesLoading={notesSnapshot.notesLoading}
-            activeNoteId={notesSnapshot.activeNoteId}
-            citations={notesSnapshot.citationRows}
-            selectedCitation={notesSnapshot.selectedCitation}
-            papers={pdfPapers}
-            papersLoading={papersQuery.isLoading}
-            greySources={greySources}
-            primaryPaperId={primaryPaperId}
-            pdfTarget={pdfTarget}
-            activeAssistantSource={selectedSource}
-            activeAssistantEvidenceIndex={activeEvidenceIndex}
-            selectedPaperIds={selectedPaperIds}
-            pdfCitationListHeight={pdfCitationListHeight}
-            sessions={history}
-            activeSessionId={activeTurnId}
-            sessionProjectId={scopedProjectId}
-            onSessionRestored={() => setSessionReloadNonce((current) => current + 1)}
-            onCreateNote={() => notesActionsRef.current?.createNote()}
-            onSelectNote={(noteId) => {
-              setControlledNoteId(noteId);
-              notesActionsRef.current?.selectNote(noteId);
-              setNavigatorTab("notes");
-            }}
-            onOpenCitation={(citation) => {
-              if (notesActionsRef.current) {
-                setRequestedCitationId("");
-                notesActionsRef.current.openCitation(citation);
-              } else {
-                setRequestedCitationId(citation.id);
-              }
-              setPdfTarget({ kind: "noteCitation", citation });
-              setPdfOpen(true);
-            }}
-            onOpenPaper={(paper) => {
-              setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(paper) });
-              setPdfOpen(true);
-            }}
-            onOpenGrey={openGreySource}
-            onToggleScopedPaper={toggleScopedPaper}
-            selectedGreyIds={selectedGreyIds}
-            onToggleScopedGrey={toggleScopedGrey}
-            greySourceListHeight={greySourceListHeight}
-            onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90)}
-            onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80)}
-            onOpenAssistantPdf={openSelectedAssistantPdf}
-            onActivateSession={activateAssistantTurn}
-            onDeleteSession={deleteAssistantTurn}
-            onDeleteNote={(noteId) => notesActionsRef.current?.deleteNote(noteId)}
-            isRealProject={isRealProject}
-            onDeletePaper={(paperId) => removePaperMutation.mutate(paperId)}
-            onDeleteGrey={(greyId) => deleteGreyMutation.mutate(greyId)}
-            onSetPrimary={(paperId) => setPrimaryMutation.mutate(paperId)}
-            onDeleteCitation={(citation) => {
-              const noteId = notesSnapshot.activeNoteId || controlledNoteId;
-              if (noteId) {
-                deleteCitationMutation.mutate({ noteId, citationId: citation.id });
-              }
-            }}
-          />
-        </aside>
-      ) : (
-        <CollapsedPane label="Navigator" icon={<PanelLeftOpen size={17} />} onOpen={() => setNavigatorOpen(true)} />
-      )}
-      <div
-        className={`split-handle ${navigatorOpen ? "" : "split-handle--idle"}`}
-        role="separator"
-        aria-label="Navigator Breite anpassen"
-        onPointerDown={navigatorOpen ? (event) => startColumnResize(event, "nav") : undefined}
-      />
+      <PanelGroup direction="horizontal" autoSaveId="ws-cols" className="wk-group">
+        <Panel
+          id="ws-nav"
+          order={1}
+          defaultSize={18}
+          minSize={8}
+          collapsedSize={2}
+          collapsible
+          ref={navPanelRef}
+          className="wk-pane-slot"
+          onCollapse={() => setNavigatorOpen(false)}
+          onExpand={() => setNavigatorOpen(true)}
+        >
+          {navigatorOpen ? (
+            <aside className="workspace-nav-pane">
+              <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => navPanelRef.current?.collapse()} collapseSide="left" />
+              <div className="segmented workspace-nav-tabs" aria-label="Arbeitsplatz Navigation">
+                <button type="button" className={centerView === "pdf" && navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
+                  <NotebookPen size={15} />
+                  <span>Notizen</span>
+                  <strong>{notesSnapshot.notes.length}</strong>
+                </button>
+                <button type="button" className={centerView === "pdf" && navigatorTab === "pdfs" ? "active" : ""} onClick={() => { setNavigatorTab("pdfs"); setCenterView("pdf"); }}>
+                  <FileText size={15} />
+                  <span>PDFs</span>
+                  <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
+                </button>
+                <button type="button" className={`workspace-nav-tab--wide ${centerView === "pdf" && navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => { setNavigatorTab("assistantSessions"); setCenterView("pdf"); }}>
+                  <MessageSquareText size={15} />
+                  <span>KI-Sessions</span>
+                  <strong>{history.length}</strong>
+                </button>
+                <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
+                  <FlaskConical size={15} />
+                  <span>Analyse</span>
+                </button>
+                <button type="button" className={centerView === "datasets" ? "active" : ""} title="Datensätze aus freien Registries suchen und sammeln" onClick={() => setCenterView("datasets")}>
+                  <Database size={15} />
+                  <span>Daten</span>
+                </button>
+              </div>
+              {sessionLoadFailed ? (
+                <div className="status-strip status-strip--error">
+                  <strong>Sitzung nicht geladen</strong>
+                  <span>Backend nicht erreichbar — es wird nichts gespeichert, bis die Verbindung steht.</span>
+                </div>
+              ) : null}
+              <WorkspaceNavigatorBody
+                tab={navigatorTab}
+                query={navigatorQuery}
+                setQuery={setNavigatorQuery}
+                notes={visibleNotes}
+                notesLoading={notesSnapshot.notesLoading}
+                activeNoteId={notesSnapshot.activeNoteId}
+                citations={notesSnapshot.citationRows}
+                selectedCitation={notesSnapshot.selectedCitation}
+                papers={pdfPapers}
+                papersLoading={papersQuery.isLoading}
+                greySources={greySources}
+                primaryPaperId={primaryPaperId}
+                pdfTarget={pdfTarget}
+                activeAssistantSource={selectedSource}
+                activeAssistantEvidenceIndex={activeEvidenceIndex}
+                selectedPaperIds={selectedPaperIds}
+                pdfCitationListHeight={pdfCitationListHeight}
+                sessions={history}
+                activeSessionId={activeTurnId}
+                sessionProjectId={scopedProjectId}
+                onSessionRestored={() => setSessionReloadNonce((current) => current + 1)}
+                onCreateNote={() => notesActionsRef.current?.createNote()}
+                onSelectNote={(noteId) => {
+                  setControlledNoteId(noteId);
+                  notesActionsRef.current?.selectNote(noteId);
+                  setNavigatorTab("notes");
+                }}
+                onOpenCitation={(citation) => {
+                  if (notesActionsRef.current) {
+                    setRequestedCitationId("");
+                    notesActionsRef.current.openCitation(citation);
+                  } else {
+                    setRequestedCitationId(citation.id);
+                  }
+                  setPdfTarget({ kind: "noteCitation", citation });
+                  setPdfOpen(true);
+                }}
+                onOpenPaper={(paper) => {
+                  setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(paper) });
+                  setPdfOpen(true);
+                }}
+                onOpenGrey={openGreySource}
+                onToggleScopedPaper={toggleScopedPaper}
+                selectedGreyIds={selectedGreyIds}
+                onToggleScopedGrey={toggleScopedGrey}
+                greySourceListHeight={greySourceListHeight}
+                onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90)}
+                onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80)}
+                onOpenAssistantPdf={openSelectedAssistantPdf}
+                onActivateSession={activateAssistantTurn}
+                onDeleteSession={deleteAssistantTurn}
+                onDeleteNote={(noteId) => notesActionsRef.current?.deleteNote(noteId)}
+                isRealProject={isRealProject}
+                onDeletePaper={(paperId) => removePaperMutation.mutate(paperId)}
+                onDeleteGrey={(greyId) => deleteGreyMutation.mutate(greyId)}
+                onSetPrimary={(paperId) => setPrimaryMutation.mutate(paperId)}
+                onDeleteCitation={(citation) => {
+                  const noteId = notesSnapshot.activeNoteId || controlledNoteId;
+                  if (noteId) {
+                    deleteCitationMutation.mutate({ noteId, citationId: citation.id });
+                  }
+                }}
+              />
+            </aside>
+          ) : (
+            <CollapsedPane label="Navigator" icon={<PanelLeftOpen size={17} />} onOpen={() => navPanelRef.current?.expand()} />
+          )}
+        </Panel>
+        <PanelResizeHandle className="wk-resize wk-resize--v" />
 
-      {centerView === "analysis" ? (
-        <AnalysisPanel
-          projectId={scopedProjectId}
-          provider={provider}
-          model={model}
-          paperIds={selectedPaperIds}
-          onCollapse={() => setCenterView("pdf")}
-        />
-      ) : centerView === "datasets" ? (
-        <DatasetsPanel projectId={scopedProjectId} onCollapse={() => setCenterView("pdf")} />
-      ) : pdfOpen ? (
-        pdfTarget?.kind === "grey" ? (
-          <GreySourceView
-            source={pdfTarget.source}
-            onCollapse={() => setPdfOpen(false)}
-            onInsert={(text) => appendGreyQuote(text, pdfTarget.source)}
-            onInsertPreview={(text) => previewGreyQuote(text, pdfTarget.source)}
-            onInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
-          />
-        ) : (
-          <PdfPane
-            url={pdfView.url}
-            title={pdfView.title}
-            metaPaperId={pdfMetaPaperId}
-            unavailableMessage={pdfUnavailableMessage}
-            evidences={pdfView.evidences}
-            activeEvidenceIndex={pdfView.activeEvidenceIndex}
-            onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
-            onCollapse={() => setPdfOpen(false)}
-            onIngestMissing={pdfTarget?.kind === "missing" ? ingestMissingCited : undefined}
-            ingestPending={pdfTarget?.kind === "missing" ? ingestingPaperId === pdfTarget.paperId : false}
-            ingestStatus={pdfTarget?.kind === "missing" ? sourceIngestStatus : undefined}
-          />
-        )
-      ) : (
-        <CollapsedPane label="PDF" icon={<PanelRightOpen size={17} />} onOpen={() => setPdfOpen(true)} />
-      )}
-      <div
-        className={`split-handle ${pdfOpen ? "" : "split-handle--idle"}`}
-        role="separator"
-        aria-label="PDF Breite anpassen"
-        onPointerDown={pdfOpen ? (event) => startColumnResize(event, "pdf") : undefined}
-      />
+        <Panel
+          id="ws-pdf"
+          order={2}
+          defaultSize={32}
+          minSize={12}
+          collapsedSize={2}
+          collapsible
+          ref={pdfPanelRef}
+          className="wk-pane-slot"
+          onCollapse={() => setPdfOpen(false)}
+          onExpand={() => setPdfOpen(true)}
+        >
+          {centerView === "analysis" ? (
+            <AnalysisPanel
+              projectId={scopedProjectId}
+              provider={provider}
+              model={model}
+              paperIds={selectedPaperIds}
+              onCollapse={() => setCenterView("pdf")}
+            />
+          ) : centerView === "datasets" ? (
+            <DatasetsPanel projectId={scopedProjectId} onCollapse={() => setCenterView("pdf")} />
+          ) : pdfOpen ? (
+            pdfTarget?.kind === "grey" ? (
+              <GreySourceView
+                source={pdfTarget.source}
+                onCollapse={() => pdfPanelRef.current?.collapse()}
+                onInsert={(text) => appendGreyQuote(text, pdfTarget.source)}
+                onInsertPreview={(text) => previewGreyQuote(text, pdfTarget.source)}
+                onInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
+              />
+            ) : (
+              <PdfPane
+                url={pdfView.url}
+                title={pdfView.title}
+                metaPaperId={pdfMetaPaperId}
+                unavailableMessage={pdfUnavailableMessage}
+                evidences={pdfView.evidences}
+                activeEvidenceIndex={pdfView.activeEvidenceIndex}
+                onActiveEvidenceChange={pdfView.onActiveEvidenceChange}
+                onCollapse={() => pdfPanelRef.current?.collapse()}
+                onIngestMissing={pdfTarget?.kind === "missing" ? ingestMissingCited : undefined}
+                ingestPending={pdfTarget?.kind === "missing" ? ingestingPaperId === pdfTarget.paperId : false}
+                ingestStatus={pdfTarget?.kind === "missing" ? sourceIngestStatus : undefined}
+              />
+            )
+          ) : (
+            <CollapsedPane label="PDF" icon={<PanelRightOpen size={17} />} onOpen={() => pdfPanelRef.current?.expand()} />
+          )}
+        </Panel>
+        <PanelResizeHandle className="wk-resize wk-resize--v" />
 
-      {assistantOpen ? (
+        <Panel
+          id="ws-assistant"
+          order={3}
+          defaultSize={32}
+          minSize={12}
+          collapsedSize={2}
+          collapsible
+          ref={assistantPanelRef}
+          className="wk-pane-slot"
+          onCollapse={() => setAssistantOpen(false)}
+          onExpand={() => setAssistantOpen(true)}
+        >
+          {assistantOpen ? (
         <section className={`workspace-assistant-pane ${assistantMode === "notes" ? "workspace-assistant-pane--notes" : ""}`}>
           <PaneHeading
             title="Assistant"
-            onCollapse={() => setAssistantOpen(false)}
+            onCollapse={() => assistantPanelRef.current?.collapse()}
             collapseSide="left"
             status={answerMutation.isPending || citationVerifyPending ? "running" : answer?.generation_error ? "warning" : "idle"}
             actions={
@@ -3634,15 +3798,23 @@ export function WorkspacePage() {
           )}
         </section>
       ) : (
-        <CollapsedPane label="Assistant" icon={<PanelLeftOpen size={17} />} onOpen={() => setAssistantOpen(true)} />
+        <CollapsedPane label="Assistant" icon={<PanelLeftOpen size={17} />} onOpen={() => assistantPanelRef.current?.expand()} />
       )}
-      <div
-        className={`split-handle ${assistantOpen ? "" : "split-handle--idle"}`}
-        role="separator"
-        aria-label="Assistant Breite anpassen"
-        onPointerDown={assistantOpen ? (event) => startColumnResize(event, "assistant") : undefined}
-      />
+        </Panel>
+        <PanelResizeHandle className="wk-resize wk-resize--v" />
 
+        <Panel
+          id="ws-notes"
+          order={4}
+          defaultSize={18}
+          minSize={8}
+          collapsedSize={2}
+          collapsible
+          ref={notesPanelRef}
+          className="wk-pane-slot"
+          onCollapse={() => setNotesOpen(false)}
+          onExpand={() => setNotesOpen(true)}
+        >
       {notesOpen ? (
         <section className="workspace-notes-pane">
           <div className="workspace-notes-topline">
@@ -3661,7 +3833,7 @@ export function WorkspacePage() {
                   </button>
                 </div>
               ) : null}
-              <button className="icon-button" type="button" aria-label="Notizen einklappen" onClick={() => setNotesOpen(false)}>
+              <button className="icon-button" type="button" aria-label="Notizen einklappen" onClick={() => notesPanelRef.current?.collapse()}>
                 <PanelRightClose size={17} />
               </button>
             </div>
@@ -3699,8 +3871,10 @@ export function WorkspacePage() {
           ) : null}
         </section>
       ) : (
-        <CollapsedPane label="Notizen" icon={<PanelRightOpen size={17} />} onOpen={() => setNotesOpen(true)} />
+        <CollapsedPane label="Notizen" icon={<PanelRightOpen size={17} />} onOpen={() => notesPanelRef.current?.expand()} />
       )}
+        </Panel>
+      </PanelGroup>
       {showHarvestDialog ? (
         <div className="harvest-dialog-overlay">
           <div className="harvest-dialog-card">

@@ -447,6 +447,35 @@ def cancel_extraction_batch(job_id: str, metadata_db_path: str = DEFAULT_METADAT
     return {"job_id": job_id, "status": (updated or {}).get("status")}
 
 
+class ExtractionDeleteRequest(BaseModel):
+    paper_ids: list[str] = Field(default_factory=list)
+    project_id: str | None = Field(default=None, max_length=240)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    projects_path: str | None = None
+
+
+@router.post("/extraction/delete")
+def delete_extraction_results(request: ExtractionDeleteRequest) -> dict[str, Any]:
+    """Loescht Extraktionsdaten (Ergebnisse, Qualitaet, Review-Queue, Embeddings,
+    Batch-Items) fuer die gegebenen Paper-IDs oder das gesamte Projekt. Paper-Metadaten
+    und PDFs bleiben erhalten — nur die Extraktion wird zurueckgesetzt, so dass ein
+    Re-Extrahieren sauber von vorne beginnt."""
+    paper_ids = [str(pid).strip() for pid in request.paper_ids if str(pid).strip()]
+    if request.project_id:
+        is_global = _is_reserved_project_id(request.project_id)
+        if is_global:
+            with MetadataDB(request.metadata_db_path) as db:
+                paper_ids = [str(p.get("id") or "") for p in db.list_papers(limit=50000)]
+        else:
+            projects = _load_projects(_projects_path(request.projects_path))
+            paper_ids = list({str(pid) for pid in projects.get(request.project_id or "", [])})
+    if not paper_ids:
+        return {"deleted": 0, "paper_ids": []}
+    with MetadataDB(request.metadata_db_path) as db:
+        deleted = db.delete_extractions_for_papers(paper_ids)
+    return {"deleted": deleted, "paper_ids": paper_ids}
+
+
 @router.get("/extraction/history")
 def extraction_history(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,

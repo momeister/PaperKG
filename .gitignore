@@ -28,6 +28,7 @@ env/
 .idea/
 .codex/
 .claude/
+.opencode/
 *.swp
 *.swo
 .DS_Store

@@ -146,4 +146,29 @@ describe("restored deep-analysis session (white-screen regression)", () => {
 
     expect(restoredActiveTurnFor(projectId)?.type).toBeUndefined();
   });
+
+  // Ein research-Turn ist der sichtbare Platzhalter fuer eine laufende oder
+  // fehlgeschlagene Auto-Recherche. Er traegt keine Antwort-Blocks (sonst
+  // wuerde turnBlocks(turn).length === 0 falsch und "Keine Antwort" angezeigt).
+  it("returns no blocks for a research placeholder turn", () => {
+    const researchTurn = {
+      id: "turn-research",
+      question: "Was ist X?",
+      answer: {},
+      verification: [],
+      createdAt: new Date().toISOString(),
+      type: "research" as const,
+      researchStatus: "running" as const,
+      researchProgress: {
+        phases: [
+          { id: "s1", label: "Lokale Quellen …", scope: "main", status: "active", papers: [], grey: [], startedAt: 0 }
+        ],
+        currentPhase: "Lokale Quellen …",
+        question: "Was ist X?",
+        startedAt: 0
+      }
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(turnBlocks(researchTurn as any)).toEqual([]);
+  });
 });

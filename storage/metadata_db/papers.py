@@ -275,7 +275,13 @@ class PapersMixin(_Base):
 
     @staticmethod
     def _normalize_identifier(value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+        # Drop a trailing ``#N`` evidence-binding fragment before stripping non-alphanumerics,
+        # otherwise ``crossref:doi#48`` would normalize to ``crossrefdoi48`` and never match the
+        # stored ``crossref:doi`` paper id.
+        raw = str(value or "")
+        if "#" in raw:
+            raw = raw.split("#", 1)[0]
+        return re.sub(r"[^a-z0-9]+", "", raw.lower())
 
     @staticmethod
     def _legacy_arxiv_category_re() -> str:

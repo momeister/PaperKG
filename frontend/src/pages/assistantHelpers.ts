@@ -202,6 +202,13 @@ export function stableHash(value: string) {
 
 
 export function turnBlocks(turn: AssistantTurn): AssistantAnswerBlock[] {
+  // Ein ``research``-Turn ist der sichtbare Platzhalter fuer eine laufende oder
+  // fehlgeschlagene Auto-Recherche. Er traegt keine Antwort-Blocks (sonst wuerde
+  // ``turnBlocks(turn).length === 0`` falsch und "Keine Antwort" angezeigt). Das
+  // Auto-Recherche-Fortschritts-UI wird separat gerendert.
+  if (turn.type === "research") {
+    return [];
+  }
   if (turn.blocks?.length) {
     return turn.blocks;
   }
@@ -739,6 +746,7 @@ export function normalizeCitation(value: string) {
   return value
     .toLowerCase()
     .replace(/^https?:\/\/arxiv\.org\/abs\//, "arxiv:")
+    .replace(/#[\w-]*$/, "")
     .replace(/v\d+$/, "")
     .replace(/\s+/g, "");
 }

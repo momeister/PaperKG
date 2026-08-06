@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BookOpenCheck, ChevronDown, ChevronRight, Database, FileSearch, FilterX, Globe, ListChecks, Play, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, ChevronDown, ChevronRight, Database, FileSearch, FilterX, Globe, ListChecks, Play, Plus, RefreshCw, RotateCw, Search, X } from "lucide-react";
 
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -63,7 +63,11 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
 
   const libraryQueryResult = useQuery({
     queryKey: ["extraction-library", libraryQuery, activeProject ?? ""],
-    queryFn: () => api.getExtractionLibrary(libraryQuery, activeProject || undefined)
+    queryFn: () => api.getExtractionLibrary(libraryQuery, activeProject || undefined),
+    // Waehrend des Refetchs (z.B. alle 2s durch batchItemsQuery-Invalidierung)
+    // die alten Daten behalten — sonst verschwindet der extrahiert/extractable-Badge
+    // fuer einen Frame und flackert wieder auf. keepPreviousData-Verhalten in v5.
+    placeholderData: (prev: { items: ExtractionLibraryItem[]; total: number; degraded?: string } | undefined) => prev
   });
   const historyQuery = useQuery({
     queryKey: ["extraction-history", historyPaperId],
@@ -155,6 +159,37 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
     }
   });
 
+  // Re-Extraktion: loescht alte Ergebnisse der ausgewaehlten Paper und startet
+  // danach sofort einen Batch-Extraktionslauf. Setzt resume=false, damit der
+  // neue Batch nichts aus einem vorherigen Job uebernimmt.
+  const reExtract = useMutation({
+    mutationFn: async () => {
+      const items = libraryQueryResult.data?.items ?? [];
+      const selectedItems = selectedBatchItems(items, selectedBatchPaths);
+      if (!selectedItems.length) {
+        return null;
+      }
+      const paperIds = selectedItems.map((item) => item.paper_id);
+      await api.deleteExtractionResults({ paper_ids: paperIds });
+      const jobId = crypto.randomUUID();
+      setPendingJobId(jobId);
+      return api.runExtractionBatch({
+        items: selectedItems,
+        job_id: jobId,
+        ...options,
+        resume: false
+      });
+    },
+    onSettled: () => setPendingJobId(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-history"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-vocabulary"] });
+      queryClient.invalidateQueries({ queryKey: ["health"] });
+    }
+  });
+
   const addVocabulary = useMutation({
     mutationFn: () =>
       api.addExtractionVocabulary({
@@ -196,8 +231,15 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
       .map((item) => item.paper_id);
   }
 
+  /** Alle batchbaren Paper im Scope — auch schon erfolgreich extrahierte. */
+  function allBatchableIds() {
+    return (libraryQueryResult.data?.items ?? [])
+      .filter((item) => isBatchable(item) && matchesScope(item, batchScope))
+      .map((item) => item.paper_id);
+  }
+
   function toggleAllBatch() {
-    const ids = openBatchableIds();
+    const ids = allBatchableIds();
     setSelectedBatchPaths((current) => (current.length === ids.length ? [] : ids));
   }
 
@@ -227,6 +269,10 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
       libraryItems.filter(
         (i) => isBatchable(i) && matchesScope(i, batchScope) && i.latest_extraction_status !== "success"
       ).length,
+    [libraryItems, batchScope]
+  );
+  const scopedAllCount = useMemo(
+    () => libraryItems.filter((i) => isBatchable(i) && matchesScope(i, batchScope)).length,
     [libraryItems, batchScope]
   );
   const batchItems: BatchJobItem[] = batchItemsQuery.data?.items ?? [];
@@ -440,11 +486,26 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                 </button>
                 <button className="button" type="button" onClick={toggleAllBatch}>
                   <ListChecks size={16} />
-                  <span>{selectedBatchPaths.length === scopedOpenCount && scopedOpenCount > 0 ? "Leeren" : "Alle"}</span>
+                  <span>{selectedBatchPaths.length === scopedAllCount && scopedAllCount > 0 ? "Leeren" : "Alle"}</span>
                 </button>
-                <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending} onClick={() => batch.mutate()}>
+                <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending || reExtract.isPending} onClick={() => batch.mutate()}>
                   <Play size={16} />
                   <span>Ausführen</span>
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={!selectedBatchPaths.length || batch.isPending || reExtract.isPending}
+                  title="Alte Extraktionen der ausgewählten Paper löschen und neu extrahieren"
+                  onClick={() => {
+                    const count = selectedBatchPaths.length;
+                    if (window.confirm(`${count} Paper neu extrahieren? Alle bisherigen Extraktionen dieser Paper werden vorher gelöscht.`)) {
+                      reExtract.mutate();
+                    }
+                  }}
+                >
+                  <RotateCw size={16} />
+                  <span>Re-Extrahieren</span>
                 </button>
               </div>
             </div>
@@ -456,17 +517,18 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                 onRetry={() => libraryQueryResult.refetch()}
               />
             ) : null}
-            <ErrorBox error={batch.error} />
+            <ErrorBox error={batch.error || reExtract.error} />
             <LlmLimitBanner
               parsed={firstLlmError([
                 batch.data?.job.error_message,
+                reExtract.data?.job.error_message,
                 runningJob?.error_message,
                 ...batchItems.map((item) => item.error_message)
               ])}
             />
 
             {/* Live status during batch */}
-            {batch.isPending && pendingJobId && (
+            {((batch.isPending || reExtract.isPending) && pendingJobId) && (
               <div className="status-strip status-strip--active">
                 <Status value="running" />
                 {currentItem ? (

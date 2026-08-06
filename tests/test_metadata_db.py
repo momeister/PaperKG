@@ -131,6 +131,27 @@ def test_clear_extraction_results_keeps_papers(tmp_path) -> None:
     db.close()
 
 
+def test_delete_extractions_for_papers_keeps_others(tmp_path) -> None:
+    db = MetadataDB(str(tmp_path / "metadata.duckdb"))
+    for pid in ("paper_a", "paper_b"):
+        db.insert_paper({"id": pid, "source": "arxiv", "source_id": pid, "title": pid})
+        db.save_extraction_result(paper_id=pid, llm_provider="fake", llm_model="fake", concepts=[{"label": "c"}])
+
+    deleted = db.delete_extractions_for_papers(["paper_a"])
+
+    assert deleted == 1
+    assert db.get_paper("paper_a") is not None
+    assert db.get_paper_extractions("paper_a") == []
+    assert db.get_paper_extractions("paper_b") != []
+    db.close()
+
+
+def test_delete_extractions_empty_list_noop(tmp_path) -> None:
+    db = MetadataDB(str(tmp_path / "metadata.duckdb"))
+    assert db.delete_extractions_for_papers([]) == 0
+    db.close()
+
+
 def test_metadata_db_persists_extended_extraction_metadata(tmp_path) -> None:
     db = MetadataDB(str(tmp_path / "metadata.duckdb"))
 

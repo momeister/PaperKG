@@ -101,6 +101,32 @@ export type AssistantAnswerBlock = {
   createdAt: string;
 };
 
+/** Eine Stage der Auto-Recherche (Themenanalyse, wissenschaftliche Quellen, …).
+ * Gesammelt in ``AutoResearchProgress.phases``; serialisiert im ``research``-Turn
+ * damit ein Reload den bis zum Abbruch erreichten Fortschritt wiederherstellt. */
+export type AutoResearchStage = {
+  id: string;
+  label: string;
+  scope: "main" | "related" | "planning" | "reanswering";
+  topic?: string;
+  status: "active" | "done" | "error";
+  papers: { id: string; title: string }[];
+  grey: { id: string; title: string; url: string; trust_tier?: string }[];
+  error?: string;
+  startedAt: number;
+  finishedAt?: number;
+};
+
+/** Laufzeit-Fortschritt der Auto-Recherche. Ersetzt das fruhere skalare
+ *  ``autoProgress``-Objekt durch eine chronologische Stage-Liste, die in der UI
+ *  aufklappbar und mit Shimmer-Animation auf der aktiven Stage dargestellt wird. */
+export type AutoResearchProgress = {
+  phases: AutoResearchStage[];
+  currentPhase: string;
+  question: string;
+  startedAt: number;
+};
+
 export type AssistantTurn = {
   id: string;
   question: string;
@@ -108,12 +134,19 @@ export type AssistantTurn = {
   verification: VerificationSource[];
   createdAt: string;
   blocks?: AssistantAnswerBlock[];
-  type?: "chat" | "research_tree" | "parallel";
+  type?: "chat" | "research_tree" | "parallel" | "research";
   researchNodes?: ResearchNode[];
   /** For ``type === "parallel"``: the server-side parallel-research session id and a
    * cached variant count for the session-list label. */
   parallelSessionId?: string;
   parallelVariantCount?: number;
+  /** For ``type === "research"``: der Auto-Recherche-Platzhalter-Turn, der sofort
+   * beim Start angelegt wird, damit eine fehlgeschlagene/abgebrochene Recherche
+   * nicht als "Keine Antwort" verschwindet. Wird beim ``done``-Event in-place zu
+   * einem ``chat``-Turn umgewandelt (kein Duplikat). */
+  researchStatus?: "running" | "done" | "error";
+  researchProgress?: AutoResearchProgress;
+  researchError?: string;
 };
 
 export type CitationMeta = {

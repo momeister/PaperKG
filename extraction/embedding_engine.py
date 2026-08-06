@@ -32,19 +32,34 @@ class EmbeddingEngine:
     EMBEDDING_DIM = 1024
     MODEL_NAME = "BAAI/bge-m3"
 
-    def __init__(self, model_name: str | None = None, backend: str = "hash-fallback") -> None:
-        """Initialize embedding engine."""
+    def __init__(
+        self, model_name: str | None = None, backend: str = "hash-fallback"
+    ) -> None:
+        """Initialize embedding engine.
+
+        ``backend`` accepts ``"hash-fallback"`` (default, deterministic, offline),
+        ``"auto"`` or ``"sentence-transformers"``. ``auto`` tries to load
+        ``sentence-transformers`` + the BGE-M3 model and falls back to the hash
+        embedding when either is unavailable. ``sentence-transformers`` raises on
+        failure. The default stays ``hash-fallback`` so a normal startup never
+        triggers a multi-gigabyte model download; set ``backend="auto"`` (or via
+        ``config.yaml``) to opt into real multilingual embeddings once torch +
+        sentence-transformers are installed.
+        """
         self.model_name = model_name or self.MODEL_NAME
         self.backend = "hash-fallback"
         self.model = None
-        if backend == "sentence-transformers":
+        desired = (backend or "hash-fallback").strip().lower()
+        if desired in {"auto", "sentence-transformers"}:
             try:
                 from sentence_transformers import SentenceTransformer  # type: ignore
 
                 self.model = SentenceTransformer(self.model_name)
                 self.backend = "sentence-transformers"
             except Exception:
-                raise
+                if desired == "sentence-transformers":
+                    raise
+                # auto: fall back silently
 
     def embed(self, label: str) -> np.ndarray:
         """Return the embedding vector for a label."""
@@ -113,7 +128,9 @@ class EmbeddingEngine:
     def _deterministic_embedding(self, label: str) -> np.ndarray:
         """Create a stable fallback embedding from token hashes."""
         vector = np.zeros(self.EMBEDDING_DIM, dtype=np.float32)
-        tokens = re.findall(r"[a-z0-9]+", label.lower()) or [label.lower().strip() or "<empty>"]
+        tokens = re.findall(r"[^\W_]+", label.casefold(), re.UNICODE) or [
+            label.casefold().strip() or "<empty>"
+        ]
 
         for token in tokens:
             digest = hashlib.blake2b(token.encode("utf-8"), digest_size=16).digest()

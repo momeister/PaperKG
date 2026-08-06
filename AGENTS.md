@@ -21,6 +21,9 @@ CodeSearch workspace.
 - Local `.venv/` is the canonical env. On Linux use `.venv/bin/python`; on
   Windows `.venv\Scripts\python`. `uv` is also available. Torch is **not** in the
   default venv — `embedding.backend` falls back to hash unless you install it.
+  `EmbeddingEngine(backend="auto")` tries `sentence-transformers` + BGE-M3 and
+  silently falls back to hash when unavailable; the default stays `hash-fallback`
+  so a normal startup never triggers a multi-GB model download.
 - Secrets via `.env` (gitignored; see `.env.example`). `config.yaml` references
   keys by env-var name (`api_key_env:`), never inline. Don't commit `.env`.
 - Only **one** backend may run at a time — DuckDB allows a single writer per
