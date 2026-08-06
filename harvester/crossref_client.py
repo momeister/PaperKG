@@ -52,19 +52,28 @@ class CrossrefClient:
                 await asyncio.sleep(min_interval - elapsed)
             self._last_request_ts = time.monotonic()
 
-    async def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _get(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         await self._throttle()
         merged = dict(params or {})
         if self.config.mailto:
             merged.setdefault("mailto", self.config.mailto)
-        response = await self._client.get(f"{self.config.base_url}{endpoint}", params=merged)
+        response = await self._client.get(
+            f"{self.config.base_url}{endpoint}", params=merged
+        )
         response.raise_for_status()
         return response.json()
 
-    async def search_works(self, query: str, rows: int = 20, filters: str | None = None) -> list[dict[str, Any]]:
+    async def search_works(
+        self, query: str, rows: int = 20, filters: str | None = None
+    ) -> list[dict[str, Any]]:
         """Bibliografische Suche; ``filters`` ist Crossrefs ``filter``-Parameter
         (z. B. ``prefix:10.31219``, um auf OSF-Preprints einzugrenzen)."""
-        params: dict[str, Any] = {"query.bibliographic": query, "rows": min(max(rows, 1), 100)}
+        params: dict[str, Any] = {
+            "query.bibliographic": query,
+            "rows": min(max(rows, 1), 100),
+        }
         if filters:
             params["filter"] = filters
         payload = await self._get("/works", params=params)

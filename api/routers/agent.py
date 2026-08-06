@@ -5,6 +5,7 @@ die Maschine steuert nur die externe Bridge. Patchbare Namen laufen ueber
 pm.<name>: _load_agent_bridge_config (Cache _AGENT_BRIDGE_CONFIG_CACHE bleibt in
 product_main), httpx.AsyncClient.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ router = APIRouter()
 
 class AgentDispatchRequest(BaseModel):
     """Forward a compiled task brief to the local desktop-agent bridge (Kanal B)."""
+
     task: str = Field(min_length=1, max_length=20000)
     variant_id: str | None = None
     bridge_url: str | None = None
@@ -35,12 +37,14 @@ class AgentDispatchRequest(BaseModel):
 
 class AgentCancelRequest(BaseModel):
     """Gracefully abort an in-flight Selbst-Steuerung run on the bridge."""
+
     run_id: str = Field(min_length=1, max_length=200)
     bridge_base: str | None = None
 
 
 class AgentObserveStartRequest(BaseModel):
     """Start an Assistent (helper) live screen-observation session on the bridge."""
+
     session_id: str | None = None
     interval_ms: int | None = None
     primer: str = Field(default="", max_length=20000)
@@ -49,6 +53,7 @@ class AgentObserveStartRequest(BaseModel):
 
 class AgentObserveAskRequest(BaseModel):
     """Ask a live question against an active Assistent observation session."""
+
     session_id: str = Field(min_length=1, max_length=200)
     question: str = Field(min_length=1, max_length=4000)
     bridge_base: str | None = None
@@ -56,7 +61,9 @@ class AgentObserveAskRequest(BaseModel):
 
 class AgentObservePointRequest(BaseModel):
     """Ask the bridge to locate a screen element ("zeig mir wo ich klicken kann") and
-    return real screen coordinates. Pure lookup — never dispatches mouse/keyboard input."""
+    return real screen coordinates. Pure lookup — never dispatches mouse/keyboard input.
+    """
+
     session_id: str = Field(min_length=1, max_length=200)
     question: str = Field(min_length=1, max_length=4000)
     bridge_base: str | None = None
@@ -64,6 +71,7 @@ class AgentObservePointRequest(BaseModel):
 
 class AgentObserveStopRequest(BaseModel):
     """Stop an active Assistent observation session."""
+
     session_id: str = Field(min_length=1, max_length=200)
     bridge_base: str | None = None
 
@@ -76,7 +84,8 @@ def _resolve_agent_bridge_vlm_base_url() -> str:
     ``llm.providers`` in config.yaml, so it isn't duplicated in the agent_bridge block.
     Only ``base_url`` is read here, never ``api_key``/``api_key_env`` — the bridge
     screenshots the user's desktop, so only local providers (ollama/lm_studio, both
-    keyless) are a sane choice; a keyed cloud provider isn't supported by this wiring."""
+    keyless) are a sane choice; a keyed cloud provider isn't supported by this wiring.
+    """
     global _AGENT_BRIDGE_VLM_BASE_URL_CACHE
     if _AGENT_BRIDGE_VLM_BASE_URL_CACHE is not None:
         return _AGENT_BRIDGE_VLM_BASE_URL_CACHE
@@ -85,7 +94,9 @@ def _resolve_agent_bridge_vlm_base_url() -> str:
     if provider:
         try:
             with open("config.yaml", "r", encoding="utf-8") as fh:
-                providers = ((yaml.safe_load(fh) or {}).get("llm", {}) or {}).get("providers", {}) or {}
+                providers = ((yaml.safe_load(fh) or {}).get("llm", {}) or {}).get(
+                    "providers", {}
+                ) or {}
             base_url = str((providers.get(provider) or {}).get("base_url") or "")
         except FileNotFoundError:
             base_url = ""
@@ -142,7 +153,9 @@ def get_agent_config() -> dict[str, Any]:
         "vlm_base_url": _resolve_agent_bridge_vlm_base_url(),
         # Assistent-only override (Selbst-Steuerung always uses vlm_model — it needs a
         # UI-TARS-family model for action grounding). Falls back to vlm_model if unset.
-        "helper_vlm_model": str(bridge.get("helper_vlm_model") or bridge.get("vlm_model") or ""),
+        "helper_vlm_model": str(
+            bridge.get("helper_vlm_model") or bridge.get("vlm_model") or ""
+        ),
         # Native shell only: whether Tauri should spawn/manage the bridge sidecar
         # itself (agent_bridge_ensure/_stop) instead of relying on a manually
         # started one. Ignored in the web app (no sidecar manager there).
@@ -159,7 +172,8 @@ async def dispatch_agent(request: AgentDispatchRequest) -> StreamingResponse:
 
     Best-effort: if the bridge is disabled or unreachable a single terminal ``error``
     event is emitted — nothing crashes, and PaperKG itself never controls the machine.
-    On completion the run transcript is appended to the variant as an assistant entry."""
+    On completion the run transcript is appended to the variant as an assistant entry.
+    """
     bridge = pm._load_agent_bridge_config()
     config_url = str(bridge.get("url") or "").strip()
     url = (request.bridge_url or config_url).strip()
@@ -172,7 +186,12 @@ async def dispatch_agent(request: AgentDispatchRequest) -> StreamingResponse:
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         if not enabled or not url:
-            yield emit({"status": "error", "error": "agent_bridge disabled or no url configured"})
+            yield emit(
+                {
+                    "status": "error",
+                    "error": "agent_bridge disabled or no url configured",
+                }
+            )
             return
         if not _validate_bridge_url(url, from_config=from_config):
             yield emit({"status": "error", "error": "bridge url rejected"})
@@ -180,16 +199,23 @@ async def dispatch_agent(request: AgentDispatchRequest) -> StreamingResponse:
         transcript: list[str] = []
         try:
             async with pm.httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", url, json={"task": request.task}) as resp:
+                async with client.stream(
+                    "POST", url, json={"task": request.task}
+                ) as resp:
                     if resp.status_code >= 400:
-                        yield emit({"status": "error", "error": f"bridge returned {resp.status_code}"})
+                        yield emit(
+                            {
+                                "status": "error",
+                                "error": f"bridge returned {resp.status_code}",
+                            }
+                        )
                         return
                     yield emit({"status": "started"})
                     async for raw in resp.aiter_lines():
                         line = raw.strip()
                         if not line.startswith("data:"):
                             continue
-                        body = line[len("data:"):].strip()
+                        body = line[len("data:") :].strip()
                         if body:
                             transcript.append(body)
                             yield f"data: {body}\n\n"
@@ -204,8 +230,10 @@ async def dispatch_agent(request: AgentDispatchRequest) -> StreamingResponse:
                     variant = db.get_parallel_variant(request.variant_id)
                     if variant is not None:
                         db.add_parallel_entry(
-                            request.variant_id, str(variant.get("session_id")),
-                            "assistant", summary,
+                            request.variant_id,
+                            str(variant.get("session_id")),
+                            "assistant",
+                            summary,
                         )
             except Exception:
                 pass
@@ -247,7 +275,9 @@ async def observe_agent_start(request: AgentObserveStartRequest) -> StreamingRes
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         if not origin or not _validate_bridge_url(origin, from_config=from_config):
-            yield emit({"status": "error", "error": "bridge url rejected or not configured"})
+            yield emit(
+                {"status": "error", "error": "bridge url rejected or not configured"}
+            )
             return
         body = {
             "sessionId": request.session_id,
@@ -256,15 +286,22 @@ async def observe_agent_start(request: AgentObserveStartRequest) -> StreamingRes
         }
         try:
             async with pm.httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", f"{origin}/observe/start", json=body) as resp:
+                async with client.stream(
+                    "POST", f"{origin}/observe/start", json=body
+                ) as resp:
                     if resp.status_code >= 400:
-                        yield emit({"status": "error", "error": f"bridge returned {resp.status_code}"})
+                        yield emit(
+                            {
+                                "status": "error",
+                                "error": f"bridge returned {resp.status_code}",
+                            }
+                        )
                         return
                     async for raw in resp.aiter_lines():
                         line = raw.strip()
                         if not line.startswith("data:"):
                             continue
-                        chunk = line[len("data:"):].strip()
+                        chunk = line[len("data:") :].strip()
                         if chunk:
                             yield f"data: {chunk}\n\n"
         except Exception as exc:  # noqa: BLE001 - surface as terminal SSE event
@@ -324,7 +361,9 @@ async def observe_agent_stop(request: AgentObserveStopRequest) -> dict[str, Any]
         return {"ok": False, "error": "bridge url rejected or not configured"}
     try:
         async with pm.httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{origin}/observe/stop", json={"sessionId": request.session_id})
+            resp = await client.post(
+                f"{origin}/observe/stop", json={"sessionId": request.session_id}
+            )
             return resp.json()
     except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
         return {"ok": False, "error": str(exc)}

@@ -3,6 +3,7 @@
 Anker-Modell: page_number + rects (0..1 normalisiert zur Seiten-Oberfläche, zoom-
 unabhängig) + quote (markierter Text) + body. kind = 'highlight' | 'point'.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -19,6 +20,7 @@ router = APIRouter()
 
 class PdfAnnotationRect(BaseModel):
     """A rectangle normalized 0..1 relative to the page surface."""
+
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
     width: float = Field(ge=0.0, le=1.0)
@@ -53,24 +55,32 @@ def list_pdf_annotations(
 
 
 @router.post("/papers/{paper_id}/annotations")
-def create_pdf_annotation(paper_id: str, payload: PdfAnnotationCreate) -> dict[str, Any]:
+def create_pdf_annotation(
+    paper_id: str, payload: PdfAnnotationCreate
+) -> dict[str, Any]:
     if payload.kind not in ("highlight", "point"):
-        raise HTTPException(status_code=400, detail="kind muss 'highlight' oder 'point' sein")
+        raise HTTPException(
+            status_code=400, detail="kind muss 'highlight' oder 'point' sein"
+        )
     with MetadataDB(payload.metadata_db_path) as db:
-        record = db.add_pdf_annotation({
-            "paper_id": paper_id,
-            "page_number": payload.page_number,
-            "kind": payload.kind,
-            "rects": [r.model_dump() for r in payload.rects],
-            "quote": payload.quote,
-            "body": payload.body,
-            "color": payload.color,
-        })
+        record = db.add_pdf_annotation(
+            {
+                "paper_id": paper_id,
+                "page_number": payload.page_number,
+                "kind": payload.kind,
+                "rects": [r.model_dump() for r in payload.rects],
+                "quote": payload.quote,
+                "body": payload.body,
+                "color": payload.color,
+            }
+        )
     return {"annotation": record}
 
 
 @router.patch("/pdf-annotations/{annotation_id}")
-def update_pdf_annotation(annotation_id: str, payload: PdfAnnotationUpdate) -> dict[str, Any]:
+def update_pdf_annotation(
+    annotation_id: str, payload: PdfAnnotationUpdate
+) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     if payload.body is not None:
         fields["body"] = payload.body

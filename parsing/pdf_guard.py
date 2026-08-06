@@ -146,7 +146,9 @@ def _process_rss_bytes(pid: int) -> int | None:
     return None
 
 
-def _spawn_child(file_path: str, paper_id: str, progress_path: str, result_path: str, memory_cap: int):
+def _spawn_child(
+    file_path: str, paper_id: str, progress_path: str, result_path: str, memory_cap: int
+):
     """`python -m parsing.pdf_child …` starten. None, wenn kein Subprozess möglich ist."""
     import subprocess
 
@@ -156,7 +158,9 @@ def _spawn_child(file_path: str, paper_id: str, progress_path: str, result_path:
     repo_root = str(Path(__file__).resolve().parent.parent)
     env = dict(os.environ)
     env[_CHILD_ENV_FLAG] = "1"
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [repo_root, env.get("PYTHONPATH", "")]))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [repo_root, env.get("PYTHONPATH", "")])
+    )
     try:
         return subprocess.Popen(
             [
@@ -223,7 +227,9 @@ def guarded_parse(file_path: str | Path, paper_id: str):
     progress_path = os.path.join(tmp_dir, "pages.jsonl")
     result_path = os.path.join(tmp_dir, "result.json")
 
-    process = _spawn_child(str(file_path), paper_id, progress_path, result_path, memory_cap)
+    process = _spawn_child(
+        str(file_path), paper_id, progress_path, result_path, memory_cap
+    )
     if process is None:
         # Kein Subprozess möglich (eingefrorene Builds, exotische Plattform):
         # lieber ungeschützt parsen als gar nicht.
@@ -276,7 +282,9 @@ def guarded_parse(file_path: str | Path, paper_id: str):
             stderr_tail = ""
             try:
                 if process.stderr is not None:
-                    stderr_tail = process.stderr.read().decode("utf-8", errors="replace")[-400:]
+                    stderr_tail = process.stderr.read().decode(
+                        "utf-8", errors="replace"
+                    )[-400:]
             except Exception:
                 pass
             reason = f"Kindprozess beendet mit exitcode={process.returncode}"

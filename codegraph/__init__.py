@@ -15,6 +15,7 @@ erhalten: **keine Beziehung ohne Beleg und Sicherheitsstufe**, und zitiert werde
 darf nur, was in derselben Sitzung tatsächlich nachgeschlagen wurde. Beides
 entscheidet die Rust-Seite (``cs_llm::citation``), nicht diese.
 """
+
 from __future__ import annotations
 
 from codegraph.binary import CodeSearchMissingError, find_binary

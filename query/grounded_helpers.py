@@ -975,7 +975,6 @@ def _relocate_mid_sentence_citations(
     return _SENTENCE_RE.sub(_replace_sentence, text)
 
 
-
 # `[paper_id]{{verbatim supporting passage}}` blocks emitted by the PDF-context prompt.
 _MODEL_QUOTE_RE = re.compile(r"[ \t]*\{\{(.*?)\}\}", re.DOTALL)
 

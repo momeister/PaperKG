@@ -16,14 +16,13 @@ from extraction.text_normalization import normalize_key, slugify_label
 
 from tests.llm_fakes import FakeLLMRouter
 
+
 class TestEntityLinker:
     """Test entity linking to knowledge bases."""
 
     def test_openalx_linkage_strategy_finds_cached_concepts(self):
         """Test OpenAlex strategy matches cached concepts."""
-        cache = {
-            "neural network": {"id": "C123", "display_name": "Neural Network"}
-        }
+        cache = {"neural network": {"id": "C123", "display_name": "Neural Network"}}
         strategy = OpenAlexLinkageStrategy(concept_cache=cache)
 
         result = strategy.link(
@@ -68,9 +67,7 @@ class TestEntityLinker:
 
         extraction = ExtractionResult(
             paper_id="p1",
-            concepts=[
-                {"label": "neural network", "context": "...", "confidence": 0.9}
-            ],
+            concepts=[{"label": "neural network", "context": "...", "confidence": 0.9}],
         )
 
         enriched = linker.enrich_extraction(extraction)
@@ -84,7 +81,9 @@ class TestEntityLinker:
         mock_router = FakeLLMRouter(
             response_json={
                 "paper_type": "research",
-                "concepts": [{"label": "neural network", "context": "model", "confidence": 0.9}],
+                "concepts": [
+                    {"label": "neural network", "context": "model", "confidence": 0.9}
+                ],
                 "methods": [],
                 "claims": [],
                 "cross_domain_hints": [],
@@ -153,13 +152,17 @@ class TestEntityLinker:
             methods=[],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
         assert [concept["canonical_id"] for concept in result.concepts] == [
             "concept:appraisal-theory",
             "concept:appraisal-dimensions",
         ]
-        assert all(concept["review_status"] == "approved" for concept in result.concepts)
+        assert all(
+            concept["review_status"] == "approved" for concept in result.concepts
+        )
         assert result.relations[0]["relation_type"] == "PART_OF"
         assert result.relations[0]["subject_id"] == "concept:appraisal-dimensions"
         rendered = json.loads(result.raw_response)
@@ -212,14 +215,24 @@ class TestEntityLinker:
             methods=[],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation_triples = {
             (relation["subject_id"], relation["relation_type"], relation["object_id"])
             for relation in result.relations
         }
 
-        assert ("concept:ai-consult", "USES", "concept:large-language-model") in relation_triples
-        assert ("concept:ai-consult", "USED_FOR", "concept:clinical-error") in relation_triples
+        assert (
+            "concept:ai-consult",
+            "USES",
+            "concept:large-language-model",
+        ) in relation_triples
+        assert (
+            "concept:ai-consult",
+            "USED_FOR",
+            "concept:clinical-error",
+        ) in relation_triples
 
     def test_entity_linker_rescues_exact_ontology_candidates_from_partial_chunks(self):
         extraction = ExtractionResult(
@@ -261,14 +274,22 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
         concept_ids = {concept["canonical_id"] for concept in result.concepts}
-        candidate_ids = {concept["canonical_id"] for concept in result.concept_candidates}
+        candidate_ids = {
+            concept["canonical_id"] for concept in result.concept_candidates
+        }
         assert "concept:occ-model" in concept_ids
         assert "concept:q-learning" not in concept_ids
         assert "concept:q-learning" in candidate_ids
-        occ_model = next(concept for concept in result.concepts if concept["canonical_id"] == "concept:occ-model")
+        occ_model = next(
+            concept
+            for concept in result.concepts
+            if concept["canonical_id"] == "concept:occ-model"
+        )
         assert occ_model["review_status"] == "approved"
         assert occ_model["acceptance_reason"] == "ontology_exact_candidate_rescue"
 
@@ -310,15 +331,23 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         concepts_by_id = {item["canonical_id"]: item for item in result.concepts}
         candidate_ids = {item["canonical_id"] for item in result.concept_candidates}
 
-        assert concepts_by_id["concept:temporal-difference-error"]["accepted_for_kg_write"] is True
+        assert (
+            concepts_by_id["concept:temporal-difference-error"]["accepted_for_kg_write"]
+            is True
+        )
         assert concepts_by_id["concept:temporal-difference-error"]["kg_layer"] == "core"
         assert concepts_by_id["concept:kl-divergence"]["accepted_for_kg_write"] is False
         assert concepts_by_id["concept:kl-divergence"]["kg_layer"] == "detail"
-        assert concepts_by_id["concept:kl-divergence"]["kg_block_reason"] == "detail_or_parameter_mention"
+        assert (
+            concepts_by_id["concept:kl-divergence"]["kg_block_reason"]
+            == "detail_or_parameter_mention"
+        )
         assert "concept:l1-norm" in candidate_ids
 
     def test_canonical_resolver_exact_alias_overrides_llm_type(self):
@@ -399,10 +428,15 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
         assert len(result.concepts) == 1
-        assert result.concepts[0]["canonical_id"] == "concept:approach-and-avoidance-behaviour"
+        assert (
+            result.concepts[0]["canonical_id"]
+            == "concept:approach-and-avoidance-behaviour"
+        )
         assert result.concepts[0]["extracted_roles"] == ["concept", "method"]
         assert result.methods == []
 
@@ -424,11 +458,18 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
-        assert result.methods[0]["canonical_id"] == "method:doya-neurotransmitter-rl-mapping"
+        assert (
+            result.methods[0]["canonical_id"]
+            == "method:doya-neurotransmitter-rl-mapping"
+        )
         assert result.methods[0]["review_status"] == "approved"
-        assert result.methods[0]["acceptance_reason"] == "accepted_method_high_precision"
+        assert (
+            result.methods[0]["acceptance_reason"] == "accepted_method_high_precision"
+        )
 
     def test_entity_linker_merges_survey_contribution_methods(self):
         extraction = ExtractionResult(
@@ -469,10 +510,16 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
-        assert [method["label"] for method in result.methods] == ["Emotion in RL Survey Taxonomy"]
-        assert result.methods[0]["canonical_id"] == "method:emotion-in-rl-survey-taxonomy"
+        assert [method["label"] for method in result.methods] == [
+            "Emotion in RL Survey Taxonomy"
+        ]
+        assert (
+            result.methods[0]["canonical_id"] == "method:emotion-in-rl-survey-taxonomy"
+        )
         assert "Survey Taxonomy" in result.methods[0]["aliases"]
         assert result.methods[0]["review_status"] == "approved"
 
@@ -505,9 +552,13 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
-        assert [method["label"] for method in result.methods] == ["Gadanho and Hallam emotion model"]
+        assert [method["label"] for method in result.methods] == [
+            "Gadanho and Hallam emotion model"
+        ]
         assert "Gadanho and Hallam (1998, 2001)" in result.methods[0]["aliases"]
         assert result.methods[0]["review_status"] == "approved"
 
@@ -630,8 +681,12 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
-        merlin = next(item for item in result.concepts if item["canonical_id"] == "concept:merlin")
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
+        merlin = next(
+            item for item in result.concepts if item["canonical_id"] == "concept:merlin"
+        )
         concepts_by_id = {
             item["canonical_id"]: item
             for item in result.concepts
@@ -650,13 +705,32 @@ class TestEntityLinker:
         assert merlin["review_status"] == "approved"
         assert merlin["accepted_for_kg_write"] is True
         assert merlin["canonical_id"] == "concept:merlin"
-        assert concepts_by_id["concept:adaptive-state-injection"]["accepted_for_kg_write"] is True
+        assert (
+            concepts_by_id["concept:adaptive-state-injection"]["accepted_for_kg_write"]
+            is True
+        )
         assert len(qgan_entities) == 1
         assert "QGANs" in qgan_entities[0].get("aliases", [])
-        assert ("concept:merlin", "BUILT_ON", "concept:strong-linear-optical-simulation") in relation_triples
-        assert ("concept:merlin", "PROVIDES", "concept:quantumlayer") in relation_triples
-        assert ("concept:quantumlayer", "SUPPORTS", "concept:angle-encoding") in relation_triples
-        assert ("concept:quantumlayer", "SUPPORTS", "concept:amplitude-encoding") in relation_triples
+        assert (
+            "concept:merlin",
+            "BUILT_ON",
+            "concept:strong-linear-optical-simulation",
+        ) in relation_triples
+        assert (
+            "concept:merlin",
+            "PROVIDES",
+            "concept:quantumlayer",
+        ) in relation_triples
+        assert (
+            "concept:quantumlayer",
+            "SUPPORTS",
+            "concept:angle-encoding",
+        ) in relation_triples
+        assert (
+            "concept:quantumlayer",
+            "SUPPORTS",
+            "concept:amplitude-encoding",
+        ) in relation_triples
         assert (
             "concept:merlin",
             "REPRODUCES",
@@ -667,7 +741,11 @@ class TestEntityLinker:
             "EVALUATED_ON",
             "concept:mnist",
         ) in relation_triples
-        assert ("concept:angle-encoding", "MORE_ROBUST_THAN", "concept:amplitude-encoding") in relation_triples
+        assert (
+            "concept:angle-encoding",
+            "MORE_ROBUST_THAN",
+            "concept:amplitude-encoding",
+        ) in relation_triples
         assert (
             "concept:merlin",
             "REPRODUCES",
@@ -786,22 +864,60 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
-        concepts_by_id = {concept["canonical_id"]: concept for concept in result.concepts}
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
+        concepts_by_id = {
+            concept["canonical_id"]: concept for concept in result.concepts
+        }
         relation_triples = {
             (relation["subject_id"], relation["relation_type"], relation["object_id"])
             for relation in result.relations
         }
 
-        assert sum(1 for item in result.concepts if item["canonical_id"] == "concept:unruptured-intracranial-aneurysm") == 1
-        assert sum(1 for item in result.concepts if item["canonical_id"] == "concept:tof-mra") == 1
-        assert sum(1 for item in result.concepts if item["canonical_id"] == "concept:satisfaction-of-search") == 1
+        assert (
+            sum(
+                1
+                for item in result.concepts
+                if item["canonical_id"] == "concept:unruptured-intracranial-aneurysm"
+            )
+            == 1
+        )
+        assert (
+            sum(
+                1
+                for item in result.concepts
+                if item["canonical_id"] == "concept:tof-mra"
+            )
+            == 1
+        )
+        assert (
+            sum(
+                1
+                for item in result.concepts
+                if item["canonical_id"] == "concept:satisfaction-of-search"
+            )
+            == 1
+        )
         assert concepts_by_id["concept:tof-mra"]["entity_type"] == "MethodFamily"
-        assert "Time-of-Flight Magnetic Resonance Angiography" in concepts_by_id["concept:tof-mra"]["aliases"]
-        assert ("concept:computer-aided-detection", "USES", "concept:3d-u-net") in relation_triples
-        assert ("concept:3d-u-net", "EVALUATED_ON", "concept:adam-dataset") in relation_triples
+        assert (
+            "Time-of-Flight Magnetic Resonance Angiography"
+            in concepts_by_id["concept:tof-mra"]["aliases"]
+        )
+        assert (
+            "concept:computer-aided-detection",
+            "USES",
+            "concept:3d-u-net",
+        ) in relation_triples
+        assert (
+            "concept:3d-u-net",
+            "EVALUATED_ON",
+            "concept:adam-dataset",
+        ) in relation_triples
 
-    def test_qml_deterministic_scan_backfills_datasets_and_architecture_components(self):
+    def test_qml_deterministic_scan_backfills_datasets_and_architecture_components(
+        self,
+    ):
         scan = EntityExtractor._scan_paper_text(
             """
             MerLin is a photonic quantum machine learning benchmark framework.
@@ -844,7 +960,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         concept_ids = {item["canonical_id"] for item in result.concepts}
         candidate_ids = {item["canonical_id"] for item in result.concept_candidates}
 
@@ -877,7 +995,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation = next(
             item
             for item in result.relations
@@ -983,23 +1103,60 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         concept_ids = {item["canonical_id"] for item in result.concepts}
         method_ids = {item["canonical_id"] for item in result.methods}
         relation_triples = {
-            (relation["subject_id"], relation["relation_type"], relation["object_id"], relation["review_status"])
+            (
+                relation["subject_id"],
+                relation["relation_type"],
+                relation["object_id"],
+                relation["review_status"],
+            )
             for relation in result.relations
         }
 
         assert "concept:accuracy" in concept_ids
         assert "concept:data-accuracy" not in concept_ids
         assert "concept:adaboost" in method_ids
-        assert ("concept:bert", "IS_A", "concept:pre-trained-language-models", "approved") in relation_triples
-        assert ("concept:distilbert", "DERIVED_FROM", "concept:bert", "approved") in relation_triples
-        assert ("concept:distilbert", "USES", "concept:knowledge-distillation", "approved") in relation_triples
-        assert ("concept:bert", "EVALUATED_ON", "concept:liar", "approved") in relation_triples
-        assert ("concept:roberta", "EVALUATED_ON", "concept:combined-corpus", "approved") in relation_triples
-        assert ("concept:adaboost", "EVALUATED_ON", "concept:combined-corpus", "approved") in relation_triples
+        assert (
+            "concept:bert",
+            "IS_A",
+            "concept:pre-trained-language-models",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:distilbert",
+            "DERIVED_FROM",
+            "concept:bert",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:distilbert",
+            "USES",
+            "concept:knowledge-distillation",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:bert",
+            "EVALUATED_ON",
+            "concept:liar",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:roberta",
+            "EVALUATED_ON",
+            "concept:combined-corpus",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:adaboost",
+            "EVALUATED_ON",
+            "concept:combined-corpus",
+            "approved",
+        ) in relation_triples
 
     def test_fake_news_deterministic_scan_backfills_clstm(self):
         scan = EntityExtractor._scan_paper_text(
@@ -1081,15 +1238,21 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
-        concepts_by_id = {concept["canonical_id"]: concept for concept in result.concepts}
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
+        concepts_by_id = {
+            concept["canonical_id"]: concept for concept in result.concepts
+        }
 
         assert concepts_by_id["concept:fock-space"]["review_status"] == "approved"
         assert concepts_by_id["concept:fock-space"]["accepted_for_kg_write"] is True
         assert concepts_by_id["concept:quantumlayer"]["review_status"] == "approved"
         assert concepts_by_id["concept:quantumlayer"]["accepted_for_kg_write"] is True
         assert concepts_by_id["concept:angle-encoding"]["review_status"] == "approved"
-        assert concepts_by_id["concept:amplitude-encoding"]["review_status"] == "approved"
+        assert (
+            concepts_by_id["concept:amplitude-encoding"]["review_status"] == "approved"
+        )
 
     def test_entity_linker_builds_specific_relation_types(self):
         extraction = ExtractionResult(
@@ -1228,7 +1391,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation_triples = {
             (relation["subject_id"], relation["relation_type"], relation["object_id"])
             for relation in result.relations
@@ -1239,14 +1404,46 @@ class TestEntityLinker:
             "CORRESPONDS_TO",
             "concept:dopamine",
         ) in relation_triples
-        assert ("concept:occ-model", "IS_A", "concept:appraisal-theory") in relation_triples
-        assert ("concept:valence", "PART_OF", "concept:dimensional-emotion-theory") in relation_triples
-        assert ("concept:bayesian-affect-control-theory", "EXTENDS", "concept:pomdp") in relation_triples
-        assert ("concept:q-learning", "USED_IN", "concept:reinforcement-learning") in relation_triples
-        assert ("concept:q-learning", "IMPLEMENTS", "concept:value-function") in relation_triples
-        assert ("concept:reward-shaping", "USED_FOR", "concept:learning-efficiency") in relation_triples
-        assert ("concept:homeostasis", "ELICITS", "concept:categorical-emotion") in relation_triples
-        assert ("concept:q-learning", "IS_A", "concept:reinforcement-learning") not in relation_triples
+        assert (
+            "concept:occ-model",
+            "IS_A",
+            "concept:appraisal-theory",
+        ) in relation_triples
+        assert (
+            "concept:valence",
+            "PART_OF",
+            "concept:dimensional-emotion-theory",
+        ) in relation_triples
+        assert (
+            "concept:bayesian-affect-control-theory",
+            "EXTENDS",
+            "concept:pomdp",
+        ) in relation_triples
+        assert (
+            "concept:q-learning",
+            "USED_IN",
+            "concept:reinforcement-learning",
+        ) in relation_triples
+        assert (
+            "concept:q-learning",
+            "IMPLEMENTS",
+            "concept:value-function",
+        ) in relation_triples
+        assert (
+            "concept:reward-shaping",
+            "USED_FOR",
+            "concept:learning-efficiency",
+        ) in relation_triples
+        assert (
+            "concept:homeostasis",
+            "ELICITS",
+            "concept:categorical-emotion",
+        ) in relation_triples
+        assert (
+            "concept:q-learning",
+            "IS_A",
+            "concept:reinforcement-learning",
+        ) not in relation_triples
         assert (
             "concept:boltzmann-action-selection",
             "MODULATED_BY",
@@ -1360,27 +1557,68 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation_triples = {
             (relation["subject_id"], relation["relation_type"], relation["object_id"])
             for relation in result.relations
         }
         relation_status = {
-            (relation["subject_id"], relation["relation_type"], relation["object_id"]): relation["review_status"]
+            (
+                relation["subject_id"],
+                relation["relation_type"],
+                relation["object_id"],
+            ): relation["review_status"]
             for relation in result.relations
         }
 
-        assert ("concept:external-data-sources", "LEADS_TO", "concept:concept-drift") in relation_triples
-        assert ("concept:data-source-changes", "LEADS_TO", "concept:concept-drift") in relation_triples
-        assert ("concept:concept-drift", "CAUSES", "concept:model-staleness") in relation_triples
-        assert ("method:risk-analysis", "MITIGATES", "concept:feature-mismatch") in relation_triples
-        assert ("method:monitoring", "MITIGATES", "concept:concept-drift") in relation_triples
-        assert ("method:diversification", "PREVENTS", "concept:data-source-discontinuation") in relation_triples
         assert (
-            relation_status[("method:diversification", "PREVENTS", "concept:data-source-discontinuation")]
+            "concept:external-data-sources",
+            "LEADS_TO",
+            "concept:concept-drift",
+        ) in relation_triples
+        assert (
+            "concept:data-source-changes",
+            "LEADS_TO",
+            "concept:concept-drift",
+        ) in relation_triples
+        assert (
+            "concept:concept-drift",
+            "CAUSES",
+            "concept:model-staleness",
+        ) in relation_triples
+        assert (
+            "method:risk-analysis",
+            "MITIGATES",
+            "concept:feature-mismatch",
+        ) in relation_triples
+        assert (
+            "method:monitoring",
+            "MITIGATES",
+            "concept:concept-drift",
+        ) in relation_triples
+        assert (
+            "method:diversification",
+            "PREVENTS",
+            "concept:data-source-discontinuation",
+        ) in relation_triples
+        assert (
+            relation_status[
+                (
+                    "method:diversification",
+                    "PREVENTS",
+                    "concept:data-source-discontinuation",
+                )
+            ]
             == "pending"
         )
-        assert relation_status[("concept:data-source-changes", "LEADS_TO", "concept:concept-drift")] == "pending"
+        assert (
+            relation_status[
+                ("concept:data-source-changes", "LEADS_TO", "concept:concept-drift")
+            ]
+            == "pending"
+        )
 
     def test_entity_linker_promotes_ontology_title_theme_candidate(self):
         extraction = ExtractionResult(
@@ -1403,10 +1641,14 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
         data_source_changes = next(
-            concept for concept in result.concepts if concept["canonical_id"] == "concept:data-source-changes"
+            concept
+            for concept in result.concepts
+            if concept["canonical_id"] == "concept:data-source-changes"
         )
         assert data_source_changes["review_status"] == "approved"
         assert data_source_changes["accepted_for_kg_write"] is True
@@ -1430,9 +1672,15 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
-        machine_learning = next(concept for concept in result.concepts if concept["canonical_id"] == "concept:machine-learning")
+        machine_learning = next(
+            concept
+            for concept in result.concepts
+            if concept["canonical_id"] == "concept:machine-learning"
+        )
         assert machine_learning["review_status"] == "approved"
         assert machine_learning["accepted_for_kg_write"] is True
         assert result.concept_candidates == []
@@ -1496,7 +1744,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation_triples = {
             (relation["subject_id"], relation["relation_type"], relation["object_id"])
             for relation in result.relations
@@ -1545,7 +1795,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation = next(
             item
             for item in result.relations
@@ -1557,7 +1809,9 @@ class TestEntityLinker:
         assert relation["review_status"] == "pending"
         assert relation["source"] == "candidate_relation"
 
-    def test_entity_linker_filters_candidates_shadowed_by_accepted_canonical_entities(self):
+    def test_entity_linker_filters_candidates_shadowed_by_accepted_canonical_entities(
+        self,
+    ):
         extraction = ExtractionResult(
             paper_id="p1",
             concepts=[
@@ -1590,13 +1844,20 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
         candidate_ids = {item["canonical_id"] for item in result.concept_candidates}
         assert "concept:extrinsic-motivation" not in candidate_ids
-        assert next(item for item in result.concept_candidates if item["canonical_id"] == "concept:human-robot-interaction")[
-            "review_status"
-        ] == "pending"
+        assert (
+            next(
+                item
+                for item in result.concept_candidates
+                if item["canonical_id"] == "concept:human-robot-interaction"
+            )["review_status"]
+            == "pending"
+        )
 
     def test_entity_linker_builds_neurotransmitter_parameter_relations(self):
         extraction = ExtractionResult(
@@ -1653,19 +1914,29 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation_triples = {
             (relation["subject_id"], relation["relation_type"], relation["object_id"])
             for relation in result.relations
         }
 
-        assert ("concept:serotonin", "CORRESPONDS_TO", "concept:discount-factor") in relation_triples
+        assert (
+            "concept:serotonin",
+            "CORRESPONDS_TO",
+            "concept:discount-factor",
+        ) in relation_triples
         assert (
             "concept:noradrenaline",
             "CORRESPONDS_TO",
             "concept:boltzmann-action-selection-temperature",
         ) in relation_triples
-        assert ("concept:acetylcholine", "CORRESPONDS_TO", "concept:learning-rate") in relation_triples
+        assert (
+            "concept:acetylcholine",
+            "CORRESPONDS_TO",
+            "concept:learning-rate",
+        ) in relation_triples
 
     def test_entity_linker_promotes_relation_endpoint_candidates(self):
         extraction = ExtractionResult(
@@ -1748,7 +2019,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         concept_ids = {item["canonical_id"] for item in result.concepts}
         method_ids = {item["canonical_id"] for item in result.methods}
         candidate_ids = {
@@ -1756,7 +2029,12 @@ class TestEntityLinker:
             for item in [*result.concept_candidates, *result.method_candidates]
         }
         relation_triples = {
-            (relation["subject_id"], relation["relation_type"], relation["object_id"], relation["review_status"])
+            (
+                relation["subject_id"],
+                relation["relation_type"],
+                relation["object_id"],
+                relation["review_status"],
+            )
             for relation in result.relations
         }
 
@@ -1764,9 +2042,24 @@ class TestEntityLinker:
         assert "concept:pomdp" in concept_ids
         assert "concept:model-based-rl" in method_ids
         assert "concept:categorical-emotion" not in candidate_ids
-        assert ("concept:homeostasis", "ELICITS", "concept:categorical-emotion", "approved") in relation_triples
-        assert ("concept:bayesian-affect-control-theory", "EXTENDS", "concept:pomdp", "approved") in relation_triples
-        assert ("concept:model-based-rl", "USES", "concept:transition-model", "approved") in relation_triples
+        assert (
+            "concept:homeostasis",
+            "ELICITS",
+            "concept:categorical-emotion",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:bayesian-affect-control-theory",
+            "EXTENDS",
+            "concept:pomdp",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:model-based-rl",
+            "USES",
+            "concept:transition-model",
+            "approved",
+        ) in relation_triples
 
     def test_categorical_emotions_alias_resolves_to_domain_concept(self):
         resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
@@ -1798,7 +2091,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
 
         assert result.methods[0]["mention_count"] == 1
 
@@ -1833,7 +2128,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation = next(
             item
             for item in result.relations
@@ -1878,16 +2175,18 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation = next(
-            item
-            for item in result.relations
-            if item["relation_type"] == "MODULATED_BY"
+            item for item in result.relations if item["relation_type"] == "MODULATED_BY"
         )
 
         assert "valency directly influenced" in relation["evidence_span"]
 
-    def test_entity_linker_avoids_generic_quantum_network_evidence_for_qgan_relation(self):
+    def test_entity_linker_avoids_generic_quantum_network_evidence_for_qgan_relation(
+        self,
+    ):
         extraction = ExtractionResult(
             paper_id="arxiv:2602.11092",
             paper_type="benchmark",
@@ -1925,7 +2224,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         relation = next(
             item
             for item in result.relations
@@ -2079,7 +2380,9 @@ class TestEntityLinker:
             ],
         )
 
-        result = EntityLinker(resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())).enrich_extraction(extraction)
+        result = EntityLinker(
+            resolver=CanonicalResolver(embedding_engine=EmbeddingEngine())
+        ).enrich_extraction(extraction)
         concept_ids = {item["canonical_id"] for item in result.concepts}
         kg_write_ids = {
             item["canonical_id"]
@@ -2087,26 +2390,75 @@ class TestEntityLinker:
             if item.get("accepted_for_kg_write") is True
         }
         relation_triples = {
-            (item["subject_id"], item["relation_type"], item["object_id"], item["review_status"])
+            (
+                item["subject_id"],
+                item["relation_type"],
+                item["object_id"],
+                item["review_status"],
+            )
             for item in result.relations
         }
 
         assert "concept:temporal-entanglement" in concept_ids
         assert "concept:pointer-states" in kg_write_ids
-        assert ("concept:von-neumann-entropy", "USED_IN", "concept:quantum-mutual-information", "approved") in relation_triples
-        assert ("concept:schmidt-decomposition", "USED_IN", "concept:envariance", "approved") in relation_triples
-        assert ("concept:einselection", "IMPLIES", "concept:pointer-states", "approved") in relation_triples
-        assert ("concept:two-photon-vector-soliton", "CAUSES", "concept:temporal-entanglement", "approved") in relation_triples
-        assert ("concept:quantum-temporal-imaging", "USES", "concept:temporal-entanglement", "approved") in relation_triples
-        assert ("concept:cross-phase-modulation", "USED_FOR", "concept:temporal-entanglement", "approved") in relation_triples
-        assert ("concept:mirror-neurons", "PART_OF", "concept:mirror-neuron-system", "approved") in relation_triples
-        assert ("concept:directed-acyclic-graph", "USED_IN", "concept:reference-picture-selection", "approved") in relation_triples
+        assert (
+            "concept:von-neumann-entropy",
+            "USED_IN",
+            "concept:quantum-mutual-information",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:schmidt-decomposition",
+            "USED_IN",
+            "concept:envariance",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:einselection",
+            "IMPLIES",
+            "concept:pointer-states",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:two-photon-vector-soliton",
+            "CAUSES",
+            "concept:temporal-entanglement",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:quantum-temporal-imaging",
+            "USES",
+            "concept:temporal-entanglement",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:cross-phase-modulation",
+            "USED_FOR",
+            "concept:temporal-entanglement",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:mirror-neurons",
+            "PART_OF",
+            "concept:mirror-neuron-system",
+            "approved",
+        ) in relation_triples
+        assert (
+            "concept:directed-acyclic-graph",
+            "USED_IN",
+            "concept:reference-picture-selection",
+            "approved",
+        ) in relation_triples
 
     def test_canonical_resolver_degrades_hash_embeddings_without_auto_merge(self):
         resolver = CanonicalResolver(embedding_engine=EmbeddingEngine())
 
         result = resolver.resolve(
-            {"label": "Unseen Appraisal Variant", "context": "novel phrase", "confidence": 0.95}
+            {
+                "label": "Unseen Appraisal Variant",
+                "context": "novel phrase",
+                "confidence": 0.95,
+            }
         )
 
         assert result["review_status"] == "pending"
@@ -2130,5 +2482,3 @@ class TestEntityLinker:
         assert ontology.validate_relation_type("IMPLIES") == "IMPLIES"
         with pytest.raises(ValueError):
             ontology.validate_relation_type("MAKES_UP")
-
-

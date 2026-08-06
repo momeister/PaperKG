@@ -5,6 +5,7 @@ Split out of api/product_main.py. Behaviour unchanged. Patchbare Namen laufen
 ueber pm.<name>: run_suite (Test-Patch-Surface). _slug/_add_edge/... leben hier
 und werden nach product_main re-importiert (extraction/notes nutzen pm._slug).
 """
+
 from __future__ import annotations
 
 import json
@@ -108,7 +109,8 @@ def review_entities(
     if query:
         query_lower = query.lower()
         items = [
-            item for item in items
+            item
+            for item in items
             if query_lower in str(item.get("label") or "").lower()
             or query_lower in str(item.get("suggested_canonical") or "").lower()
             or query_lower in str(item.get("paper_id") or "").lower()
@@ -149,7 +151,9 @@ def graph_explorer(
 ) -> GraphExplorerResponse:
     projects = _load_projects(_projects_path(projects_path))
     selected_ids = set(projects.get(project_id, [])) if project_id else None
-    requested_edges = set(_split_query_values(edge_types) or ["cites", "concept", "method", "similar"])
+    requested_edges = set(
+        _split_query_values(edge_types) or ["cites", "concept", "method", "similar"]
+    )
 
     with MetadataDB(metadata_db_path) as db:
         papers = db.list_papers(limit=50000)
@@ -165,8 +169,12 @@ def graph_explorer(
     # and must never be pushed out by `limit` — `limit` only bounds how many
     # additional non-extracted papers are pulled in for citation/similarity context.
     extraction_by_paper = _latest_successful_extractions(extractions)
-    extracted_papers = [paper for paper in papers if str(paper.get("id")) in extraction_by_paper]
-    other_papers = [paper for paper in papers if str(paper.get("id")) not in extraction_by_paper]
+    extracted_papers = [
+        paper for paper in papers if str(paper.get("id")) in extraction_by_paper
+    ]
+    other_papers = [
+        paper for paper in papers if str(paper.get("id")) not in extraction_by_paper
+    ]
     extracted_count = len(extracted_papers)
     effective_limit = max(limit, extracted_count)
     papers = (extracted_papers + other_papers)[:effective_limit]
@@ -182,11 +190,16 @@ def graph_explorer(
             "label": str(paper.get("title") or pid)[:120],
             "type": "paper",
             "year": paper.get("year"),
-            "metadata": {"source": paper.get("source"), "source_id": paper.get("source_id")},
+            "metadata": {
+                "source": paper.get("source"),
+                "source_id": paper.get("source_id"),
+            },
         }
 
     if "cites" in requested_edges or "similar" in requested_edges:
-        refs_by_paper = {str(paper.get("id")): set(extract_citation_ids(paper)) for paper in papers}
+        refs_by_paper = {
+            str(paper.get("id")): set(extract_citation_ids(paper)) for paper in papers
+        }
         if "cites" in requested_edges:
             for source_id, refs in refs_by_paper.items():
                 for ref in refs:
@@ -201,7 +214,14 @@ def graph_explorer(
                     if shared and union:
                         score = len(shared) / len(union)
                         if score >= 0.1:
-                            _add_edge(edges, source_id, target_id, "similar", "SIMILAR", score=round(score, 4))
+                            _add_edge(
+                                edges,
+                                source_id,
+                                target_id,
+                                "similar",
+                                "SIMILAR",
+                                score=round(score, 4),
+                            )
 
     for pid in paper_ids:
         extraction = extraction_by_paper.get(pid)
@@ -209,20 +229,49 @@ def graph_explorer(
             continue
         if "concept" in requested_edges:
             for concept in _iter_labeled_items(extraction.get("concepts"))[:12]:
-                node_id = str(concept.get("canonical_id") or f"concept:{_slug(concept.get('label'))}")
+                node_id = str(
+                    concept.get("canonical_id")
+                    or f"concept:{_slug(concept.get('label'))}"
+                )
                 nodes.setdefault(
                     node_id,
-                    {"id": node_id, "label": concept.get("canonical_label") or concept.get("label"), "type": "concept", "metadata": concept},
+                    {
+                        "id": node_id,
+                        "label": concept.get("canonical_label") or concept.get("label"),
+                        "type": "concept",
+                        "metadata": concept,
+                    },
                 )
-                _add_edge(edges, pid, node_id, "concept", "HAS_CONCEPT", score=concept.get("confidence"))
+                _add_edge(
+                    edges,
+                    pid,
+                    node_id,
+                    "concept",
+                    "HAS_CONCEPT",
+                    score=concept.get("confidence"),
+                )
         if "method" in requested_edges:
             for method in _iter_labeled_items(extraction.get("methods"))[:12]:
-                node_id = str(method.get("canonical_id") or f"method:{_slug(method.get('label'))}")
+                node_id = str(
+                    method.get("canonical_id") or f"method:{_slug(method.get('label'))}"
+                )
                 nodes.setdefault(
                     node_id,
-                    {"id": node_id, "label": method.get("canonical_label") or method.get("label"), "type": "method", "metadata": method},
+                    {
+                        "id": node_id,
+                        "label": method.get("canonical_label") or method.get("label"),
+                        "type": "method",
+                        "metadata": method,
+                    },
                 )
-                _add_edge(edges, pid, node_id, "method", "HAS_METHOD", score=method.get("confidence"))
+                _add_edge(
+                    edges,
+                    pid,
+                    node_id,
+                    "method",
+                    "HAS_METHOD",
+                    score=method.get("confidence"),
+                )
 
     return GraphExplorerResponse(
         nodes=list(nodes.values()),
@@ -370,14 +419,20 @@ def list_benchmark_runs(
 
 
 @router.delete("/benchmark/runs/{run_id}")
-def delete_benchmark_run(run_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def delete_benchmark_run(
+    run_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         deleted = db.delete_benchmark_run(run_id)
     return {"deleted": deleted, "id": run_id}
 
 
-def _run_benchmark_suite_job(request: BenchmarkJobRequest | BenchmarkSuiteJobRequest) -> dict[str, Any]:
-    policies = list(getattr(request, "compare_context_policies", None) or []) or [request.context_policy]
+def _run_benchmark_suite_job(
+    request: BenchmarkJobRequest | BenchmarkSuiteJobRequest,
+) -> dict[str, Any]:
+    policies = list(getattr(request, "compare_context_policies", None) or []) or [
+        request.context_policy
+    ]
     return pm.run_suite(
         SuiteConfig(
             suite=getattr(request, "suite", None) or "core",
@@ -418,7 +473,14 @@ def _add_edge(
     edge_id = f"{source}->{edge_type}->{target}"
     edges.setdefault(
         edge_id,
-        {"id": edge_id, "source": source, "target": target, "type": edge_type, "label": label, "score": score},
+        {
+            "id": edge_id,
+            "source": source,
+            "target": target,
+            "type": edge_type,
+            "label": label,
+            "score": score,
+        },
     )
 
 

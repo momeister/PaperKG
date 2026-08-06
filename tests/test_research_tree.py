@@ -1,13 +1,18 @@
 """Tests for the deep-analysis research tree: synthesis citation stripping,
 question de-duplication / deterministic resume, and real extraction of harvested papers.
 """
+
 from __future__ import annotations
 
 import json
 from types import SimpleNamespace
 
 from query import auto_harvester
-from query.auto_harvester import _extract_pdf_into_db, harvest_for_question, ingest_paper_record
+from query.auto_harvester import (
+    _extract_pdf_into_db,
+    harvest_for_question,
+    ingest_paper_record,
+)
 from query.research_tree import (
     ResearchTreeRunner,
     _normalize_question,
@@ -21,6 +26,7 @@ from storage.metadata_db import MetadataDB
 # --------------------------------------------------------------------------- #
 # Fix 1 — _strip_unknown_citations must not raise "no such group"
 # --------------------------------------------------------------------------- #
+
 
 def test_strip_unknown_citations_keeps_known_and_strips_unknown() -> None:
     text = "Befund A [arxiv:1234.5678]. Behauptung B [arxiv:9999.0000]."
@@ -39,6 +45,7 @@ def test_strip_unknown_citations_passthrough_without_known_ids() -> None:
 # Fix 2 — dedup of repeated questions + resume that does not re-search
 # --------------------------------------------------------------------------- #
 
+
 def _parse_events(raw_events: list[str]) -> list[dict]:
     return [json.loads(e.removeprefix("data: ").strip()) for e in raw_events]
 
@@ -48,7 +55,12 @@ def _make_runner(answer_calls: dict) -> ResearchTreeRunner:
 
     def fake_answer(question, *args, **kwargs):  # no self — set as instance attribute
         answer_calls["n"] += 1
-        return {"answer": f"Antwort zu {question}", "no_answer": False, "context_diagnostics": {}, "sources": []}
+        return {
+            "answer": f"Antwort zu {question}",
+            "no_answer": False,
+            "context_diagnostics": {},
+            "sources": [],
+        }
 
     def fake_decompose(question, n, provider=None, model=None):
         # Same two sub-questions for every node → forces cross-branch duplicates.
@@ -64,9 +76,15 @@ async def test_research_tree_dedups_questions() -> None:
     answer_calls = {"n": 0}
     runner = _make_runner(answer_calls)
 
-    raw = [e async for e in runner.stream_events(
-        question="Hauptfrage", depth=2, branches=2, auto_harvest=False,
-    )]
+    raw = [
+        e
+        async for e in runner.stream_events(
+            question="Hauptfrage",
+            depth=2,
+            branches=2,
+            auto_harvest=False,
+        )
+    ]
     done = [e for e in _parse_events(raw) if e.get("status") == "done"]
 
     questions = [_normalize_question(e["question"]) for e in done]
@@ -80,16 +98,28 @@ async def test_research_tree_resume_does_not_reanswer() -> None:
     answer_calls = {"n": 0}
     runner = _make_runner(answer_calls)
 
-    raw = [e async for e in runner.stream_events(
-        question="Hauptfrage", depth=2, branches=2, auto_harvest=False,
-    )]
+    raw = [
+        e
+        async for e in runner.stream_events(
+            question="Hauptfrage",
+            depth=2,
+            branches=2,
+            auto_harvest=False,
+        )
+    ]
     initial_nodes = [e for e in _parse_events(raw) if e.get("status") == "done"]
 
     answer_calls["n"] = 0
-    raw2 = [e async for e in runner.stream_events(
-        question="Hauptfrage", depth=2, branches=2, auto_harvest=False,
-        initial_nodes=initial_nodes,
-    )]
+    raw2 = [
+        e
+        async for e in runner.stream_events(
+            question="Hauptfrage",
+            depth=2,
+            branches=2,
+            auto_harvest=False,
+            initial_nodes=initial_nodes,
+        )
+    ]
     done2 = [e for e in _parse_events(raw2) if e.get("status") == "done"]
 
     # Resume replays the saved tree without re-running a single answer LLM call.
@@ -104,10 +134,14 @@ async def test_research_tree_resume_does_not_reanswer() -> None:
 # depth-3+ findings are folded into the matching subsection as context.
 # --------------------------------------------------------------------------- #
 
+
 def _tree_nodes() -> list[dict]:
     def node(nid, pid, q, depth, ans="...", sources=None):
         return {
-            "id": nid, "parent_id": pid, "question": q, "depth": depth,
+            "id": nid,
+            "parent_id": pid,
+            "question": q,
+            "depth": depth,
             "chapter_question": None if depth <= 1 else q,
             "answer": {"answer": ans, "sources": sources or []},
         }
@@ -135,7 +169,11 @@ def test_synthesis_steps_promote_depth2_to_subsections() -> None:
     assert "## Kapitel Eins" in headings
     assert "## Kapitel Zwei" in headings
     sub_headings = [h for h in headings if h.startswith("### ")]
-    assert sub_headings == ["### Unterfrage 1a", "### Unterfrage 1b", "### Unterfrage 2a"]
+    assert sub_headings == [
+        "### Unterfrage 1a",
+        "### Unterfrage 1b",
+        "### Unterfrage 2a",
+    ]
 
     # Depth-3 finding is folded into its depth-2 parent's prompt, not its own section.
     sub_2a = next(s for s in steps if s["heading"] == "### Unterfrage 2a")
@@ -147,17 +185,22 @@ def test_synthesis_steps_promote_depth2_to_subsections() -> None:
 # duplicate-looking ToC entries) and demote/normalize stray ####/## headings.
 # --------------------------------------------------------------------------- #
 
+
 def test_normalize_strips_leading_restated_heading() -> None:
     # The LLM restates our injected "### {Frage}" as its own ### heading → must be dropped.
     body = "### Die Rolle des Systems\n\nText hier."
-    out = _normalize_synthesis_body(body, "### Welche Rolle spielt das System?", keep_subsections=False)
+    out = _normalize_synthesis_body(
+        body, "### Welche Rolle spielt das System?", keep_subsections=False
+    )
     assert not out.startswith("#")
     assert out.startswith("Text hier.")
 
 
 def test_normalize_demotes_stray_chapter_headings() -> None:
     body = "Absatz.\n\n## Neues Kapitel\n\nMehr Text."
-    out_lines = _normalize_synthesis_body(body, "### Unterabschnitt", keep_subsections=False).split("\n")
+    out_lines = _normalize_synthesis_body(
+        body, "### Unterabschnitt", keep_subsections=False
+    ).split("\n")
     # Exact-line check (a "## …" substring would also match the demoted "#### …" line).
     assert "## Neues Kapitel" not in out_lines
     assert "#### Neues Kapitel" in out_lines
@@ -211,6 +254,7 @@ def test_synthesize_sync_preserves_known_and_strips_unknown_citations() -> None:
 # Fix 3 — real extraction of harvested papers + project attach
 # --------------------------------------------------------------------------- #
 
+
 def test_extract_pdf_into_db_writes_real_extraction(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "metadata.duckdb"
 
@@ -234,7 +278,9 @@ def test_extract_pdf_into_db_writes_real_extraction(tmp_path, monkeypatch) -> No
     )
 
     class FakePipeline:
-        def process(self, paper_id, text, provider=None, overrides=None, link_concepts=True):
+        def process(
+            self, paper_id, text, provider=None, overrides=None, link_concepts=True
+        ):
             return fake_result
 
     class FakeParser:
@@ -242,10 +288,17 @@ def test_extract_pdf_into_db_writes_real_extraction(tmp_path, monkeypatch) -> No
             return SimpleNamespace(text="Long parsed paper text " * 20)
 
     with MetadataDB(str(db_path)) as db:
-        db.insert_paper({"id": "arxiv:1", "source": "arxiv", "source_id": "1", "title": "T"})
+        db.insert_paper(
+            {"id": "arxiv:1", "source": "arxiv", "source_id": "1", "title": "T"}
+        )
         ok = _extract_pdf_into_db(
-            db, FakePipeline(), FakeParser(), "arxiv:1", str(tmp_path / "x.pdf"),
-            provider="lm_studio", model="qwen",
+            db,
+            FakePipeline(),
+            FakeParser(),
+            "arxiv:1",
+            str(tmp_path / "x.pdf"),
+            provider="lm_studio",
+            model="qwen",
         )
         rows = db._execute(
             "SELECT llm_provider, extraction_status FROM extraction_results WHERE paper_id = ?",
@@ -264,7 +317,9 @@ async def _no_remote_sources(question, sources, max_papers):  # noqa: ANN001, AR
     return []
 
 
-async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monkeypatch) -> None:
+async def test_harvest_attaches_to_project_and_synthetic_fallback(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
     pdf_dir = tmp_path / "pdfs"
@@ -273,8 +328,12 @@ async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monk
     projects_path.write_text(json.dumps({}), encoding="utf-8")
 
     paper = {
-        "id": "arxiv:5", "source": "arxiv", "source_id": "5",
-        "title": "Paper Five", "abstract": "An abstract.", "pdf_url": None,
+        "id": "arxiv:5",
+        "source": "arxiv",
+        "source_id": "5",
+        "title": "Paper Five",
+        "abstract": "An abstract.",
+        "pdf_url": None,
     }
 
     class FakeArxiv:
@@ -295,7 +354,9 @@ async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monk
     monkeypatch.setattr(auto_harvester, "SemanticScholarClient", FakeSS)
     # Die breite Quellen-Aufaecherung wuerde echte APIs anfragen; hier wird der
     # schlanke arXiv/S2-Fallback getestet (Projekt-Zuordnung + synthetische Extraktion).
-    monkeypatch.setattr(auto_harvester, "_search_scientific_sources", _no_remote_sources)
+    monkeypatch.setattr(
+        auto_harvester, "_search_scientific_sources", _no_remote_sources
+    )
 
     inserted = await harvest_for_question(
         question="frage",
@@ -312,7 +373,8 @@ async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monk
 
     with MetadataDB(str(db_path)) as db:
         rows = db._execute(
-            "SELECT llm_provider FROM extraction_results WHERE paper_id = ?", ["arxiv:5"],
+            "SELECT llm_provider FROM extraction_results WHERE paper_id = ?",
+            ["arxiv:5"],
         ).fetchall()
     # No PDF + no router → synthetic title/abstract extraction.
     assert rows and rows[0][0] == "auto-harvest"
@@ -322,6 +384,7 @@ async def test_harvest_attaches_to_project_and_synthetic_fallback(tmp_path, monk
 # On-demand ingest — download a cited paper's PDF and record the local path so the
 # citation no longer reports pdf_available:false (the "Kein PDF verfügbar" limbo).
 # --------------------------------------------------------------------------- #
+
 
 class _FakePdfResponse:
     content = b"%PDF-1.4 minimal pdf bytes"
@@ -343,15 +406,22 @@ async def test_ingest_paper_record_downloads_and_records_local_pdf(tmp_path) -> 
     storage = FileManager(str(pdf_dir))
 
     paper = {
-        "id": "arxiv:7", "source": "arxiv", "source_id": "7",
-        "title": "Paper Seven", "abstract": "Abstract.",
+        "id": "arxiv:7",
+        "source": "arxiv",
+        "source_id": "7",
+        "title": "Paper Seven",
+        "abstract": "Abstract.",
         "pdf_url": "https://example.org/seven.pdf",  # no DOI → OA resolver is a no-op
     }
 
     with MetadataDB(str(db_path)) as db:
         db.insert_paper(paper)
         result = await ingest_paper_record(
-            paper, db, storage, _FakePdfClient(), extract=False,  # type: ignore[arg-type]
+            paper,
+            db,
+            storage,
+            _FakePdfClient(),
+            extract=False,  # type: ignore[arg-type]
         )
         stored = db.get_paper("arxiv:7")
 

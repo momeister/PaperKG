@@ -33,9 +33,13 @@ def load_cases(path: Path = DEFAULT_CASES_PATH) -> list[Phase4Case]:
             Phase4Case(
                 id=str(item["id"]),
                 question=str(item["question"]),
-                expected_sources=[str(value) for value in item.get("expected_sources", [])],
+                expected_sources=[
+                    str(value) for value in item.get("expected_sources", [])
+                ],
                 required_terms=[str(value) for value in item.get("required_terms", [])],
-                forbidden_terms=[str(value) for value in item.get("forbidden_terms", [])],
+                forbidden_terms=[
+                    str(value) for value in item.get("forbidden_terms", [])
+                ],
             )
         )
     return cases
@@ -51,9 +55,17 @@ def evaluate_answer(case: Phase4Case, answer_payload: dict[str, Any]) -> dict[st
     cited_sources = _cited_paper_ids(answer_text)
     all_sources = returned_sources | cited_sources
 
-    missing_sources = [source for source in case.expected_sources if source not in all_sources]
-    missing_terms = [term for term in case.required_terms if not _required_term_present(term, answer_text)]
-    forbidden_hits = [term for term in case.forbidden_terms if _norm(term) in _norm(answer_text)]
+    missing_sources = [
+        source for source in case.expected_sources if source not in all_sources
+    ]
+    missing_terms = [
+        term
+        for term in case.required_terms
+        if not _required_term_present(term, answer_text)
+    ]
+    forbidden_hits = [
+        term for term in case.forbidden_terms if _norm(term) in _norm(answer_text)
+    ]
     invalid_citations = _invalid_citations(answer_text)
     generation_error = answer_payload.get("generation_error")
     no_answer = bool(answer_payload.get("no_answer"))
@@ -149,7 +161,9 @@ def summarize(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
             case["id"] for case in case_reports if case.get("forbidden_hits")
         ],
         "generation_error_cases": [
-            case["id"] for case in case_reports if case.get("generation_error") or case.get("no_answer")
+            case["id"]
+            for case in case_reports
+            if case.get("generation_error") or case.get("no_answer")
         ],
     }
 
@@ -205,7 +219,11 @@ def _cited_paper_ids(answer_text: str) -> set[str]:
     for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
         for value in re.split(r"[,;]\s*", bracketed):
             value = value.strip()
-            if value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p"):
+            if (
+                value.startswith("arxiv:")
+                or value.startswith("doi:")
+                or value.startswith("p")
+            ):
                 ids.add(value)
     return ids
 
@@ -213,7 +231,9 @@ def _cited_paper_ids(answer_text: str) -> set[str]:
 def _invalid_citations(answer_text: str) -> list[str]:
     invalid: list[str] = []
     for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
-        parts = [part.strip() for part in re.split(r"[,;]\s*", bracketed) if part.strip()]
+        parts = [
+            part.strip() for part in re.split(r"[,;]\s*", bracketed) if part.strip()
+        ]
         for part in parts:
             if re.fullmatch(r"\d+", part):
                 invalid.append(part)
@@ -229,15 +249,41 @@ def _invalid_citations(answer_text: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Evaluate Phase 4 grounded answers against a small gold question set.")
-    parser.add_argument("--provider", action="append", required=True, help="Provider to evaluate. Can be passed multiple times.")
-    parser.add_argument("--model", default=None, help="Optional model override. Applied to all providers.")
-    parser.add_argument("--cases", default=str(DEFAULT_CASES_PATH), help="Path to Phase 4 eval cases JSON.")
-    parser.add_argument("--metadata-db", default="data/metadata.duckdb", help="DuckDB metadata path.")
-    parser.add_argument("--graph-db", default="data/graphs/global_kg", help="Kuzu graph path.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate Phase 4 grounded answers against a small gold question set."
+    )
+    parser.add_argument(
+        "--provider",
+        action="append",
+        required=True,
+        help="Provider to evaluate. Can be passed multiple times.",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Optional model override. Applied to all providers.",
+    )
+    parser.add_argument(
+        "--cases",
+        default=str(DEFAULT_CASES_PATH),
+        help="Path to Phase 4 eval cases JSON.",
+    )
+    parser.add_argument(
+        "--metadata-db", default="data/metadata.duckdb", help="DuckDB metadata path."
+    )
+    parser.add_argument(
+        "--graph-db", default="data/graphs/global_kg", help="Kuzu graph path."
+    )
     parser.add_argument("--limit", type=int, default=8, help="Retrieval limit.")
-    parser.add_argument("--timeout-seconds", type=float, default=None, help="Optional LLM timeout override.")
-    parser.add_argument("--output", default=None, help="Optional path to write JSON report.")
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=None,
+        help="Optional LLM timeout override.",
+    )
+    parser.add_argument(
+        "--output", default=None, help="Optional path to write JSON report."
+    )
     args = parser.parse_args(argv)
 
     reports = []

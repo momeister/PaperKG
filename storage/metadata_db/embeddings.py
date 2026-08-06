@@ -32,7 +32,8 @@ class EmbeddingsMixin(_Base):
         Persist a normalized entity embedding for reuse across batch runs.
         """
         now = datetime.now()
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO entity_embeddings
             (label_norm, label, model, backend, dimension, embedding_version, vector, updated_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -42,16 +43,18 @@ class EmbeddingsMixin(_Base):
                 dimension = EXCLUDED.dimension,
                 vector = EXCLUDED.vector,
                 updated_timestamp = EXCLUDED.updated_timestamp
-        """, [
-            self._normalize_embedding_label(label),
-            label,
-            model,
-            backend,
-            int(dimension),
-            int(embedding_version),
-            json.dumps(vector),
-            now,
-        ])
+        """,
+            [
+                self._normalize_embedding_label(label),
+                label,
+                model,
+                backend,
+                int(dimension),
+                int(embedding_version),
+                json.dumps(vector),
+                now,
+            ],
+        )
 
     def get_entity_embedding(
         self,
@@ -59,10 +62,13 @@ class EmbeddingsMixin(_Base):
         model: str,
         embedding_version: int = 1,
     ) -> dict[str, Any] | None:
-        result = self._execute("""
+        result = self._execute(
+            """
             SELECT * FROM entity_embeddings
             WHERE label_norm = ? AND model = ? AND embedding_version = ?
-        """, [self._normalize_embedding_label(label), model, int(embedding_version)]).fetchone()
+        """,
+            [self._normalize_embedding_label(label), model, int(embedding_version)],
+        ).fetchone()
         if result is None:
             return None
         cols = [desc[0] for desc in self.conn.description]
@@ -70,20 +76,28 @@ class EmbeddingsMixin(_Base):
         data["vector"] = json.loads(data["vector"])
         return data
 
-    def list_entity_embeddings(self, model: str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
+    def list_entity_embeddings(
+        self, model: str | None = None, limit: int = 1000
+    ) -> list[dict[str, Any]]:
         if model is None:
-            results = self._execute("""
+            results = self._execute(
+                """
                 SELECT * FROM entity_embeddings
                 ORDER BY updated_timestamp DESC
                 LIMIT ?
-            """, [limit]).fetchall()
+            """,
+                [limit],
+            ).fetchall()
         else:
-            results = self._execute("""
+            results = self._execute(
+                """
                 SELECT * FROM entity_embeddings
                 WHERE model = ?
                 ORDER BY updated_timestamp DESC
                 LIMIT ?
-            """, [model, limit]).fetchall()
+            """,
+                [model, limit],
+            ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         data_list = []
         for row in results:

@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   ChevronRight,
   Compass,
+  FileText,
   GraduationCap,
+  Link as LinkIcon,
   ListChecks,
   Loader2,
   Plus,
   Sparkles,
   Target,
+  Type,
   X,
 } from "lucide-react";
 
@@ -23,19 +26,19 @@ import type {
 } from "../types";
 import { CreativitySlider } from "../components/CreativitySlider";
 import { TaskIngestDialog } from "./TaskIngestDialog";
+import { ParallelTransferDialog } from "./ParallelTransferDialog";
 import { TaskResearchSuggestions } from "./TaskResearchSuggestions";
 import { TaskSpecCard } from "./TaskSpecCard";
 
 /**
  * Task-Focused Pane — Overlay-Container für den Task-Modus (Hackathon/Kaggle/Anweisung).
  *
- * Plan §Session 4: Zeigt die Task-Spec, lädt Forschungsrichtungen, erzeugt einen
+ * Zeigt die Task-Spec, lädt Forschungsrichtungen, erzeugt einen
  * Implementationsplan und kann eine parallele Research-Session starten
  * (verkabelt via ``onStartParallelSession`` mit der Task als grey source).
  *
- * Der Container ist ein Overlay *innerhalb* der Workspace-Seite, kein eigener
- * Panel-Slot — im Task-Modus kollabieren die Navigator-Tabs (Plan: nav-tabs
- * default-collapsed) und dieses Pane überdeckt die Center-+Assistant-Spalten.
+ * Im Leerzustand wird die Fokus-Auswahl (PDF/URL/Text) inline angezeigt —
+ * kein Modal. Sobald eine Task existiert, erscheinen TaskSpecCard + Aktionen.
  */
 type Props = {
   projectId: string;
@@ -49,6 +52,8 @@ type Props = {
   onClose: () => void;
 };
 
+type Source = "url" | "pdf" | "text";
+
 export function TaskFocusedPane({
   projectId,
   provider = null,
@@ -60,7 +65,6 @@ export function TaskFocusedPane({
 }: Props) {
   const queryClient = useQueryClient();
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [showIngest, setShowIngest] = useState(false);
   const [selectedDirection, setSelectedDirection] = useState<TaskResearchDirection | null>(null);
   const [plan, setPlan] = useState<TaskImplementationPlan | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
@@ -69,6 +73,16 @@ export function TaskFocusedPane({
   const [greyCitation, setGreyCitation] = useState<string | null>(null);
   const [greyError, setGreyError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Inline-Erfassung (Leerzustand)
+  const [inlineSource, setInlineSource] = useState<Source>("text");
+  const [inlineUrl, setInlineUrl] = useState("");
+  const [inlineText, setInlineText] = useState("");
+  const [inlinePdfFile, setInlinePdfFile] = useState<File | null>(null);
+  const [inlineBusy, setInlineBusy] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [showIngest, setShowIngest] = useState(false);
+  // Dialog: Forschungsrichtung in den Parallel-Modus überführen.
+  const [transferDirection, setTransferDirection] = useState<TaskResearchDirection | null>(null);
 
   // Tasks des Projekts laden
   const tasksQuery = useQuery({
@@ -102,11 +116,60 @@ export function TaskFocusedPane({
     void queryClient.invalidateQueries({ queryKey: ["tasks", projectId] });
   }
 
+  async function handleDeleteTask(taskId: string) {
+    try {
+      await api.tasks.remove(taskId);
+      if (activeTaskId === taskId) setActiveTaskId(null);
+      refreshTasks();
+      setToast("Aufgabe gelöscht");
+      window.setTimeout(() => setToast(null), 2500);
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+      window.setTimeout(() => setToast(null), 4000);
+    }
+  }
+
   function handleTaskCreated(task: Task) {
     refreshTasks();
     setActiveTaskId(task.id);
+    setInlineUrl("");
+    setInlineText("");
+    setInlinePdfFile(null);
+    setInlineError(null);
     setToast(`Task „${task.title}“ aufgenommen`);
     window.setTimeout(() => setToast(null), 2500);
+  }
+
+  const canSubmitInline =
+    !inlineBusy &&
+    ((inlineSource === "url" && inlineUrl.trim().length > 0) ||
+      (inlineSource === "text" && inlineText.trim().length > 0) ||
+      (inlineSource === "pdf" && inlinePdfFile !== null));
+
+  async function handleInlineSubmit() {
+    if (!canSubmitInline) return;
+    setInlineBusy(true);
+    setInlineError(null);
+    try {
+      let pdfPath: string | null = null;
+      if (inlineSource === "pdf" && inlinePdfFile) {
+        const up = await api.uploadPdf(inlinePdfFile, { title: inlinePdfFile.name, project_id: projectId });
+        pdfPath = up.pdf_path;
+      }
+      const task = await api.tasks.ingest(projectId, {
+        source_kind: inlineSource,
+        source_url: inlineSource === "url" ? inlineUrl.trim() : null,
+        source_text: inlineSource === "text" ? inlineText.trim() : null,
+        source_pdf_path: pdfPath,
+        provider,
+        model,
+      });
+      handleTaskCreated(task);
+    } catch (err) {
+      setInlineError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInlineBusy(false);
+    }
   }
 
   async function handleSelectDirection(dir: TaskResearchDirection) {
@@ -154,6 +217,20 @@ export function TaskFocusedPane({
     onStartParallelSession(question, activeTask.id);
   }
 
+  function handleStartParallelFromDirection(direction: TaskResearchDirection) {
+    if (!activeTask) return;
+    setSelectedDirection(direction);
+    setTransferDirection(direction);
+  }
+
+  function handleConfirmTransfer(question: string, _creativity: CreativityLevel) {
+    if (!activeTask || !transferDirection) return;
+    // creativity wird projektweit übernommen, damit die Session sie erbt.
+    setCreativityLevel(_creativity);
+    setTransferDirection(null);
+    onStartParallelSession(question, activeTask.id);
+  }
+
   return (
     <section className="task-focused-pane" aria-label="Task-Focused Mode">
       <header className="task-focused-pane__head">
@@ -165,15 +242,17 @@ export function TaskFocusedPane({
           </div>
         </div>
         <div className="task-focused-pane__head-actions">
-          <button
-            type="button"
-            className="button button-compact button-primary"
-            onClick={() => setShowIngest(true)}
-            title="Neue Aufgabe aufnehmen (URL, PDF oder Freitext)"
-          >
-            <Plus size={13} />
-            <span>Aufgabe aufnehmen</span>
-          </button>
+          {tasks.length > 0 ? (
+            <button
+              type="button"
+              className="button button-compact button-primary"
+              onClick={() => setShowIngest(true)}
+              title="Neue Aufgabe aufnehmen (URL, PDF oder Freitext)"
+            >
+              <Plus size={13} />
+              <span>Neue Aufgabe</span>
+            </button>
+          ) : null}
           <button
             type="button"
             className="icon-button"
@@ -184,18 +263,6 @@ export function TaskFocusedPane({
           </button>
         </div>
       </header>
-
-      <div className="task-focused-pane__creativity">
-        <CreativitySlider
-          value={creativityLevel}
-          onChange={setCreativityLevel}
-          label="Kreativität für dieses Projekt"
-          id="task-creativity"
-        />
-        <span className="muted task-focused-pane__creativity-hint">
-          Steuert, wie konventionell (1) oder cross-domain (5) Vorschläge, Richtungen und Varianten ausfallen.
-        </span>
-      </div>
 
       {tasksQuery.isLoading ? (
         <div className="parallel-loading">
@@ -208,12 +275,87 @@ export function TaskFocusedPane({
           <p>Noch keine Aufgabe aufgenommen.</p>
           <p className="muted">
             Lade eine Aufgabenstellung als URL, PDF oder Freitext — der Assistant extrahiert daraus eine
-            strukturierte Task-Spec (Ziel, Evaluation, Datensätze, Constraints).
+            strukturierte Task-Spec (Ziel, Evaluation, Datensätze, Kriterien).
           </p>
-          <button type="button" className="button button-primary" onClick={() => setShowIngest(true)}>
-            <Plus size={13} />
-            <span>Aufgabe aufnehmen</span>
-          </button>
+
+          <div className="task-focused-inline-ingest">
+            <div className="segmented task-ingest-source-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inlineSource === "text"}
+                className={inlineSource === "text" ? "active" : ""}
+                onClick={() => setInlineSource("text")}
+              >
+                <Type size={14} />
+                <span>Freitext</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inlineSource === "url"}
+                className={inlineSource === "url" ? "active" : ""}
+                onClick={() => setInlineSource("url")}
+              >
+                <LinkIcon size={14} />
+                <span>URL</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inlineSource === "pdf"}
+                className={inlineSource === "pdf" ? "active" : ""}
+                onClick={() => setInlineSource("pdf")}
+              >
+                <FileText size={14} />
+                <span>PDF</span>
+              </button>
+            </div>
+
+            {inlineSource === "text" ? (
+              <textarea
+                rows={6}
+                placeholder="z. B. „Baue einen Klassifikator für arrhythmiefreie EKG-Abschnitte aus dem MIT-BIH-Subset. Ziel: F1 ≥ 0.85 auf einer gehaltenen Patient-Disjunkt-Testmenge. Constraint: Modell muss auf CPU unter 200 ms pro 10-s-Abschnitt inferieren.“"
+                value={inlineText}
+                onChange={(e) => setInlineText(e.target.value)}
+                disabled={inlineBusy}
+              />
+            ) : null}
+            {inlineSource === "url" ? (
+              <>
+                <input
+                  type="url"
+                  placeholder="https://www.kaggle.com/competitions/…"
+                  value={inlineUrl}
+                  onChange={(e) => setInlineUrl(e.target.value)}
+                  disabled={inlineBusy}
+                />
+                <span className="muted task-ingest-hint">
+                  Der Backend lädt die Seite herunter und parst den sichtbaren Text.
+                </span>
+              </>
+            ) : null}
+            {inlineSource === "pdf" ? (
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => setInlinePdfFile(e.target.files?.[0] ?? null)}
+                disabled={inlineBusy}
+              />
+            ) : null}
+
+            {inlineError ? <div className="warning-row">{inlineError}</div> : null}
+
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={handleInlineSubmit}
+              disabled={!canSubmitInline}
+            >
+              {inlineBusy ? <Loader2 size={14} className="spin" /> : <Target size={14} />}
+              <span>{inlineBusy ? "Extrahiere…" : "Aufgabe aufnehmen"}</span>
+            </button>
+          </div>
         </div>
       ) : (
         <>
@@ -236,7 +378,7 @@ export function TaskFocusedPane({
 
           {activeTask ? (
             <>
-              <TaskSpecCard task={activeTask} onUpdated={refreshTasks} />
+              <TaskSpecCard task={activeTask} onUpdated={refreshTasks} onDeleted={handleDeleteTask} />
 
               <TaskResearchSuggestions
                 task={activeTask}
@@ -245,6 +387,7 @@ export function TaskFocusedPane({
                 model={model}
                 selectedLabel={selectedDirection?.label ?? null}
                 onSelect={handleSelectDirection}
+                onStartParallel={handleStartParallelFromDirection}
                 initialDirections={activeTask.task_json?.suggested_directions ?? []}
               />
 
@@ -312,6 +455,17 @@ export function TaskFocusedPane({
                   <Sparkles size={15} />
                   <strong>Parallele Varianten starten</strong>
                 </div>
+                <div className="task-focused-pane__creativity">
+                  <span className="task-focused-pane__creativity-label muted">Konservativ → Creativ</span>
+                  <CreativitySlider
+                    value={creativityLevel}
+                    onChange={setCreativityLevel}
+                    id="task-creativity"
+                    compact
+                    hint="Gilt projektweit für den Implementationsplan und Parallele Sessions (1 = konservativ, 5 = cross-domain)."
+                    tooltip="Kreativität projektweit — steuert Implementationsplan und Parallele Sessions dieser Aufgabe."
+                  />
+                </div>
                 <p className="muted">
                   Startet eine parallele Research-Session aus der Task-Spec — der Assistant schlägt mehrere
                   Umsetzungs-Varianten vor, die du im „Ergebnisse"-Tab einzeln ausprobieren und begutachten lassen kannst.
@@ -339,6 +493,17 @@ export function TaskFocusedPane({
         open={showIngest}
         onClose={() => setShowIngest(false)}
         onTaskCreated={handleTaskCreated}
+        provider={provider}
+        model={model}
+      />
+
+      <ParallelTransferDialog
+        direction={transferDirection ?? ({} as TaskResearchDirection)}
+        taskTitle={activeTask?.title ?? ""}
+        creativityLevel={creativityLevel}
+        open={!!transferDirection}
+        onClose={() => setTransferDirection(null)}
+        onConfirm={handleConfirmTransfer}
       />
     </section>
   );

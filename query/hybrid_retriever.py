@@ -63,7 +63,12 @@ class HybridRetriever:
 
         if include_embeddings:
             for match in self.find_embedding_matches(query):
-                for label_hit in self.kg_retriever.search(match.label, limit=limit, include_extractions=True, paper_ids=paper_ids):
+                for label_hit in self.kg_retriever.search(
+                    match.label,
+                    limit=limit,
+                    include_extractions=True,
+                    paper_ids=paper_ids,
+                ):
                     target = merged.get(label_hit.source.paper_id)
                     if target is None:
                         target = SearchHit(source=label_hit.source)
@@ -123,7 +128,9 @@ class HybridRetriever:
     def paper_detail(self, paper_id: str) -> dict[str, Any] | None:
         return self.kg_retriever.paper_detail(paper_id)
 
-    def paper_neighborhood(self, paper_id: str, limit: int = 20) -> dict[str, Any] | None:
+    def paper_neighborhood(
+        self, paper_id: str, limit: int = 20
+    ) -> dict[str, Any] | None:
         return self.kg_retriever.paper_neighborhood(paper_id, limit=limit)
 
 

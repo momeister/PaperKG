@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +30,11 @@ class PaperMetaMixin(_Base):
     def _normalize_paper_type(value: Any) -> str:
         """Normalize paper type to the supported controlled vocabulary."""
         paper_type = str(value or "research").strip().lower()
-        return paper_type if paper_type in {"research", "survey", "theoretical", "benchmark"} else "research"
+        return (
+            paper_type
+            if paper_type in {"research", "survey", "theoretical", "benchmark"}
+            else "research"
+        )
 
     @classmethod
     def _detect_paper_type(cls, text: str) -> str | None:
@@ -45,7 +50,10 @@ class PaperMetaMixin(_Base):
         framework_intro = bool(
             re.search(r"\b(we|this paper|we introduce|we present|we propose)\b", sample)
             and re.search(r"\b(framework|engine|toolkit|library|platform)\b", sample)
-            and re.search(r"\b(benchmark|dataset|task|evaluate|evaluation|reproduce|reproduces|mnist|sst-?2)\b", sample)
+            and re.search(
+                r"\b(benchmark|dataset|task|evaluate|evaluation|reproduce|reproduces|mnist|sst-?2)\b",
+                sample,
+            )
         )
         if any(marker in title for marker in benchmark_markers) or framework_intro:
             return "benchmark"
@@ -66,11 +74,17 @@ class PaperMetaMixin(_Base):
         return None
 
     @classmethod
-    def _resolve_paper_type(cls, semantic_type: Any, detected_type: str | None, text: str) -> str:
+    def _resolve_paper_type(
+        cls, semantic_type: Any, detected_type: str | None, text: str
+    ) -> str:
         """Combine model paper-type output with deterministic safeguards."""
         paper_type = cls._normalize_paper_type(semantic_type)
         detected = cls._normalize_paper_type(detected_type) if detected_type else None
-        if detected == "benchmark" and paper_type in {"research", "survey", "benchmark"}:
+        if detected == "benchmark" and paper_type in {
+            "research",
+            "survey",
+            "benchmark",
+        }:
             return "benchmark"
         if detected == "survey" and paper_type == "research":
             return "survey"
@@ -88,11 +102,19 @@ class PaperMetaMixin(_Base):
                 continue
             if lowered in {"abstract", "introduction"}:
                 continue
-            if lowered in {"article", "research article", "original article", "original research", "open access"}:
+            if lowered in {
+                "article",
+                "research article",
+                "original article",
+                "original research",
+                "open access",
+            }:
                 continue
             if re.match(r"^(?:arxiv|doi|http|www\.|journal|conference)\b", lowered):
                 continue
-            if re.match(r"^(?:downloaded from|published by|available online)\b", lowered):
+            if re.match(
+                r"^(?:downloaded from|published by|available online)\b", lowered
+            ):
                 continue
             if len(line) < 6 or len(line) > 180:
                 continue
@@ -149,14 +171,20 @@ class PaperMetaMixin(_Base):
         return {
             token
             for token in tokens
-            if len(token) >= 3 and token not in cls.TITLE_STOPWORDS and not token.isdigit()
+            if len(token) >= 3
+            and token not in cls.TITLE_STOPWORDS
+            and not token.isdigit()
         }
 
     @classmethod
     def _titles_conflict(cls, first: str, second: str) -> bool:
         """Return true only for strong title conflicts, not small formatting drift."""
-        first_clean = re.sub(r"\s+", " ", normalize_scientific_text(first)).strip().lower()
-        second_clean = re.sub(r"\s+", " ", normalize_scientific_text(second)).strip().lower()
+        first_clean = (
+            re.sub(r"\s+", " ", normalize_scientific_text(first)).strip().lower()
+        )
+        second_clean = (
+            re.sub(r"\s+", " ", normalize_scientific_text(second)).strip().lower()
+        )
         if not first_clean or not second_clean:
             return False
         if cls._normalize_label(first_clean) == cls._normalize_label(second_clean):
@@ -217,7 +245,9 @@ class PaperMetaMixin(_Base):
             re.IGNORECASE,
         )
         if introduction_match:
-            explicit = cls._extract_explicit_arxiv_identifier(front_matter[: introduction_match.start()])
+            explicit = cls._extract_explicit_arxiv_identifier(
+                front_matter[: introduction_match.start()]
+            )
             if explicit:
                 return explicit
 
@@ -226,7 +256,11 @@ class PaperMetaMixin(_Base):
             return explicit
 
         abstract_match = re.search(r"\babstract\b", front_matter, re.IGNORECASE)
-        fallback_window = front_matter[: abstract_match.end() + 250] if abstract_match else front_matter[:2500]
+        fallback_window = (
+            front_matter[: abstract_match.end() + 250]
+            if abstract_match
+            else front_matter[:2500]
+        )
         return cls._extract_arxiv_identifier(fallback_window)
 
     @classmethod
@@ -248,7 +282,9 @@ class PaperMetaMixin(_Base):
 
     @classmethod
     def _arxiv_publication_year(cls, arxiv_id: str) -> int | None:
-        match = re.search(r"\b(?:arxiv:\s*)?(\d{2})(\d{2})\.\d{4,5}", arxiv_id, re.IGNORECASE)
+        match = re.search(
+            r"\b(?:arxiv:\s*)?(\d{2})(\d{2})\.\d{4,5}", arxiv_id, re.IGNORECASE
+        )
         if not match:
             match = re.search(
                 rf"(?<![A-Za-z0-9])(?:arxiv:\s*)?{cls.LEGACY_ARXIV_CATEGORY_RE}\s*/\s*(\d{{2}})(\d{{2}})\d{{3}}",

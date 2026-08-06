@@ -7,6 +7,7 @@ Split out of api/product_main.py. Behaviour unchanged. Patchbare Namen laufen
 ueber pm.<name>: _run_harvest_search (Test-Patch), httpx.AsyncClient,
 _resolve_extraction_pdf_path/_parse_pdf_for_extraction (Extraction-Helfer).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,10 @@ from pydantic import BaseModel, Field
 
 import api.product_main as pm  # patchable singletons + geteilte Helfer
 from api.routers.projects import _attach_papers_to_project
-from extraction.reference_parser import extract_reference_section, split_reference_entries
+from extraction.reference_parser import (
+    extract_reference_section,
+    split_reference_entries,
+)
 from harvester.ads_client import AdsApiKeyMissing, AdsClient, AdsConfig
 from harvester.arxiv_client import ArxivClient
 from harvester.core_client import CoreApiKeyMissing, CoreClient, CoreConfig
@@ -71,7 +75,6 @@ class ReferenceExtractRequest(BaseModel):
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
 
 
-
 @router.get("/harvest/sources")
 def harvest_sources() -> dict[str, Any]:
     """Katalog der waehlbaren Suchquellen inkl. fachlicher Gruppen."""
@@ -83,7 +86,9 @@ async def harvest_search(request: HarvestSearchRequest) -> dict[str, Any]:
     # Bewusst ueber pm.: nur so greift der dokumentierte Test-Patch
     # (``monkeypatch.setattr(product_main, "_run_harvest_search", ...)``).
     # Der lokale Name wuerde am Patch vorbeilaufen und echt ins Netz gehen.
-    results, warnings = await pm._run_harvest_search(request.query, request.sources, request.max_results)
+    results, warnings = await pm._run_harvest_search(
+        request.query, request.sources, request.max_results
+    )
     return {"query": request.query, "results": results, "warnings": warnings}
 
 
@@ -96,28 +101,36 @@ async def _fetch_one_pdf(
 ) -> dict[str, Any]:
     """Download (or attempt to locate) the PDF for a single paper. Returns a result dict."""
     async with semaphore:
-        canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+        canonical_id = str(
+            paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+        )
         title = str(paper.get("title") or paper.get("id") or canonical_id)
         doi = paper.get("doi")
         saved_path: str | None = None
         detail: str | None = None
 
         direct_url = paper.get("pdf_url")
-        if direct_url and not await asyncio.to_thread(is_safe_public_url, str(direct_url)):
+        if direct_url and not await asyncio.to_thread(
+            is_safe_public_url, str(direct_url)
+        ):
             detail = "Direkt-Link verweist nicht auf eine öffentliche Adresse"
             direct_url = None
         if direct_url:
             try:
                 response = await client.get(str(direct_url))
                 response.raise_for_status()
-                if _looks_like_pdf(response.content, response.headers.get("content-type", "")):
-                    saved_path = str(storage.save_pdf(
-                        canonical_id,
-                        response.content,
-                        version=int(paper.get("version") or 1),
-                        display_name=str(paper.get("title") or canonical_id),
-                        source=str(paper.get("source") or "paper"),
-                    ))
+                if _looks_like_pdf(
+                    response.content, response.headers.get("content-type", "")
+                ):
+                    saved_path = str(
+                        storage.save_pdf(
+                            canonical_id,
+                            response.content,
+                            version=int(paper.get("version") or 1),
+                            display_name=str(paper.get("title") or canonical_id),
+                            source=str(paper.get("source") or "paper"),
+                        )
+                    )
                 else:
                     detail = "Direkt-Link lieferte kein PDF"
             except Exception as exc:  # noqa: BLE001
@@ -181,20 +194,26 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         for paper in request.papers:
             db.insert_paper(paper)
-            canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+            canonical_id = str(
+                paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+            )
             attached_ids.append(canonical_id)
 
     # If PDF download not requested, return immediately.
     if not request.download_pdfs:
         results = [
             {
-                "paper_id": str(p.get("id") or f"{p.get('source')}:{p.get('source_id')}"),
+                "paper_id": str(
+                    p.get("id") or f"{p.get('source')}:{p.get('source_id')}"
+                ),
                 "title": str(p.get("title") or p.get("id") or ""),
                 "status": "inserted",
             }
             for p in request.papers
         ]
-        project_paper_ids = _attach_papers_to_project(request.project_id, attached_ids, request.projects_path)
+        project_paper_ids = _attach_papers_to_project(
+            request.project_id, attached_ids, request.projects_path
+        )
         return {
             "inserted": len(results),
             "downloaded": 0,
@@ -206,9 +225,14 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
 
     # Download PDFs concurrently (semaphore limits parallel external requests).
     semaphore = asyncio.Semaphore(8)
-    async with pm.httpx.AsyncClient(timeout=60.0, follow_redirects=True, headers=download_headers) as client:
+    async with pm.httpx.AsyncClient(
+        timeout=60.0, follow_redirects=True, headers=download_headers
+    ) as client:
         fetch_results = await asyncio.gather(
-            *[_fetch_one_pdf(paper, client, storage, resolver, semaphore) for paper in request.papers],
+            *[
+                _fetch_one_pdf(paper, client, storage, resolver, semaphore)
+                for paper in request.papers
+            ],
             return_exceptions=True,
         )
 
@@ -221,7 +245,14 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         for fetch_result in fetch_results:
             if isinstance(fetch_result, BaseException):
-                results.append({"paper_id": "unknown", "title": "unknown", "status": "failed", "detail": str(fetch_result)})
+                results.append(
+                    {
+                        "paper_id": "unknown",
+                        "title": "unknown",
+                        "status": "failed",
+                        "detail": str(fetch_result),
+                    }
+                )
                 failed_downloads.append(str(fetch_result))
                 continue
             canonical_id = fetch_result["canonical_id"]
@@ -230,9 +261,13 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
             saved_path = fetch_result["saved_path"]
             detail = fetch_result["detail"]
             if saved_path:
-                db.update_paper_metadata_if_missing(canonical_id, pdf_path=str(saved_path))
+                db.update_paper_metadata_if_missing(
+                    canonical_id, pdf_path=str(saved_path)
+                )
                 downloaded += 1
-                results.append({"paper_id": canonical_id, "title": title, "status": "downloaded"})
+                results.append(
+                    {"paper_id": canonical_id, "title": title, "status": "downloaded"}
+                )
             else:
                 landing_url = _external_paper_url(
                     fetch_result.get("landing_page_url"),
@@ -242,15 +277,19 @@ async def harvest_download(request: HarvestDownloadRequest) -> dict[str, Any]:
                 status = "failed" if detail and "fehlgeschlagen" in detail else "no_pdf"
                 if status == "failed":
                     failed_downloads.append(f"{title}: {detail}")
-                results.append({
-                    "paper_id": canonical_id,
-                    "title": title,
-                    "status": status,
-                    "detail": detail,
-                    "landing_url": landing_url,
-                })
+                results.append(
+                    {
+                        "paper_id": canonical_id,
+                        "title": title,
+                        "status": status,
+                        "detail": detail,
+                        "landing_url": landing_url,
+                    }
+                )
 
-    project_paper_ids = _attach_papers_to_project(request.project_id, attached_ids, request.projects_path)
+    project_paper_ids = _attach_papers_to_project(
+        request.project_id, attached_ids, request.projects_path
+    )
     return {
         "inserted": inserted,
         "downloaded": downloaded,
@@ -277,7 +316,9 @@ async def _match_references_to_crossref(
             if not work:
                 continue
             normalized = _normalize_crossref_work(work)
-            doi_key = str(normalized.get("doi") or normalized.get("source_id") or "").lower()
+            doi_key = str(
+                normalized.get("doi") or normalized.get("source_id") or ""
+            ).lower()
             if not doi_key or doi_key in seen_dois:
                 continue
             seen_dois.add(doi_key)
@@ -297,12 +338,17 @@ async def extract_paper_references(request: ReferenceExtractRequest) -> dict[str
     /harvest/download.
     """
     pdf_path = pm._resolve_extraction_pdf_path(
-        request.paper_id, request.pdf_path, request.metadata_db_path, request.pdf_base_dir
+        request.paper_id,
+        request.pdf_path,
+        request.metadata_db_path,
+        request.pdf_base_dir,
     )
     parsed = pm._parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
     section = extract_reference_section(parsed.text)
     reference_strings = split_reference_entries(section)
-    references = await _match_references_to_crossref(reference_strings, request.max_references)
+    references = await _match_references_to_crossref(
+        reference_strings, request.max_references
+    )
     return {
         "paper_id": request.paper_id,
         "references_detected": len(reference_strings),
@@ -325,7 +371,6 @@ def _existing_library_keys(metadata_db_path: str) -> set[str]:
     except Exception:
         return keys
     return keys
-
 
 
 _HARVESTER_CONFIG_CACHE: dict[str, Any] | None = None
@@ -375,7 +420,9 @@ def _crossref_mailto() -> str | None:
     return os.getenv(env_name) or section.get("mailto") or _unpaywall_email()
 
 
-async def _run_harvest_search(query: str, sources: list[str], max_results: int) -> tuple[list[dict[str, Any]], list[str]]:
+async def _run_harvest_search(
+    query: str, sources: list[str], max_results: int
+) -> tuple[list[dict[str, Any]], list[str]]:
     normalized_sources = {source.lower() for source in sources}
     results: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -396,14 +443,22 @@ async def _run_harvest_search(query: str, sources: list[str], max_results: int) 
                         limit=max_results,
                         fields="paperId,corpusId,title,abstract,authors,year,externalIds,openAccessPdf,url",
                     )
-                    results.extend(_normalize_semantic_scholar_paper(item) for item in payload.get("data", []))
+                    results.extend(
+                        _normalize_semantic_scholar_paper(item)
+                        for item in payload.get("data", [])
+                    )
                 finally:
                     await client.close()
             elif source == "openalex":
                 client = OpenAlexClient()
                 try:
-                    payload = await client.list_works(search=query, per_page=max_results)
-                    results.extend(_normalize_openalex_work(item) for item in payload.get("results", []))
+                    payload = await client.list_works(
+                        search=query, per_page=max_results
+                    )
+                    results.extend(
+                        _normalize_openalex_work(item)
+                        for item in payload.get("results", [])
+                    )
                 finally:
                     await client.close()
             elif source == "crossref":
@@ -426,12 +481,17 @@ async def _run_harvest_search(query: str, sources: list[str], max_results: int) 
                 try:
                     preprint_query = f'({query}) AND SRC:PPR AND (PUBLISHER:"bioRxiv" OR PUBLISHER:"medRxiv")'
                     items = await client.search(preprint_query, page_size=max_results)
-                    results.extend(_normalize_europepmc_result(item, source="biorxiv") for item in items)
+                    results.extend(
+                        _normalize_europepmc_result(item, source="biorxiv")
+                        for item in items
+                    )
                 finally:
                     await client.close()
             elif source == "core":
                 section = _harvester_section("core")
-                client = CoreClient(CoreConfig(api_key=_resolved_key(section, "CORE_API_KEY")))
+                client = CoreClient(
+                    CoreConfig(api_key=_resolved_key(section, "CORE_API_KEY"))
+                )
                 try:
                     items = await client.search_works(query, limit=max_results)
                     results.extend(_normalize_core_work(item) for item in items)
@@ -460,7 +520,9 @@ async def _run_harvest_search(query: str, sources: list[str], max_results: int) 
                     await client.close()
             elif source == "ads":
                 section = _harvester_section("ads")
-                client = AdsClient(AdsConfig(api_key=_resolved_key(section, "ADS_API_KEY")))
+                client = AdsClient(
+                    AdsConfig(api_key=_resolved_key(section, "ADS_API_KEY"))
+                )
                 try:
                     items = await client.search_documents(query, limit=max_results)
                     results.extend(_normalize_ads_document(item) for item in items)
@@ -471,8 +533,12 @@ async def _run_harvest_search(query: str, sources: list[str], max_results: int) 
                 # OSF-DOI-Praefix eingegrenzt, gibt es echte Relevanz und Abstracts.
                 client = CrossrefClient(CrossrefConfig(mailto=_crossref_mailto()))
                 try:
-                    items = await client.search_works(query, rows=max_results, filters="prefix:10.31219")
-                    results.extend(_normalize_crossref_work(item, source="osf") for item in items)
+                    items = await client.search_works(
+                        query, rows=max_results, filters="prefix:10.31219"
+                    )
+                    results.extend(
+                        _normalize_crossref_work(item, source="osf") for item in items
+                    )
                 finally:
                     await client.close()
             elif source == "eric":
@@ -513,7 +579,11 @@ def _dedupe_harvest_results(results: list[dict[str, Any]]) -> list[dict[str, Any
     seen: set[str] = set()
     output: list[dict[str, Any]] = []
     for result in results:
-        key = str(result.get("doi") or result.get("id") or f"{result.get('source')}:{result.get('source_id')}").lower()
+        key = str(
+            result.get("doi")
+            or result.get("id")
+            or f"{result.get('source')}:{result.get('source_id')}"
+        ).lower()
         if key in seen:
             continue
         seen.add(key)
@@ -563,9 +633,17 @@ def _normalize_openalex_work(work: dict[str, Any]) -> dict[str, Any]:
         ],
         "year": work.get("publication_year"),
         "doi": work.get("doi"),
-        "pdf_url": ((work.get("best_oa_location") or {}).get("pdf_url") if isinstance(work.get("best_oa_location"), dict) else None),
+        "pdf_url": (
+            (work.get("best_oa_location") or {}).get("pdf_url")
+            if isinstance(work.get("best_oa_location"), dict)
+            else None
+        ),
         "landing_page_url": work.get("doi") or work.get("id"),
-        "has_full_text": bool((work.get("best_oa_location") or {}).get("pdf_url")) if isinstance(work.get("best_oa_location"), dict) else False,
+        "has_full_text": (
+            bool((work.get("best_oa_location") or {}).get("pdf_url"))
+            if isinstance(work.get("best_oa_location"), dict)
+            else False
+        ),
     }
 
 
@@ -578,12 +656,22 @@ def _normalize_semantic_scholar_paper(paper: dict[str, Any]) -> dict[str, Any]:
         "version": 1,
         "title": paper.get("title") or "",
         "abstract": paper.get("abstract") or "",
-        "authors": [author.get("name", "") for author in paper.get("authors", []) if isinstance(author, dict)],
+        "authors": [
+            author.get("name", "")
+            for author in paper.get("authors", [])
+            if isinstance(author, dict)
+        ],
         "year": paper.get("year"),
         "doi": external_ids.get("DOI") or paper.get("doi"),
-        "pdf_url": open_access_pdf.get("url") if isinstance(open_access_pdf, dict) else None,
+        "pdf_url": (
+            open_access_pdf.get("url") if isinstance(open_access_pdf, dict) else None
+        ),
         "landing_page_url": paper.get("url"),
-        "has_full_text": bool(open_access_pdf.get("url")) if isinstance(open_access_pdf, dict) else False,
+        "has_full_text": (
+            bool(open_access_pdf.get("url"))
+            if isinstance(open_access_pdf, dict)
+            else False
+        ),
         "raw": paper,
     }
 
@@ -596,8 +684,18 @@ def _crossref_title(work: dict[str, Any]) -> str:
 
 
 def _crossref_year(work: dict[str, Any]) -> int | None:
-    for key in ("published", "published-print", "published-online", "issued", "created"):
-        parts = (work.get(key) or {}).get("date-parts") if isinstance(work.get(key), dict) else None
+    for key in (
+        "published",
+        "published-print",
+        "published-online",
+        "issued",
+        "created",
+    ):
+        parts = (
+            (work.get(key) or {}).get("date-parts")
+            if isinstance(work.get(key), dict)
+            else None
+        )
         if parts and isinstance(parts, list) and parts[0]:
             try:
                 return int(parts[0][0])
@@ -606,12 +704,16 @@ def _crossref_year(work: dict[str, Any]) -> int | None:
     return None
 
 
-def _normalize_crossref_work(work: dict[str, Any], source: str = "crossref") -> dict[str, Any]:
+def _normalize_crossref_work(
+    work: dict[str, Any], source: str = "crossref"
+) -> dict[str, Any]:
     doi = work.get("DOI")
     authors = []
     for author in work.get("author", []) or []:
         if isinstance(author, dict):
-            name = " ".join(part for part in [author.get("given"), author.get("family")] if part)
+            name = " ".join(
+                part for part in [author.get("given"), author.get("family")] if part
+            )
             if name:
                 authors.append(name)
     pdf_url = None
@@ -634,33 +736,44 @@ def _normalize_crossref_work(work: dict[str, Any], source: str = "crossref") -> 
     }
 
 
-def _normalize_europepmc_result(item: dict[str, Any], source: str = "europepmc") -> dict[str, Any]:
+def _normalize_europepmc_result(
+    item: dict[str, Any], source: str = "europepmc"
+) -> dict[str, Any]:
     doi = item.get("doi")
     pdf_url = None
     for url_item in (item.get("fullTextUrlList") or {}).get("fullTextUrl", []) or []:
         if not isinstance(url_item, dict):
             continue
-        if url_item.get("documentStyle") == "pdf" or str(url_item.get("url", "")).lower().endswith(".pdf"):
+        if url_item.get("documentStyle") == "pdf" or str(
+            url_item.get("url", "")
+        ).lower().endswith(".pdf"):
             pdf_url = url_item.get("url")
             break
     pmcid = item.get("pmcid")
     if not pdf_url and pmcid:
-        pdf_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
+        pdf_url = (
+            f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
+        )
     authors = []
     author_string = item.get("authorString")
     if author_string:
-        authors = [name.strip() for name in str(author_string).split(",") if name.strip()]
+        authors = [
+            name.strip() for name in str(author_string).split(",") if name.strip()
+        ]
     return {
         "source": source,
         "source_id": str(item.get("id") or doi or pmcid or "unknown"),
         "title": str(item.get("title") or ""),
         "abstract": str(item.get("abstractText") or ""),
         "authors": authors,
-        "year": int(item["pubYear"]) if str(item.get("pubYear") or "").isdigit() else None,
+        "year": (
+            int(item["pubYear"]) if str(item.get("pubYear") or "").isdigit() else None
+        ),
         "doi": doi,
         "pdf_url": pdf_url,
         "landing_page_url": (f"https://doi.org/{doi}" if doi else None),
-        "has_full_text": str(item.get("isOpenAccess") or "").upper() == "Y" or bool(pdf_url),
+        "has_full_text": str(item.get("isOpenAccess") or "").upper() == "Y"
+        or bool(pdf_url),
     }
 
 
@@ -686,7 +799,9 @@ def _normalize_core_work(work: dict[str, Any]) -> dict[str, Any]:
         "year": year_int,
         "doi": doi,
         "pdf_url": pdf_url,
-        "landing_page_url": (f"https://doi.org/{doi}" if doi else work.get("sourceFulltextUrls")),
+        "landing_page_url": (
+            f"https://doi.org/{doi}" if doi else work.get("sourceFulltextUrls")
+        ),
         "has_full_text": bool(pdf_url),
     }
 
@@ -761,7 +876,11 @@ def _normalize_dblp_publication(info: dict[str, Any]) -> dict[str, Any]:
         # DBLP ist eine Bibliografie ohne Abstracts; der Volltext-Resolver holt
         # spaeter ueber die DOI, was frei verfuegbar ist.
         "abstract": "",
-        "authors": [str(item.get("text") or "") for item in raw_authors or [] if isinstance(item, dict)],
+        "authors": [
+            str(item.get("text") or "")
+            for item in raw_authors or []
+            if isinstance(item, dict)
+        ],
         "year": int(info["year"]) if str(info.get("year") or "").isdigit() else None,
         "doi": doi,
         "pdf_url": None,
@@ -783,7 +902,9 @@ def _normalize_ads_document(doc: dict[str, Any]) -> dict[str, Any]:
         "doi": doi,
         "pdf_url": None,
         "landing_page_url": (
-            f"https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract" if bibcode else (f"https://doi.org/{doi}" if doi else None)
+            f"https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract"
+            if bibcode
+            else (f"https://doi.org/{doi}" if doi else None)
         ),
         "has_full_text": False,
     }
@@ -801,8 +922,14 @@ def _normalize_eric_record(doc: dict[str, Any]) -> dict[str, Any]:
         "authors": [str(name) for name in doc.get("author") or []],
         "year": _as_year(year),
         "doi": None,
-        "pdf_url": (f"https://files.eric.ed.gov/fulltext/{record_id}.pdf" if has_fulltext and record_id else None),
-        "landing_page_url": (f"https://eric.ed.gov/?id={record_id}" if record_id else None),
+        "pdf_url": (
+            f"https://files.eric.ed.gov/fulltext/{record_id}.pdf"
+            if has_fulltext and record_id
+            else None
+        ),
+        "landing_page_url": (
+            f"https://eric.ed.gov/?id={record_id}" if record_id else None
+        ),
         "has_full_text": has_fulltext,
     }
 
@@ -830,7 +957,8 @@ def _normalize_doab_book(item: dict[str, Any]) -> dict[str, Any]:
         "year": _as_year(year),
         "doi": doi,
         "pdf_url": None,
-        "landing_page_url": landing or (f"https://directory.doabooks.org/handle/{handle}" if handle else None),
+        "landing_page_url": landing
+        or (f"https://directory.doabooks.org/handle/{handle}" if handle else None),
         "has_full_text": False,
     }
 
@@ -867,9 +995,15 @@ def _normalize_doaj_article(article: dict[str, Any]) -> dict[str, Any]:
             continue
         if link.get("type") == "fulltext":
             landing = link.get("url")
-            if str(link.get("content_type", "")).lower() == "pdf" or str(link.get("url", "")).lower().endswith(".pdf"):
+            if str(link.get("content_type", "")).lower() == "pdf" or str(
+                link.get("url", "")
+            ).lower().endswith(".pdf"):
                 pdf_url = link.get("url")
-    authors = [a.get("name", "") for a in bib.get("author", []) or [] if isinstance(a, dict) and a.get("name")]
+    authors = [
+        a.get("name", "")
+        for a in bib.get("author", []) or []
+        if isinstance(a, dict) and a.get("name")
+    ]
     return {
         "source": "doaj",
         "source_id": str(article.get("id") or doi or "unknown"),

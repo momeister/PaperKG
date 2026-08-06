@@ -3,6 +3,7 @@
 Fully offline and deterministic — the LLM router is faked (`product_main.llm_router`
 monkeypatched, style of test_agent_handoff.py); only Pillow does real work (the
 screenshots are synthetic in-memory PNGs)."""
+
 from __future__ import annotations
 
 import base64
@@ -35,7 +36,9 @@ class _FakeRouter:
         self.calls: list[dict[str, Any]] = []
 
     def chat(self, messages, provider=None, overrides=None):
-        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides or {}})
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides or {}}
+        )
         return self.reply
 
     def available_providers(self):
@@ -56,6 +59,7 @@ class _RaisingRouter:
 # screen_companion module                                                      #
 # --------------------------------------------------------------------------- #
 
+
 def test_prepare_image_resizes_into_budget() -> None:
     prepared = screen_companion.prepare_image(_png_b64(2800, 1400))
     assert (prepared.width, prepared.height) == (2800, 1400)
@@ -65,7 +69,9 @@ def test_prepare_image_resizes_into_budget() -> None:
 
 
 def test_prepare_image_accepts_data_url_and_rejects_garbage() -> None:
-    prepared = screen_companion.prepare_image("data:image/png;base64," + _png_b64(280, 280))
+    prepared = screen_companion.prepare_image(
+        "data:image/png;base64," + _png_b64(280, 280)
+    )
     assert (prepared.width, prepared.height) == (280, 280)
     try:
         screen_companion.prepare_image("%%%kein-bild%%%")
@@ -83,7 +89,11 @@ def test_guide_scales_grid_steps_and_clamps() -> None:
             "answer": "Klicke dort.",
             "steps": [
                 {"x": 100, "y": 50, "label": "Erster Schritt"},
-                {"x": 99999, "y": 99999, "label": "außerhalb"},  # clamped into the frame
+                {
+                    "x": 99999,
+                    "y": 99999,
+                    "label": "außerhalb",
+                },  # clamped into the frame
                 {"x": "kein-int", "y": 5, "label": "kaputt"},  # dropped
             ],
         }
@@ -111,16 +121,22 @@ def test_guide_scales_grid_steps_and_clamps() -> None:
 def test_guide_pixel_answers_use_sent_frame_fallback() -> None:
     # Values beyond the 0-1000 grid mean the model answered in sent-frame pixels
     # (1400×700 here) despite the contract → old sent→original scaling (×2).
-    reply = json.dumps({"answer": "Da.", "steps": [{"x": 1200, "y": 400, "label": "Ziel"}]})
+    reply = json.dumps(
+        {"answer": "Da.", "steps": [{"x": 1200, "y": 400, "label": "Ziel"}]}
+    )
     router = _FakeRouter(reply)
     result = screen_companion.guide(router, "wo?", _png_b64(2800, 1400))
     assert result["steps"][0] == {"x": 2400.0, "y": 800.0, "label": "Ziel"}
 
 
 def test_guide_debug_capture_writes_dump(tmp_path) -> None:
-    reply = json.dumps({"answer": "Da.", "steps": [{"x": 500, "y": 500, "label": "Mitte"}]})
+    reply = json.dumps(
+        {"answer": "Da.", "steps": [{"x": 500, "y": 500, "label": "Mitte"}]}
+    )
     router = _FakeRouter(reply)
-    result = screen_companion.guide(router, "wo?", _png_b64(560, 560), debug_dir=str(tmp_path))
+    result = screen_companion.guide(
+        router, "wo?", _png_b64(560, 560), debug_dir=str(tmp_path)
+    )
     assert result["found"] is True
     pngs = list(tmp_path.glob("*.png"))
     jsons = list(tmp_path.glob("*.json"))
@@ -134,7 +150,11 @@ def test_guide_debug_capture_writes_dump(tmp_path) -> None:
 def test_guide_degrades_to_text_when_json_missing() -> None:
     router = _FakeRouter("Nur Fließtext, kein JSON.")
     result = screen_companion.guide(router, "wo?", _png_b64(560, 560))
-    assert result == {"answer": "Nur Fließtext, kein JSON.", "found": False, "steps": []}
+    assert result == {
+        "answer": "Nur Fließtext, kein JSON.",
+        "found": False,
+        "steps": [],
+    }
 
 
 def test_guide_empty_steps_means_not_found() -> None:
@@ -167,11 +187,15 @@ def test_ask_includes_history_and_region_hint() -> None:
 
 class _ThinkingExhaustedRouter(_FakeRouter):
     """Simulates a reasoning model that burned the whole max_tokens budget inside its
-    thinking channel: the router falls back to reasoning_content + finish_reason=length."""
+    thinking channel: the router falls back to reasoning_content + finish_reason=length.
+    """
 
     def chat(self, messages, provider=None, overrides=None):
         result = super().chat(messages, provider, overrides)
-        self.last_response_metadata = {"reasoning_fallback": True, "finish_reason": "length"}
+        self.last_response_metadata = {
+            "reasoning_fallback": True,
+            "finish_reason": "length",
+        }
         return result
 
 
@@ -195,18 +219,26 @@ def test_no_think_suffix_only_for_qwen_models() -> None:
     assert "/no_think" not in router.calls[0]["messages"][0]["content"]
 
     router = _FakeRouter("ok")
-    screen_companion.ask(router, "Frage", model="qwen/qwen3-vl-8b", disable_thinking=False)
+    screen_companion.ask(
+        router, "Frage", model="qwen/qwen3-vl-8b", disable_thinking=False
+    )
     assert "/no_think" not in router.calls[0]["messages"][0]["content"]
 
 
 def test_max_tokens_defaults_and_override() -> None:
     router = _FakeRouter("ok")
     screen_companion.ask(router, "Frage")
-    assert router.calls[0]["overrides"]["max_tokens"] == screen_companion.DEFAULT_MAX_TOKENS_ASK
+    assert (
+        router.calls[0]["overrides"]["max_tokens"]
+        == screen_companion.DEFAULT_MAX_TOKENS_ASK
+    )
 
     router = _FakeRouter(json.dumps({"answer": "a", "steps": []}))
     screen_companion.guide(router, "wo?", _png_b64(280, 280))
-    assert router.calls[0]["overrides"]["max_tokens"] == screen_companion.DEFAULT_MAX_TOKENS_GUIDE
+    assert (
+        router.calls[0]["overrides"]["max_tokens"]
+        == screen_companion.DEFAULT_MAX_TOKENS_GUIDE
+    )
 
     router = _FakeRouter(json.dumps({"answer": "a", "steps": []}))
     screen_companion.guide(router, "wo?", _png_b64(280, 280), max_tokens=3200)
@@ -217,20 +249,31 @@ def test_max_tokens_defaults_and_override() -> None:
 # /companion/* endpoints                                                       #
 # --------------------------------------------------------------------------- #
 
+
 def _client(monkeypatch, router) -> TestClient:
     monkeypatch.setattr(product_main, "llm_router", router)
     monkeypatch.setattr(
         product_main,
         "_COMPANION_CONFIG_CACHE",
-        {"provider": "lm_studio", "model": "qwen/qwen3-vl-8b", "language": "de", "history_turns": 8},
+        {
+            "provider": "lm_studio",
+            "model": "qwen/qwen3-vl-8b",
+            "language": "de",
+            "history_turns": 8,
+        },
     )
     return TestClient(product_main.app)
 
 
 def test_companion_guide_endpoint_scales_back(monkeypatch) -> None:
-    router = _FakeRouter(json.dumps({"answer": "Hier.", "steps": [{"x": 100, "y": 50, "label": "Ziel"}]}))
+    router = _FakeRouter(
+        json.dumps({"answer": "Hier.", "steps": [{"x": 100, "y": 50, "label": "Ziel"}]})
+    )
     client = _client(monkeypatch, router)
-    res = client.post("/companion/guide", json={"question": "wo?", "image_base64": _png_b64(2800, 1400)})
+    res = client.post(
+        "/companion/guide",
+        json={"question": "wo?", "image_base64": _png_b64(2800, 1400)},
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["found"] is True
@@ -242,7 +285,9 @@ def test_companion_guide_endpoint_scales_back(monkeypatch) -> None:
 
 def test_companion_guide_endpoint_reports_errors_in_body(monkeypatch) -> None:
     client = _client(monkeypatch, _RaisingRouter())
-    res = client.post("/companion/guide", json={"question": "wo?", "image_base64": _png_b64(280, 280)})
+    res = client.post(
+        "/companion/guide", json={"question": "wo?", "image_base64": _png_b64(280, 280)}
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["answer"] == ""
@@ -252,7 +297,9 @@ def test_companion_guide_endpoint_reports_errors_in_body(monkeypatch) -> None:
 
 def test_companion_guide_endpoint_thinking_budget_error_in_body(monkeypatch) -> None:
     client = _client(monkeypatch, _ThinkingExhaustedRouter("Denkprotokoll…"))
-    res = client.post("/companion/guide", json={"question": "wo?", "image_base64": _png_b64(280, 280)})
+    res = client.post(
+        "/companion/guide", json={"question": "wo?", "image_base64": _png_b64(280, 280)}
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["answer"] == ""
@@ -261,7 +308,9 @@ def test_companion_guide_endpoint_thinking_budget_error_in_body(monkeypatch) -> 
 
 def test_companion_guide_endpoint_bad_image_in_body(monkeypatch) -> None:
     client = _client(monkeypatch, _FakeRouter("{}"))
-    res = client.post("/companion/guide", json={"question": "wo?", "image_base64": "%%%"})
+    res = client.post(
+        "/companion/guide", json={"question": "wo?", "image_base64": "%%%"}
+    )
     assert res.status_code == 200
     assert "dekodiert" in res.json()["error"]
 
@@ -316,14 +365,18 @@ def test_companion_ask_with_paper_and_web_sources(monkeypatch) -> None:
         def search(self, query, limit=10):  # noqa: ARG002
             return [_FakeHit()]
 
-    monkeypatch.setattr(product_main, "_parallel_retriever", lambda *a, **k: _FakeRetriever())
+    monkeypatch.setattr(
+        product_main, "_parallel_retriever", lambda *a, **k: _FakeRetriever()
+    )
 
     import research.search_provider as search_provider
 
     async def _fake_search(query, config, provider=None, max_results=6):  # noqa: ARG001
         return [
             search_provider.SearchHit(
-                url="https://example.org/a", title="Beispielseite", snippet="Ein <b>Schnipsel</b>"
+                url="https://example.org/a",
+                title="Beispielseite",
+                snippet="Ein <b>Schnipsel</b>",
             )
         ]
 
@@ -331,7 +384,11 @@ def test_companion_ask_with_paper_and_web_sources(monkeypatch) -> None:
 
     res = client.post(
         "/companion/ask",
-        json={"question": "Was sagt die Literatur?", "use_papers": True, "use_web": True},
+        json={
+            "question": "Was sagt die Literatur?",
+            "use_papers": True,
+            "use_web": True,
+        },
     )
     assert res.status_code == 200
     body = res.json()

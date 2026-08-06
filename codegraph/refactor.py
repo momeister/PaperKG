@@ -19,6 +19,7 @@ Testlauf in der Sandbox (Teil D) entscheidet endgültig.
 Ohne Modell ist der Tab trotzdem nützlich: die Diagnose steht, der
 Vorschlagsknopf zeigt den üblichen Hinweis (wie überall sonst im Code-Graph).
 """
+
 from __future__ import annotations
 
 import json
@@ -60,7 +61,10 @@ Belegregel wie überall: eine konkrete Aussage über den Code trägt `pfad:zeile
 def _rpc_factory(project: dict[str, Any], session: str, config_path: str):
     def rpc(method: str, params: dict[str, Any] | None = None) -> Any:
         return service.query(
-            project, method, {**(params or {}), "session": session}, config_path=config_path
+            project,
+            method,
+            {**(params or {}), "session": session},
+            config_path=config_path,
         )
 
     return rpc
@@ -91,7 +95,9 @@ def _extract_json(text: str) -> dict[str, Any] | None:
         return None
 
 
-def validate_proposal(root: Path, proposal: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+def validate_proposal(
+    root: Path, proposal: dict[str, Any]
+) -> tuple[bool, list[str], dict[str, Any]]:
     """Vorschlag prüfen, ohne ihn zu schreiben.
 
     Vier Prüfungen, bevor irgendetwas geschrieben wird:
@@ -141,7 +147,9 @@ def validate_proposal(root: Path, proposal: dict[str, Any]) -> tuple[bool, list[
             try:
                 compile(inhalt, str(resolved), "exec")
             except SyntaxError as exc:
-                errors.append(f"{pfad}: Syntaxfehler Zeile {exc.lineno or '?'}: {exc.msg}")
+                errors.append(
+                    f"{pfad}: Syntaxfehler Zeile {exc.lineno or '?'}: {exc.msg}"
+                )
                 continue
         files_in.append({"pfad": pfad, "inhalt": inhalt, "resolved": str(resolved)})
 
@@ -244,7 +252,9 @@ def propose_stream(
         source = rpc("tool_call", {"name": "get_source", "arguments": {"id": node_id}})
     except CodeGraphError:
         source = ""
-    src_text = source if isinstance(source, str) else json.dumps(source, ensure_ascii=False)
+    src_text = (
+        source if isinstance(source, str) else json.dumps(source, ensure_ascii=False)
+    )
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -289,7 +299,9 @@ def propose_stream(
         "event": "done",
         "proposal": {
             "node_id": node_id,
-            "begruendung": cleaned.get("begruendung") or proposal.get("begruendung") or "",
+            "begruendung": cleaned.get("begruendung")
+            or proposal.get("begruendung")
+            or "",
             "dateien": cleaned["dateien"],
             "geloescht": cleaned["geloescht"],
             "valid": ok,

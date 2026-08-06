@@ -11,7 +11,9 @@ from storage.metadata_db import MetadataDB
 
 
 def _hit(source: str, ext: str) -> DatasetHit:
-    return DatasetHit(source=source, external_id=ext, title=f"{source} {ext}", url=f"https://x/{ext}")
+    return DatasetHit(
+        source=source, external_id=ext, title=f"{source} {ext}", url=f"https://x/{ext}"
+    )
 
 
 def test_search_datasets_aggregates_and_is_failsoft(monkeypatch):
@@ -34,10 +36,27 @@ def test_search_datasets_aggregates_and_is_failsoft(monkeypatch):
 def test_dataset_db_dedup_list_delete(tmp_path):
     db_path = tmp_path / "metadata.duckdb"
     with MetadataDB(str(db_path)) as db:
-        a = db.add_dataset({"project_id": "proj", "source": "zenodo", "external_id": "z1", "title": "A", "year": 2022})
-        again = db.add_dataset({"project_id": "proj", "source": "zenodo", "external_id": "z1", "title": "A dup"})
+        a = db.add_dataset(
+            {
+                "project_id": "proj",
+                "source": "zenodo",
+                "external_id": "z1",
+                "title": "A",
+                "year": 2022,
+            }
+        )
+        again = db.add_dataset(
+            {
+                "project_id": "proj",
+                "source": "zenodo",
+                "external_id": "z1",
+                "title": "A dup",
+            }
+        )
         assert again["id"] == a["id"]  # de-duplicated on (project, source, external_id)
-        db.add_dataset({"project_id": "proj", "source": "dryad", "external_id": "d1", "title": "B"})
+        db.add_dataset(
+            {"project_id": "proj", "source": "dryad", "external_id": "d1", "title": "B"}
+        )
         listed = db.list_datasets("proj")
         assert len(listed) == 2
         assert db.delete_dataset(a["id"]) is True
@@ -48,7 +67,9 @@ def test_datasets_api_flow(tmp_path, monkeypatch):
     db_path = tmp_path / "metadata.duckdb"
     common = {"metadata_db_path": str(db_path)}
 
-    async def fake_search(query, sources=None, per_source=8, timeout=25.0):  # noqa: ANN001
+    async def fake_search(
+        query, sources=None, per_source=8, timeout=25.0
+    ):  # noqa: ANN001
         return {"results": [_hit("zenodo", "z9").as_dict()], "warnings": []}
 
     monkeypatch.setattr(dataset_clients, "search_datasets", fake_search)
@@ -57,7 +78,9 @@ def test_datasets_api_flow(tmp_path, monkeypatch):
     sources = client.get("/datasets/sources")
     assert sources.status_code == 200 and sources.json()["default"]
 
-    search = client.post("/datasets/search", json={"query": "diabetes", "sources": ["zenodo"]})
+    search = client.post(
+        "/datasets/search", json={"query": "diabetes", "sources": ["zenodo"]}
+    )
     assert search.status_code == 200
     hit = search.json()["results"][0]
     assert hit["source"] == "zenodo"

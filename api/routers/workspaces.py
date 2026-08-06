@@ -3,6 +3,7 @@
 Split out of api/product_main.py. Behaviour unchanged. workspace_manager is a
 module -> attribute access keeps test monkeypatches (base_dir) working.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -147,7 +148,9 @@ def workspace_write_file(project_id: str, request: WriteFileRequest) -> dict[str
 
 
 @router.post("/workspaces/{project_id}/file")
-def workspace_create_file(project_id: str, request: CreatePathRequest) -> dict[str, Any]:
+def workspace_create_file(
+    project_id: str, request: CreatePathRequest
+) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         project = _require_code_project(db, project_id)
     root = workspace_manager.ensure_exists(project)
@@ -209,26 +212,28 @@ class CheckpointRestoreRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
-def _checkpoint_to_dict(db: MetadataDB, project_id: str, result: Any, reason: str) -> dict[str, Any]:
-	"""Aus einem :class:`CheckpointResult` (ggf. None) einen DB-Eintrag + Antwort machen.
+def _checkpoint_to_dict(
+    db: MetadataDB, project_id: str, result: Any, reason: str
+) -> dict[str, Any]:
+    """Aus einem :class:`CheckpointResult` (ggf. None) einen DB-Eintrag + Antwort machen.
 
-	Fail-soft: ohne git/Repo wird kein Eintrag angelegt; die Antwort traegt
-	``checkpoint: null`` und ``reason``, damit die UI es sagen kann statt
-	zu schweigen (gleiche Konvention wie ``git_log_for_lines``).
-	"""
-	if not result.ref_name or not result.commit_sha:
-		return {"checkpoint": None, "reason": result.reason, "error": result.error}
-	record = db.add_code_checkpoint(
-		project_id,
-		ref_name=result.ref_name,
-		commit_sha=result.commit_sha,
-		tree_sha=result.tree_sha,
-		parent_sha=result.parent_sha,
-		label=result.label,
-		reason=reason,
-		file_count=result.file_count,
-	)
-	return {"checkpoint": record, "reason": reason}
+    Fail-soft: ohne git/Repo wird kein Eintrag angelegt; die Antwort traegt
+    ``checkpoint: null`` und ``reason``, damit die UI es sagen kann statt
+    zu schweigen (gleiche Konvention wie ``git_log_for_lines``).
+    """
+    if not result.ref_name or not result.commit_sha:
+        return {"checkpoint": None, "reason": result.reason, "error": result.error}
+    record = db.add_code_checkpoint(
+        project_id,
+        ref_name=result.ref_name,
+        commit_sha=result.commit_sha,
+        tree_sha=result.tree_sha,
+        parent_sha=result.parent_sha,
+        label=result.label,
+        reason=reason,
+        file_count=result.file_count,
+    )
+    return {"checkpoint": record, "reason": reason}
 
 
 @router.get("/workspaces/{project_id}/checkpoints")
@@ -248,9 +253,7 @@ def create_checkpoint(
     with MetadataDB(metadata_db_path := request.metadata_db_path) as db:
         project = _require_code_project(db, project_id)
     root = workspace_manager.ensure_exists(project)
-    result = workspace_checkpoints.create(
-        root, label=request.label, reason="manual"
-    )
+    result = workspace_checkpoints.create(root, label=request.label, reason="manual")
     with MetadataDB(metadata_db_path) as db:
         return _checkpoint_to_dict(db, project_id, result, "manual")
 
@@ -340,7 +343,11 @@ def delete_checkpoint(
     removed = workspace_checkpoints.drop(root, checkpoint["ref_name"])
     with MetadataDB(metadata_db_path) as db:
         db.delete_code_checkpoint(checkpoint_id)
-    return {"project_id": project_id, "checkpoint_id": checkpoint_id, "removed": removed}
+    return {
+        "project_id": project_id,
+        "checkpoint_id": checkpoint_id,
+        "removed": removed,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -371,9 +378,7 @@ def list_sandboxes(
 
 
 @router.post("/workspaces/{project_id}/sandboxes")
-def create_sandbox(
-    project_id: str, request: SandboxCreateRequest
-) -> dict[str, Any]:
+def create_sandbox(project_id: str, request: SandboxCreateRequest) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         project = _require_code_project(db, project_id)
         checkpoint = db.get_code_checkpoint(request.checkpoint_id)
@@ -389,7 +394,9 @@ def create_sandbox(
             status="creating",
             test_command=request.test_command,
         )
-    created = workspace_sandbox.create_worktree(root, checkpoint["commit_sha"], record["id"])
+    created = workspace_sandbox.create_worktree(
+        root, checkpoint["commit_sha"], record["id"]
+    )
     with MetadataDB(request.metadata_db_path) as db:
         if created.get("created"):
             db.update_code_sandbox(
@@ -417,7 +424,9 @@ def run_sandbox(
         raise HTTPException(status_code=404, detail="Sandbox nicht gefunden")
     worktree = Path(sandbox["path"])
     if not worktree.is_dir():
-        raise HTTPException(status_code=404, detail="Sandbox-Verzeichnis nicht mehr vorhanden")
+        raise HTTPException(
+            status_code=404, detail="Sandbox-Verzeichnis nicht mehr vorhanden"
+        )
     # Befehl: explizit, sonst der hinterlegte, sonst erkannt. Erstmal-Lauf
     # ohne hinterlegten Befehl ist bestätigungspflichtig — die UI fragt.
     if request.command:
@@ -435,7 +444,9 @@ def run_sandbox(
             status_code=400,
             detail="Kein Testbefehl erkannt (pytest.ini/pyproject.toml/package.json/Cargo.toml). Bitte explizit angeben.",
         )
-    result = workspace_sandbox.run_tests(worktree, command, timeout=max(10, min(int(request.timeout), 1800)))
+    result = workspace_sandbox.run_tests(
+        worktree, command, timeout=max(10, min(int(request.timeout), 1800))
+    )
     with MetadataDB(request.metadata_db_path) as db:
         db.update_code_sandbox(
             sandbox_id,
@@ -459,7 +470,9 @@ def sandbox_diff(
         raise HTTPException(status_code=404, detail="Sandbox nicht gefunden")
     worktree = Path(sandbox["path"])
     if not worktree.is_dir():
-        raise HTTPException(status_code=404, detail="Sandbox-Verzeichnis nicht mehr vorhanden")
+        raise HTTPException(
+            status_code=404, detail="Sandbox-Verzeichnis nicht mehr vorhanden"
+        )
     return workspace_sandbox.diff_worktree(Path(sandbox["path"]), sandbox["base_sha"])
 
 
@@ -475,7 +488,9 @@ def apply_sandbox(
     root = workspace_manager.ensure_exists(project)
     worktree = Path(sandbox["path"])
     if not worktree.is_dir():
-        raise HTTPException(status_code=404, detail="Sandbox-Verzeichnis nicht mehr vorhanden")
+        raise HTTPException(
+            status_code=404, detail="Sandbox-Verzeichnis nicht mehr vorhanden"
+        )
     result = workspace_sandbox.apply_to_main(root, worktree, sandbox["base_sha"])
     with MetadataDB(metadata_db_path) as db:
         if result.get("applied"):
@@ -515,7 +530,9 @@ class WorkspaceSessionRestore(BaseModel):
 
 
 @router.get("/workspace/sessions/{project_id}")
-def get_workspace_session(project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def get_workspace_session(
+    project_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     """Server-side workspace assistant session (chat history + verification payloads).
 
     Sessions used to live only in localStorage, where large verification payloads
@@ -524,13 +541,21 @@ def get_workspace_session(project_id: str, metadata_db_path: str = DEFAULT_METAD
     """
     with MetadataDB(metadata_db_path) as db:
         session = db.get_workspace_session(project_id)
-    return session or {"project_id": project_id, "payload": {}, "updated_timestamp": None}
+    return session or {
+        "project_id": project_id,
+        "payload": {},
+        "updated_timestamp": None,
+    }
 
 
 @router.put("/workspace/sessions/{project_id}")
-def save_workspace_session(project_id: str, request: WorkspaceSessionPayload) -> dict[str, Any]:
+def save_workspace_session(
+    project_id: str, request: WorkspaceSessionPayload
+) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
-        session = db.save_workspace_session(project_id, request.payload, force=request.force)
+        session = db.save_workspace_session(
+            project_id, request.payload, force=request.force
+        )
     return session
 
 
@@ -545,9 +570,13 @@ def list_workspace_session_backups(
 
 
 @router.post("/workspace/sessions/{project_id}/restore")
-def restore_workspace_session(project_id: str, request: WorkspaceSessionRestore) -> dict[str, Any]:
+def restore_workspace_session(
+    project_id: str, request: WorkspaceSessionRestore
+) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         session = db.restore_workspace_session(project_id, request.saved_at)
     if session is None:
-        raise HTTPException(status_code=404, detail="Keine Sicherung fuer diese Session vorhanden")
+        raise HTTPException(
+            status_code=404, detail="Keine Sicherung fuer diese Session vorhanden"
+        )
     return session

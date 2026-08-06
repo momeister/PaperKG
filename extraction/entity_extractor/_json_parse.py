@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import json
@@ -39,7 +40,9 @@ class JsonParseMixin(_Base):
         return score
 
     @classmethod
-    def _parse_json_robust(cls, raw_text: str, default: dict[str, Any]) -> ParsedLLMResponse:
+    def _parse_json_robust(
+        cls, raw_text: str, default: dict[str, Any]
+    ) -> ParsedLLMResponse:
         """
         Parse model JSON with clean, trimmed, and partial fallbacks.
 
@@ -50,12 +53,16 @@ class JsonParseMixin(_Base):
         """
         raw = cls._sanitize_json_text(raw_text)
         if not raw:
-            return ParsedLLMResponse(data=dict(default), parse_quality="partial", raw_text=raw_text)
+            return ParsedLLMResponse(
+                data=dict(default), parse_quality="partial", raw_text=raw_text
+            )
 
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                return ParsedLLMResponse(data=parsed, parse_quality="clean", raw_text=raw_text)
+                return ParsedLLMResponse(
+                    data=parsed, parse_quality="clean", raw_text=raw_text
+                )
         except json.JSONDecodeError:
             pass
 
@@ -66,7 +73,9 @@ class JsonParseMixin(_Base):
             try:
                 parsed = json.loads(trimmed)
                 if isinstance(parsed, dict):
-                    return ParsedLLMResponse(data=parsed, parse_quality="trimmed", raw_text=raw_text)
+                    return ParsedLLMResponse(
+                        data=parsed, parse_quality="trimmed", raw_text=raw_text
+                    )
             except json.JSONDecodeError:
                 pass
 
@@ -79,7 +88,9 @@ class JsonParseMixin(_Base):
             match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', raw)
             if match:
                 partial[key] = match.group(1)
-        return ParsedLLMResponse(data=partial, parse_quality="partial", raw_text=raw_text)
+        return ParsedLLMResponse(
+            data=partial, parse_quality="partial", raw_text=raw_text
+        )
 
     @staticmethod
     def _sanitize_json_text(raw_text: str) -> str:
@@ -96,7 +107,9 @@ class JsonParseMixin(_Base):
         """Parse a model response expected to be a JSON array."""
         raw = cls._sanitize_json_text(raw_text)
         if not raw:
-            return ParsedLLMResponse(data=[], parse_quality="partial", raw_text=raw_text)
+            return ParsedLLMResponse(
+                data=[], parse_quality="partial", raw_text=raw_text
+            )
 
         try:
             parsed = json.loads(raw)
@@ -138,7 +151,9 @@ class JsonParseMixin(_Base):
         value_start = key_match.end()
         opener = raw[value_start : value_start + 1]
         if opener not in {"[", "{"}:
-            scalar = re.match(r'"([^"]*)"|true|false|null|-?\d+(?:\.\d+)?', raw[value_start:])
+            scalar = re.match(
+                r'"([^"]*)"|true|false|null|-?\d+(?:\.\d+)?', raw[value_start:]
+            )
             if not scalar:
                 return None
             text = scalar.group(0)

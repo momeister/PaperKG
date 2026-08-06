@@ -6,6 +6,7 @@ mit dem gespeicherten. Stimmen sie überein, ist der Lauf **reproduzierbar** —
 Grundlage für das „nachvollziehbar/reproduzierbar"-Badge. Die Original-Ausgaben
 werden dabei nicht angefasst (Verifikation läuft in einer Kopie).
 """
+
 from __future__ import annotations
 
 import shutil
@@ -31,8 +32,13 @@ def verify_run(
     run_dir = Path(str(run.get("run_dir"))).resolve()
     script = run_dir / runner.SCRIPT_FILENAME
     if not script.is_file():
-        return {"reproducible": False, "expected": run.get("output_hash"), "actual": None,
-                "ok": False, "stderr": "script.py fehlt auf der Platte."}
+        return {
+            "reproducible": False,
+            "expected": run.get("output_hash"),
+            "actual": None,
+            "ok": False,
+            "stderr": "script.py fehlt auf der Platte.",
+        }
 
     seed = int(run.get("seed") or runner.DEFAULT_SEED)
     expected = str(run.get("output_hash") or "")

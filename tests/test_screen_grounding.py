@@ -1,6 +1,7 @@
 """Tests for zoom-refine grounding + verification primitives (R7 rework).
 
 Offline — the LLM router is faked; only Pillow does real work (synthetic PNGs)."""
+
 from __future__ import annotations
 
 import base64
@@ -32,7 +33,9 @@ class _FakeRouter:
         self.calls: list[dict[str, Any]] = []
 
     def chat(self, messages, provider=None, overrides=None):
-        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides or {}})
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides or {}}
+        )
         if len(self.replies) > 1:
             return self.replies.pop(0)
         return self.replies[0]
@@ -44,6 +47,7 @@ class _FakeRouter:
 # --------------------------------------------------------------------------- #
 # crop_around                                                                  #
 # --------------------------------------------------------------------------- #
+
 
 def test_crop_around_centers_on_point() -> None:
     from PIL import Image
@@ -76,6 +80,7 @@ def test_crop_around_small_image_uses_full_frame() -> None:
 # refine_point                                                                 #
 # --------------------------------------------------------------------------- #
 
+
 def test_refine_point_maps_grid_back_to_original_pixels() -> None:
     # Crop is 400px centered at (500, 400) → origin (300, 200). Grid (500, 500)
     # is the crop center → original (500.0, 400.0).
@@ -98,7 +103,9 @@ def test_refine_point_grid_corner_maps_to_crop_origin() -> None:
 
 def test_refine_point_garbage_reply_falls_back_to_coarse() -> None:
     router = _FakeRouter("kein json")
-    result = screen_grounding.refine_point(router, _png_b64(600, 600), 123.4, 234.5, "Ziel")
+    result = screen_grounding.refine_point(
+        router, _png_b64(600, 600), 123.4, 234.5, "Ziel"
+    )
     assert result == {"x": 123.4, "y": 234.5, "refined": False}
 
 
@@ -119,6 +126,7 @@ def test_refine_point_label_lands_in_prompt() -> None:
 # screen_changed                                                               #
 # --------------------------------------------------------------------------- #
 
+
 def test_screen_changed_identical_frames_near_zero() -> None:
     b64 = _png_b64(300, 300)
     assert screen_grounding.screen_changed(b64, b64) == pytest.approx(0.0)
@@ -134,34 +142,52 @@ def test_screen_changed_different_frames_positive() -> None:
 # verify_expectation                                                           #
 # --------------------------------------------------------------------------- #
 
+
 def test_verify_expectation_reports_mismatch_with_note() -> None:
     reply = json.dumps(
-        {"beobachtung": "Der Desktop ist unverändert.", "erfuellt": False, "hinweis": "Kein Menü offen."}
+        {
+            "beobachtung": "Der Desktop ist unverändert.",
+            "erfuellt": False,
+            "hinweis": "Kein Menü offen.",
+        }
     )
     router = _FakeRouter(reply)
     result = screen_grounding.verify_expectation(
-        router, _png_b64(400, 400), "Klick auf (100, 100) — 'Startmenü'", "Das Startmenü öffnet sich"
+        router,
+        _png_b64(400, 400),
+        "Klick auf (100, 100) — 'Startmenü'",
+        "Das Startmenü öffnet sich",
     )
     assert result["matches"] is False
     assert "Kein Menü" in result["note"]
 
 
 def test_verify_expectation_success() -> None:
-    reply = json.dumps({"beobachtung": "Menü ist offen.", "erfuellt": True, "hinweis": ""})
+    reply = json.dumps(
+        {"beobachtung": "Menü ist offen.", "erfuellt": True, "hinweis": ""}
+    )
     router = _FakeRouter(reply)
-    result = screen_grounding.verify_expectation(router, _png_b64(400, 400), "Klick", "Menü offen")
+    result = screen_grounding.verify_expectation(
+        router, _png_b64(400, 400), "Klick", "Menü offen"
+    )
     assert result["matches"] is True
 
 
 def test_verify_expectation_unparseable_is_inconclusive() -> None:
     router = _FakeRouter("???")
-    result = screen_grounding.verify_expectation(router, _png_b64(400, 400), "Klick", "Menü offen")
+    result = screen_grounding.verify_expectation(
+        router, _png_b64(400, 400), "Klick", "Menü offen"
+    )
     assert result == {"matches": True, "note": ""}
 
 
 def test_verify_expectation_prompt_contains_action_and_expectation() -> None:
-    router = _FakeRouter(json.dumps({"beobachtung": "x", "erfuellt": True, "hinweis": ""}))
-    screen_grounding.verify_expectation(router, _png_b64(400, 400), "Klick auf 'Speichern'", "Dialog offen")
+    router = _FakeRouter(
+        json.dumps({"beobachtung": "x", "erfuellt": True, "hinweis": ""})
+    )
+    screen_grounding.verify_expectation(
+        router, _png_b64(400, 400), "Klick auf 'Speichern'", "Dialog offen"
+    )
     system = router.calls[0]["messages"][0]["content"]
     assert "Klick auf 'Speichern'" in system
     assert "Dialog offen" in system

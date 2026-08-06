@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -31,7 +32,9 @@ class ClaimsMixin(_Base):
             for claim in claim_list:
                 if not isinstance(claim, dict):
                     continue
-                statement = re.sub(r"\s+", " ", str(claim.get("statement") or "")).strip()
+                statement = re.sub(
+                    r"\s+", " ", str(claim.get("statement") or "")
+                ).strip()
                 normalized = cls._normalize_label(statement)
                 if not normalized:
                     continue
@@ -49,20 +52,41 @@ class ClaimsMixin(_Base):
     @staticmethod
     def _infer_claim_type(claim: dict[str, Any]) -> str:
         existing = str(claim.get("claim_type") or "").strip().lower()
-        allowed = {"contribution", "finding", "limitation", "negative_result", "comparison", "recommendation"}
+        allowed = {
+            "contribution",
+            "finding",
+            "limitation",
+            "negative_result",
+            "comparison",
+            "recommendation",
+        }
         if existing in allowed:
             return existing
 
         statement = str(claim.get("statement") or "").lower()
-        if re.search(r"\b(too simple|insufficient|limited|limitation|cannot draw|unable to draw|hard to draw|not enough to)\b", statement):
+        if re.search(
+            r"\b(too simple|insufficient|limited|limitation|cannot draw|unable to draw|hard to draw|not enough to)\b",
+            statement,
+        ):
             return "limitation"
-        if re.search(r"\b(no evidence|does not|do not|did not|failed to|fails to|cannot|unable to|no significant)\b", statement):
+        if re.search(
+            r"\b(no evidence|does not|do not|did not|failed to|fails to|cannot|unable to|no significant)\b",
+            statement,
+        ):
             return "negative_result"
-        if re.search(r"\b(outperform|outperforms|more robust|less robust|more accurate|less accurate|compared|whereas|than)\b", statement):
+        if re.search(
+            r"\b(outperform|outperforms|more robust|less robust|more accurate|less accurate|compared|whereas|than)\b",
+            statement,
+        ):
             return "comparison"
-        if re.search(r"\b(should|recommend|requires?|must|need to|necessary)\b", statement):
+        if re.search(
+            r"\b(should|recommend|requires?|must|need to|necessary)\b", statement
+        ):
             return "recommendation"
-        if re.search(r"\b(introduce|introduces|propose|proposes|present|presents|provide|provides|contribute|contributes)\b", statement):
+        if re.search(
+            r"\b(introduce|introduces|propose|proposes|present|presents|provide|provides|contribute|contributes)\b",
+            statement,
+        ):
             return "contribution"
         return "finding"
 
@@ -73,7 +97,9 @@ class ClaimsMixin(_Base):
             r"\bwithout\s+(?:a\s+)?(?:significant\s+|substantial\s+|meaningful\s+)?"
             r"(?:loss|degradation|performance loss|drop|reduction)\b",
             statement,
-        ) or re.search(r"\bwithout\s+(?:sacrificing|compromising|hurting)\b", statement):
+        ) or re.search(
+            r"\bwithout\s+(?:sacrificing|compromising|hurting)\b", statement
+        ):
             return False
         explicit_negation = bool(
             re.search(
@@ -83,7 +109,10 @@ class ClaimsMixin(_Base):
         )
         if explicit_negation:
             return True
-        if str(claim.get("claim_type") or "").lower() in {"limitation", "negative_result"}:
+        if str(claim.get("claim_type") or "").lower() in {
+            "limitation",
+            "negative_result",
+        }:
             return False
         return bool(claim.get("negated"))
 
@@ -99,10 +128,18 @@ class ClaimsMixin(_Base):
         if not text:
             return []
         windows: list[str] = []
-        abstract = re.search(r"\babstract\b\s*([\s\S]{200,2500}?)(?:\n\s*(?:keywords|introduction|1\.?\s+introduction)\b)", text, flags=re.IGNORECASE)
+        abstract = re.search(
+            r"\babstract\b\s*([\s\S]{200,2500}?)(?:\n\s*(?:keywords|introduction|1\.?\s+introduction)\b)",
+            text,
+            flags=re.IGNORECASE,
+        )
         if abstract:
             windows.append(abstract.group(1))
-        for match in re.finditer(r"\b(?:conclusion|conclusions|discussion)\b\s*([\s\S]{200,2500})", text, flags=re.IGNORECASE):
+        for match in re.finditer(
+            r"\b(?:conclusion|conclusions|discussion)\b\s*([\s\S]{200,2500})",
+            text,
+            flags=re.IGNORECASE,
+        ):
             windows.append(match.group(1))
             if len(windows) >= 3:
                 break
@@ -116,7 +153,9 @@ class ClaimsMixin(_Base):
             flags=re.IGNORECASE,
         )
         for window in windows:
-            for sentence in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", window.strip())):
+            for sentence in re.split(
+                r"(?<=[.!?])\s+", re.sub(r"\s+", " ", window.strip())
+            ):
                 clean = sentence.strip(" .")
                 if not (70 <= len(clean) <= 320):
                     continue
@@ -129,8 +168,16 @@ class ClaimsMixin(_Base):
                 candidates.append(
                     {
                         "statement": clean,
-                        "evidence_type": "review" if paper_type_hint == "survey" else "theoretical",
-                        "negated": bool(re.search(r"\b(no|not|lack|lacking|limited|without)\b", clean, flags=re.IGNORECASE)),
+                        "evidence_type": (
+                            "review" if paper_type_hint == "survey" else "theoretical"
+                        ),
+                        "negated": bool(
+                            re.search(
+                                r"\b(no|not|lack|lacking|limited|without)\b",
+                                clean,
+                                flags=re.IGNORECASE,
+                            )
+                        ),
                         "attributed_to": "this_paper",
                         "auto_detected": True,
                         "candidate_source": "text_claim_fallback",

@@ -1,7 +1,11 @@
 """Tests for reference-section extraction and splitting (pure, no network)."""
+
 from __future__ import annotations
 
-from extraction.reference_parser import extract_reference_section, split_reference_entries
+from extraction.reference_parser import (
+    extract_reference_section,
+    split_reference_entries,
+)
 
 
 PAPER = """
@@ -37,7 +41,10 @@ def test_split_reference_entries_finds_three_numbered_refs():
     entries = split_reference_entries(section)
     assert len(entries) == 3
     assert any("BERT" in entry for entry in entries)
-    assert all("2017" in entries[0] or "2019" in entries[1] or "2020" in entries[2] for _ in [0])
+    assert all(
+        "2017" in entries[0] or "2019" in entries[1] or "2020" in entries[2]
+        for _ in [0]
+    )
 
 
 def test_no_reference_section_returns_empty():

@@ -37,7 +37,9 @@ class OpenAlexClient:
                 await asyncio.sleep(min_interval - elapsed)
             self._last_request_ts = time.monotonic()
 
-    async def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _get(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         await self._throttle()
         merged = dict(params or {})
         if self.config.api_key:
@@ -69,14 +71,24 @@ class OpenAlexClient:
     async def get_work(self, work_id: str) -> dict[str, Any]:
         return await self._get(f"/works/{work_id}")
 
-    async def list_topics(self, search: str | None = None, per_page: int = 25, page: int = 1) -> dict[str, Any]:
-        params: dict[str, Any] = {"per_page": min(max(per_page, 1), 100), "page": max(page, 1)}
+    async def list_topics(
+        self, search: str | None = None, per_page: int = 25, page: int = 1
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "per_page": min(max(per_page, 1), 100),
+            "page": max(page, 1),
+        }
         if search:
             params["search"] = search
         return await self._get("/topics", params=params)
 
-    async def list_concepts(self, search: str | None = None, per_page: int = 25, page: int = 1) -> dict[str, Any]:
-        params: dict[str, Any] = {"per_page": min(max(per_page, 1), 100), "page": max(page, 1)}
+    async def list_concepts(
+        self, search: str | None = None, per_page: int = 25, page: int = 1
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "per_page": min(max(per_page, 1), 100),
+            "page": max(page, 1),
+        }
         if search:
             params["search"] = search
         return await self._get("/concepts", params=params)

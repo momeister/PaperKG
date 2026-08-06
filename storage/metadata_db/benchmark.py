@@ -19,30 +19,37 @@ class BenchmarkMixin(_Base):
     def add_benchmark_run(self, run: dict[str, Any]) -> dict[str, Any]:
         """Persist a benchmark/eval run so past runs and their metadata stay visible."""
         run_id = str(run.get("id") or f"bench_{uuid.uuid4().hex}")
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO benchmark_runs
             (id, kind, provider, model, summary, report, duration_ms, created_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            run_id,
-            str(run.get("kind") or "extraction"),
-            run.get("provider"),
-            run.get("model"),
-            json.dumps(run.get("summary") or {}),
-            json.dumps(run.get("report") or {}),
-            int(run.get("duration_ms") or 0),
-            datetime.now(),
-        ])
+        """,
+            [
+                run_id,
+                str(run.get("kind") or "extraction"),
+                run.get("provider"),
+                run.get("model"),
+                json.dumps(run.get("summary") or {}),
+                json.dumps(run.get("report") or {}),
+                int(run.get("duration_ms") or 0),
+                datetime.now(),
+            ],
+        )
         return self.get_benchmark_run(run_id) or {"id": run_id}
 
     def get_benchmark_run(self, run_id: str) -> dict[str, Any] | None:
-        rows = self._execute("SELECT * FROM benchmark_runs WHERE id = ?", [run_id]).fetchall()
+        rows = self._execute(
+            "SELECT * FROM benchmark_runs WHERE id = ?", [run_id]
+        ).fetchall()
         if not rows:
             return None
         cols = [desc[0] for desc in self.conn.description]
         return self._decode_benchmark_run(dict(zip(cols, rows[0])))
 
-    def list_benchmark_runs(self, kind: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def list_benchmark_runs(
+        self, kind: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
         if kind:
             rows = self._execute(
                 "SELECT * FROM benchmark_runs WHERE kind = ? ORDER BY created_timestamp DESC LIMIT ?",

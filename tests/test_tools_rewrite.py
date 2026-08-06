@@ -12,7 +12,9 @@ class _FakeRouter:
         self.calls: list[dict] = []
 
     def chat(self, messages, provider=None, overrides=None) -> str:
-        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides}
+        )
         return self.reply
 
     def provider_default_model(self, provider=None) -> str:
@@ -34,7 +36,10 @@ def test_rewrite_strips_chain_of_thought_preamble() -> None:
     client, fake = _client_with(reply)
     resp = client.post(
         "/tools/rewrite",
-        json={"text": "Bevacizumab hilft bei Glioblastom.", "instruction": "Umformulieren."},
+        json={
+            "text": "Bevacizumab hilft bei Glioblastom.",
+            "instruction": "Umformulieren.",
+        },
     )
     assert resp.status_code == 200
     body = resp.json()

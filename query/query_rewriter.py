@@ -240,7 +240,16 @@ def _is_reasoning_model(model: str | None) -> bool:
         return False
     return any(
         marker in name
-        for marker in ("qwen3", "qwen-3", "deepseek-r1", "r1-", "glm-4.5", "glm-5", "gpt-oss", "reasoning")
+        for marker in (
+            "qwen3",
+            "qwen-3",
+            "deepseek-r1",
+            "r1-",
+            "glm-4.5",
+            "glm-5",
+            "gpt-oss",
+            "reasoning",
+        )
     )
 
 

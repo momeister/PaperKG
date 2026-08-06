@@ -12,6 +12,7 @@ entsteht ohne diese nachvollziehbare Historie.
   * :mod:`analysis.store`   — DuckDB-Persistenz der Läufe + Artefakte
   * :mod:`analysis.verify`  — deterministischer Reproduzierbarkeits-Check (WP4)
 """
+
 from __future__ import annotations
 
 from analysis.runner import (

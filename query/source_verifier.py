@@ -58,7 +58,9 @@ def _normalized_for_match(text: str) -> tuple[str, list[int]]:
         replacement = _MATCH_CHAR_EQUIV.get(original)
         if replacement is None:
             decomposed = unicodedata.normalize("NFKD", original)
-            replacement = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+            replacement = "".join(
+                ch for ch in decomposed if not unicodedata.combining(ch)
+            )
         replacement = replacement.lower()
         for folded in replacement:
             chars.append(folded)
@@ -208,16 +210,20 @@ def verify_answer_sources(
     max_evidence_per_source: int = 15,
 ) -> VerificationReport:
     sources = [
-        source for source in (answer_payload.get("sources") or [])
+        source
+        for source in (answer_payload.get("sources") or [])
         if isinstance(source, dict)
     ][:max_sources]
     evidence = [
-        item for item in (answer_payload.get("evidence") or [])
+        item
+        for item in (answer_payload.get("evidence") or [])
         if isinstance(item, dict)
     ]
     cited_paper_ids = sorted(_cited_paper_ids(str(answer_payload.get("answer") or "")))
     source_ids = {str(source.get("paper_id") or "") for source in sources}
-    missing_source_ids = [paper_id for paper_id in cited_paper_ids if paper_id not in source_ids]
+    missing_source_ids = [
+        paper_id for paper_id in cited_paper_ids if paper_id not in source_ids
+    ]
 
     verifications: list[SourceVerification] = []
     for source in sources:
@@ -233,7 +239,8 @@ def verify_answer_sources(
                 pdf_error = str(exc)
 
         source_evidence = [
-            (index, item) for index, item in enumerate(evidence)
+            (index, item)
+            for index, item in enumerate(evidence)
             if str(item.get("paper_id") or "") == paper_id
         ]
         locations: list[EvidenceLocation] = []
@@ -281,7 +288,9 @@ def locate_evidence_fragments(
 ) -> list[EvidenceLocation]:
     if _is_claim_excerpt_evidence(evidence):
         return [_claim_excerpt_location(evidence, pdf_text, source_evidence_index)]
-    fragments = reference_fragments(evidence, max_fragments=max_fragments) or [reference_text(evidence)]
+    fragments = reference_fragments(evidence, max_fragments=max_fragments) or [
+        reference_text(evidence)
+    ]
     locations: list[EvidenceLocation] = []
     for fragment_index, reference in enumerate(fragments[:max_fragments]):
         locations.append(
@@ -305,10 +314,14 @@ def locate_evidence_fragments(
 
 
 def _is_claim_excerpt_evidence(evidence: dict[str, Any]) -> bool:
-    metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    metadata = (
+        evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    )
     if (metadata or {}).get("context_policy") in ("claim_excerpt", "approx_region"):
         return True
-    return str(evidence.get("kind") or "") == "pdf" and str(evidence.get("field") or "") in (
+    return str(evidence.get("kind") or "") == "pdf" and str(
+        evidence.get("field") or ""
+    ) in (
         "answer_claim_excerpt",
         "answer_claim_region",
     )
@@ -327,13 +340,23 @@ def _claim_excerpt_location(
     re-locates non-strict and without translation, which is how wrong passages
     ended up displayed as "Aktive Textstelle".
     """
-    metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    metadata = (
+        evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    )
     excerpt = re.sub(r"\s+", " ", str(evidence.get("text") or "")).strip()
-    reference = re.sub(r"\s+", " ", str((metadata or {}).get("context") or "")).strip() or excerpt
+    reference = (
+        re.sub(r"\s+", " ", str((metadata or {}).get("context") or "")).strip()
+        or excerpt
+    )
     reference = _truncate_at_sentence(reference, MAX_REFERENCE_CHARS)
     normalized_pdf = re.sub(r"\s+", " ", pdf_text or "").lower()
-    found = bool(excerpt) and bool(normalized_pdf) and (
-        excerpt.lower() in normalized_pdf or _normalized_contains(normalized_pdf, excerpt)
+    found = (
+        bool(excerpt)
+        and bool(normalized_pdf)
+        and (
+            excerpt.lower() in normalized_pdf
+            or _normalized_contains(normalized_pdf, excerpt)
+        )
     )
     terms = highlightable_terms(excerpt)
     return EvidenceLocation(
@@ -343,7 +366,9 @@ def _claim_excerpt_location(
         field=str(evidence.get("field")) if evidence.get("field") else None,
         reference_text=reference,
         pdf_excerpt=excerpt,
-        matched_terms=[term for term in terms if term in excerpt.lower()] if excerpt else [],
+        matched_terms=(
+            [term for term in terms if term in excerpt.lower()] if excerpt else []
+        ),
         found_in_pdf_text=found,
         source_evidence_index=source_evidence_index,
         fragment_index=0,
@@ -371,13 +396,17 @@ def _location_for_reference(
                 # presenting the window as the exact Belegstelle.
                 located = "term_overlap_only"
         else:
-            region, _ = best_excerpt_with_method(pdf_text, reference, window_chars=APPROX_REGION_CHARS)
+            region, _ = best_excerpt_with_method(
+                pdf_text, reference, window_chars=APPROX_REGION_CHARS
+            )
             if region:
                 excerpt = region
                 located = "approx_region"
     terms = highlightable_terms(reference)
     raw_metadata = evidence.get("metadata")
-    metadata: dict[str, Any] = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    metadata: dict[str, Any] = (
+        dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    )
     if located:
         metadata["located"] = located
     return EvidenceLocation(
@@ -387,7 +416,9 @@ def _location_for_reference(
         field=str(evidence.get("field")) if evidence.get("field") else None,
         reference_text=reference,
         pdf_excerpt=excerpt,
-        matched_terms=[term for term in terms if term in excerpt.lower()] if excerpt else [],
+        matched_terms=(
+            [term for term in terms if term in excerpt.lower()] if excerpt else []
+        ),
         found_in_pdf_text=bool(excerpt),
         source_evidence_index=source_evidence_index,
         fragment_index=fragment_index,
@@ -414,6 +445,7 @@ def find_pdf_path(
     index: list[tuple[str, str]] | None = None,
 ) -> str | None:
     import re as _re
+
     if index is None:
         index = build_pdf_index(pdf_base_dir)
     if not index:
@@ -466,7 +498,9 @@ def reference_text(evidence: dict[str, Any]) -> str:
 
 
 def reference_fragments(evidence: dict[str, Any], max_fragments: int = 3) -> list[str]:
-    metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    metadata = (
+        evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+    )
     title = str(metadata.get("title") or "")
     preferred_anchor_keys = [
         "evidence_span",
@@ -519,7 +553,9 @@ def best_excerpt(
     window_chars: int = DEFAULT_EXCERPT_CHARS,
     strict: bool = False,
 ) -> str:
-    return best_excerpt_with_method(pdf_text, reference, window_chars=window_chars, strict=strict)[0]
+    return best_excerpt_with_method(
+        pdf_text, reference, window_chars=window_chars, strict=strict
+    )[0]
 
 
 def best_excerpt_with_method(
@@ -560,18 +596,27 @@ def best_excerpt_with_method(
 
     lower = clean.lower()
     if quantitative:
-        required_numbers = {token for token in quantitative if token.endswith("%")} or quantitative
+        required_numbers = {
+            token for token in quantitative if token.endswith("%")
+        } or quantitative
         number_candidates: list[tuple[int, str]] = []
         for token in required_numbers:
             token_pattern = r"(?<![a-z0-9.])" + re.escape(token) + r"(?![a-z0-9.%])"
             for match in re.finditer(token_pattern, lower):
-                excerpt = _excerpt_around(clean, match.start(), len(match.group(0)), window_chars)
+                excerpt = _excerpt_around(
+                    clean, match.start(), len(match.group(0)), window_chars
+                )
                 if not _contains_quantitative_tokens(excerpt, quantitative):
                     continue
-                score = sum(1 for term in tokens if term in excerpt.lower()) + len(required_numbers) * 20
+                score = (
+                    sum(1 for term in tokens if term in excerpt.lower())
+                    + len(required_numbers) * 20
+                )
                 number_candidates.append((score, excerpt))
         if number_candidates:
-            number_candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
+            number_candidates.sort(
+                key=lambda item: (item[0], len(item[1])), reverse=True
+            )
             return number_candidates[0][1], "quantitative"
 
     best_start = 0
@@ -621,11 +666,16 @@ def best_excerpt_with_method(
     # dominated by names that recur throughout the whole paper — better to report no match than
     # a confident-looking excerpt that doesn't actually support the claim.
     if not strict and fallback_score >= 3:
-        return _term_centered_excerpt(clean, lower, fallback_start, window_chars, tokens), "term_overlap"
+        return (
+            _term_centered_excerpt(clean, lower, fallback_start, window_chars, tokens),
+            "term_overlap",
+        )
     return "", ""
 
 
-def _term_centered_excerpt(clean: str, lower: str, start: int, window_chars: int, tokens: list[str]) -> str:
+def _term_centered_excerpt(
+    clean: str, lower: str, start: int, window_chars: int, tokens: list[str]
+) -> str:
     """Centre the excerpt on the matched terms inside the winning window.
 
     Anchoring on the raw window start instead caused two real bugs: sentence-truncation
@@ -633,9 +683,13 @@ def _term_centered_excerpt(clean: str, lower: str, start: int, window_chars: int
     surrounded by mostly irrelevant text.
     """
     window = lower[start : start + window_chars]
-    positions = [(window.find(token), len(token)) for token in tokens if token in window]
+    positions = [
+        (window.find(token), len(token)) for token in tokens if token in window
+    ]
     if not positions:
-        return _excerpt_around(clean, start, min(window_chars, len(clean) - start), window_chars)
+        return _excerpt_around(
+            clean, start, min(window_chars, len(clean) - start), window_chars
+        )
     first = min(position for position, _ in positions)
     last = max(position + length for position, length in positions)
     return _excerpt_around(clean, start + first, last - first, window_chars)
@@ -704,7 +758,9 @@ def best_excerpts(
     spans: list[tuple[int, int]] = []
     unplaced: list[str] = []
     for fragment in fragments[: max_excerpts * 2]:
-        excerpt = best_excerpt(clean, fragment, window_chars=window_chars, strict=strict)
+        excerpt = best_excerpt(
+            clean, fragment, window_chars=window_chars, strict=strict
+        )
         if not excerpt:
             continue
         position = clean.lower().find(excerpt.lower())
@@ -716,7 +772,9 @@ def best_excerpts(
 
     if not spans and not unplaced:
         # Individual clauses may lack anchors even when the whole reference has one.
-        whole = best_excerpt(clean, reference_clean, window_chars=window_chars, strict=strict)
+        whole = best_excerpt(
+            clean, reference_clean, window_chars=window_chars, strict=strict
+        )
         return [whole] if whole else []
 
     spans.sort()
@@ -770,7 +828,9 @@ def highlightable_terms(text: str) -> list[str]:
     return unique
 
 
-def _short_reference_fragments(text: str, max_chars: int = MAX_REFERENCE_CHARS) -> list[str]:
+def _short_reference_fragments(
+    text: str, max_chars: int = MAX_REFERENCE_CHARS
+) -> list[str]:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
     if not clean:
         return []
@@ -797,7 +857,11 @@ def _truncate_at_sentence(text: str, max_chars: int) -> str:
     clean = re.sub(r"\s+", " ", text or "").strip()
     if len(clean) <= max_chars:
         return clean
-    boundary = max(clean.rfind(". ", 0, max_chars), clean.rfind("! ", 0, max_chars), clean.rfind("? ", 0, max_chars))
+    boundary = max(
+        clean.rfind(". ", 0, max_chars),
+        clean.rfind("! ", 0, max_chars),
+        clean.rfind("? ", 0, max_chars),
+    )
     if boundary >= max(80, max_chars // 2):
         return clean[: boundary + 1].strip()
     return clean[: max_chars - 3].rstrip() + "..."
@@ -811,7 +875,9 @@ def _split_long_sentence(sentence: str, max_chars: int) -> list[str]:
         return [clean]
     clauses = [
         clause.strip(" ;:,")
-        for clause in re.split(r"(?:;\s+|:\s+|\s+-\s+|\s+\u2013\s+|\s+\u2014\s+)", clean)
+        for clause in re.split(
+            r"(?:;\s+|:\s+|\s+-\s+|\s+\u2013\s+|\s+\u2014\s+)", clean
+        )
         if clause.strip(" ;:,")
     ]
     if len(clauses) > 1:
@@ -838,11 +904,13 @@ def _remove_title_prefix(text: str, title: str) -> str:
     if clean.lower() == title_clean.lower():
         return ""
     if clean.lower().startswith(title_clean.lower()):
-        return clean[len(title_clean):].lstrip(" .:-")
+        return clean[len(title_clean) :].lstrip(" .:-")
     return clean
 
 
-def _excerpt_around(text: str, position: int, match_length: int, window_chars: int) -> str:
+def _excerpt_around(
+    text: str, position: int, match_length: int, window_chars: int
+) -> str:
     half_context = max(40, (window_chars - match_length) // 2)
     raw_start = max(0, position - half_context)
     raw_end = min(len(text), position + match_length + half_context)
@@ -857,7 +925,9 @@ def _excerpt_around(text: str, position: int, match_length: int, window_chars: i
     # Truncation would cut the match itself away (e.g. a number near the end of a long
     # sentence shown as "0.55..."): return the complete sentence(s) carrying the match
     # instead, even when slightly longer than the window.
-    sentence_start = _nearest_sentence_start(text, max(0, position - window_chars), position)
+    sentence_start = _nearest_sentence_start(
+        text, max(0, position - window_chars), position
+    )
     sentence_end = _nearest_sentence_end(text, position + match_length)
     return text[sentence_start:sentence_end].strip()
 
@@ -865,7 +935,11 @@ def _excerpt_around(text: str, position: int, match_length: int, window_chars: i
 def _nearest_sentence_start(text: str, raw_start: int, match_start: int) -> int:
     if raw_start <= 0:
         return 0
-    candidates = [text.rfind(". ", raw_start, match_start), text.rfind("! ", raw_start, match_start), text.rfind("? ", raw_start, match_start)]
+    candidates = [
+        text.rfind(". ", raw_start, match_start),
+        text.rfind("! ", raw_start, match_start),
+        text.rfind("? ", raw_start, match_start),
+    ]
     candidate = max(candidates)
     return candidate + 2 if candidate >= 0 else raw_start
 
@@ -873,14 +947,20 @@ def _nearest_sentence_start(text: str, raw_start: int, match_start: int) -> int:
 def _nearest_sentence_end(text: str, raw_end: int) -> int:
     if raw_end >= len(text):
         return len(text)
-    candidates = [text.find(". ", raw_end), text.find("! ", raw_end), text.find("? ", raw_end)]
+    candidates = [
+        text.find(". ", raw_end),
+        text.find("! ", raw_end),
+        text.find("? ", raw_end),
+    ]
     candidates = [candidate + 1 for candidate in candidates if candidate >= 0]
     return min(candidates) if candidates else raw_end
 
 
 def _is_duplicate_fragment(fragment: str, existing: list[str]) -> bool:
     normalized = re.sub(r"\W+", " ", fragment).strip().lower()
-    return any(normalized == re.sub(r"\W+", " ", item).strip().lower() for item in existing)
+    return any(
+        normalized == re.sub(r"\W+", " ", item).strip().lower() for item in existing
+    )
 
 
 def _find_longest_substring(text: str, reference: str) -> tuple[int, int] | None:
@@ -930,6 +1010,10 @@ def _cited_paper_ids(answer_text: str) -> set[str]:
     for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
         for value in re.split(r"[,;]\s*", bracketed):
             value = value.strip()
-            if value.startswith("arxiv:") or value.startswith("doi:") or value.startswith("p"):
+            if (
+                value.startswith("arxiv:")
+                or value.startswith("doi:")
+                or value.startswith("p")
+            ):
                 ids.add(value)
     return ids

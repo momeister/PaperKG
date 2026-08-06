@@ -29,6 +29,13 @@ type Props = {
   /** Optionaler Titel über der Schiene — Default: "Kreativität". */
   label?: string;
   id?: string;
+  /** Klärungstext unter der Schiene (auch im compact-Modus sichtbar). Erklärt
+   *  Geltungsbereich der Kreativitätseinstellung (z. B. projektweit vs. nur
+   *  für diese Vorschlag-Generierung). */
+  hint?: string;
+  /** Native Browser-Tooltipp (title-Attribut auf dem Container). Für
+   *  ausführlichere Erklärungen beim Hovern. */
+  tooltip?: string;
 };
 
 export function CreativitySlider({
@@ -38,11 +45,17 @@ export function CreativitySlider({
   disabled = false,
   label = "Kreativität",
   id = "creativity-slider",
+  hint,
+  tooltip,
 }: Props) {
   const active = LEVELS.find((level) => level.value === value) ?? LEVELS[2];
 
   return (
-    <div className={compact ? "creativity-slider creativity-slider--compact" : "creativity-slider"} id={id}>
+    <div
+      className={compact ? "creativity-slider creativity-slider--compact" : "creativity-slider"}
+      id={id}
+      title={tooltip}
+    >
       {!compact ? (
         <div className="creativity-slider-head">
           <label htmlFor={id} className="creativity-slider-label">
@@ -74,6 +87,7 @@ export function CreativitySlider({
           );
         })}
       </div>
+      {hint ? <p className="creativity-slider-hint muted">{hint}</p> : null}
     </div>
   );
 }

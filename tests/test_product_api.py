@@ -87,10 +87,18 @@ def test_product_projects_papers_dashboard_review_and_graph(tmp_path) -> None:
         "projects_path": str(projects_path),
     }
 
-    created = client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "demo", "paper_ids": ["p1"]})
+    created = client.post(
+        "/projects",
+        params={"projects_path": str(projects_path)},
+        json={"name": "demo", "paper_ids": ["p1"]},
+    )
     assert created.status_code == 200
     assert created.json()["project"]["paper_count"] == 1
-    reserved = client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "Alle Papers"})
+    reserved = client.post(
+        "/projects",
+        params={"projects_path": str(projects_path)},
+        json={"name": "Alle Papers"},
+    )
     assert reserved.status_code == 400
 
     projects = client.get("/projects", params=common)
@@ -130,9 +138,13 @@ def test_product_projects_papers_dashboard_review_and_graph(tmp_path) -> None:
     node_types = {node["type"] for node in graph.json()["nodes"]}
     assert {"paper", "concept", "method"} <= node_types
 
-    delete_reserved = client.delete("/projects/__all_papers__", params={"projects_path": str(projects_path)})
+    delete_reserved = client.delete(
+        "/projects/__all_papers__", params={"projects_path": str(projects_path)}
+    )
     assert delete_reserved.status_code == 400
-    deleted = client.delete("/projects/demo", params={"projects_path": str(projects_path)})
+    deleted = client.delete(
+        "/projects/demo", params={"projects_path": str(projects_path)}
+    )
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
     projects_after_delete = client.get("/projects", params=common)
@@ -144,12 +156,20 @@ def test_project_rename_migrates_project_scoped_data(tmp_path, monkeypatch) -> N
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
     _fixture_db(db_path)
-    monkeypatch.setattr(projects_router, "PROJECT_PRIMARY_PATH", tmp_path / "project_primary.json")
-    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json")
+    monkeypatch.setattr(
+        projects_router, "PROJECT_PRIMARY_PATH", tmp_path / "project_primary.json"
+    )
+    monkeypatch.setattr(
+        projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json"
+    )
 
     client = TestClient(product_main.app)
     common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
-    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "alt", "paper_ids": ["p1"]})
+    client.post(
+        "/projects",
+        params={"projects_path": str(projects_path)},
+        json={"name": "alt", "paper_ids": ["p1"]},
+    )
     client.put("/projects/alt/primary-paper", json={"paper_id": "p1"})
 
     note = client.post(
@@ -160,7 +180,9 @@ def test_project_rename_migrates_project_scoped_data(tmp_path, monkeypatch) -> N
     assert note.status_code == 200
     note_id = note.json()["note"]["id"]
     with MetadataDB(str(db_path)) as db:
-        grey = db.add_grey_source("alt", {"url": "https://example.org", "title": "Web", "summary": "s"})
+        grey = db.add_grey_source(
+            "alt", {"url": "https://example.org", "title": "Web", "summary": "s"}
+        )
     grey_id = grey["id"]
 
     renamed = client.patch("/projects/alt", params=common, json={"name": "neu"})
@@ -171,7 +193,9 @@ def test_project_rename_migrates_project_scoped_data(tmp_path, monkeypatch) -> N
     assert saved == {"neu": ["p1"]}
 
     # Notiz, Web-Quelle und Hauptquelle haengen jetzt am neuen Projekt …
-    moved_notes = client.get("/projects/neu/notes", params={"metadata_db_path": str(db_path)})
+    moved_notes = client.get(
+        "/projects/neu/notes", params={"metadata_db_path": str(db_path)}
+    )
     assert [item["id"] for item in moved_notes.json()["items"]] == [note_id]
     with MetadataDB(str(db_path)) as db:
         assert [record["id"] for record in db.list_grey_sources("neu")] == [grey_id]
@@ -183,35 +207,64 @@ def test_project_rename_migrates_project_scoped_data(tmp_path, monkeypatch) -> N
     assert missing.status_code == 404
 
 
-def test_project_rename_rejects_reserved_and_existing_names(tmp_path, monkeypatch) -> None:
+def test_project_rename_rejects_reserved_and_existing_names(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
     _fixture_db(db_path)
-    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json")
+    monkeypatch.setattr(
+        projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json"
+    )
 
     client = TestClient(product_main.app)
     common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
-    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "a"})
-    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "b"})
+    client.post(
+        "/projects", params={"projects_path": str(projects_path)}, json={"name": "a"}
+    )
+    client.post(
+        "/projects", params={"projects_path": str(projects_path)}, json={"name": "b"}
+    )
 
-    assert client.patch("/projects/a", params=common, json={"name": "Alle Papers"}).status_code == 400
-    assert client.patch("/projects/a", params=common, json={"name": "b"}).status_code == 409
+    assert (
+        client.patch(
+            "/projects/a", params=common, json={"name": "Alle Papers"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.patch("/projects/a", params=common, json={"name": "b"}).status_code
+        == 409
+    )
     # Der globale Modus steht nicht in projects.json — er ist damit gar nicht erst umbenennbar.
-    assert client.patch("/projects/__all_papers__", params=common, json={"name": "x"}).status_code == 404
+    assert (
+        client.patch(
+            "/projects/__all_papers__", params=common, json={"name": "x"}
+        ).status_code
+        == 404
+    )
 
 
 def test_pinned_projects_sort_first_and_survive_reload(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "metadata.duckdb"
     projects_path = tmp_path / "projects.json"
     _fixture_db(db_path)
-    monkeypatch.setattr(projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json")
+    monkeypatch.setattr(
+        projects_router, "PROJECT_META_PATH", tmp_path / "project_meta.json"
+    )
 
     client = TestClient(product_main.app)
     common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
     for name in ["alpha", "beta", "gamma"]:
-        client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": name})
+        client.post(
+            "/projects",
+            params={"projects_path": str(projects_path)},
+            json={"name": name},
+        )
 
-    assert [p["id"] for p in client.get("/projects", params=common).json()["projects"]] == ["alpha", "beta", "gamma"]
+    assert [
+        p["id"] for p in client.get("/projects", params=common).json()["projects"]
+    ] == ["alpha", "beta", "gamma"]
 
     pinned = client.patch("/projects/gamma", params=common, json={"pinned": True})
     assert pinned.json()["project"]["pinned"] is True
@@ -219,7 +272,9 @@ def test_pinned_projects_sort_first_and_survive_reload(tmp_path, monkeypatch) ->
     assert [p["id"] for p in listed] == ["gamma", "alpha", "beta"]
 
     client.patch("/projects/gamma", params=common, json={"pinned": False})
-    assert [p["id"] for p in client.get("/projects", params=common).json()["projects"]] == ["alpha", "beta", "gamma"]
+    assert [
+        p["id"] for p in client.get("/projects", params=common).json()["projects"]
+    ] == ["alpha", "beta", "gamma"]
 
 
 def test_pin_survives_rename_and_is_dropped_on_delete(tmp_path, monkeypatch) -> None:
@@ -231,7 +286,9 @@ def test_pin_survives_rename_and_is_dropped_on_delete(tmp_path, monkeypatch) -> 
 
     client = TestClient(product_main.app)
     common = {"metadata_db_path": str(db_path), "projects_path": str(projects_path)}
-    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "alt"})
+    client.post(
+        "/projects", params={"projects_path": str(projects_path)}, json={"name": "alt"}
+    )
     client.patch("/projects/alt", params=common, json={"pinned": True})
 
     renamed = client.patch("/projects/alt", params=common, json={"name": "neu"})
@@ -259,7 +316,9 @@ def test_graph_explorer_never_truncates_extracted_papers(tmp_path) -> None:
             paper_id="extracted",
             llm_provider="fake",
             llm_model="fake-model",
-            concepts=[{"label": "Concept", "confidence": 0.9, "canonical_id": "concept:c"}],
+            concepts=[
+                {"label": "Concept", "confidence": 0.9, "canonical_id": "concept:c"}
+            ],
         )
         for index in range(10):
             pid = f"recent{index}"
@@ -302,8 +361,18 @@ def test_harvest_download_attaches_papers_to_project(tmp_path) -> None:
         "/harvest/download",
         json={
             "papers": [
-                {"id": "arxiv:1234.5678", "source": "arxiv", "source_id": "1234.5678", "title": "A"},
-                {"id": "arxiv:2222.0001", "source": "arxiv", "source_id": "2222.0001", "title": "B"},
+                {
+                    "id": "arxiv:1234.5678",
+                    "source": "arxiv",
+                    "source_id": "1234.5678",
+                    "title": "A",
+                },
+                {
+                    "id": "arxiv:2222.0001",
+                    "source": "arxiv",
+                    "source_id": "2222.0001",
+                    "title": "B",
+                },
             ],
             "download_pdfs": False,
             "project_id": "demo",
@@ -331,7 +400,14 @@ def test_harvest_download_to_all_papers_does_not_attach(tmp_path) -> None:
     response = client.post(
         "/harvest/download",
         json={
-            "papers": [{"id": "arxiv:9999.0001", "source": "arxiv", "source_id": "9999.0001", "title": "X"}],
+            "papers": [
+                {
+                    "id": "arxiv:9999.0001",
+                    "source": "arxiv",
+                    "source_id": "9999.0001",
+                    "title": "X",
+                }
+            ],
             "download_pdfs": False,
             "project_id": "__all_papers__",
             "projects_path": str(projects_path),
@@ -357,8 +433,24 @@ def test_extraction_library_filters_by_project(tmp_path) -> None:
     other_pdf.write_bytes(b"%PDF-1.4\n")
 
     with MetadataDB(str(db_path)) as db:
-        db.insert_paper({"id": "member", "source": "f", "source_id": "member", "title": "Member", "pdf_url": str(member_pdf)})
-        db.insert_paper({"id": "other", "source": "f", "source_id": "other", "title": "Other", "pdf_url": str(other_pdf)})
+        db.insert_paper(
+            {
+                "id": "member",
+                "source": "f",
+                "source_id": "member",
+                "title": "Member",
+                "pdf_url": str(member_pdf),
+            }
+        )
+        db.insert_paper(
+            {
+                "id": "other",
+                "source": "f",
+                "source_id": "other",
+                "title": "Other",
+                "pdf_url": str(other_pdf),
+            }
+        )
     projects_path.write_text(json.dumps({"demo": ["member"]}), encoding="utf-8")
 
     client = TestClient(product_main.app)
@@ -397,7 +489,9 @@ def test_benchmark_job_persists_and_lists_runs(tmp_path) -> None:
     ids = {item["id"] for item in listed.json()["items"]}
     assert run_id in ids
 
-    deleted = client.delete(f"/benchmark/runs/{run_id}", params={"metadata_db_path": str(db_path)})
+    deleted = client.delete(
+        f"/benchmark/runs/{run_id}", params={"metadata_db_path": str(db_path)}
+    )
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
 
@@ -442,7 +536,9 @@ def test_product_papers_include_pdf_display_fallbacks(tmp_path) -> None:
     assert paper["pdf_path"] == str(pdf_path)
 
 
-def test_grey_source_from_url_fetches_sanitizes_and_infers_title(tmp_path, monkeypatch) -> None:
+def test_grey_source_from_url_fetches_sanitizes_and_infers_title(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
 
     class FakeResponse:
@@ -505,8 +601,14 @@ def test_note_as_source_publishes_citable_snapshot(tmp_path) -> None:
     # andere Quelle ueber [grey::<id>] zitierbar — inklusive der Paper ihrer Zitate.
     db_path = tmp_path / "metadata.duckdb"
     with MetadataDB(str(db_path)) as db:
-        note = db.create_note(project_id="demo", title="Meine Notiz", markdown="# Befund\n\nWichtiger Text.")
-        db.add_note_citation(str(note["id"]), {"paper_id": "arxiv:1234.5678", "title": "Paper"})
+        note = db.create_note(
+            project_id="demo",
+            title="Meine Notiz",
+            markdown="# Befund\n\nWichtiger Text.",
+        )
+        db.add_note_citation(
+            str(note["id"]), {"paper_id": "arxiv:1234.5678", "title": "Paper"}
+        )
     client = TestClient(product_main.app)
 
     response = client.post(
@@ -524,7 +626,9 @@ def test_note_as_source_publishes_citable_snapshot(tmp_path) -> None:
     # Erneutes Speichern aktualisiert den Snapshot, statt eine zweite Quelle anzulegen.
     with MetadataDB(str(db_path)) as db:
         db.update_note(str(note["id"]), markdown="# Befund\n\nAktualisierter Text.")
-    again = client.post(f"/notes/{note['id']}/as-source", json={"metadata_db_path": str(db_path)})
+    again = client.post(
+        f"/notes/{note['id']}/as-source", json={"metadata_db_path": str(db_path)}
+    )
     assert again.status_code == 200
     with MetadataDB(str(db_path)) as db:
         stored = db.list_grey_sources("demo", kind="note")
@@ -543,10 +647,20 @@ def test_research_tree_as_source_keeps_used_papers(tmp_path) -> None:
             "root_question": "Wie lernt das Gehirn?",
             "document": "## Kapitel\n\nBefund [arxiv:1].",
             "nodes": [
-                {"id": "r", "parent_id": None, "depth": 0, "question": "Wie lernt das Gehirn?",
-                 "answer": {"sources": [{"paper_id": "arxiv:1", "title": "A"}]}},
-                {"id": "c", "parent_id": "r", "depth": 1, "question": "Kapitel",
-                 "answer": {"sources": [{"paper_id": "arxiv:2", "title": "B"}]}},
+                {
+                    "id": "r",
+                    "parent_id": None,
+                    "depth": 0,
+                    "question": "Wie lernt das Gehirn?",
+                    "answer": {"sources": [{"paper_id": "arxiv:1", "title": "A"}]},
+                },
+                {
+                    "id": "c",
+                    "parent_id": "r",
+                    "depth": 1,
+                    "question": "Kapitel",
+                    "answer": {"sources": [{"paper_id": "arxiv:2", "title": "B"}]},
+                },
             ],
             "sources": [{"paper_id": "arxiv:1", "title": "A"}],
             "session_id": "sess-1",
@@ -573,7 +687,9 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
     pdf_path.write_bytes(b"%PDF-1.4\n")
 
     with MetadataDB(str(db_path)) as db:
-        db.ensure_paper_record("paper-1", title="Phase Three Paper", pdf_path=str(pdf_path))
+        db.ensure_paper_record(
+            "paper-1", title="Phase Three Paper", pdf_path=str(pdf_path)
+        )
 
     class FakeParser:
         def parse(self, file_path, paper_id, force_parser=None):
@@ -587,15 +703,29 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
             )
 
     class FakePipeline:
-        def process(self, paper_id, text, provider=None, overrides=None, link_concepts=True):
+        def process(
+            self, paper_id, text, provider=None, overrides=None, link_concepts=True
+        ):
             assert paper_id == "paper-1"
             assert "Graph Transformer" in text
             assert overrides["model"] == "fake-model"
             return SimpleNamespace(
                 paper_id=paper_id,
                 paper_type="research",
-                concepts=[{"label": "Graph Transformer", "confidence": 0.95, "review_status": "approved"}],
-                methods=[{"label": "Attention", "confidence": 0.9, "review_status": "approved"}],
+                concepts=[
+                    {
+                        "label": "Graph Transformer",
+                        "confidence": 0.95,
+                        "review_status": "approved",
+                    }
+                ],
+                methods=[
+                    {
+                        "label": "Attention",
+                        "confidence": 0.9,
+                        "review_status": "approved",
+                    }
+                ],
                 concept_candidates=[],
                 method_candidates=[],
                 relations=[],
@@ -617,7 +747,10 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(product_main, "extraction_pipeline", FakePipeline())
     client = TestClient(product_main.app)
 
-    library = client.get("/extraction/library", params={"metadata_db_path": str(db_path), "pdf_base_dir": str(pdf_dir)})
+    library = client.get(
+        "/extraction/library",
+        params={"metadata_db_path": str(db_path), "pdf_base_dir": str(pdf_dir)},
+    )
     assert library.status_code == 200
     assert library.json()["items"][0]["paper_id"] == "paper-1"
 
@@ -652,12 +785,17 @@ def test_product_extraction_library_parse_and_extract(tmp_path, monkeypatch) -> 
     assert payload["parse"]["metadata"]["extraction_method"] == "fake"
     assert payload["result"]["concepts"][0]["label"] == "Graph Transformer"
 
-    history = client.get("/extraction/history", params={"metadata_db_path": str(db_path), "paper_id": "paper-1"})
+    history = client.get(
+        "/extraction/history",
+        params={"metadata_db_path": str(db_path), "paper_id": "paper-1"},
+    )
     assert history.status_code == 200
     assert history.json()["items"][0]["concepts"][0]["label"] == "Graph Transformer"
 
 
-def test_product_extraction_parse_returns_structured_errors(tmp_path, monkeypatch) -> None:
+def test_product_extraction_parse_returns_structured_errors(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
@@ -665,7 +803,9 @@ def test_product_extraction_parse_returns_structured_errors(tmp_path, monkeypatc
     pdf_path.write_bytes(b"%PDF-1.4\n")
 
     with MetadataDB(str(db_path)) as db:
-        db.ensure_paper_record("paper-1", title="Parser Error Paper", pdf_path=str(pdf_path))
+        db.ensure_paper_record(
+            "paper-1", title="Parser Error Paper", pdf_path=str(pdf_path)
+        )
 
     client = TestClient(product_main.app)
     invalid_parser = client.post(
@@ -713,15 +853,23 @@ def test_product_extraction_parse_returns_structured_errors(tmp_path, monkeypatc
 
 
 def test_text_looks_garbled_distinguishes_clean_and_broken_extraction() -> None:
-    clean = "Graph transformers improve link prediction across large citation networks. " * 4
-    garbled = "x7$ q@9 ##z 1!a 0)( *&^ %$# qq1 zz9 ;;: ,,, ... !!! ??? @@@ ### $$$ %%% &&& " * 4
+    clean = (
+        "Graph transformers improve link prediction across large citation networks. "
+        * 4
+    )
+    garbled = (
+        "x7$ q@9 ##z 1!a 0)( *&^ %$# qq1 zz9 ;;: ,,, ... !!! ??? @@@ ### $$$ %%% &&& "
+        * 4
+    )
 
     assert product_main._text_looks_garbled(clean) is False
     assert product_main._text_looks_garbled(garbled) is True
     assert product_main._text_looks_garbled("too short") is False
 
 
-def _run_garbled_title_extraction(tmp_path, monkeypatch, *, stored_title: str, garbled: bool):
+def _run_garbled_title_extraction(
+    tmp_path, monkeypatch, *, stored_title: str, garbled: bool
+):
     db_path = tmp_path / "metadata.duckdb"
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
@@ -732,9 +880,11 @@ def _run_garbled_title_extraction(tmp_path, monkeypatch, *, stored_title: str, g
         db.ensure_paper_record("paper-1", title=stored_title, pdf_path=str(pdf_path))
 
     extracted_text = (
-        "x7$ q@9 ##z 1!a 0)( *&^ %$# qq1 zz9 ;;: ,,, ... !!! ??? @@@ ### $$$ %%% &&& " * 4
+        "x7$ q@9 ##z 1!a 0)( *&^ %$# qq1 zz9 ;;: ,,, ... !!! ??? @@@ ### $$$ %%% &&& "
+        * 4
         if garbled
-        else "Graph transformers improve link prediction across large citation networks. " * 4
+        else "Graph transformers improve link prediction across large citation networks. "
+        * 4
     )
 
     class FakeParser:
@@ -748,7 +898,9 @@ def _run_garbled_title_extraction(tmp_path, monkeypatch, *, stored_title: str, g
             )
 
     class FakePipeline:
-        def process(self, paper_id, text, provider=None, overrides=None, link_concepts=True):
+        def process(
+            self, paper_id, text, provider=None, overrides=None, link_concepts=True
+        ):
             return SimpleNamespace(
                 paper_id=paper_id,
                 paper_type="research",
@@ -773,7 +925,11 @@ def _run_garbled_title_extraction(tmp_path, monkeypatch, *, stored_title: str, g
 
     monkeypatch.setattr(product_main, "parser_router", FakeParser())
     monkeypatch.setattr(product_main, "extraction_pipeline", FakePipeline())
-    monkeypatch.setattr(product_main, "_infer_pdf_title_from_bytes", lambda content: "Inferred Real Title From PDF")
+    monkeypatch.setattr(
+        product_main,
+        "_infer_pdf_title_from_bytes",
+        lambda content: "Inferred Real Title From PDF",
+    )
 
     client = TestClient(product_main.app)
     response = client.post(
@@ -793,18 +949,28 @@ def _run_garbled_title_extraction(tmp_path, monkeypatch, *, stored_title: str, g
         return db.get_paper("paper-1")
 
 
-def test_garbled_extraction_overwrites_generic_title_with_inferred_pdf_title(tmp_path, monkeypatch) -> None:
-    paper = _run_garbled_title_extraction(tmp_path, monkeypatch, stored_title="files", garbled=True)
+def test_garbled_extraction_overwrites_generic_title_with_inferred_pdf_title(
+    tmp_path, monkeypatch
+) -> None:
+    paper = _run_garbled_title_extraction(
+        tmp_path, monkeypatch, stored_title="files", garbled=True
+    )
     assert paper["title"] == "Inferred Real Title From PDF"
 
 
 def test_clean_extraction_does_not_touch_a_fine_title(tmp_path, monkeypatch) -> None:
-    paper = _run_garbled_title_extraction(tmp_path, monkeypatch, stored_title="A Perfectly Fine Title", garbled=False)
+    paper = _run_garbled_title_extraction(
+        tmp_path, monkeypatch, stored_title="A Perfectly Fine Title", garbled=False
+    )
     assert paper["title"] == "A Perfectly Fine Title"
 
 
-def test_garbled_extraction_does_not_overwrite_a_specific_title(tmp_path, monkeypatch) -> None:
-    paper = _run_garbled_title_extraction(tmp_path, monkeypatch, stored_title="A Perfectly Fine Title", garbled=True)
+def test_garbled_extraction_does_not_overwrite_a_specific_title(
+    tmp_path, monkeypatch
+) -> None:
+    paper = _run_garbled_title_extraction(
+        tmp_path, monkeypatch, stored_title="A Perfectly Fine Title", garbled=True
+    )
     assert paper["title"] == "A Perfectly Fine Title"
 
 
@@ -853,16 +1019,25 @@ def test_product_upload_models_jobs_and_harvest(tmp_path, monkeypatch) -> None:
     assert jobs.status_code == 200
     assert jobs.json()["jobs"][0]["job_id"] == "job-1"
 
-    harvest = client.post("/harvest/search", json={"query": "graph", "sources": ["arxiv"], "max_results": 1})
+    harvest = client.post(
+        "/harvest/search",
+        json={"query": "graph", "sources": ["arxiv"], "max_results": 1},
+    )
     assert harvest.status_code == 200
     assert harvest.json()["results"][0]["source"] == "arxiv"
 
     # Keeps the legacy project file shape used by the Streamlit project workbench.
-    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "compat", "paper_ids": ["p1"]})
+    client.post(
+        "/projects",
+        params={"projects_path": str(projects_path)},
+        json={"name": "compat", "paper_ids": ["p1"]},
+    )
     assert json.loads(projects_path.read_text(encoding="utf-8")) == {"compat": ["p1"]}
 
 
-def test_product_benchmark_suite_job_accepts_context_options(tmp_path, monkeypatch) -> None:
+def test_product_benchmark_suite_job_accepts_context_options(
+    tmp_path, monkeypatch
+) -> None:
     captured = {}
 
     def fake_run_suite(config):
@@ -950,7 +1125,11 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
     asset_dir = tmp_path / "note_assets"
     _fixture_db(db_path)
     client = TestClient(product_main.app)
-    client.post("/projects", params={"projects_path": str(projects_path)}, json={"name": "demo", "paper_ids": ["p1"]})
+    client.post(
+        "/projects",
+        params={"projects_path": str(projects_path)},
+        json={"name": "demo", "paper_ids": ["p1"]},
+    )
 
     created = client.post(
         "/projects/demo/notes",
@@ -1004,7 +1183,9 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
     assert second_repeat.status_code == 200
     assert second_repeat.json()["note"]["citation_count"] == 2
 
-    listed = client.get("/projects/demo/notes", params={"metadata_db_path": str(db_path)})
+    listed = client.get(
+        "/projects/demo/notes", params={"metadata_db_path": str(db_path)}
+    )
     assert listed.status_code == 200
     assert listed.json()["items"][0]["citation_count"] == 2
 
@@ -1014,7 +1195,10 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
         json={"markdown": "# Geaendert"},
     )
     assert patched.status_code == 200
-    restored = client.post(f"/notes/{note_id}/versions/restore-latest", params={"metadata_db_path": str(db_path)})
+    restored = client.post(
+        f"/notes/{note_id}/versions/restore-latest",
+        params={"metadata_db_path": str(db_path)},
+    )
     assert restored.status_code == 200
     assert "Beleg" in restored.json()["note"]["markdown"]
 
@@ -1077,9 +1261,13 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
         },
     )
     assert followup.status_code == 200
-    assert followup.json()["assistant_message"]["content"] == "Verbesserter Abschnitt [p1]"
+    assert (
+        followup.json()["assistant_message"]["content"] == "Verbesserter Abschnitt [p1]"
+    )
 
-    threads = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    threads = client.get(
+        f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)}
+    )
     assert threads.status_code == 200
     assert threads.json()["total"] == 2
     thread_ids = [item["id"] for item in threads.json()["items"]]
@@ -1089,22 +1277,36 @@ def test_product_notes_crud_append_assets_ai_and_restore(tmp_path, monkeypatch) 
         json={"metadata_db_path": str(db_path), "ui_state": {"collapsed": False}},
     )
     assert ui_patch.status_code == 200
-    after_ui_patch = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    after_ui_patch = client.get(
+        f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)}
+    )
     assert [item["id"] for item in after_ui_patch.json()["items"]] == thread_ids
 
-    delete_one = client.post(f"/notes/{note_id}/ai-threads/{thread_id}/delete", params={"metadata_db_path": str(db_path)})
+    delete_one = client.post(
+        f"/notes/{note_id}/ai-threads/{thread_id}/delete",
+        params={"metadata_db_path": str(db_path)},
+    )
     assert delete_one.status_code == 200
-    after_delete_one = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    after_delete_one = client.get(
+        f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)}
+    )
     assert after_delete_one.json()["total"] == 1
 
-    delete_all = client.post(f"/notes/{note_id}/ai-threads/delete-all", params={"metadata_db_path": str(db_path)})
+    delete_all = client.post(
+        f"/notes/{note_id}/ai-threads/delete-all",
+        params={"metadata_db_path": str(db_path)},
+    )
     assert delete_all.status_code == 200
     assert delete_all.json()["deleted"] == 1
-    after_delete_all = client.get(f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)})
+    after_delete_all = client.get(
+        f"/notes/{note_id}/ai-threads", params={"metadata_db_path": str(db_path)}
+    )
     assert after_delete_all.json()["total"] == 0
 
 
-def test_note_ai_retries_empty_response_before_storing_thread(tmp_path, monkeypatch) -> None:
+def test_note_ai_retries_empty_response_before_storing_thread(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
     _fixture_db(db_path)
     client = TestClient(product_main.app)
@@ -1126,7 +1328,10 @@ def test_note_ai_retries_empty_response_before_storing_thread(tmp_path, monkeypa
         def chat(self, messages, provider=None, overrides=None):
             self.calls += 1
             self.overrides.append(dict(overrides or {}))
-            assert "Markierter Text" in messages[-1]["content"] or "vorige Antwort" in messages[-1]["content"]
+            assert (
+                "Markierter Text" in messages[-1]["content"]
+                or "vorige Antwort" in messages[-1]["content"]
+            )
             if self.calls == 1:
                 return ""
             return "Der Abschnitt sagt: Lernen ist wichtiger als starres Befolgen eines Protokolls."
@@ -1150,17 +1355,24 @@ def test_note_ai_retries_empty_response_before_storing_thread(tmp_path, monkeypa
     assert router.overrides[1]["extra"]["include_reasoning"] is False
     assert router.overrides[1]["extra"]["chat_template_kwargs"]["thinking"] is False
     assert response.json()["replacement_text"].startswith("Der Abschnitt sagt")
-    assert response.json()["thread"]["messages"][1]["content"].startswith("Der Abschnitt sagt")
+    assert response.json()["thread"]["messages"][1]["content"].startswith(
+        "Der Abschnitt sagt"
+    )
 
 
-def test_note_ask_stores_whole_note_thread_without_anchor(tmp_path, monkeypatch) -> None:
+def test_note_ask_stores_whole_note_thread_without_anchor(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
     _fixture_db(db_path)
     client = TestClient(product_main.app)
     created = client.post(
         "/projects/demo/notes",
         params={"metadata_db_path": str(db_path)},
-        json={"title": "Vorbereitung", "markdown": "# Vorbereitung\n\nGraph Transformer und Citation Networks."},
+        json={
+            "title": "Vorbereitung",
+            "markdown": "# Vorbereitung\n\nGraph Transformer und Citation Networks.",
+        },
     )
     assert created.status_code == 200
     note_id = created.json()["note"]["id"]
@@ -1204,9 +1416,23 @@ def test_auto_answer_streams_sse_events(tmp_path, monkeypatch) -> None:
         captured["max_related_topics"] = kwargs.get("max_related_topics")
         yield {"status": "answer", "answer": {"answer": "weak", "no_answer": True}}
         yield {"status": "planning", "related_topics": ["t1"]}
-        yield {"status": "harvesting", "scope": "main", "topic": question, "papers": [{"id": "arxiv:1", "title": "P"}], "grey": []}
-        yield {"status": "done", "answer": {"answer": "strong [arxiv:1]"},
-               "harvest_summary": {"harvested": True, "papers": [{"id": "arxiv:1", "title": "P"}], "grey": [], "related_topics": ["t1"]}}
+        yield {
+            "status": "harvesting",
+            "scope": "main",
+            "topic": question,
+            "papers": [{"id": "arxiv:1", "title": "P"}],
+            "grey": [],
+        }
+        yield {
+            "status": "done",
+            "answer": {"answer": "strong [arxiv:1]"},
+            "harvest_summary": {
+                "harvested": True,
+                "papers": [{"id": "arxiv:1", "title": "P"}],
+                "grey": [],
+                "related_topics": ["t1"],
+            },
+        }
 
     monkeypatch.setattr(product_main, "auto_research_answer", _fake_auto)
     client = TestClient(product_main.app)
@@ -1219,7 +1445,11 @@ def test_auto_answer_streams_sse_events(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
 
-    events = [json.loads(line[len("data: "):]) for line in response.text.splitlines() if line.startswith("data: ")]
+    events = [
+        json.loads(line[len("data: ") :])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
     statuses = [event["status"] for event in events]
     assert statuses == ["answer", "planning", "harvesting", "done"]
     assert events[-1]["harvest_summary"]["harvested"] is True
@@ -1241,7 +1471,10 @@ def test_workspace_session_survives_an_empty_overwrite(tmp_path) -> None:
     client = TestClient(product_main.app)
     project = "Hirn und LLM"
     payload = {
-        "history": [{"id": "t1", "question": "Wie lernt das Gehirn?"}, {"id": "t2", "question": "Und LLMs?"}],
+        "history": [
+            {"id": "t1", "question": "Wie lernt das Gehirn?"},
+            {"id": "t2", "question": "Und LLMs?"},
+        ],
         "activeTurnId": "t2",
         "savedAt": 1,
     }
@@ -1254,12 +1487,17 @@ def test_workspace_session_survives_an_empty_overwrite(tmp_path) -> None:
 
     wiped = client.put(
         f"/workspace/sessions/{project}",
-        json={"payload": {"history": [], "activeTurnId": "", "savedAt": 2}, "metadata_db_path": str(db_path)},
+        json={
+            "payload": {"history": [], "activeTurnId": "", "savedAt": 2},
+            "metadata_db_path": str(db_path),
+        },
     )
     assert wiped.status_code == 200
     assert len(wiped.json()["payload"]["history"]) == 2
 
-    still_there = client.get(f"/workspace/sessions/{project}", params={"metadata_db_path": str(db_path)})
+    still_there = client.get(
+        f"/workspace/sessions/{project}", params={"metadata_db_path": str(db_path)}
+    )
     assert len(still_there.json()["payload"]["history"]) == 2
 
 
@@ -1284,13 +1522,19 @@ def test_workspace_session_backups_can_be_listed_and_restored(tmp_path) -> None:
     assert put([{"id": "c"}]).status_code == 200
 
     backups = client.get(
-        f"/workspace/sessions/{project}/backups", params={"metadata_db_path": str(db_path)}
+        f"/workspace/sessions/{project}/backups",
+        params={"metadata_db_path": str(db_path)},
     ).json()["backups"]
     assert [entry["turn_count"] for entry in backups] == [2]
 
     # The explicit delete path may empty the session — and is itself backed up.
     assert put([], force=True).status_code == 200
-    assert client.get(f"/workspace/sessions/{project}", params={"metadata_db_path": str(db_path)}).json()["payload"]["history"] == []
+    assert (
+        client.get(
+            f"/workspace/sessions/{project}", params={"metadata_db_path": str(db_path)}
+        ).json()["payload"]["history"]
+        == []
+    )
 
     restored = client.post(
         f"/workspace/sessions/{project}/restore",

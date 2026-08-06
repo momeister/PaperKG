@@ -64,7 +64,9 @@ def effective_generation_limits(
     overrides = dict(overrides or {})
     model = str(overrides.get("model") or "").strip() or None
     try:
-        settings = llm_router.provider_settings(provider) if llm_router is not None else None
+        settings = (
+            llm_router.provider_settings(provider) if llm_router is not None else None
+        )
     except Exception:
         settings = None
 
@@ -72,9 +74,19 @@ def effective_generation_limits(
     configured_max_tokens = getattr(settings, "max_tokens", default_max_tokens)
     configured_model = getattr(settings, "model", None)
 
-    context_size = _safe_int(overrides.get("context_size"), _safe_int(configured_context, default_context_size))
-    max_tokens = _safe_int(overrides.get("max_tokens"), _safe_int(configured_max_tokens, default_max_tokens))
-    return max(1024, context_size), max(1, max_tokens), model or (str(configured_model) if configured_model else None)
+    context_size = _safe_int(
+        overrides.get("context_size"),
+        _safe_int(configured_context, default_context_size),
+    )
+    max_tokens = _safe_int(
+        overrides.get("max_tokens"),
+        _safe_int(configured_max_tokens, default_max_tokens),
+    )
+    return (
+        max(1024, context_size),
+        max(1, max_tokens),
+        model or (str(configured_model) if configured_model else None),
+    )
 
 
 def decide_whole_context(
@@ -91,7 +103,10 @@ def decide_whole_context(
 ) -> ContextBudgetDecision:
     policy = normalize_context_policy(context_policy)
     text_tokens = estimate_text_tokens(text)
-    reserve = max(int(output_reserve_tokens if output_reserve_tokens is not None else max_tokens), max_tokens)
+    reserve = max(
+        int(output_reserve_tokens if output_reserve_tokens is not None else max_tokens),
+        max_tokens,
+    )
     estimated_prompt_tokens = int(prompt_overhead_tokens) + text_tokens
     context_margin = int(context_size) - estimated_prompt_tokens - reserve
     fits = context_margin >= 0

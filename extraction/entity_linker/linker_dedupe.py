@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_linker/linker.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import re
@@ -38,20 +39,28 @@ class LinkerDedupeMixin(_Base):
             item = dict(method)
             if paper_type == "survey" and cls._is_survey_contribution_method(item):
                 canonical = cls._canonical_survey_contribution(item)
-                survey_contribution = canonical if survey_contribution is None else cls._merge_method_entities(
-                    survey_contribution,
-                    canonical,
-                    prefer_source=True,
+                survey_contribution = (
+                    canonical
+                    if survey_contribution is None
+                    else cls._merge_method_entities(
+                        survey_contribution,
+                        canonical,
+                        prefer_source=True,
+                    )
                 )
                 continue
 
             key = cls._author_year_method_key(item)
             if key:
                 existing = author_year.get(key)
-                author_year[key] = item if existing is None else cls._merge_method_entities(
-                    existing,
-                    item,
-                    prefer_source=cls._prefer_method(item, existing),
+                author_year[key] = (
+                    item
+                    if existing is None
+                    else cls._merge_method_entities(
+                        existing,
+                        item,
+                        prefer_source=cls._prefer_method(item, existing),
+                    )
                 )
                 continue
 
@@ -71,7 +80,10 @@ class LinkerDedupeMixin(_Base):
             for key in ("label", "canonical_label", "description", "evidence_span")
         ).lower()
         return bool(
-            re.search(r"\b(taxonom\w*|framework|categorization|categorisation|overview)\b", text)
+            re.search(
+                r"\b(taxonom\w*|framework|categorization|categorisation|overview)\b",
+                text,
+            )
             and re.search(r"\b(emotion|affect|rl|reinforcement|intrinsic)\b", text)
         )
 
@@ -80,16 +92,26 @@ class LinkerDedupeMixin(_Base):
         item = dict(method)
         original_label = str(item.get("label") or "")
         aliases = list(item.get("aliases") or [])
-        if original_label and original_label != "Emotion in RL Survey Taxonomy" and original_label not in aliases:
+        if (
+            original_label
+            and original_label != "Emotion in RL Survey Taxonomy"
+            and original_label not in aliases
+        ):
             aliases.append(original_label)
         item["label"] = "Emotion in RL Survey Taxonomy"
         item["canonical_label"] = "Emotion in RL Survey Taxonomy"
-        item["canonical_id"] = stable_canonical_id("Emotion in RL Survey Taxonomy", prefix="method")
+        item["canonical_id"] = stable_canonical_id(
+            "Emotion in RL Survey Taxonomy", prefix="method"
+        )
         item["entity_type"] = "MethodFamily"
         item["source_type"] = "paper_contribution"
         if aliases:
             item["aliases"] = aliases
-        item["review_status"] = "approved" if item.get("accepted") is True else item.get("review_status", "pending")
+        item["review_status"] = (
+            "approved"
+            if item.get("accepted") is True
+            else item.get("review_status", "pending")
+        )
         item.setdefault("acceptance_reason", "survey_contribution_canonicalized")
         return item
 
@@ -100,7 +122,9 @@ class LinkerDedupeMixin(_Base):
         if not normalized:
             return ""
         base = re.sub(r"\s*\((?:19|20)\d{2}(?:\s*,\s*(?:19|20)\d{2})*\)\s*", " ", label)
-        base = re.sub(r"\b(emotion|affective)\s+model\b", " ", base, flags=re.IGNORECASE)
+        base = re.sub(
+            r"\b(emotion|affective)\s+model\b", " ", base, flags=re.IGNORECASE
+        )
         base_key = normalize_key(base)
         if not base_key or base_key == normalized:
             return ""
@@ -109,17 +133,23 @@ class LinkerDedupeMixin(_Base):
         return f"author_method:{base_key}"
 
     @classmethod
-    def _dedupe_methods_by_label(cls, methods: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _dedupe_methods_by_label(
+        cls, methods: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         output: dict[str, dict[str, Any]] = {}
         for method in methods:
             key = normalize_key(method.get("canonical_label") or method.get("label"))
             if not key:
                 continue
             existing = output.get(key)
-            output[key] = method if existing is None else cls._merge_method_entities(
-                existing,
-                method,
-                prefer_source=cls._prefer_method(method, existing),
+            output[key] = (
+                method
+                if existing is None
+                else cls._merge_method_entities(
+                    existing,
+                    method,
+                    prefer_source=cls._prefer_method(method, existing),
+                )
             )
         return list(output.values())
 
@@ -134,7 +164,8 @@ class LinkerDedupeMixin(_Base):
         return len(candidate_label) > len(current_label)
 
     @classmethod
-    def _merge_method_entities(cls, 
+    def _merge_method_entities(
+        cls,
         target: dict[str, Any],
         source: dict[str, Any],
         prefer_source: bool = False,
@@ -143,7 +174,11 @@ class LinkerDedupeMixin(_Base):
         output = dict(primary)
         aliases = list(output.get("aliases") or [])
         for alias in secondary.get("aliases") or []:
-            if alias and str(alias) not in aliases and str(alias) != output.get("label"):
+            if (
+                alias
+                and str(alias) not in aliases
+                and str(alias) != output.get("label")
+            ):
                 aliases.append(str(alias))
         for alias in (
             secondary.get("label"),
@@ -151,7 +186,11 @@ class LinkerDedupeMixin(_Base):
             primary.get("label"),
             primary.get("canonical_label"),
         ):
-            if alias and str(alias) not in aliases and str(alias) != output.get("label"):
+            if (
+                alias
+                and str(alias) not in aliases
+                and str(alias) != output.get("label")
+            ):
                 aliases.append(str(alias))
         if aliases:
             output["aliases"] = aliases
@@ -166,7 +205,10 @@ class LinkerDedupeMixin(_Base):
         evidence = cls._best_evidence_span([output, secondary])
         if evidence:
             output["evidence_span"] = evidence
-        output["confidence"] = max(_coerce_float(output.get("confidence"), 0.0), _coerce_float(secondary.get("confidence"), 0.0))
+        output["confidence"] = max(
+            _coerce_float(output.get("confidence"), 0.0),
+            _coerce_float(secondary.get("confidence"), 0.0),
+        )
         if str(secondary.get("review_status") or "").lower() == "approved":
             output["review_status"] = "approved"
         return output
@@ -174,7 +216,12 @@ class LinkerDedupeMixin(_Base):
     @staticmethod
     def _best_evidence_span(items: list[dict[str, Any]]) -> str:
         spans = [
-            str(item.get("evidence_span") or item.get("context") or item.get("description") or "").strip()
+            str(
+                item.get("evidence_span")
+                or item.get("context")
+                or item.get("description")
+                or ""
+            ).strip()
             for item in items
         ]
         spans = [re.sub(r"\s+", " ", span) for span in spans if span]
@@ -217,11 +264,17 @@ class LinkerDedupeMixin(_Base):
                 return "method"
             return extracted_role
 
-        def merge_entity(target: dict[str, Any], source: dict[str, Any], role: str) -> dict[str, Any]:
+        def merge_entity(
+            target: dict[str, Any], source: dict[str, Any], role: str
+        ) -> dict[str, Any]:
             output = dict(target)
             aliases = list(output.get("aliases") or [])
             for alias in (source.get("label"), source.get("canonical_label")):
-                if alias and str(alias) not in aliases and str(alias) != output.get("label"):
+                if (
+                    alias
+                    and str(alias) not in aliases
+                    and str(alias) != output.get("label")
+                ):
                     aliases.append(str(alias))
             if aliases:
                 output["aliases"] = aliases
@@ -229,7 +282,12 @@ class LinkerDedupeMixin(_Base):
             roles.add(role)
             output["extracted_roles"] = sorted(roles)
             for key, value in source.items():
-                if output.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                if output.get(key) in (None, "", [], {}) and value not in (
+                    None,
+                    "",
+                    [],
+                    {},
+                ):
                     output[key] = value
             return output
 
@@ -242,12 +300,17 @@ class LinkerDedupeMixin(_Base):
                 current = by_key.get(key)
                 if current is None:
                     enriched = dict(item)
-                    enriched["extracted_roles"] = sorted({role, *(enriched.get("extracted_roles") or [])})
+                    enriched["extracted_roles"] = sorted(
+                        {role, *(enriched.get("extracted_roles") or [])}
+                    )
                     by_key[key] = (item_role, enriched)
                     continue
                 existing_role, existing = current
                 if item_role != existing_role:
-                    by_key[key] = (item_role, merge_entity(item, existing, existing_role))
+                    by_key[key] = (
+                        item_role,
+                        merge_entity(item, existing, existing_role),
+                    )
                 else:
                     by_key[key] = (existing_role, merge_entity(existing, item, role))
 
@@ -280,7 +343,9 @@ class LinkerDedupeMixin(_Base):
                 if not isinstance(item, dict):
                     continue
                 canonical_id = str(item.get("canonical_id") or "")
-                label_key = normalize_key(item.get("canonical_label") or item.get("label"))
+                label_key = normalize_key(
+                    item.get("canonical_label") or item.get("label")
+                )
                 if canonical_id and canonical_id in accepted_ids:
                     continue
                 if label_key and label_key in accepted_labels:

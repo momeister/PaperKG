@@ -40,9 +40,13 @@ def _wait_for_api(base_url: str, timeout_seconds: float = 15.0) -> bool:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="One-command runner for ScienceKG Phase 4")
+    parser = argparse.ArgumentParser(
+        description="One-command runner for ScienceKG Phase 4"
+    )
     parser.add_argument("--api-only", action="store_true", help="Start only FastAPI")
-    parser.add_argument("--ui-only", action="store_true", help="Start only Streamlit UI")
+    parser.add_argument(
+        "--ui-only", action="store_true", help="Start only Streamlit UI"
+    )
     parser.add_argument("--api-port", type=int, default=8000, help="FastAPI port")
     parser.add_argument("--ui-port", type=int, default=8501, help="Streamlit port")
     parser.add_argument(

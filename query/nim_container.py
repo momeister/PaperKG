@@ -30,7 +30,9 @@ class NIMContainerConfig:
     extra_args: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_config_file(cls, config_path: str | Path = "config.yaml") -> "NIMContainerConfig":
+    def from_config_file(
+        cls, config_path: str | Path = "config.yaml"
+    ) -> "NIMContainerConfig":
         path = Path(config_path)
         _load_dotenv(path.parent / ".env")
         with path.open("r", encoding="utf-8") as fh:
@@ -63,7 +65,11 @@ class NIMContainerConfig:
 
     @property
     def api_key(self) -> str | None:
-        return os.getenv(self.env_key_name) or os.getenv("NGC_API_KEY") or os.getenv("NVIDIA_API_KEY")
+        return (
+            os.getenv(self.env_key_name)
+            or os.getenv("NGC_API_KEY")
+            or os.getenv("NVIDIA_API_KEY")
+        )
 
     @property
     def has_api_key(self) -> bool:
@@ -87,7 +93,9 @@ class NIMCommandResult:
 
     @property
     def output(self) -> str:
-        return "\n".join(part for part in [self.stdout.strip(), self.stderr.strip()] if part)
+        return "\n".join(
+            part for part in [self.stdout.strip(), self.stderr.strip()] if part
+        )
 
 
 @dataclass(frozen=True)
@@ -108,7 +116,9 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 class NIMContainerManager:
     """Small Docker wrapper for a local NVIDIA NIM container."""
 
-    def __init__(self, config: NIMContainerConfig, runner: Runner | None = None) -> None:
+    def __init__(
+        self, config: NIMContainerConfig, runner: Runner | None = None
+    ) -> None:
         self.config = config
         self._runner = runner or subprocess.run
 
@@ -127,7 +137,10 @@ class NIMContainerManager:
                 error=version.output or "Docker CLI not found.",
             )
 
-        info = self._run([self.config.docker_executable, "info", "--format", "{{.ServerVersion}}"], timeout=15)
+        info = self._run(
+            [self.config.docker_executable, "info", "--format", "{{.ServerVersion}}"],
+            timeout=15,
+        )
         if not info.ok:
             return NIMContainerStatus(
                 docker_available=True,
@@ -138,7 +151,10 @@ class NIMContainerManager:
                 error=info.output or "Docker daemon is not reachable.",
             )
 
-        inspect = self._run([self.config.docker_executable, "inspect", self.config.container_name], timeout=15)
+        inspect = self._run(
+            [self.config.docker_executable, "inspect", self.config.container_name],
+            timeout=15,
+        )
         if not inspect.ok:
             return NIMContainerStatus(
                 docker_available=True,
@@ -180,17 +196,33 @@ class NIMContainerManager:
             return NIMCommandResult(
                 ok=False,
                 returncode=1,
-                command=[self.config.docker_executable, "login", "nvcr.io", "--username", "$oauthtoken", "--password-stdin"],
+                command=[
+                    self.config.docker_executable,
+                    "login",
+                    "nvcr.io",
+                    "--username",
+                    "$oauthtoken",
+                    "--password-stdin",
+                ],
                 stderr="NGC_API_KEY or NVIDIA_API_KEY is not set.",
             )
         return self._run(
-            [self.config.docker_executable, "login", "nvcr.io", "--username", "$oauthtoken", "--password-stdin"],
+            [
+                self.config.docker_executable,
+                "login",
+                "nvcr.io",
+                "--username",
+                "$oauthtoken",
+                "--password-stdin",
+            ],
             input_text=api_key,
             timeout=120,
         )
 
     def pull_image(self) -> NIMCommandResult:
-        return self._run([self.config.docker_executable, "pull", self.config.image], timeout=3600)
+        return self._run(
+            [self.config.docker_executable, "pull", self.config.image], timeout=3600
+        )
 
     def start_container(self) -> NIMCommandResult:
         status = self.status()
@@ -198,11 +230,18 @@ class NIMContainerManager:
             return NIMCommandResult(
                 ok=True,
                 returncode=0,
-                command=[self.config.docker_executable, "start", self.config.container_name],
+                command=[
+                    self.config.docker_executable,
+                    "start",
+                    self.config.container_name,
+                ],
                 stdout="Container is already running.",
             )
         if status.container_exists:
-            return self._run([self.config.docker_executable, "start", self.config.container_name], timeout=120)
+            return self._run(
+                [self.config.docker_executable, "start", self.config.container_name],
+                timeout=120,
+            )
         if not self.config.has_api_key:
             return NIMCommandResult(
                 ok=False,
@@ -218,11 +257,20 @@ class NIMContainerManager:
         return self._run(self._run_args(), env=env, timeout=3600)
 
     def stop_container(self) -> NIMCommandResult:
-        return self._run([self.config.docker_executable, "stop", self.config.container_name], timeout=300)
+        return self._run(
+            [self.config.docker_executable, "stop", self.config.container_name],
+            timeout=300,
+        )
 
     def logs(self, tail: int = 80) -> NIMCommandResult:
         return self._run(
-            [self.config.docker_executable, "logs", "--tail", str(max(1, min(tail, 500))), self.config.container_name],
+            [
+                self.config.docker_executable,
+                "logs",
+                "--tail",
+                str(max(1, min(tail, 500))),
+                self.config.container_name,
+            ],
             timeout=30,
         )
 
@@ -268,9 +316,17 @@ class NIMContainerManager:
                 timeout=timeout,
             )
         except FileNotFoundError as exc:
-            return NIMCommandResult(ok=False, returncode=127, command=args, stderr=str(exc))
+            return NIMCommandResult(
+                ok=False, returncode=127, command=args, stderr=str(exc)
+            )
         except subprocess.TimeoutExpired as exc:
-            return NIMCommandResult(ok=False, returncode=124, command=args, stdout=exc.stdout or "", stderr=exc.stderr or "Command timed out.")
+            return NIMCommandResult(
+                ok=False,
+                returncode=124,
+                command=args,
+                stdout=exc.stdout or "",
+                stderr=exc.stderr or "Command timed out.",
+            )
         return NIMCommandResult(
             ok=completed.returncode == 0,
             returncode=completed.returncode,

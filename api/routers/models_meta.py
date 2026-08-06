@@ -3,6 +3,7 @@
 Split out of api/product_main.py. Behaviour unchanged. llm_router laeuft ueber
 pm.llm_router (Test-Patch-Surface).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -18,22 +19,34 @@ router = APIRouter()
 def model_providers() -> dict[str, Any]:
     return {
         "default_provider": pm.llm_router.default_provider,
-        "providers": [_provider_view(provider) for provider in pm.llm_router.available_providers()],
+        "providers": [
+            _provider_view(provider) for provider in pm.llm_router.available_providers()
+        ],
     }
 
 
 @router.post("/models/{provider}/discover")
 def discover_models(provider: str) -> dict[str, Any]:
     _ensure_provider(provider)
-    return {"provider": provider, "models": pm.llm_router.provider_model_options(provider, refresh=True)}
+    return {
+        "provider": provider,
+        "models": pm.llm_router.provider_model_options(provider, refresh=True),
+    }
 
 
 @router.post("/models/{provider}/check")
 def check_model_provider(provider: str, model: str | None = None) -> dict[str, Any]:
     _ensure_provider(provider)
     cfg = pm.llm_router.provider_config(provider)
-    ok, error = pm.llm_router.check_provider_auth(provider=provider, model=model, timeout_seconds=min(cfg.timeout_seconds, 30.0))
-    return {"provider": provider, "model": model or pm.llm_router.provider_default_model(provider), "ok": ok, "error": error}
+    ok, error = pm.llm_router.check_provider_auth(
+        provider=provider, model=model, timeout_seconds=min(cfg.timeout_seconds, 30.0)
+    )
+    return {
+        "provider": provider,
+        "model": model or pm.llm_router.provider_default_model(provider),
+        "ok": ok,
+        "error": error,
+    }
 
 
 def _provider_view(provider: str) -> dict[str, Any]:

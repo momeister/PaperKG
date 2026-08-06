@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,7 +31,9 @@ class QualityMixin(_Base):
     def _combined_parse_quality(call_1_quality: str, call_2_quality: str) -> str:
         """Combine per-call parse quality into one quality label."""
         order = {"clean": 0, "trimmed": 1, "partial": 2, "failed": 3}
-        worst = max((call_1_quality, call_2_quality), key=lambda item: order.get(item, 2))
+        worst = max(
+            (call_1_quality, call_2_quality), key=lambda item: order.get(item, 2)
+        )
         return worst if worst in order else "partial"
 
     @staticmethod
@@ -55,13 +58,19 @@ class QualityMixin(_Base):
         calls = [
             call
             for call in call_diagnostics
-            if isinstance(call, dict) and str(call.get("call_type") or "") != "claims_retry"
+            if isinstance(call, dict)
+            and str(call.get("call_type") or "") != "claims_retry"
         ]
         if not calls:
             return "LLM extraction failed before usable JSON could be produced."
-        if any(str(call.get("parse_quality") or "") not in {"failed", "skipped"} for call in calls):
+        if any(
+            str(call.get("parse_quality") or "") not in {"failed", "skipped"}
+            for call in calls
+        ):
             return None
-        failed_calls = [call for call in calls if str(call.get("parse_quality") or "") == "failed"]
+        failed_calls = [
+            call for call in calls if str(call.get("parse_quality") or "") == "failed"
+        ]
         if not failed_calls:
             return None
         excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in failed_calls)
@@ -78,7 +87,8 @@ class QualityMixin(_Base):
         return "LLM extraction failed before usable JSON could be produced."
 
     @classmethod
-    def _call_diagnostics(cls, 
+    def _call_diagnostics(
+        cls,
         structural_calls: list[ParsedLLMResponse],
         semantic: ParsedLLMResponse,
         claims_pass: ParsedLLMResponse | None,
@@ -88,7 +98,12 @@ class QualityMixin(_Base):
     ) -> list[dict[str, Any]]:
         """Return per-call parse diagnostics for review and benchmark gates."""
         diagnostics: list[dict[str, Any]] = []
-        structural_keys = {"concepts", "methods", "concept_candidates", "method_candidates"}
+        structural_keys = {
+            "concepts",
+            "methods",
+            "concept_candidates",
+            "method_candidates",
+        }
         for index, call in enumerate(structural_calls, start=1):
             data_keys = set(call.data.keys())
             row = {
@@ -97,9 +112,11 @@ class QualityMixin(_Base):
                 "parse_quality": call.parse_quality,
                 "missing_keys": sorted(structural_keys - data_keys),
                 "tokens_used": call.tokens_used,
-                "recovery_strategy": "split_retry"
-                if "--- SPLIT STRUCTURAL RETRY ---" in call.raw_text
-                else None,
+                "recovery_strategy": (
+                    "split_retry"
+                    if "--- SPLIT STRUCTURAL RETRY ---" in call.raw_text
+                    else None
+                ),
             }
             if call.parse_quality in {"partial", "failed"}:
                 row["raw_excerpt"] = cls._diagnostic_excerpt(call.raw_text)
@@ -109,7 +126,9 @@ class QualityMixin(_Base):
                 "call_type": "concepts_retry",
                 "chunk_index": None,
                 "parse_quality": concepts_retry.parse_quality,
-                "missing_keys": [] if "concepts" in concepts_retry.data else ["concepts"],
+                "missing_keys": (
+                    [] if "concepts" in concepts_retry.data else ["concepts"]
+                ),
                 "tokens_used": concepts_retry.tokens_used,
             }
             if concepts_retry.parse_quality in {"partial", "failed"}:
@@ -183,22 +202,34 @@ class QualityMixin(_Base):
         semantic_title = str(semantic_paper_node.get("title") or "").strip()
         text_title = cls._paper_title_from_text(paper_text)
         title = semantic_title or text_title
-        title_conflict = bool(semantic_title and text_title and cls._titles_conflict(semantic_title, text_title))
+        title_conflict = bool(
+            semantic_title
+            and text_title
+            and cls._titles_conflict(semantic_title, text_title)
+        )
         if title_conflict:
             title = text_title
-        paper_year = semantic_paper_node.get("paper_year") or temporal_coverage.get("paper_year")
-        reviewed_period = semantic_paper_node.get("reviewed_period") or temporal_coverage.get("reviewed_period")
+        paper_year = semantic_paper_node.get("paper_year") or temporal_coverage.get(
+            "paper_year"
+        )
+        reviewed_period = semantic_paper_node.get(
+            "reviewed_period"
+        ) or temporal_coverage.get("reviewed_period")
         detected_source_id = cls._extract_front_matter_arxiv_identifier(paper_text)
         requested_arxiv_id = cls._extract_arxiv_identifier(str(paper_id))
         canonical_paper_id = requested_arxiv_id or detected_source_id or str(paper_id)
         authoritative_arxiv_id = ""
-        if requested_arxiv_id and (not detected_source_id or detected_source_id == requested_arxiv_id):
+        if requested_arxiv_id and (
+            not detected_source_id or detected_source_id == requested_arxiv_id
+        ):
             authoritative_arxiv_id = requested_arxiv_id
         elif detected_source_id and not requested_arxiv_id:
             authoritative_arxiv_id = detected_source_id
         arxiv_year = cls._arxiv_publication_year(authoritative_arxiv_id)
         llm_paper_year = cls._coerce_year(paper_year)
-        year_conflict = bool(arxiv_year and llm_paper_year and abs(arxiv_year - llm_paper_year) > 2)
+        year_conflict = bool(
+            arxiv_year and llm_paper_year and abs(arxiv_year - llm_paper_year) > 2
+        )
         if arxiv_year and (paper_year in (None, "") or year_conflict):
             paper_year = arxiv_year
         node = {
@@ -211,7 +242,11 @@ class QualityMixin(_Base):
             "language_detected": language_detected or "en",
             "source": "extraction",
         }
-        if detected_source_id and requested_arxiv_id and detected_source_id != requested_arxiv_id:
+        if (
+            detected_source_id
+            and requested_arxiv_id
+            and detected_source_id != requested_arxiv_id
+        ):
             node["detected_source_id"] = detected_source_id
         if title_conflict:
             node["detected_title"] = text_title
@@ -219,7 +254,9 @@ class QualityMixin(_Base):
         if year_conflict:
             node["llm_paper_year"] = llm_paper_year
             node["paper_year_source"] = "arxiv_id"
-        return {key: value for key, value in node.items() if value not in (None, "", [], {})}
+        return {
+            key: value for key, value in node.items() if value not in (None, "", [], {})
+        }
 
     @staticmethod
     def _worst_parse_quality(qualities: list[str]) -> str:
@@ -256,7 +293,9 @@ class QualityMixin(_Base):
         if parse_quality == "partial":
             warnings.append("One or more LLM JSON responses required partial recovery.")
         elif parse_quality == "failed":
-            warnings.append("One or more LLM extraction calls failed; deterministic fallbacks may be incomplete.")
+            warnings.append(
+                "One or more LLM extraction calls failed; deterministic fallbacks may be incomplete."
+            )
         if text_length >= 20000 and concept_count < 12:
             warnings.append(
                 "Full-length paper produced fewer than 12 concepts; review extraction coverage."
@@ -266,7 +305,9 @@ class QualityMixin(_Base):
                 "Survey paper produced fewer than 30 concepts; reviewed methods may be under-extracted."
             )
         if text_length >= 20000 and method_count == 0:
-            warnings.append("Full-length paper produced no methods; review method extraction.")
+            warnings.append(
+                "Full-length paper produced no methods; review method extraction."
+            )
         warnings.extend(cls._paper_identity_warnings(paper_id, paper_node or {}))
         return warnings
 
@@ -293,7 +334,9 @@ class QualityMixin(_Base):
                 f"implies {arxiv_year}; using arXiv metadata year."
             )
 
-        detected_source_id = cls._extract_arxiv_identifier(str(paper_node.get("detected_source_id") or ""))
+        detected_source_id = cls._extract_arxiv_identifier(
+            str(paper_node.get("detected_source_id") or "")
+        )
         if arxiv_id and detected_source_id and detected_source_id != arxiv_id:
             warnings.append(
                 f"Paper text contains {detected_source_id}, "
@@ -301,7 +344,11 @@ class QualityMixin(_Base):
             )
         detected_title = str(paper_node.get("detected_title") or "")
         llm_title = str(paper_node.get("llm_paper_title") or "")
-        if detected_title and llm_title and cls._titles_conflict(detected_title, llm_title):
+        if (
+            detected_title
+            and llm_title
+            and cls._titles_conflict(detected_title, llm_title)
+        ):
             warnings.append(
                 "Parsed paper title conflicts with LLM/external title; verify the selected paper text."
             )
@@ -316,8 +363,14 @@ class QualityMixin(_Base):
         blocking_errors: list[str] = []
         node_paper_id = str(paper_node.get("paper_id") or paper_id or "")
         supplied_arxiv_id = cls._extract_arxiv_identifier(node_paper_id)
-        detected_source_id = cls._extract_arxiv_identifier(str(paper_node.get("detected_source_id") or ""))
-        if supplied_arxiv_id and detected_source_id and detected_source_id != supplied_arxiv_id:
+        detected_source_id = cls._extract_arxiv_identifier(
+            str(paper_node.get("detected_source_id") or "")
+        )
+        if (
+            supplied_arxiv_id
+            and detected_source_id
+            and detected_source_id != supplied_arxiv_id
+        ):
             blocking_errors.append(
                 f"paper_id_mismatch: supplied {supplied_arxiv_id}, extracted {detected_source_id}"
             )
@@ -332,7 +385,11 @@ class QualityMixin(_Base):
 
         detected_title = str(paper_node.get("detected_title") or "")
         llm_title = str(paper_node.get("llm_paper_title") or "")
-        if detected_title and llm_title and cls._titles_conflict(detected_title, llm_title):
+        if (
+            detected_title
+            and llm_title
+            and cls._titles_conflict(detected_title, llm_title)
+        ):
             blocking_errors.append(
                 "paper_title_mismatch: parsed title "
                 f"'{detected_title[:120]}' conflicts with LLM/external title '{llm_title[:120]}'"
@@ -377,26 +434,55 @@ class QualityMixin(_Base):
             from storage.metadata_db import MetadataDB
 
             with MetadataDB(self.quality_db_path) as db:
-                context_diagnostics = payload.get("context_diagnostics") if isinstance(payload.get("context_diagnostics"), dict) else {}
+                context_diagnostics = (
+                    payload.get("context_diagnostics")
+                    if isinstance(payload.get("context_diagnostics"), dict)
+                    else {}
+                )
                 db.save_extraction_quality(
                     paper_id=paper_id,
                     concept_count=len(payload.get("concepts") or []),
                     method_count=len(payload.get("methods") or []),
                     claim_count=len(payload.get("claims") or []),
-                    has_formulas=bool((payload.get("mathematical_content") or {}).get("has_formulas")),
-                    auto_detected_concepts=int(payload.get("auto_detected_concepts") or 0),
-                    parse_quality=str(payload.get("extraction_parse_quality") or "partial"),
+                    has_formulas=bool(
+                        (payload.get("mathematical_content") or {}).get("has_formulas")
+                    ),
+                    auto_detected_concepts=int(
+                        payload.get("auto_detected_concepts") or 0
+                    ),
+                    parse_quality=str(
+                        payload.get("extraction_parse_quality") or "partial"
+                    ),
                     call_1_tokens_used=call_1_tokens_used,
                     call_2_tokens_used=call_2_tokens_used,
                     duration_seconds=duration_seconds,
                     model=self._model_name(provider, overrides),
                     provider=provider,
-                    context_policy=str(context_diagnostics.get("context_policy") or payload.get("context_policy") or ""),
-                    whole_context_used=bool(context_diagnostics.get("whole_context_used") or payload.get("whole_context_used")),
-                    chunk_count=self._optional_int(context_diagnostics.get("chunk_count") or payload.get("chunk_count")),
-                    estimated_prompt_tokens=self._optional_int(context_diagnostics.get("estimated_prompt_tokens")),
-                    context_margin_tokens=self._optional_int(context_diagnostics.get("context_margin_tokens") or payload.get("context_margin_tokens")),
-                    context_fallback_reason=str(context_diagnostics.get("fallback_reason") or ""),
+                    context_policy=str(
+                        context_diagnostics.get("context_policy")
+                        or payload.get("context_policy")
+                        or ""
+                    ),
+                    whole_context_used=bool(
+                        context_diagnostics.get("whole_context_used")
+                        or payload.get("whole_context_used")
+                    ),
+                    chunk_count=self._optional_int(
+                        context_diagnostics.get("chunk_count")
+                        or payload.get("chunk_count")
+                    ),
+                    estimated_prompt_tokens=self._optional_int(
+                        context_diagnostics.get("estimated_prompt_tokens")
+                    ),
+                    context_margin_tokens=self._optional_int(
+                        context_diagnostics.get("context_margin_tokens")
+                        or payload.get("context_margin_tokens")
+                    ),
+                    context_fallback_reason=str(
+                        context_diagnostics.get("fallback_reason") or ""
+                    ),
                 )
         except Exception:
-            logger.exception("Failed to persist extraction quality for paper_id=%s", paper_id)
+            logger.exception(
+                "Failed to persist extraction quality for paper_id=%s", paper_id
+            )

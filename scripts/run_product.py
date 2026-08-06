@@ -46,7 +46,9 @@ def _wait_for_api(base_url: str, timeout_seconds: float = 20.0) -> bool:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run ScienceKG product API and React frontend.")
+    parser = argparse.ArgumentParser(
+        description="Run ScienceKG product API and React frontend."
+    )
     parser.add_argument("--api-only", action="store_true", help="Start only FastAPI.")
     parser.add_argument("--frontend-only", action="store_true", help="Start only Vite.")
     parser.add_argument("--api-port", type=int, default=8000, help="FastAPI port.")
@@ -95,7 +97,9 @@ def main() -> None:
 
     if not args.api_only:
         if not (FRONTEND_ROOT / "node_modules").exists():
-            raise SystemExit("frontend/node_modules is missing. Run `npm.cmd install` in frontend/ first.")
+            raise SystemExit(
+                "frontend/node_modules is missing. Run `npm.cmd install` in frontend/ first."
+            )
         print(f"[product] Starting frontend on {frontend_url}")
         processes.append(
             _start(

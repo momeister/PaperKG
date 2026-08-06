@@ -11,6 +11,7 @@ dieselbe Rust-Seite wie bei jeder anderen Antwort.
 Ohne LLM ist trotzdem nichts kaputt: die Oberfläche zeigt weiterhin ihren
 Faktensteckbrief; diese Route meldet dann einen Fehler und sonst nichts.
 """
+
 from __future__ import annotations
 
 import json
@@ -53,7 +54,10 @@ def explain_stream(
 
     def rpc(method: str, params: dict[str, Any] | None = None) -> Any:
         return service.query(
-            project, method, {**(params or {}), "session": session}, config_path=config_path
+            project,
+            method,
+            {**(params or {}), "session": session},
+            config_path=config_path,
         )
 
     try:

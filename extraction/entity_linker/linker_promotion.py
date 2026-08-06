@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_linker/linker.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import re
@@ -53,7 +54,9 @@ class LinkerPromotionMixin(_Base):
             normalized = normalize_scientific_text(label).lower().strip()
             if not normalized:
                 continue
-            if re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", evidence):
+            if re.search(
+                rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", evidence
+            ):
                 item = dict(entity)
                 item["mention_count"] = 1
                 return item
@@ -97,7 +100,13 @@ class LinkerPromotionMixin(_Base):
         mention_count = int(_coerce_float(concept.get("mention_count"), 0.0))
         if confidence < 0.85 or salience != "central":
             return concept
-        if entity_type not in {"System", "ModelArchitecture", "Benchmark", "DomainConcept", "MethodFamily"}:
+        if entity_type not in {
+            "System",
+            "ModelArchitecture",
+            "Benchmark",
+            "DomainConcept",
+            "MethodFamily",
+        }:
             return concept
         if evidence_role not in {
             "method_family",
@@ -107,10 +116,15 @@ class LinkerPromotionMixin(_Base):
             "domain_concept",
         } and source_type not in {"paper_contribution", "reviewed_method"}:
             return concept
-        if entity_type in {"DomainConcept", "MethodFamily"} and mention_count < 2 and source_type not in {
-            "paper_contribution",
-            "reviewed_method",
-        }:
+        if (
+            entity_type in {"DomainConcept", "MethodFamily"}
+            and mention_count < 2
+            and source_type
+            not in {
+                "paper_contribution",
+                "reviewed_method",
+            }
+        ):
             return concept
 
         item = dict(concept)
@@ -127,7 +141,11 @@ class LinkerPromotionMixin(_Base):
         paper_node: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Promote high-confidence ontology-backed candidates lost to partial JSON."""
-        existing_ids = {str(item.get("canonical_id")) for item in concepts if item.get("canonical_id")}
+        existing_ids = {
+            str(item.get("canonical_id"))
+            for item in concepts
+            if item.get("canonical_id")
+        }
         paper_title = str((paper_node or {}).get("title") or "")
         is_survey = paper_type == "survey"
         is_framework_or_benchmark = paper_type in {"benchmark", "research"}
@@ -156,7 +174,9 @@ class LinkerPromotionMixin(_Base):
             canonical_id = str(candidate.get("canonical_id") or "")
             match = candidate.get("canonical_match") or {}
             entity_type = str(candidate.get("entity_type") or "")
-            canonical_key = normalize_key(candidate.get("canonical_label") or candidate.get("label"))
+            canonical_key = normalize_key(
+                candidate.get("canonical_label") or candidate.get("label")
+            )
             confidence = _coerce_float(candidate.get("confidence"), 0.0)
             mention_count = int(_coerce_float(candidate.get("mention_count"), 0.0))
             salience = str(candidate.get("salience") or "").lower()
@@ -192,14 +212,22 @@ class LinkerPromotionMixin(_Base):
                 and exact_match
                 and canonical_key in cls.QML_CORE_KEYS
                 and confidence >= 0.60
-                and (mention_count >= 1 or salience in {"central", "supporting"} or title_rescue)
+                and (
+                    mention_count >= 1
+                    or salience in {"central", "supporting"}
+                    or title_rescue
+                )
             )
             benchmark_rescue = (
                 paper_type == "benchmark"
                 and exact_match
                 and canonical_key in cls.BENCHMARK_CORE_KEYS
                 and confidence >= 0.60
-                and (mention_count >= 1 or salience in {"central", "supporting"} or title_rescue)
+                and (
+                    mention_count >= 1
+                    or salience in {"central", "supporting"}
+                    or title_rescue
+                )
             )
             theoretical_rescue = (
                 paper_type == "theoretical"
@@ -225,17 +253,14 @@ class LinkerPromotionMixin(_Base):
                     or candidate_source == "deterministic_scan"
                 )
             )
-            should_promote = (
-                canonical_key not in cls.DETAIL_ONLY_KEYS
-                and (
-                    standard_rescue
-                    or method_family_rescue
-                    or title_rescue
-                    or qml_rescue
-                    or benchmark_rescue
-                    or theoretical_rescue
-                    or medical_imaging_rescue
-                )
+            should_promote = canonical_key not in cls.DETAIL_ONLY_KEYS and (
+                standard_rescue
+                or method_family_rescue
+                or title_rescue
+                or qml_rescue
+                or benchmark_rescue
+                or theoretical_rescue
+                or medical_imaging_rescue
             )
             if should_promote:
                 item = dict(candidate)
@@ -275,8 +300,18 @@ class LinkerPromotionMixin(_Base):
         """Promote precise ontology-backed methods lost to candidate arrays."""
         if paper_type not in {"survey", "benchmark"}:
             return methods, method_candidates
-        existing_ids = {str(item.get("canonical_id")) for item in methods if item.get("canonical_id")}
-        promotable_types = {"Algorithm", "MethodFamily", "ModelArchitecture", "System", "Task"}
+        existing_ids = {
+            str(item.get("canonical_id"))
+            for item in methods
+            if item.get("canonical_id")
+        }
+        promotable_types = {
+            "Algorithm",
+            "MethodFamily",
+            "ModelArchitecture",
+            "System",
+            "Task",
+        }
         promoted: list[dict[str, Any]] = []
         remaining: list[dict[str, Any]] = []
         for candidate in method_candidates:
@@ -297,7 +332,9 @@ class LinkerPromotionMixin(_Base):
                 and source_type in {"reviewed_method", "baseline"}
                 and (mention_count >= 1 or salience in {"central", "supporting"})
             )
-            benchmark_key = normalize_key(candidate.get("canonical_label") or candidate.get("label"))
+            benchmark_key = normalize_key(
+                candidate.get("canonical_label") or candidate.get("label")
+            )
             benchmark_promote = (
                 paper_type == "benchmark"
                 and canonical_id
@@ -320,7 +357,9 @@ class LinkerPromotionMixin(_Base):
                 and source_type in {"reviewed_method", "baseline", "paper_contribution"}
                 and (mention_count >= 1 or salience in {"central", "supporting"})
             )
-            should_promote = survey_promote or benchmark_promote or medical_imaging_promote
+            should_promote = (
+                survey_promote or benchmark_promote or medical_imaging_promote
+            )
             if should_promote:
                 item = dict(candidate)
                 item["accepted"] = True
@@ -340,7 +379,12 @@ class LinkerPromotionMixin(_Base):
         methods: list[dict[str, Any]],
         concept_candidates: list[dict[str, Any]],
         method_candidates: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
         """Rescue ontology-backed candidates needed for approved structural relations.
 
         This keeps important relation endpoints stable across LLM runs without
@@ -350,7 +394,8 @@ class LinkerPromotionMixin(_Base):
         approved_keys = {
             normalize_key(item.get("canonical_label") or item.get("label"))
             for item in [*concepts, *methods]
-            if isinstance(item, dict) and str(item.get("review_status") or "").lower() == "approved"
+            if isinstance(item, dict)
+            and str(item.get("review_status") or "").lower() == "approved"
         }
         approved_ids = {
             str(item.get("canonical_id"))
@@ -374,7 +419,11 @@ class LinkerPromotionMixin(_Base):
             "MEASURES",
         }
         relation_endpoint_keys: set[str] = set()
-        for subject_key, relation_type, object_key in ControlledRelationExtractor.KNOWN_RELATION_TEMPLATES:
+        for (
+            subject_key,
+            relation_type,
+            object_key,
+        ) in ControlledRelationExtractor.KNOWN_RELATION_TEMPLATES:
             if relation_type not in promotable_relations:
                 continue
             if subject_key in approved_keys:
@@ -409,7 +458,9 @@ class LinkerPromotionMixin(_Base):
             confidence = _coerce_float(item.get("confidence"), 0.0)
             mention_count = int(_coerce_float(item.get("mention_count"), 0.0))
             salience = str(item.get("salience") or "").lower()
-            return confidence >= 0.60 and (mention_count >= 1 or salience in {"central", "supporting"})
+            return confidence >= 0.60 and (
+                mention_count >= 1 or salience in {"central", "supporting"}
+            )
 
         promoted_concepts: list[dict[str, Any]] = []
         promoted_methods: list[dict[str, Any]] = []
@@ -421,7 +472,9 @@ class LinkerPromotionMixin(_Base):
                 item = cls._mark_relation_endpoint_promoted(candidate)
                 promoted_concepts.append(item)
                 approved_ids.add(str(item.get("canonical_id")))
-                approved_keys.add(normalize_key(item.get("canonical_label") or item.get("label")))
+                approved_keys.add(
+                    normalize_key(item.get("canonical_label") or item.get("label"))
+                )
             else:
                 remaining_concepts.append(candidate)
 
@@ -433,7 +486,9 @@ class LinkerPromotionMixin(_Base):
                 else:
                     promoted_methods.append(item)
                 approved_ids.add(str(item.get("canonical_id")))
-                approved_keys.add(normalize_key(item.get("canonical_label") or item.get("label")))
+                approved_keys.add(
+                    normalize_key(item.get("canonical_label") or item.get("label"))
+                )
             else:
                 remaining_methods.append(candidate)
 

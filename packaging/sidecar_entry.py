@@ -19,8 +19,12 @@ import sys
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ScienceKG bundled backend sidecar.")
-    parser.add_argument("--port", type=int, required=True, help="Localhost port to bind.")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1).")
+    parser.add_argument(
+        "--port", type=int, required=True, help="Localhost port to bind."
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1)."
+    )
     parser.add_argument(
         "--data-dir",
         default=None,

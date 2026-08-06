@@ -1,5 +1,6 @@
 """Tests for server-side persistence of deep-research (Tiefensuche) trees: DB CRUD,
 streaming persistence during ``/research/tree``, and the session endpoints."""
+
 from __future__ import annotations
 
 import json
@@ -13,11 +14,19 @@ from storage.metadata_db import MetadataDB
 
 def test_research_session_db_crud(tmp_path) -> None:
     db = MetadataDB(str(tmp_path / "t.duckdb"))
-    db.upsert_research_session("s1", "proj", "F?", "running", [{"id": "n1", "status": "running"}])
-    db.upsert_research_session("s1", "proj", "F?", "done", [
-        {"id": "n1", "status": "done", "answer": {"answer": "a"}},
-        {"id": "synthesis", "status": "synthesis", "document": "doc"},
-    ])
+    db.upsert_research_session(
+        "s1", "proj", "F?", "running", [{"id": "n1", "status": "running"}]
+    )
+    db.upsert_research_session(
+        "s1",
+        "proj",
+        "F?",
+        "done",
+        [
+            {"id": "n1", "status": "done", "answer": {"answer": "a"}},
+            {"id": "synthesis", "status": "synthesis", "document": "doc"},
+        ],
+    )
     got = db.get_research_session("s1")
     assert len(got["nodes"]) == 2
     assert got["status"] == "done"
@@ -50,12 +59,15 @@ def client(monkeypatch):
 
 def test_research_tree_stream_persists_session(client, tmp_path) -> None:
     db_path = str(tmp_path / "stream.duckdb")
-    res = client.post("/research/tree", json={
-        "question": "Frage?",
-        "project_id": "proj",
-        "session_id": "sess-123",
-        "metadata_db_path": db_path,
-    })
+    res = client.post(
+        "/research/tree",
+        json={
+            "question": "Frage?",
+            "project_id": "proj",
+            "session_id": "sess-123",
+            "metadata_db_path": db_path,
+        },
+    )
     assert res.status_code == 200
     # node 'n1' is updated in place (running -> done), plus the synthesis node => 2 nodes.
     assert "data:" in res.text
@@ -73,7 +85,9 @@ def test_research_tree_stream_persists_session(client, tmp_path) -> None:
 def test_research_session_endpoints(client, tmp_path) -> None:
     db_path = str(tmp_path / "ep.duckdb")
     with MetadataDB(db_path) as db:
-        db.upsert_research_session("rs1", "proj", "F?", "running", [{"id": "n1", "status": "done"}])
+        db.upsert_research_session(
+            "rs1", "proj", "F?", "running", [{"id": "n1", "status": "done"}]
+        )
 
     res = client.get("/research/sessions/proj", params={"metadata_db_path": db_path})
     assert res.json()["sessions"][0]["node_count"] == 1
@@ -81,10 +95,16 @@ def test_research_session_endpoints(client, tmp_path) -> None:
     res = client.get("/research/session/rs1", params={"metadata_db_path": db_path})
     assert len(res.json()["session"]["nodes"]) == 1
 
-    res = client.put("/research/session/rs1", json={
-        "project_id": "proj", "question": "F?", "status": "done",
-        "nodes": [{"id": "n1"}, {"id": "n2"}], "metadata_db_path": db_path,
-    })
+    res = client.put(
+        "/research/session/rs1",
+        json={
+            "project_id": "proj",
+            "question": "F?",
+            "status": "done",
+            "nodes": [{"id": "n1"}, {"id": "n2"}],
+            "metadata_db_path": db_path,
+        },
+    )
     assert len(res.json()["session"]["nodes"]) == 2
 
     res = client.get("/research/session/missing", params={"metadata_db_path": db_path})

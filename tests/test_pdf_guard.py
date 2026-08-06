@@ -27,7 +27,11 @@ def _minimal_pdf(text: str = "Hallo Wissenschaft") -> bytes:
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
         b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Length "
+        + str(len(stream)).encode()
+        + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
     out = bytearray(b"%PDF-1.4\n")
@@ -62,7 +66,9 @@ def test_guarded_parse_matches_direct_parse(sample_pdf: Path) -> None:
     assert not guarded.meta.get("guard_aborted")
 
 
-def test_guard_disabled_falls_back_to_direct(sample_pdf: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guard_disabled_falls_back_to_direct(
+    sample_pdf: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SCIENCEKG_PDF_GUARD", "0")
     monkeypatch.setattr(pdf_guard, "_config_cache", None)
 
@@ -71,7 +77,9 @@ def test_guard_disabled_falls_back_to_direct(sample_pdf: Path, monkeypatch: pyte
     assert result.text == MarkerParser().parse_direct(str(sample_pdf), "paper-2").text
 
 
-def test_child_flag_prevents_recursive_spawn(sample_pdf: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_child_flag_prevents_recursive_spawn(
+    sample_pdf: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Im Kindprozess darf `parse` nicht erneut einen Kindprozess starten."""
     monkeypatch.setenv(pdf_guard._CHILD_ENV_FLAG, "1")
 
@@ -133,11 +141,16 @@ def test_memory_limit_scales_with_free_ram(monkeypatch: pytest.MonkeyPatch) -> N
     assert generous <= config["memory_max_mb"] * 1024 * 1024
 
 
-def test_memory_limit_falls_back_when_ram_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_memory_limit_falls_back_when_ram_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(pdf_guard, "_config_cache", None)
     monkeypatch.setattr(pdf_guard, "available_memory_bytes", lambda: None)
 
-    assert pdf_guard.memory_limit_bytes() == int(pdf_guard._load_config()["memory_min_mb"]) * 1024 * 1024
+    assert (
+        pdf_guard.memory_limit_bytes()
+        == int(pdf_guard._load_config()["memory_min_mb"]) * 1024 * 1024
+    )
 
 
 def test_env_overrides_beat_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,7 +160,9 @@ def test_env_overrides_beat_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert pdf_guard._load_config()["pdf_timeout_seconds"] == 900.0
 
 
-def test_partial_result_when_child_is_killed(sample_pdf: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_partial_result_when_child_is_killed(
+    sample_pdf: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Wird das Kind abgeschossen, kommen die bereits fertigen Seiten zurueck."""
     monkeypatch.setattr(pdf_guard, "_config_cache", None)
 

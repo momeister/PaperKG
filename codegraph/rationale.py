@@ -23,6 +23,7 @@ wird aber nirgends erzeugt (nachgeprüft: ``grep -rn "TestedBy"`` außerhalb von
 ``cs-core`` ist leer). Eine Abfrage darauf sähe aus wie „keine Tests" und wäre
 eine Falschaussage über den Code.
 """
+
 from __future__ import annotations
 
 import json
@@ -98,7 +99,9 @@ def recorded(
     return {"history": history, "notes": notes}
 
 
-def _caller_summary(rpc: Any, node_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _caller_summary(
+    rpc: Any, node_id: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Aufrufer, getrennt in Tests und alles andere.
 
     Über ``neighbours`` statt über das Werkzeug ``callers_of``: nur diese Antwort
@@ -106,10 +109,13 @@ def _caller_summary(rpc: Any, node_id: str) -> tuple[list[dict[str, Any]], list[
     einem gewöhnlichen Aufrufer unterscheiden.
     """
     try:
-        neighbours = rpc(
-            "neighbours",
-            {"id": node_id, "direction": "in", "edge_kinds": ["calls"]},
-        ) or []
+        neighbours = (
+            rpc(
+                "neighbours",
+                {"id": node_id, "direction": "in", "edge_kinds": ["calls"]},
+            )
+            or []
+        )
     except CodeGraphError:
         return [], []
 
@@ -144,7 +150,10 @@ def why_stream(
 
     def rpc(method: str, params: dict[str, Any] | None = None) -> Any:
         return service.query(
-            project, method, {**(params or {}), "session": session}, config_path=config_path
+            project,
+            method,
+            {**(params or {}), "session": session},
+            config_path=config_path,
         )
 
     try:
@@ -203,7 +212,8 @@ def why_stream(
         "aufrufende_tests": tests,
         "weitere_aufrufer": callers,
         "commit_betreffe": [
-            f"{commit['date']} {commit['subject']}" for commit in facts["history"]["commits"]
+            f"{commit['date']} {commit['subject']}"
+            for commit in facts["history"]["commits"]
         ],
         "hinterlegte_begruendungen": [note["text"] for note in facts["notes"]],
     }

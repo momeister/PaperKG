@@ -101,7 +101,9 @@ class FakeUnpaywallClient:
 
 
 @pytest.mark.asyncio
-async def test_run_demo_full_phase1_works_with_mocked_clients(tmp_path: Path, monkeypatch) -> None:
+async def test_run_demo_full_phase1_works_with_mocked_clients(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(try_phase1, "PROJECT_ROOT", tmp_path)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
 

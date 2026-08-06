@@ -8,6 +8,7 @@
 All inputs are the plain research-tree node dicts as posted by the frontend, each with
 ``id``/``parent_id``/``depth``/``question`` and ``answer.sources`` (paper metadata).
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -40,7 +41,7 @@ def breakable_id(paper_id: str, chunk: int = 8) -> str:
     index = 0
     while index < len(escaped):
         if escaped[index] == "\\":  # keep an escape sequence (\_, \&, …) intact
-            out.append(escaped[index:index + 2])
+            out.append(escaped[index : index + 2])
             index += 2
             since_break += 1
         else:
@@ -63,8 +64,10 @@ def _forest_label(text: str, limit: int = _MAX_LABEL) -> str:
 def _tree_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Real question nodes only — the synthesis event rides along in the same list."""
     return [
-        n for n in nodes
-        if str(n.get("status") or "") != "synthesis" and str(n.get("id") or "") != "synthesis"
+        n
+        for n in nodes
+        if str(n.get("status") or "") != "synthesis"
+        and str(n.get("id") or "") != "synthesis"
     ]
 
 
@@ -98,28 +101,30 @@ def research_tree_forest(nodes: list[dict[str, Any]], max_depth: int = 1) -> str
         return f"[{{{label}}}{inner}]"
 
     tree = emit(root, 0)
-    return "\n".join([
-        r"\begin{landscape}",
-        r"\begin{figure}[H]",
-        r"\centering",
-        r"\resizebox{\linewidth}{!}{%",
-        r"\begin{forest}",
-        # ``text width``/``align`` MUST travel via ``node options``: passed directly in
-        # ``for tree`` forest ignores them, the label is typeset as one long line and runs
-        # out of its box (that is why the diagram used to be an unreadable overlap).
-        # ``align=left`` and not ``flush left``: with the array package loaded TikZ parses
-        # the latter as a tabular preamble and aborts with "Illegal pream-token".
-        r"for tree={draw, rounded corners, font=\footnotesize, grow=east,"
-        r" edge={->, >=latex}, anchor=west,"
-        r" node options={align=left, text width=5.4cm, inner sep=3pt},"
-        r" l sep=18mm, s sep=5mm}",
-        tree,
-        r"\end{forest}%",
-        r"}",
-        r"\caption{Struktur der Tiefenanalyse: Forschungsfrage und untersuchte Kapitel.}",
-        r"\end{figure}",
-        r"\end{landscape}",
-    ])
+    return "\n".join(
+        [
+            r"\begin{landscape}",
+            r"\begin{figure}[H]",
+            r"\centering",
+            r"\resizebox{\linewidth}{!}{%",
+            r"\begin{forest}",
+            # ``text width``/``align`` MUST travel via ``node options``: passed directly in
+            # ``for tree`` forest ignores them, the label is typeset as one long line and runs
+            # out of its box (that is why the diagram used to be an unreadable overlap).
+            # ``align=left`` and not ``flush left``: with the array package loaded TikZ parses
+            # the latter as a tabular preamble and aborts with "Illegal pream-token".
+            r"for tree={draw, rounded corners, font=\footnotesize, grow=east,"
+            r" edge={->, >=latex}, anchor=west,"
+            r" node options={align=left, text width=5.4cm, inner sep=3pt},"
+            r" l sep=18mm, s sep=5mm}",
+            tree,
+            r"\end{forest}%",
+            r"}",
+            r"\caption{Struktur der Tiefenanalyse: Forschungsfrage und untersuchte Kapitel.}",
+            r"\end{figure}",
+            r"\end{landscape}",
+        ]
+    )
 
 
 def outline_latex(nodes: list[dict[str, Any]]) -> str:
@@ -137,12 +142,17 @@ def outline_latex(nodes: list[dict[str, Any]]) -> str:
         chapter = str(d1.get("question") or "")
         lines.append(r"\item " + latex_escape(_short(chapter, 220)))
         subs = [
-            n for n in tree
-            if int(n.get("depth", 0)) >= 2 and chapters.get(str(n.get("id") or "")) == chapter
+            n
+            for n in tree
+            if int(n.get("depth", 0)) >= 2
+            and chapters.get(str(n.get("id") or "")) == chapter
         ]
         if subs:
             lines.append(r"\begin{itemize}[leftmargin=*]")
-            lines.extend(r"\item " + latex_escape(_short(str(s.get("question") or ""), 220)) for s in subs)
+            lines.extend(
+                r"\item " + latex_escape(_short(str(s.get("question") or ""), 220))
+                for s in subs
+            )
             lines.append(r"\end{itemize}")
     lines.append(r"\end{enumerate}")
     return "\n".join(lines)
@@ -220,8 +230,14 @@ def _top_sources(
                 titles.setdefault(pid, str(s.get("title") or pid))
         for pid in used:
             usage[pid] += 1
-    ranked = sorted(usage.items(), key=lambda item: (-item[1], titles.get(item[0], item[0])))
-    return [(titles.get(pid, pid) or pid, count) for pid, count in ranked[:_MAX_TOP_SOURCES] if count > 1] or [
+    ranked = sorted(
+        usage.items(), key=lambda item: (-item[1], titles.get(item[0], item[0]))
+    )
+    return [
+        (titles.get(pid, pid) or pid, count)
+        for pid, count in ranked[:_MAX_TOP_SOURCES]
+        if count > 1
+    ] or [
         (titles.get(pid, pid) or pid, count) for pid, count in ranked[:_MAX_TOP_SOURCES]
     ]
 
@@ -238,6 +254,7 @@ def make_charts(
     """
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except Exception:
@@ -250,13 +267,19 @@ def make_charts(
         # Kapitel-Fragen sind zu lang für eine y-Achse: auf K1…Kn kürzen und die Zuordnung
         # in die Bildunterschrift schreiben. Höhe hart begrenzt, damit das Bild auf die
         # Seite passt (früher wuchs es linear und lief über den Seitenrand hinaus).
-        ranked = sorted(by_chapter.items(), key=lambda item: len(item[1]), reverse=True)[:_MAX_CHART_CHAPTERS]
+        ranked = sorted(
+            by_chapter.items(), key=lambda item: len(item[1]), reverse=True
+        )[:_MAX_CHART_CHAPTERS]
         order = list(by_chapter)
         keys = [f"K{order.index(chapter) + 1}" for chapter, _ in ranked]
         counts = [len(sources) for _, sources in ranked]
-        legend = "; ".join(f"{key} = {_short(chapter, 60)}" for key, (chapter, _) in zip(keys, ranked))
+        legend = "; ".join(
+            f"{key} = {_short(chapter, 60)}" for key, (chapter, _) in zip(keys, ranked)
+        )
         try:
-            fig, ax = plt.subplots(figsize=(7, min(7.0, max(2.2, 0.34 * len(keys) + 1.2))))
+            fig, ax = plt.subplots(
+                figsize=(7, min(7.0, max(2.2, 0.34 * len(keys) + 1.2)))
+            )
             bars = ax.barh(range(len(keys)), counts, color="#3b6ea5")
             ax.bar_label(bars, padding=3, fontsize=8)
             ax.set_yticks(range(len(keys)))
@@ -268,14 +291,21 @@ def make_charts(
             fig.tight_layout()
             fig.savefig(workdir / "chart_sources.png", dpi=150)
             plt.close(fig)
-            out.append((f"Anzahl der belegten Quellen je Kapitel. {legend}", "chart_sources.png"))
+            out.append(
+                (
+                    f"Anzahl der belegten Quellen je Kapitel. {legend}",
+                    "chart_sources.png",
+                )
+            )
         except Exception:
             pass
 
     top_sources = _top_sources(nodes, sources)
     if top_sources:
         try:
-            fig, ax = plt.subplots(figsize=(7, min(6.0, max(2.2, 0.4 * len(top_sources) + 1.2))))
+            fig, ax = plt.subplots(
+                figsize=(7, min(6.0, max(2.2, 0.4 * len(top_sources) + 1.2)))
+            )
             labels = [_short(title, 46) for title, _ in top_sources]
             counts = [count for _, count in top_sources]
             bars = ax.barh(range(len(labels)), counts, color="#4a7f5c")
@@ -289,10 +319,12 @@ def make_charts(
             fig.tight_layout()
             fig.savefig(workdir / "chart_top_sources.png", dpi=150)
             plt.close(fig)
-            out.append((
-                "Quellen, die in den meisten Teilfragen als Beleg herangezogen wurden.",
-                "chart_top_sources.png",
-            ))
+            out.append(
+                (
+                    "Quellen, die in den meisten Teilfragen als Beleg herangezogen wurden.",
+                    "chart_top_sources.png",
+                )
+            )
         except Exception:
             pass
 
@@ -309,7 +341,12 @@ def make_charts(
             fig.tight_layout()
             fig.savefig(workdir / "chart_years.png", dpi=150)
             plt.close(fig)
-            out.append(("Verteilung der Publikationsjahre der zitierten Quellen.", "chart_years.png"))
+            out.append(
+                (
+                    "Verteilung der Publikationsjahre der zitierten Quellen.",
+                    "chart_years.png",
+                )
+            )
         except Exception:
             pass
 
@@ -320,13 +357,17 @@ def charts_latex(charts: list[tuple[str, str]]) -> str:
     """Wrap rendered chart PNGs in LaTeX ``figure`` blocks."""
     blocks: list[str] = []
     for caption, filename in charts:
-        blocks.append("\n".join([
-            r"\begin{figure}[H]",
-            r"\centering",
-            rf"\includegraphics[width=0.85\textwidth]{{{filename}}}",
-            rf"\caption{{{latex_escape(caption)}}}",
-            r"\end{figure}",
-        ]))
+        blocks.append(
+            "\n".join(
+                [
+                    r"\begin{figure}[H]",
+                    r"\centering",
+                    rf"\includegraphics[width=0.85\textwidth]{{{filename}}}",
+                    rf"\caption{{{latex_escape(caption)}}}",
+                    r"\end{figure}",
+                ]
+            )
+        )
     return "\n\n".join(blocks)
 
 
@@ -350,19 +391,21 @@ def overview_table_latex(nodes: list[dict[str, Any]]) -> str:
             f"K{index} & {latex_escape(_short(chapter, 150))} & "
             f"{subq_count.get(chapter, 0)} & {len(by_chapter.get(chapter, set()))} \\\\"
         )
-    return "\n".join([
-        r"\begingroup\small",
-        r"\begin{longtable}{@{}l >{\raggedright\arraybackslash}p{0.58\textwidth} r r@{}}",
-        r"\caption{Überblick der untersuchten Kapitel.}\\",
-        r"\toprule",
-        r"\textbf{\#} & \textbf{Kapitel} & \textbf{Teilfragen} & \textbf{Quellen} \\",
-        r"\midrule",
-        r"\endhead",
-        *rows,
-        r"\bottomrule",
-        r"\end{longtable}",
-        r"\endgroup",
-    ])
+    return "\n".join(
+        [
+            r"\begingroup\small",
+            r"\begin{longtable}{@{}l >{\raggedright\arraybackslash}p{0.58\textwidth} r r@{}}",
+            r"\caption{Überblick der untersuchten Kapitel.}\\",
+            r"\toprule",
+            r"\textbf{\#} & \textbf{Kapitel} & \textbf{Teilfragen} & \textbf{Quellen} \\",
+            r"\midrule",
+            r"\endhead",
+            *rows,
+            r"\bottomrule",
+            r"\end{longtable}",
+            r"\endgroup",
+        ]
+    )
 
 
 def sources_table_latex(sources: list[dict[str, Any]]) -> str:
@@ -384,17 +427,19 @@ def sources_table_latex(sources: list[dict[str, Any]]) -> str:
             f"{idx} & {latex_escape(title)} & {latex_escape(str(year))} & "
             f"{breakable_id(pid)} \\\\"
         )
-    return "\n".join([
-        r"\begingroup\small",
-        r"\begin{longtable}{@{}r >{\raggedright\arraybackslash}p{0.44\textwidth} c"
-        r" >{\raggedright\arraybackslash}p{0.26\textwidth}@{}}",
-        r"\caption{Übersicht der einbezogenen Quellen.}\\",
-        r"\toprule",
-        r"\# & \textbf{Titel} & \textbf{Jahr} & \textbf{ID} \\",
-        r"\midrule",
-        r"\endhead",
-        *rows,
-        r"\bottomrule",
-        r"\end{longtable}",
-        r"\endgroup",
-    ])
+    return "\n".join(
+        [
+            r"\begingroup\small",
+            r"\begin{longtable}{@{}r >{\raggedright\arraybackslash}p{0.44\textwidth} c"
+            r" >{\raggedright\arraybackslash}p{0.26\textwidth}@{}}",
+            r"\caption{Übersicht der einbezogenen Quellen.}\\",
+            r"\toprule",
+            r"\# & \textbf{Titel} & \textbf{Jahr} & \textbf{ID} \\",
+            r"\midrule",
+            r"\endhead",
+            *rows,
+            r"\bottomrule",
+            r"\end{longtable}",
+            r"\endgroup",
+        ]
+    )

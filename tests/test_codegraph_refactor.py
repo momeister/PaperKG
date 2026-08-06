@@ -6,6 +6,7 @@ der das Projekt verlässt oder syntaktisch kaputt ist, **abgelehnt** wird, bevor
 irgendetwas geschrieben wird. Genau das ist die Sicherheitslinie zwischen einem
 Modelltext und einer geschriebenen Datei.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,7 +24,9 @@ def _proposal(*files: tuple[str, str], geloescht=None) -> dict:
 
 def test_a_path_that_leaves_the_project_is_rejected(tmp_path: Path) -> None:
     """``../../etc/passwd`` fällt an der Pfadprüfung, nicht erst am Testlauf."""
-    ok, errors, _cleaned = refactor.validate_proposal(tmp_path, _proposal(("../etc/passwd", "x")))
+    ok, errors, _cleaned = refactor.validate_proposal(
+        tmp_path, _proposal(("../etc/passwd", "x"))
+    )
     assert not ok
     assert any("verlässt" in e or "passwd" in e for e in errors)
 

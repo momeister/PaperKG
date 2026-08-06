@@ -24,14 +24,22 @@ _FIG_TABLE_CODE = (
 
 
 def _plan_response(code: str, title: str = "Demo-Analyse") -> str:
-    return json.dumps({"title": title, "description": "Erzeugt eine Figur und eine Tabelle.", "code": code})
+    return json.dumps(
+        {
+            "title": title,
+            "description": "Erzeugt eine Figur und eine Tabelle.",
+            "code": code,
+        }
+    )
 
 
 @pytest.fixture
 def analysis_client(tmp_path, monkeypatch):
     """TestClient with the managed workspace redirected into tmp and the LLM stubbed."""
     ws_base = tmp_path / "ws"
-    monkeypatch.setattr(product_main.workspace_manager, "base_dir", lambda *a, **k: ws_base)
+    monkeypatch.setattr(
+        product_main.workspace_manager, "base_dir", lambda *a, **k: ws_base
+    )
 
     calls: dict[str, str] = {"code": _FIG_TABLE_CODE, "title": "Demo-Analyse"}
 
@@ -65,14 +73,18 @@ def test_runner_is_deterministic(tmp_path):
     for i in range(2):
         d = tmp_path / f"r{i}"
         d.mkdir()
-        hashes.append(runner.run_script(d, _FIG_TABLE_CODE, seed=7, timeout=60).combined_hash)
+        hashes.append(
+            runner.run_script(d, _FIG_TABLE_CODE, seed=7, timeout=60).combined_hash
+        )
     assert hashes[0] == hashes[1]
 
 
 def test_runner_timeout(tmp_path):
     run_dir = tmp_path / "slow"
     run_dir.mkdir()
-    result = runner.run_script(run_dir, "import time\ntime.sleep(5)\n", seed=1, timeout=1)
+    result = runner.run_script(
+        run_dir, "import time\ntime.sleep(5)\n", seed=1, timeout=1
+    )
     assert result.timed_out and not result.ok
 
 
@@ -149,7 +161,9 @@ def test_analysis_run_create_serve_and_revise(analysis_client):
 def test_analysis_artifact_not_found(analysis_client):
     client, tmp_path, _ = analysis_client
     db_path = tmp_path / "metadata.duckdb"
-    resp = client.get("/analysis/artifacts/does-not-exist", params={"metadata_db_path": str(db_path)})
+    resp = client.get(
+        "/analysis/artifacts/does-not-exist", params={"metadata_db_path": str(db_path)}
+    )
     assert resp.status_code == 404
 
 
@@ -159,15 +173,20 @@ def test_artifact_served_from_non_allowed_root(tmp_path, monkeypatch):
     # Artifact serving must contain against the run folder (resolve_within), not the
     # global allowed-roots guard — otherwise every real artifact 400s.
     outside = Path.home() / f".pkg_test_ws_{uuid.uuid4().hex[:8]}"
-    monkeypatch.setattr(product_main.workspace_manager, "base_dir", lambda *a, **k: outside)
     monkeypatch.setattr(
-        product_main.llm_router, "chat",
+        product_main.workspace_manager, "base_dir", lambda *a, **k: outside
+    )
+    monkeypatch.setattr(
+        product_main.llm_router,
+        "chat",
         lambda messages, provider=None, overrides=None: _plan_response(_FIG_TABLE_CODE),
     )
     client = TestClient(product_main.app)
     db_path = tmp_path / "metadata.duckdb"
     try:
-        created = client.post("/analysis/runs", json={"request": "Demo", "metadata_db_path": str(db_path)})
+        created = client.post(
+            "/analysis/runs", json={"request": "Demo", "metadata_db_path": str(db_path)}
+        )
         run = created.json()["run"]
         fig = [a for a in run["artifacts"] if a["kind"] == "figure"][0]
         served = client.get(fig["url"], params={"metadata_db_path": str(db_path)})
@@ -195,10 +214,15 @@ def test_analysis_revise_with_annotation(analysis_client):
     common = {"metadata_db_path": str(tmp_path / "metadata.duckdb")}
     created = client.post("/analysis/runs", json={"request": "Demo", **common})
     run = created.json()["run"]
-    calls["code"] = "import matplotlib.pyplot as plt\nplt.figure(); plt.plot([1],[1]); plt.savefig('outputs/chart.png')\n"
+    calls["code"] = (
+        "import matplotlib.pyplot as plt\nplt.figure(); plt.plot([1],[1]); plt.savefig('outputs/chart.png')\n"
+    )
     revised = client.post(
         f"/analysis/runs/{run['id']}/revise",
-        json={"annotation": "Bereich links=10%, oben=20%: Achse logarithmisch", **common},
+        json={
+            "annotation": "Bereich links=10%, oben=20%: Achse logarithmisch",
+            **common,
+        },
     )
     assert revised.status_code == 200, revised.text
     assert revised.json()["run"]["status"] == "ok"

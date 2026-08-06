@@ -51,7 +51,10 @@ class VLMParser:
     def _annotate_visual_cues(text: str) -> str:
         annotated: list[str] = []
         for line in text.splitlines():
-            if any(marker in line.lower() for marker in ("figure", "diagram", "architecture", "workflow", "plot")):
+            if any(
+                marker in line.lower()
+                for marker in ("figure", "diagram", "architecture", "workflow", "plot")
+            ):
                 annotated.append(f"[visual-cue] {line}")
             else:
                 annotated.append(line)

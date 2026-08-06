@@ -10,12 +10,15 @@ Implementationspläne werden aus Spec + KG-Kontext vom LLM erzeugt — LLM-Zugri
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import api.product_main as pm  # patchable singletons (llm_router)
+from query.direction_deep_search import DirectionDeepSearchRunner
 from query.task_extractor import extract_task_spec
 from query.task_implementation_planner import build_implementation_plan
 from query.task_research_suggester import suggest_research_directions
@@ -86,6 +89,20 @@ class TaskPlanRequest(BaseModel):
 
 class TaskPublishAsGreySourceRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+
+
+class TaskDeepSearchRequest(BaseModel):
+    """Per-research-direction deep search — see ``POST /tasks/{id}/deep-search``."""
+
+    direction: dict[str, Any] = Field(default_factory=dict)
+    max_papers: int = Field(default=20, ge=1, le=50)
+    max_web_sources: int = Field(default=10, ge=0, le=30)
+    provider: str | None = None
+    model: str | None = None
+    creativity_level: int | None = Field(default=None, ge=1, le=5)
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    pdf_base_dir: str = "data/pdfs"
+    projects_path: str = "data/projects.json"
 
 
 # ---------------------------------------------------------------------------
@@ -292,3 +309,110 @@ def publish_task_as_grey_source(
         }
         saved = db.add_grey_source(project_id, record)
     return {"task_id": task_id, "grey_source": saved, "citation": f"grey::{task_id}"}
+
+
+# ---------------------------------------------------------------------------
+# Per-direction deep search (streaming)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/tasks/{task_id}/deep-search")
+async def task_deep_search(
+    task_id: str, payload: TaskDeepSearchRequest
+) -> StreamingResponse:
+    """Tiefensuche für eine Forschungsrichtung — streamt Fortschritt über SSE.
+
+    Für die gegebene ``direction`` (``{label, rationale, keywords}``) werden viele
+    Paper (``harvest_for_question``) und Web-Quellen (``harvest_grey_sources_for_question``
+    ) geerntet, ins Projekt eingepflegt, und ein geerdetes Möglichkeitsprinzip
+    (Machbarkeit / Ansätze / Risiken / Fazit) synthetisiert. Streams ``data: {json}\\n\\n``
+    im selben Format wie der Research Tree, mit ``status``-Feldern pro Phase.
+
+    Das Ergebnis (Summary + Counts + Source-IDs) wird nach Stream-Ende best-effort
+    in ``task_json.deep_searches[<direction-label>]`` persistiert.
+    """
+    with MetadataDB(payload.metadata_db_path) as db:
+        task = db.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task nicht gefunden: {task_id}")
+
+    direction = payload.direction or {}
+    label = str(direction.get("label") or "").strip()
+    if not label:
+        raise HTTPException(status_code=422, detail="direction.label ist erforderlich.")
+
+    project_id = task.get("project_id")
+    task_spec = task.get("task_json") or {}
+    db_path = payload.metadata_db_path
+    projects_path = payload.projects_path
+    pdf_base_dir = payload.pdf_base_dir
+
+    runner = DirectionDeepSearchRunner(pm.llm_router)
+
+    async def stream() -> Any:
+        final_summary: dict[str, Any] | None = None
+        papers_count = 0
+        grey_count = 0
+        paper_ids: list[str] = []
+        grey_ids: list[str] = []
+        try:
+            async for event in runner.stream(
+                direction=direction,
+                project_id=project_id,
+                task_spec=task_spec,
+                max_papers=payload.max_papers,
+                max_web_sources=payload.max_web_sources,
+                provider=payload.provider,
+                model=payload.model,
+                creativity_level=payload.creativity_level,
+                metadata_db_path=db_path,
+                pdf_base_dir=pdf_base_dir,
+                projects_path=projects_path,
+            ):
+                yield event
+                # Parse our own events to capture the final summary for persistence.
+                if event.startswith("data: "):
+                    try:
+                        payload_evt = json.loads(event[len("data: ") :])
+                    except Exception:
+                        continue
+                    if payload_evt.get("status") == "done":
+                        final_summary = payload_evt.get("summary")
+                        papers_count = int(payload_evt.get("papers_count", 0))
+                        grey_count = int(payload_evt.get("grey_count", 0))
+                        paper_ids = list(payload_evt.get("paper_ids") or [])
+                        grey_ids = list(payload_evt.get("grey_ids") or [])
+        except Exception as exc:  # noqa: BLE001 — terminal error event
+            yield f"data: {json.dumps({'status': 'error', 'error': str(exc)}, ensure_ascii=False)}\n\n"
+            return
+
+        # Best-effort persist the deep-search result into task_json.deep_searches.
+        if final_summary is not None:
+            try:
+                with MetadataDB(db_path) as db:
+                    fresh = db.get_task(task_id) or {}
+                    spec = dict(fresh.get("task_json") or {})
+                    deep = dict(spec.get("deep_searches") or {})
+                    deep[label] = {
+                        "summary": final_summary,
+                        "papers_count": papers_count,
+                        "grey_count": grey_count,
+                        "paper_ids": paper_ids,
+                        "grey_ids": grey_ids,
+                        "direction": direction,
+                    }
+                    spec["deep_searches"] = deep
+                    db.update_task(task_id, task_json=spec)
+            except Exception:
+                # Persistence is best-effort; the client already has the result.
+                pass
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Task-Id": task_id,
+        },
+    )

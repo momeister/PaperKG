@@ -60,17 +60,25 @@ def run_project_manager_app() -> None:
 
     with st.sidebar:
         metadata_db_path = st.text_input("DuckDB path", value="data/metadata.duckdb")
-        global_graph_path = st.text_input("Global Kuzu path", value="data/graphs/global_kg")
+        global_graph_path = st.text_input(
+            "Global Kuzu path", value="data/graphs/global_kg"
+        )
 
     projects = load_projects()
     options = _paper_options(metadata_db_path)
 
     left, right = st.columns([1, 2])
     with left:
-        project_name = st.text_input("Project name", value=next(iter(projects), "default"))
+        project_name = st.text_input(
+            "Project name", value=next(iter(projects), "default")
+        )
         selected_project = projects.get(project_name, [])
         labels_by_id = {paper_id: label for label, paper_id in options.items()}
-        default_labels = [labels_by_id[paper_id] for paper_id in selected_project if paper_id in labels_by_id]
+        default_labels = [
+            labels_by_id[paper_id]
+            for paper_id in selected_project
+            if paper_id in labels_by_id
+        ]
         selected_labels = st.multiselect(
             "Papers",
             options=list(options.keys()),
@@ -109,7 +117,13 @@ def run_project_manager_app() -> None:
         if selected_ids:
             st.subheader(project_name)
             st.dataframe(
-                [{"paper_id": paper_id, "label": labels_by_id.get(paper_id, paper_id)} for paper_id in selected_ids],
+                [
+                    {
+                        "paper_id": paper_id,
+                        "label": labels_by_id.get(paper_id, paper_id),
+                    }
+                    for paper_id in selected_ids
+                ],
                 width="stretch",
                 hide_index=True,
             )

@@ -26,6 +26,7 @@ Coordinates follow the companion contract: the VLM answers on a 0-1000 grid over
 sent frame; :func:`scale_point` maps that into original-screenshot pixels, which the
 frontend turns into physical desktop pixels via the capture's monitor origin.
 """
+
 from __future__ import annotations
 
 import re
@@ -78,19 +79,61 @@ EXECUTABLE_TYPES = {"click", "double_click", "type", "key", "scroll", "move"}
 # German + English; multi-word entries match as phrases, all with word boundaries.
 DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     # credentials
-    "passwort", "kennwort", "password", "passphrase", "pin", "tan", "otp",
-    "zugangsdaten", "credentials", "anmeldedaten",
+    "passwort",
+    "kennwort",
+    "password",
+    "passphrase",
+    "pin",
+    "tan",
+    "otp",
+    "zugangsdaten",
+    "credentials",
+    "anmeldedaten",
     # payment / purchase
-    "cvv", "cvc", "kreditkarte", "credit card", "iban", "bic", "paypal",
-    "überweisung", "überweisen", "geld senden", "send money", "zahlung",
-    "bezahlen", "payment", "jetzt kaufen", "kaufen", "buy now", "buy",
-    "purchase", "checkout", "zur kasse", "bestellen", "bestellung abschicken",
-    "kostenpflichtig", "abonnieren", "subscribe", "order now",
+    "cvv",
+    "cvc",
+    "kreditkarte",
+    "credit card",
+    "iban",
+    "bic",
+    "paypal",
+    "überweisung",
+    "überweisen",
+    "geld senden",
+    "send money",
+    "zahlung",
+    "bezahlen",
+    "payment",
+    "jetzt kaufen",
+    "kaufen",
+    "buy now",
+    "buy",
+    "purchase",
+    "checkout",
+    "zur kasse",
+    "bestellen",
+    "bestellung abschicken",
+    "kostenpflichtig",
+    "abonnieren",
+    "subscribe",
+    "order now",
     # destructive
-    "löschen", "endgültig löschen", "delete", "delete permanently",
-    "papierkorb leeren", "empty trash", "deinstallieren", "uninstall",
-    "formatieren", "format", "zurücksetzen", "factory reset",
-    "konto schließen", "konto löschen", "close account", "delete account",
+    "löschen",
+    "endgültig löschen",
+    "delete",
+    "delete permanently",
+    "papierkorb leeren",
+    "empty trash",
+    "deinstallieren",
+    "uninstall",
+    "formatieren",
+    "format",
+    "zurücksetzen",
+    "factory reset",
+    "konto schließen",
+    "konto löschen",
+    "close account",
+    "delete account",
 )
 
 
@@ -133,7 +176,9 @@ def classify_sensitive(
     return False, None
 
 
-def _system_prompt(goal: str, sent_width: int, sent_height: int, *, lookup_enabled: bool) -> str:
+def _system_prompt(
+    goal: str, sent_width: int, sent_height: int, *, lookup_enabled: bool
+) -> str:
     lookup_line = (
         '- "lookup": Dir fehlt Wissen über die Anwendung oder den Weg zum Ziel? Setze '
         '"query" auf eine Suchanfrage — du bekommst Rechercheergebnisse als Kontext.\n'
@@ -159,7 +204,7 @@ def _system_prompt(goal: str, sent_width: int, sent_height: int, *, lookup_enabl
         '- "ask": Du brauchst eine Entscheidung oder Information des Nutzers? Setze '
         '"question" — der Nutzer antwortet und du machst weiter.\n'
         '"expectation" bei ausführenden Aktionen IMMER setzen: die konkret sichtbare '
-        "Folge (z.B. \"Das Startmenü öffnet sich\"). Sie wird nach der Aktion geprüft.\n"
+        'Folge (z.B. "Das Startmenü öffnet sich"). Sie wird nach der Aktion geprüft.\n'
         "Wenn du Feedback bekommst, dass eine Aktion NICHT funktioniert hat, wiederhole "
         "sie nicht einfach — wähle eine andere Position, ein anderes Element oder einen "
         "anderen Weg.\n"
@@ -297,11 +342,16 @@ class SelfDriveStore:
         return self._sessions.pop(session_id, None) is not None
 
 
-def inject_lookup_result(session: SelfDriveSession, query: str, blocks: list[str]) -> None:
+def inject_lookup_result(
+    session: SelfDriveSession, query: str, blocks: list[str]
+) -> None:
     """Feed research results into the planning history (endpoint layer performs the
     actual web/paper search). The untrusted-data framing mirrors `_SOURCES_HINT`."""
     session.lookup_count += 1
-    joined = "\n---\n".join(str(b).strip() for b in blocks if str(b).strip()) or "Keine Treffer."
+    joined = (
+        "\n---\n".join(str(b).strip() for b in blocks if str(b).strip())
+        or "Keine Treffer."
+    )
     session.history.append(
         {
             "role": "user",
@@ -343,7 +393,9 @@ def _verify_previous(
 
     ok = True
     note = ""
-    threshold = float(verify_cfg.get("pixel_diff_threshold", DEFAULT_PIXEL_DIFF_THRESHOLD))
+    threshold = float(
+        verify_cfg.get("pixel_diff_threshold", DEFAULT_PIXEL_DIFF_THRESHOLD)
+    )
     try:
         if session.last_image_thumb is not None:
             diff = screen_grounding.thumb_diff(
@@ -360,7 +412,11 @@ def _verify_previous(
                 provider=session.provider,
                 model=session.model,
                 max_pixels=max_pixels,
-                max_tokens=int(verify_cfg.get("max_tokens", screen_grounding.DEFAULT_VERIFY_MAX_TOKENS)),
+                max_tokens=int(
+                    verify_cfg.get(
+                        "max_tokens", screen_grounding.DEFAULT_VERIFY_MAX_TOKENS
+                    )
+                ),
                 disable_thinking=disable_thinking,
             )
             ok, note = bool(result.get("matches")), str(result.get("note") or "")
@@ -370,7 +426,10 @@ def _verify_previous(
     if ok:
         session.consecutive_failures = 0
         session.history.append(
-            {"role": "user", "content": f"Feedback: Aktion ‹{action_desc}› war erfolgreich."}
+            {
+                "role": "user",
+                "content": f"Feedback: Aktion ‹{action_desc}› war erfolgreich.",
+            }
         )
     else:
         session.consecutive_failures += 1
@@ -389,7 +448,9 @@ def _verify_previous(
     return {"ok": ok, "note": note}
 
 
-def _is_stalled(session: SelfDriveSession, max_consecutive_failures: int, frame_width: int) -> bool:
+def _is_stalled(
+    session: SelfDriveSession, max_consecutive_failures: int, frame_width: int
+) -> bool:
     """Repeated identical actions or too many verified failures in a row."""
     if session.consecutive_failures >= max_consecutive_failures:
         return True
@@ -411,7 +472,9 @@ def _is_stalled(session: SelfDriveSession, max_consecutive_failures: int, frame_
     return True
 
 
-def _forced_ask(session: SelfDriveSession, verification: dict[str, Any] | None) -> dict[str, Any]:
+def _forced_ask(
+    session: SelfDriveSession, verification: dict[str, Any] | None
+) -> dict[str, Any]:
     """Deterministic ask/fail when the run stalls — no VLM call."""
     if session.help_requests >= 1:
         session.finished = True
@@ -428,7 +491,9 @@ def _forced_ask(session: SelfDriveSession, verification: dict[str, Any] | None) 
     session.help_requests += 1
     session.consecutive_failures = 0
     session.recent_actions.clear()
-    note = (verification or {}).get("note") or "mehrere Aktionen ohne die erwartete Wirkung"
+    note = (verification or {}).get(
+        "note"
+    ) or "mehrere Aktionen ohne die erwartete Wirkung"
     question = f"Ich komme nicht weiter: {note} Wie soll ich fortfahren?"
     session.history.append(
         {"role": "assistant", "content": f"Rückfrage an den Nutzer: {question}"}
@@ -508,14 +573,17 @@ def plan_step(
         return _forced_ask(session, verification)
 
     # 3) Plan the next action.
-    lookup_enabled = bool(lookup_cfg.get("enabled", False)) and session.lookup_count < int(
-        lookup_cfg.get("max_per_session", 3)
-    )
+    lookup_enabled = bool(
+        lookup_cfg.get("enabled", False)
+    ) and session.lookup_count < int(lookup_cfg.get("max_per_session", 3))
     system = _system_prompt(
-        session.goal, prepared.sent_width, prepared.sent_height, lookup_enabled=lookup_enabled
+        session.goal,
+        prepared.sent_width,
+        prepared.sent_height,
+        lookup_enabled=lookup_enabled,
     ) + _no_think_suffix(router, session.provider, session.model, disable_thinking)
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-    for turn in session.history[-(history_turns * 2):]:
+    for turn in session.history[-(history_turns * 2) :]:
         messages.append(turn)
     messages.append(
         {"role": "user", "content": _user_content("Nächste Aktion?", prepared.data_url)}
@@ -557,11 +625,17 @@ def plan_step(
                 float(action["x"]),
                 float(action["y"]),
                 str(action["label"]),
-                crop_px=int(refine_cfg.get("crop_px", screen_grounding.DEFAULT_CROP_PX)),
+                crop_px=int(
+                    refine_cfg.get("crop_px", screen_grounding.DEFAULT_CROP_PX)
+                ),
                 zoom=float(refine_cfg.get("zoom", screen_grounding.DEFAULT_ZOOM)),
                 provider=session.provider,
                 model=session.model,
-                max_tokens=int(refine_cfg.get("max_tokens", screen_grounding.DEFAULT_REFINE_MAX_TOKENS)),
+                max_tokens=int(
+                    refine_cfg.get(
+                        "max_tokens", screen_grounding.DEFAULT_REFINE_MAX_TOKENS
+                    )
+                ),
                 disable_thinking=disable_thinking,
             )
             action["x"], action["y"] = point["x"], point["y"]

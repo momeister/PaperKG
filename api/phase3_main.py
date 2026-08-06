@@ -183,12 +183,18 @@ async def extract_entities(request: ExtractionRequest) -> ExtractionResponse:
                 detail = (
                     f"NVIDIA hosted provider authorization failed: {provider_error}"
                     if is_hosted and llm_router.is_auth_error(provider_error)
-                    else f"NVIDIA hosted provider preflight failed: {provider_error}"
-                    if is_hosted
-                    else f"Self-hosted NVIDIA NIM provider check failed: {provider_error}"
+                    else (
+                        f"NVIDIA hosted provider preflight failed: {provider_error}"
+                        if is_hosted
+                        else f"Self-hosted NVIDIA NIM provider check failed: {provider_error}"
+                    )
                 )
                 raise HTTPException(
-                    status_code=401 if is_hosted and llm_router.is_auth_error(provider_error) else 503,
+                    status_code=(
+                        401
+                        if is_hosted and llm_router.is_auth_error(provider_error)
+                        else 503
+                    ),
                     detail=detail,
                 )
 

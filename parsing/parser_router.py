@@ -62,7 +62,13 @@ class ParserCharacteristics:
         """Check if text likely contains important diagrams."""
         sample = text[:sample_size]
         # Markers like "Figure:", "Diagram:", repeated mentions of visual elements
-        visual_markers = ["Figure", "Diagram", "Visualization", "Schematic", "Architecture"]
+        visual_markers = [
+            "Figure",
+            "Diagram",
+            "Visualization",
+            "Schematic",
+            "Architecture",
+        ]
         count = sum(sample.count(marker) for marker in visual_markers)
         return count > 1
 
@@ -111,7 +117,9 @@ class ParserRouter:
         try:
             from parsing.table_transformer import TableTransformerParser
 
-            self.available_parsers[ParserType.TABLE_TRANSFORMER] = TableTransformerParser()
+            self.available_parsers[ParserType.TABLE_TRANSFORMER] = (
+                TableTransformerParser()
+            )
         except Exception:
             pass
 
@@ -126,7 +134,9 @@ class ParserRouter:
         """Register parser implementation."""
         self.available_parsers[parser_type] = parser
 
-    def select_parser(self, file_path: str, preview_text: str | None = None) -> ParserType:
+    def select_parser(
+        self, file_path: str, preview_text: str | None = None
+    ) -> ParserType:
         """
         Select best parser based on file characteristics.
 
@@ -139,7 +149,9 @@ class ParserRouter:
         """
         return self.select_parser_details(file_path, preview_text).parser
 
-    def select_parser_details(self, file_path: str, preview_text: str | None = None) -> ParserSelection:
+    def select_parser_details(
+        self, file_path: str, preview_text: str | None = None
+    ) -> ParserSelection:
         """Select parser and explain why it was chosen."""
         if preview_text is None:
             preview_text = ""

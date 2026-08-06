@@ -71,9 +71,18 @@ def run_paper_detail_app() -> None:
         if not latest:
             st.info("No extraction result found for this paper.")
         else:
-            concept_rows = _list_rows(latest.get("concepts") or [], ["label", "confidence", "openalx_id", "context"])
-            method_rows = _list_rows(latest.get("methods") or [], ["label", "domain", "source_type", "description"])
-            claim_rows = _list_rows(latest.get("claims") or [], ["statement", "evidence_type", "negated", "attributed_to"])
+            concept_rows = _list_rows(
+                latest.get("concepts") or [],
+                ["label", "confidence", "openalx_id", "context"],
+            )
+            method_rows = _list_rows(
+                latest.get("methods") or [],
+                ["label", "domain", "source_type", "description"],
+            )
+            claim_rows = _list_rows(
+                latest.get("claims") or [],
+                ["statement", "evidence_type", "negated", "attributed_to"],
+            )
 
             if concept_rows:
                 st.subheader("Concepts")
@@ -86,7 +95,9 @@ def run_paper_detail_app() -> None:
                 st.dataframe(claim_rows, width="stretch", hide_index=True)
             if latest.get("cross_domain_hints"):
                 st.subheader("Cross-Domain Hints")
-                st.dataframe(latest["cross_domain_hints"], width="stretch", hide_index=True)
+                st.dataframe(
+                    latest["cross_domain_hints"], width="stretch", hide_index=True
+                )
 
     with tabs[1]:
         neighborhood = retriever.paper_neighborhood(source["paper_id"], limit=limit)
@@ -96,7 +107,9 @@ def run_paper_detail_app() -> None:
             left, middle, right = st.columns(3)
             with left:
                 st.subheader("Cites")
-                st.dataframe(neighborhood["citations"], width="stretch", hide_index=True)
+                st.dataframe(
+                    neighborhood["citations"], width="stretch", hide_index=True
+                )
             with middle:
                 st.subheader("Cited By")
                 st.dataframe(neighborhood["cited_by"], width="stretch", hide_index=True)

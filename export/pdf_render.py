@@ -12,6 +12,7 @@ non-interactively instead of blocking on the "install package?" prompt.
 If no engine is installed or compilation fails, callers fall back to shipping the
 ``.tex`` + ``.bib`` + figures as a ZIP that can be compiled elsewhere (e.g. Overleaf).
 """
+
 from __future__ import annotations
 
 import os
@@ -72,7 +73,8 @@ def find_engine() -> str | None:
 
 def engine_is_unicode(engine: str | None) -> bool:
     """True if ``engine`` natively typesets Unicode (xelatex/lualatex) and therefore
-    wants a ``fontspec`` preamble instead of the pdflatex ``inputenc``/``fontenc`` one."""
+    wants a ``fontspec`` preamble instead of the pdflatex ``inputenc``/``fontenc`` one.
+    """
     if not engine:
         return False
     return Path(engine).stem.lower() in {"xelatex", "lualatex"}
@@ -82,7 +84,9 @@ def _commands(engine: str, tex_name: str) -> list[list[str]]:
     name = Path(engine).stem.lower()
     is_miktex = "miktex" in engine.lower()
     if name == "latexmk":
-        return [["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", tex_name]]
+        return [
+            ["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", tex_name]
+        ]
     # Raw pdflatex/xelatex: two passes around bibtex so \autocite + bibliography resolve.
     # ``--enable-installer`` lets MiKTeX auto-fetch missing packages (biblatex, forest, …)
     # on the first compile without an interactive prompt.
@@ -106,7 +110,11 @@ def latex_error_excerpt(log: str, max_lines: int = 12) -> str:
     Prefers explicit TeX error lines (``! ...`` / ``l.<n> ...``); falls back to the
     tail of the log. Used to tell the user *why* the PDF could not be built.
     """
-    errors = [ln.strip() for ln in log.splitlines() if ln.startswith("!") or ln.startswith("l.")]
+    errors = [
+        ln.strip()
+        for ln in log.splitlines()
+        if ln.startswith("!") or ln.startswith("l.")
+    ]
     if errors:
         return "\n".join(errors[:max_lines])
     tail = [ln for ln in log.splitlines() if ln.strip()]
@@ -114,7 +122,10 @@ def latex_error_excerpt(log: str, max_lines: int = 12) -> str:
 
 
 def compile_to_pdf(
-    work_dir: Path, tex_name: str = "main.tex", timeout: float = 600.0, engine: str | None = None
+    work_dir: Path,
+    tex_name: str = "main.tex",
+    timeout: float = 600.0,
+    engine: str | None = None,
 ) -> CompileResult:
     """Compile ``work_dir/tex_name`` to PDF. Never raises — failures land in ``log``.
 
@@ -129,28 +140,43 @@ def compile_to_pdf(
     if engine is None:
         engine = find_engine()
     if engine is None:
-        return CompileResult(None, "No LaTeX engine (pdflatex/xelatex/latexmk) found on PATH.", None)
+        return CompileResult(
+            None, "No LaTeX engine (pdflatex/xelatex/latexmk) found on PATH.", None
+        )
 
     log_parts: list[str] = []
     last_tex_returncode = 0
     try:
         for cmd in _commands(engine, tex_name):
             proc = subprocess.run(
-                cmd, cwd=str(work_dir), capture_output=True, text=True,
-                timeout=timeout, encoding="utf-8", errors="replace",
+                cmd,
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                encoding="utf-8",
+                errors="replace",
             )
-            log_parts.append(f"$ {' '.join(cmd)} (exit {proc.returncode})\n{proc.stdout}\n{proc.stderr}")
+            log_parts.append(
+                f"$ {' '.join(cmd)} (exit {proc.returncode})\n{proc.stdout}\n{proc.stderr}"
+            )
             # bibtex returning non-zero on warnings is fine; only the LaTeX passes decide
             # success, so we track the return code of the pdflatex/xelatex/latexmk runs.
             if "bibtex" not in Path(cmd[0]).stem.lower():
                 last_tex_returncode = proc.returncode
     except subprocess.TimeoutExpired:
-        return CompileResult(None, "LaTeX compilation timed out.\n" + "\n".join(log_parts), engine)
+        return CompileResult(
+            None, "LaTeX compilation timed out.\n" + "\n".join(log_parts), engine
+        )
     except Exception as exc:  # noqa: BLE001 — surface any spawn error as log text
-        return CompileResult(None, f"LaTeX compilation error: {exc}\n" + "\n".join(log_parts), engine)
+        return CompileResult(
+            None, f"LaTeX compilation error: {exc}\n" + "\n".join(log_parts), engine
+        )
 
     log = "\n".join(log_parts)
-    pdf_path = work_dir / (tex_name[:-4] + ".pdf" if tex_name.endswith(".tex") else tex_name + ".pdf")
+    pdf_path = work_dir / (
+        tex_name[:-4] + ".pdf" if tex_name.endswith(".tex") else tex_name + ".pdf"
+    )
     # A produced PDF is the source of truth, but flag a non-zero final pass so the caller
     # can warn that the document may be incomplete.
     if pdf_path.exists() and pdf_path.stat().st_size > 0:

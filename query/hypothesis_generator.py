@@ -87,7 +87,11 @@ class HypothesisGenerator:
                             metadata=item if isinstance(item, dict) else {},
                         )
                     )
-            return [_SyntheticHit(source=source, evidence=evidence, score=float(len(evidence)))]
+            return [
+                _SyntheticHit(
+                    source=source, evidence=evidence, score=float(len(evidence))
+                )
+            ]
 
         if topic:
             return self.retriever.search(topic, limit=limit)
@@ -99,8 +103,16 @@ class HypothesisGenerator:
             for evidence in hit.evidence:
                 if evidence.kind != "cross_domain_hint":
                     continue
-                field = str(evidence.metadata.get("field") or evidence.metadata.get("domain") or "another field")
-                why = str(evidence.metadata.get("why_applicable") or evidence.metadata.get("reason") or evidence.text)
+                field = str(
+                    evidence.metadata.get("field")
+                    or evidence.metadata.get("domain")
+                    or "another field"
+                )
+                why = str(
+                    evidence.metadata.get("why_applicable")
+                    or evidence.metadata.get("reason")
+                    or evidence.text
+                )
                 statement = (
                     f"Methods or findings from {hit.source.title or hit.source.paper_id} "
                     f"may be relevant to {field}."
@@ -134,7 +146,9 @@ class HypothesisGenerator:
             selected = grouped[:4]
             sources = [hit.source for hit, _ in selected]
             evidence = [item for _, item in selected]
-            title_list = ", ".join(source.title or source.paper_id for source in sources[:3])
+            title_list = ", ".join(
+                source.title or source.paper_id for source in sources[:3]
+            )
             hypotheses.append(
                 Hypothesis(
                     statement=f"The shared {evidence[0].kind} '{label}' may connect these papers.",
@@ -167,7 +181,10 @@ class HypothesisGenerator:
                 assert self.llm_router is not None
                 text = self.llm_router.chat(
                     [
-                        {"role": "system", "content": "Return one grounded hypothesis sentence."},
+                        {
+                            "role": "system",
+                            "content": "Return one grounded hypothesis sentence.",
+                        },
                         {"role": "user", "content": prompt},
                     ],
                     provider=provider,
@@ -204,8 +221,19 @@ def _label_from_evidence(evidence: Evidence) -> str:
 
 def _item_text(item: Any) -> str:
     if isinstance(item, dict):
-        for key in ("label", "statement", "field", "why_applicable", "description", "context"):
+        for key in (
+            "label",
+            "statement",
+            "field",
+            "why_applicable",
+            "description",
+            "context",
+        ):
             if item.get(key):
                 return str(item[key])
-        return " ".join(str(value) for value in item.values() if isinstance(value, (str, int, float)))
+        return " ".join(
+            str(value)
+            for value in item.values()
+            if isinstance(value, (str, int, float))
+        )
     return str(item or "")

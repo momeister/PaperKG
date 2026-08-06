@@ -1,4 +1,5 @@
 """Tests for the optional bearer-token auth middleware on the product API."""
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -24,7 +25,14 @@ def test_token_required_when_set(monkeypatch) -> None:
     # No header -> 401.
     assert client.get("/models/providers").status_code == 401
     # Wrong token -> 401.
-    assert client.get("/models/providers", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert (
+        client.get(
+            "/models/providers", headers={"Authorization": "Bearer wrong"}
+        ).status_code
+        == 401
+    )
     # Correct token -> passes auth (status is whatever the route returns, not 401).
-    ok = client.get("/models/providers", headers={"Authorization": "Bearer s3cret-token"})
+    ok = client.get(
+        "/models/providers", headers={"Authorization": "Bearer s3cret-token"}
+    )
     assert ok.status_code != 401

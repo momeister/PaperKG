@@ -25,7 +25,11 @@ def build_health_report(
             "status": "error",
             "metadata_db": {"path": str(metadata_path), "exists": False},
             "graph_db": {"path": str(graph_path), "exists": graph_path.exists()},
-            "pdf_library": {"path": str(pdf_path), "exists": pdf_path.exists(), "pdf_count": _pdf_count(pdf_path)},
+            "pdf_library": {
+                "path": str(pdf_path),
+                "exists": pdf_path.exists(),
+                "pdf_count": _pdf_count(pdf_path),
+            },
             "warnings": [f"Metadata database not found: {metadata_path}"],
         }
 
@@ -105,7 +109,10 @@ def _paper_metrics(db: MetadataDB) -> dict[str, Any]:
 
 
 def _extraction_metrics(db: MetadataDB) -> dict[str, Any]:
-    status_counts = _group_counts(db, "SELECT extraction_status, COUNT(*) FROM extraction_results GROUP BY extraction_status")
+    status_counts = _group_counts(
+        db,
+        "SELECT extraction_status, COUNT(*) FROM extraction_results GROUP BY extraction_status",
+    )
     latest = _one(
         db,
         """
@@ -125,13 +132,21 @@ def _extraction_metrics(db: MetadataDB) -> dict[str, Any]:
         "papers_with_success": papers_with_success,
         "paper_success_coverage": _ratio(papers_with_success, paper_total),
         "avg_duration_seconds": _round(latest.get("avg_duration_seconds")),
-        "latest_extraction_timestamp": _string_or_none(latest.get("latest_extraction_timestamp")),
+        "latest_extraction_timestamp": _string_or_none(
+            latest.get("latest_extraction_timestamp")
+        ),
     }
 
 
 def _review_queue_metrics(db: MetadataDB) -> dict[str, Any]:
     return {
-        "pending": int(_scalar(db, "SELECT COUNT(*) FROM entity_review_queue WHERE review_status = 'pending'") or 0),
+        "pending": int(
+            _scalar(
+                db,
+                "SELECT COUNT(*) FROM entity_review_queue WHERE review_status = 'pending'",
+            )
+            or 0
+        ),
         "total": int(_scalar(db, "SELECT COUNT(*) FROM entity_review_queue") or 0),
     }
 
@@ -156,7 +171,9 @@ def _embedding_metrics(db: MetadataDB) -> dict[str, Any]:
 
 def _batch_job_metrics(db: MetadataDB) -> dict[str, Any]:
     return {
-        "by_status": _group_counts(db, "SELECT status, COUNT(*) FROM batch_jobs GROUP BY status"),
+        "by_status": _group_counts(
+            db, "SELECT status, COUNT(*) FROM batch_jobs GROUP BY status"
+        ),
         "latest": db.list_batch_jobs(limit=5),
     }
 
@@ -174,20 +191,27 @@ def _quality_telemetry_metrics(db: MetadataDB) -> dict[str, Any]:
     )
     return {
         "total": int(row.get("total") or 0),
-        "by_parse_quality": _group_counts(db, "SELECT parse_quality, COUNT(*) FROM extraction_quality GROUP BY parse_quality"),
+        "by_parse_quality": _group_counts(
+            db,
+            "SELECT parse_quality, COUNT(*) FROM extraction_quality GROUP BY parse_quality",
+        ),
         "avg_duration_seconds": _round(row.get("avg_duration_seconds")),
         "latest_timestamp": _string_or_none(row.get("latest_timestamp")),
     }
 
 
-def _health_warnings(report: dict[str, Any], extraction_coverage_gate: float) -> list[str]:
+def _health_warnings(
+    report: dict[str, Any], extraction_coverage_gate: float
+) -> list[str]:
     warnings: list[str] = []
     paper_count = int(report.get("metadata_db", {}).get("paper_count") or 0)
     if paper_count == 0:
         warnings.append("No papers are stored in the metadata database.")
     graph = report.get("graph_db", {})
     if not graph.get("exists") and graph.get("kuzu_available"):
-        warnings.append("Kuzu graph path does not exist; graph-only features may be unavailable.")
+        warnings.append(
+            "Kuzu graph path does not exist; graph-only features may be unavailable."
+        )
     if not report.get("pdf_library", {}).get("exists"):
         warnings.append("PDF library path does not exist.")
 
@@ -200,9 +224,13 @@ def _health_warnings(report: dict[str, Any], extraction_coverage_gate: float) ->
     if int(report.get("extractions", {}).get("by_status", {}).get("failed") or 0):
         warnings.append("Failed extraction runs are present.")
     if paper_count and int(report.get("embeddings", {}).get("total") or 0) == 0:
-        warnings.append("No entity embeddings are stored; hybrid semantic retrieval may be weaker.")
+        warnings.append(
+            "No entity embeddings are stored; hybrid semantic retrieval may be weaker."
+        )
     if int(report.get("papers", {}).get("retracted") or 0):
-        warnings.append("Retracted papers are present and should be flagged in answers.")
+        warnings.append(
+            "Retracted papers are present and should be flagged in answers."
+        )
     if int(report.get("papers", {}).get("duplicate_doi_groups") or 0):
         warnings.append("Duplicate DOI groups are present.")
     return warnings
@@ -278,11 +306,21 @@ def _pdf_count(path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Report local ScienceKG health metrics.")
-    parser.add_argument("--metadata-db", default="data/metadata.duckdb", help="DuckDB metadata path.")
-    parser.add_argument("--graph-db", default="data/graphs/global_kg", help="Kuzu graph path.")
-    parser.add_argument("--pdf-dir", default="data/pdfs", help="Local PDF library path.")
-    parser.add_argument("--output", default=None, help="Optional path to write JSON report.")
+    parser = argparse.ArgumentParser(
+        description="Report local ScienceKG health metrics."
+    )
+    parser.add_argument(
+        "--metadata-db", default="data/metadata.duckdb", help="DuckDB metadata path."
+    )
+    parser.add_argument(
+        "--graph-db", default="data/graphs/global_kg", help="Kuzu graph path."
+    )
+    parser.add_argument(
+        "--pdf-dir", default="data/pdfs", help="Local PDF library path."
+    )
+    parser.add_argument(
+        "--output", default=None, help="Optional path to write JSON report."
+    )
     args = parser.parse_args(argv)
 
     report = build_health_report(

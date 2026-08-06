@@ -29,10 +29,14 @@ class AdsClient(ThrottledJsonClient):
 
     def __init__(self, config: AdsConfig | None = None) -> None:
         config = config or AdsConfig()
-        headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+        headers = (
+            {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+        )
         super().__init__(config, extra_headers=headers)
 
-    async def search_documents(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    async def search_documents(
+        self, query: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
         if not self.config.api_key:
             raise AdsApiKeyMissing(
                 "NASA ADS benötigt einen kostenlosen Token. ADS_API_KEY in der Umgebung / .env setzen."

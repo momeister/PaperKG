@@ -30,10 +30,13 @@ class CodeProjectsMixin(_Base):
     ) -> dict[str, Any]:
         pid = project_id or f"cp_{uuid.uuid4().hex}"
         now = datetime.now()
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO code_projects (id, name, path, kind, created_timestamp, updated_timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, [pid, str(name), str(path), str(kind or "managed"), now, now])
+        """,
+            [pid, str(name), str(path), str(kind or "managed"), now, now],
+        )
         return self.get_code_project(pid)  # type: ignore[return-value]
 
     def get_code_project(self, project_id: str) -> dict[str, Any] | None:

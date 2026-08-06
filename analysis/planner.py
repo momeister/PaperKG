@@ -7,6 +7,7 @@ eigenständiges Python-Skript und eine Beschreibung („was tut dieses Skript"),
 in die Provenance-``README.md`` wandert. Für eine Revision (WP3) wird das bisherige
 Skript samt Fehlermeldung/Annotation mitgegeben.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,16 @@ from query.llm_router import LLMRouter
 # Bibliotheken, die im Werkstatt-venv verfügbar sind (requirements.txt): der Planner
 # darf sich nur auf diese verlassen, damit ein Lauf nicht an einem fehlenden Import
 # scheitert. Torch etc. ist bewusst nicht dabei (nicht im Standard-venv).
-ALLOWED_LIBS = ["pandas", "numpy", "matplotlib", "csv", "json", "math", "statistics", "pathlib"]
+ALLOWED_LIBS = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "csv",
+    "json",
+    "math",
+    "statistics",
+    "pathlib",
+]
 
 _SYSTEM = (
     "Du bist eine wissenschaftliche Analyse-Assistenz für eine reproduzierbare, lokale "
@@ -98,7 +108,9 @@ def _context_block(
             f"Aufbau bei):\n```python\n{previous_code.strip()}\n```"
         )
     if error:
-        parts.append(f"Der letzte Lauf schlug fehl mit:\n{error.strip()}\nBehebe die Ursache.")
+        parts.append(
+            f"Der letzte Lauf schlug fehl mit:\n{error.strip()}\nBehebe die Ursache."
+        )
     if annotation:
         parts.append(
             "Nutzer-Annotation zur letzten Figur (markierter Bereich + Kommentar) — passe "
@@ -128,7 +140,9 @@ def plan_script(
     contract = _CONTRACT.format(libs=", ".join(ALLOWED_LIBS))
     user = "\n\n".join(
         [
-            _context_block(request, context, input_files, previous_code, error, annotation),
+            _context_block(
+                request, context, input_files, previous_code, error, annotation
+            ),
             contract,
             _OUTPUT_INSTR,
         ]

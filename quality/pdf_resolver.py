@@ -40,7 +40,11 @@ class BenchmarkPdfResolver:
     ) -> None:
         self.pdf_base_dir = pdf_base_dir
         self.file_manager = FileManager(pdf_base_dir)
-        self.contact_email = contact_email or os.getenv("UNPAYWALL_EMAIL") or os.getenv("CROSSREF_MAILTO")
+        self.contact_email = (
+            contact_email
+            or os.getenv("UNPAYWALL_EMAIL")
+            or os.getenv("CROSSREF_MAILTO")
+        )
         self.timeout_seconds = float(timeout_seconds)
         self._last_request_by_source: dict[str, float] = {}
 
@@ -60,9 +64,13 @@ class BenchmarkPdfResolver:
                 provenance={"source": "local", "pdf_path": str(local)},
             )
         if not download_missing:
-            return PdfResolution(paper_id=paper_id, pdf_path=None, warnings=["PDF not found locally."])
+            return PdfResolution(
+                paper_id=paper_id, pdf_path=None, warnings=["PDF not found locally."]
+            )
 
-        candidates, source_warnings = self._candidate_urls(paper_id=paper_id, title=title, doi=doi)
+        candidates, source_warnings = self._candidate_urls(
+            paper_id=paper_id, title=title, doi=doi
+        )
         warnings: list[str] = []
         warnings.extend(source_warnings)
         for candidate in candidates:
@@ -92,12 +100,23 @@ class BenchmarkPdfResolver:
                     "content_type": content_type,
                     "pdf_path": str(path),
                 }
-                return PdfResolution(paper_id=paper_id, pdf_path=str(path), provenance=provenance, warnings=warnings)
+                return PdfResolution(
+                    paper_id=paper_id,
+                    pdf_path=str(path),
+                    provenance=provenance,
+                    warnings=warnings,
+                )
             except Exception as exc:
                 warnings.append(f"{source}: {exc}")
-        return PdfResolution(paper_id=paper_id, pdf_path=None, warnings=warnings or ["No downloadable OA PDF found."])
+        return PdfResolution(
+            paper_id=paper_id,
+            pdf_path=None,
+            warnings=warnings or ["No downloadable OA PDF found."],
+        )
 
-    def _candidate_urls(self, *, paper_id: str, title: str, doi: str | None) -> tuple[list[dict[str, Any]], list[str]]:
+    def _candidate_urls(
+        self, *, paper_id: str, title: str, doi: str | None
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         candidates: list[dict[str, Any]] = []
         warnings: list[str] = []
         arxiv_id = _extract_arxiv_id(paper_id) or _extract_arxiv_id(title)
@@ -125,7 +144,9 @@ class BenchmarkPdfResolver:
         core_key = os.getenv("CORE_API_KEY")
         if core_key and (doi or title):
             try:
-                candidates.extend(self._core_candidates(doi=doi, title=title, api_key=core_key))
+                candidates.extend(
+                    self._core_candidates(doi=doi, title=title, api_key=core_key)
+                )
             except Exception as exc:
                 warnings.append(f"core: {exc}")
         return _dedupe_candidates(candidates), warnings
@@ -133,16 +154,28 @@ class BenchmarkPdfResolver:
     def _download_pdf(self, url: str) -> tuple[bytes, str]:
         from harvester.url_guard import assert_safe_public_url
 
-        assert_safe_public_url(url)  # SSRF guard: candidate URLs come from external APIs
+        assert_safe_public_url(
+            url
+        )  # SSRF guard: candidate URLs come from external APIs
         headers = {"User-Agent": "ScienceKG-Benchmark/1.0"}
-        with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(
+            timeout=self.timeout_seconds, follow_redirects=True, headers=headers
+        ) as client:
             response = client.get(url)
             response.raise_for_status()
             return response.content, response.headers.get("content-type", "")
 
-    def _json_get(self, source: str, url: str, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    def _json_get(
+        self,
+        source: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         self._throttle(source)
-        with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True) as client:
+        with httpx.Client(
+            timeout=self.timeout_seconds, follow_redirects=True
+        ) as client:
             response = client.get(url, params=params, headers=headers)
             response.raise_for_status()
             return response.json()
@@ -153,7 +186,11 @@ class BenchmarkPdfResolver:
             f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
             params={"fields": "paperId,title,url,openAccessPdf,externalIds"},
         )
-        oa_pdf = payload.get("openAccessPdf") if isinstance(payload.get("openAccessPdf"), dict) else {}
+        oa_pdf = (
+            payload.get("openAccessPdf")
+            if isinstance(payload.get("openAccessPdf"), dict)
+            else {}
+        )
         return [
             {
                 "source": "semantic_scholar",
@@ -164,12 +201,18 @@ class BenchmarkPdfResolver:
         ]
 
     def _openalex_candidates(self, doi: str) -> list[dict[str, Any]]:
-        payload = self._json_get("openalex", f"https://api.openalex.org/works/doi:{doi}")
+        payload = self._json_get(
+            "openalex", f"https://api.openalex.org/works/doi:{doi}"
+        )
         locations = []
         for key in ["best_oa_location", "primary_location"]:
             if isinstance(payload.get(key), dict):
                 locations.append(payload[key])
-        locations.extend(location for location in payload.get("locations") or [] if isinstance(location, dict))
+        locations.extend(
+            location
+            for location in payload.get("locations") or []
+            if isinstance(location, dict)
+        )
         return [
             {
                 "source": "openalex",
@@ -192,7 +235,11 @@ class BenchmarkPdfResolver:
         locations = []
         if isinstance(payload.get("best_oa_location"), dict):
             locations.append(payload["best_oa_location"])
-        locations.extend(location for location in payload.get("oa_locations") or [] if isinstance(location, dict))
+        locations.extend(
+            location
+            for location in payload.get("oa_locations") or []
+            if isinstance(location, dict)
+        )
         return [
             {
                 "source": "unpaywall",
@@ -206,32 +253,47 @@ class BenchmarkPdfResolver:
 
     def _crossref_candidates(self, doi: str) -> list[dict[str, Any]]:
         payload = self._json_get("crossref", f"https://api.crossref.org/works/{doi}")
-        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        message = (
+            payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        )
         links = message.get("link") or []
         return [
             {
                 "source": "crossref",
                 "pdf_url": link.get("URL"),
                 "landing_url": message.get("URL"),
-                "license": (message.get("license") or [{}])[0].get("URL") if message.get("license") else None,
+                "license": (
+                    (message.get("license") or [{}])[0].get("URL")
+                    if message.get("license")
+                    else None
+                ),
             }
             for link in links
-            if isinstance(link, dict) and str(link.get("content-type") or "").lower() == "application/pdf"
+            if isinstance(link, dict)
+            and str(link.get("content-type") or "").lower() == "application/pdf"
         ]
 
     def _europe_pmc_candidates(self, doi: str) -> list[dict[str, Any]]:
         payload = self._json_get(
             "europe_pmc",
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
-            params={"query": f'DOI:"{doi}"', "format": "json", "resultType": "core", "pageSize": 1},
+            params={
+                "query": f'DOI:"{doi}"',
+                "format": "json",
+                "resultType": "core",
+                "pageSize": 1,
+            },
         )
-        results = ((payload.get("resultList") or {}).get("result") or [])
+        results = (payload.get("resultList") or {}).get("result") or []
         candidates: list[dict[str, Any]] = []
         for item in results:
             if not isinstance(item, dict):
                 continue
             for url in item.get("fullTextUrlList", {}).get("fullTextUrl", []) or []:
-                if isinstance(url, dict) and str(url.get("documentStyle") or "").lower() == "pdf":
+                if (
+                    isinstance(url, dict)
+                    and str(url.get("documentStyle") or "").lower() == "pdf"
+                ):
                     candidates.append(
                         {
                             "source": "europe_pmc",
@@ -242,7 +304,9 @@ class BenchmarkPdfResolver:
                     )
         return candidates
 
-    def _core_candidates(self, *, doi: str | None, title: str, api_key: str) -> list[dict[str, Any]]:
+    def _core_candidates(
+        self, *, doi: str | None, title: str, api_key: str
+    ) -> list[dict[str, Any]]:
         query = f'doi:"{doi}"' if doi else title
         payload = self._json_get(
             "core",

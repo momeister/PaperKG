@@ -1,4 +1,5 @@
 """ControlledRelationExtractor: derive controlled relations between linked entities."""
+
 from __future__ import annotations
 
 import re
@@ -240,7 +241,9 @@ class ControlledRelationExtractor:
         method_candidates: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         structural_entities = [*concepts, *methods]
-        approved_entities = [item for item in structural_entities if self._is_approved(item)]
+        approved_entities = [
+            item for item in structural_entities if self._is_approved(item)
+        ]
         reviewable_structural_entities = [
             item for item in structural_entities if self._is_reviewable_candidate(item)
         ]
@@ -253,7 +256,11 @@ class ControlledRelationExtractor:
             [*approved_entities, *reviewable_structural_entities, *candidate_entities]
         )
         by_label = self._index_by_label(entities)
-        by_id = {str(item.get("canonical_id")): item for item in entities if item.get("canonical_id")}
+        by_id = {
+            str(item.get("canonical_id")): item
+            for item in entities
+            if item.get("canonical_id")
+        }
         relations: list[dict[str, Any]] = []
 
         for relation in existing_relations or []:
@@ -262,7 +269,9 @@ class ControlledRelationExtractor:
                 relations.append(clean)
 
         for subject_key, relation_type, object_key in self.KNOWN_RELATION_TEMPLATES:
-            self._add_known_relation(relations, by_label, entities, subject_key, relation_type, object_key)
+            self._add_known_relation(
+                relations, by_label, entities, subject_key, relation_type, object_key
+            )
 
         reinforcement_learning = by_label.get("reinforcementlearning")
         if reinforcement_learning:
@@ -272,13 +281,20 @@ class ControlledRelationExtractor:
                     and item is not reinforcement_learning
                     and self._should_auto_link_algorithm_to_rl(item)
                 ):
-                    review_status = "approved" if self._is_approved(item) and self._is_approved(reinforcement_learning) else "pending"
+                    review_status = (
+                        "approved"
+                        if self._is_approved(item)
+                        and self._is_approved(reinforcement_learning)
+                        else "pending"
+                    )
                     self._append_relation(
                         relations,
                         item,
                         "USED_IN",
                         reinforcement_learning,
-                        self._evidence(item, reinforcement_learning, "USED_IN", entities),
+                        self._evidence(
+                            item, reinforcement_learning, "USED_IN", entities
+                        ),
                         review_status=review_status,
                     )
 
@@ -292,7 +308,9 @@ class ControlledRelationExtractor:
                 str(relation.get("object_id")),
             )
             current = by_relation_key.get(key)
-            if current is None or self._relation_rank(relation) > self._relation_rank(current):
+            if current is None or self._relation_rank(relation) > self._relation_rank(
+                current
+            ):
                 by_relation_key[key] = relation
         return list(by_relation_key.values())
 
@@ -314,35 +332,65 @@ class ControlledRelationExtractor:
         text = normalize_scientific_text(
             " ".join(
                 str(item.get(key) or "")
-                for key in ("label", "canonical_label", "domain", "description", "evidence_span", "context")
+                for key in (
+                    "label",
+                    "canonical_label",
+                    "domain",
+                    "description",
+                    "evidence_span",
+                    "context",
+                )
             )
         ).lower()
 
         has_rl_anchor = bool(cls.RL_AUTO_LINK_ANCHOR_RE.search(text))
-        has_rl_domain = "reinforcement learning" in domain or domain in {"rl", "navigation tasks"}
+        has_rl_domain = "reinforcement learning" in domain or domain in {
+            "rl",
+            "navigation tasks",
+        }
         has_context = any(term in text for term in cls.RL_CONTEXT_TERMS)
         is_background = (
             source_type in {"background", "generic_field"}
             or salience == "passing"
             or "introduction" in section
         )
-        has_bio_background = any(term in text for term in cls.BIO_INSPIRATION_BACKGROUND_TERMS)
+        has_bio_background = any(
+            term in text for term in cls.BIO_INSPIRATION_BACKGROUND_TERMS
+        )
 
         if is_background and has_bio_background and not has_rl_anchor:
             return False
         if source_type == "background" and not (has_rl_anchor or has_rl_domain):
             return False
 
-        return has_rl_anchor or (has_rl_domain and has_context) or (
-            source_type in {"reviewed_method", "baseline"} and has_context
+        return (
+            has_rl_anchor
+            or (has_rl_domain and has_context)
+            or (source_type in {"reviewed_method", "baseline"} and has_context)
         )
 
     GENERIC_RELATION_LIMIT = 48
-    GENERIC_METHOD_SUBJECT_TYPES = {"Algorithm", "MethodFamily", "ModelArchitecture", "System", "Task"}
+    GENERIC_METHOD_SUBJECT_TYPES = {
+        "Algorithm",
+        "MethodFamily",
+        "ModelArchitecture",
+        "System",
+        "Task",
+    }
     GENERIC_DATA_OBJECT_TYPES = {"Dataset", "Benchmark"}
-    GENERIC_USED_FOR_OBJECT_TYPES = {"Task", "Phenomenon", "ApplicationSetting", "DomainConcept"}
+    GENERIC_USED_FOR_OBJECT_TYPES = {
+        "Task",
+        "Phenomenon",
+        "ApplicationSetting",
+        "DomainConcept",
+    }
     GENERIC_USES_OBJECT_TYPES = {"Algorithm", "MethodFamily", "ModelArchitecture"}
-    GENERIC_MEASURE_OBJECT_TYPES = {"Task", "Phenomenon", "ApplicationSetting", "DomainConcept"}
+    GENERIC_MEASURE_OBJECT_TYPES = {
+        "Task",
+        "Phenomenon",
+        "ApplicationSetting",
+        "DomainConcept",
+    }
     GENERIC_EVALUATED_TERMS = (
         "evaluated",
         "evaluation",
@@ -417,15 +465,25 @@ class ControlledRelationExtractor:
             for object_entity in entities:
                 if subject is object_entity:
                     continue
-                if not (self._is_approved(subject) and self._is_approved(object_entity)):
+                if not (
+                    self._is_approved(subject) and self._is_approved(object_entity)
+                ):
                     continue
-                relation_type = self._infer_generic_relation_type(subject, object_entity)
+                relation_type = self._infer_generic_relation_type(
+                    subject, object_entity
+                )
                 if not relation_type:
                     continue
-                evidence = self._generic_relation_evidence(subject, object_entity, relation_type)
+                evidence = self._generic_relation_evidence(
+                    subject, object_entity, relation_type
+                )
                 if not evidence:
                     continue
-                review_status = "approved" if self._is_approved(subject) and self._is_approved(object_entity) else "pending"
+                review_status = (
+                    "approved"
+                    if self._is_approved(subject) and self._is_approved(object_entity)
+                    else "pending"
+                )
                 self._append_relation(
                     relations,
                     subject,
@@ -446,19 +504,36 @@ class ControlledRelationExtractor:
     ) -> str | None:
         subject_type = str(subject.get("entity_type") or "")
         object_type = str(object_entity.get("entity_type") or "")
-        if subject_type in cls.GENERIC_METHOD_SUBJECT_TYPES and object_type in cls.GENERIC_DATA_OBJECT_TYPES:
-            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_EVALUATED_TERMS) or cls._context_matches_entity(
+        if (
+            subject_type in cls.GENERIC_METHOD_SUBJECT_TYPES
+            and object_type in cls.GENERIC_DATA_OBJECT_TYPES
+        ):
+            if cls._context_matches_entity(
+                subject, object_entity, cls.GENERIC_EVALUATED_TERMS
+            ) or cls._context_matches_entity(
                 object_entity, subject, cls.GENERIC_EVALUATED_TERMS
             ):
                 return "EVALUATED_ON"
-        if subject_type in cls.GENERIC_METHOD_SUBJECT_TYPES and object_type in cls.GENERIC_USED_FOR_OBJECT_TYPES:
-            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_USED_FOR_TERMS):
+        if (
+            subject_type in cls.GENERIC_METHOD_SUBJECT_TYPES
+            and object_type in cls.GENERIC_USED_FOR_OBJECT_TYPES
+        ):
+            if cls._context_matches_entity(
+                subject, object_entity, cls.GENERIC_USED_FOR_TERMS
+            ):
                 return "USED_FOR"
-        if subject_type in {"System", "ModelArchitecture", "MethodFamily"} and object_type in cls.GENERIC_USES_OBJECT_TYPES:
-            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_USES_TERMS):
+        if (
+            subject_type in {"System", "ModelArchitecture", "MethodFamily"}
+            and object_type in cls.GENERIC_USES_OBJECT_TYPES
+        ):
+            if cls._context_matches_entity(
+                subject, object_entity, cls.GENERIC_USES_TERMS
+            ):
                 return "USES"
         if subject_type == "Metric" and object_type in cls.GENERIC_MEASURE_OBJECT_TYPES:
-            if cls._context_matches_entity(subject, object_entity, cls.GENERIC_MEASURES_TERMS):
+            if cls._context_matches_entity(
+                subject, object_entity, cls.GENERIC_MEASURES_TERMS
+            ):
                 return "MEASURES"
         return None
 
@@ -495,7 +570,9 @@ class ControlledRelationExtractor:
         text_key = normalize_scientific_text(evidence).lower()
         if not text_key or not cls._entity_match_score(text_key, target):
             return ""
-        if relation_terms and not any(str(term).lower() in text_key for term in relation_terms):
+        if relation_terms and not any(
+            str(term).lower() in text_key for term in relation_terms
+        ):
             return ""
         return evidence[:360]
 
@@ -506,12 +583,18 @@ class ControlledRelationExtractor:
     ) -> dict[str, Any] | None:
         if not isinstance(relation, dict):
             return None
-        subject_id = str(relation.get("subject_id") or relation.get("subject") or "").strip()
-        object_id = str(relation.get("object_id") or relation.get("object") or "").strip()
+        subject_id = str(
+            relation.get("subject_id") or relation.get("subject") or ""
+        ).strip()
+        object_id = str(
+            relation.get("object_id") or relation.get("object") or ""
+        ).strip()
         if subject_id not in by_id or object_id not in by_id or subject_id == object_id:
             return None
         try:
-            relation_type = self.resolver.ontology.validate_relation_type(relation.get("relation_type") or relation.get("type"))
+            relation_type = self.resolver.ontology.validate_relation_type(
+                relation.get("relation_type") or relation.get("type")
+            )
         except ValueError:
             return None
         evidence = str(relation.get("evidence_span") or "").strip()
@@ -528,13 +611,15 @@ class ControlledRelationExtractor:
                 relation.get("source")
                 or (
                     "llm_relation"
-                    if self._is_approved(by_id[subject_id]) and self._is_approved(by_id[object_id])
+                    if self._is_approved(by_id[subject_id])
+                    and self._is_approved(by_id[object_id])
                     else "candidate_relation"
                 )
             ),
             "review_status": (
                 "approved"
-                if self._is_approved(by_id[subject_id]) and self._is_approved(by_id[object_id])
+                if self._is_approved(by_id[subject_id])
+                and self._is_approved(by_id[object_id])
                 else "pending"
             ),
         }
@@ -551,7 +636,11 @@ class ControlledRelationExtractor:
         subject = by_label.get(subject_key)
         object_entity = by_label.get(object_key)
         if subject and object_entity:
-            review_status = "approved" if self._is_approved(subject) and self._is_approved(object_entity) else "pending"
+            review_status = (
+                "approved"
+                if self._is_approved(subject) and self._is_approved(object_entity)
+                else "pending"
+            )
             self._append_relation(
                 relations,
                 subject,
@@ -584,25 +673,39 @@ class ControlledRelationExtractor:
                 "relation_type": checked_type,
                 "object_id": str(object_entity.get("canonical_id")),
                 "evidence_span": evidence[:360],
-                "section": str(subject.get("section") or object_entity.get("section") or ""),
+                "section": str(
+                    subject.get("section") or object_entity.get("section") or ""
+                ),
                 "confidence": 0.8 if review_status == "approved" else 0.65,
-                "source": "deterministic_relation" if review_status == "approved" else "candidate_relation",
+                "source": (
+                    "deterministic_relation"
+                    if review_status == "approved"
+                    else "candidate_relation"
+                ),
                 "review_status": review_status,
             }
         )
 
     @staticmethod
     def _is_approved(entity: dict[str, Any]) -> bool:
-        return bool(entity.get("canonical_id")) and str(entity.get("review_status") or "").lower() == "approved"
+        return (
+            bool(entity.get("canonical_id"))
+            and str(entity.get("review_status") or "").lower() == "approved"
+        )
 
     @staticmethod
     def _is_reviewable_candidate(entity: dict[str, Any]) -> bool:
         if not bool(entity.get("canonical_id")):
             return False
-        return str(entity.get("review_status") or "").lower() not in {"approved", "rejected"}
+        return str(entity.get("review_status") or "").lower() not in {
+            "approved",
+            "rejected",
+        }
 
     @classmethod
-    def _dedupe_relation_entities(cls, entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _dedupe_relation_entities(
+        cls, entities: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         by_id: dict[str, dict[str, Any]] = {}
         no_id: list[dict[str, Any]] = []
         for item in entities:
@@ -625,7 +728,9 @@ class ControlledRelationExtractor:
         return [*by_id.values(), *no_id]
 
     @classmethod
-    def _index_by_label(cls, entities: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    def _index_by_label(
+        cls, entities: list[dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
         index: dict[str, dict[str, Any]] = {}
         for item in entities:
             for label in cls._entity_labels(item):
@@ -633,7 +738,9 @@ class ControlledRelationExtractor:
                 if not key:
                     continue
                 current = index.get(key)
-                if current is None or (not cls._is_approved(current) and cls._is_approved(item)):
+                if current is None or (
+                    not cls._is_approved(current) and cls._is_approved(item)
+                ):
                     index[key] = item
         return index
 
@@ -675,8 +782,12 @@ class ControlledRelationExtractor:
                 continue
             relation_score = 0
             if relation_terms:
-                relation_score = 3 if any(term in text_key for term in relation_terms) else 0
-            ranked.append((subject_score + object_score + relation_score, len(text), text))
+                relation_score = (
+                    3 if any(term in text_key for term in relation_terms) else 0
+                )
+            ranked.append(
+                (subject_score + object_score + relation_score, len(text), text)
+            )
         if ranked:
             ranked.sort(reverse=True)
             return ranked[0][2][:360]
@@ -705,7 +816,9 @@ class ControlledRelationExtractor:
         phrases = cls._evidence_phrase_terms(entity)
         if any(phrase in text_key for phrase in phrases):
             return 4
-        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        canonical_key = normalize_key(
+            entity.get("canonical_label") or entity.get("label")
+        )
         if canonical_key in {"rewardshaping", "tdlearning", "modelbasedrl"}:
             return 0
         tokens = cls._evidence_token_terms(entity)
@@ -739,13 +852,23 @@ class ControlledRelationExtractor:
                 normalized.replace(" ", "-"),
             }
             terms.extend(term for term in variants if len(term) >= 4)
-        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        canonical_key = normalize_key(
+            entity.get("canonical_label") or entity.get("label")
+        )
         if canonical_key == "valence":
             terms.extend(["valency", "valence"])
         if canonical_key == "boltzmannactionselection":
             terms.extend(["boltzmann action selection", "boltzmann", "beta", "β", "Î²"])
         if canonical_key == "largelanguagemodel":
-            terms.extend(["large language model", "large language models", "llm", "llms", "llm-based"])
+            terms.extend(
+                [
+                    "large language model",
+                    "large language models",
+                    "llm",
+                    "llms",
+                    "llm-based",
+                ]
+            )
         if canonical_key == "clinicaldecisionsupport":
             terms.extend(["clinical decision support", "cds", "cds systems"])
         if canonical_key == "rewardshaping":
@@ -761,9 +884,22 @@ class ControlledRelationExtractor:
                 ]
             )
         if canonical_key == "tdlearning":
-            terms.extend(["td learning", "temporal difference learning", "model-free rl", "model free rl"])
+            terms.extend(
+                [
+                    "td learning",
+                    "temporal difference learning",
+                    "model-free rl",
+                    "model free rl",
+                ]
+            )
         if canonical_key == "modelbasedrl":
-            terms.extend(["model-based rl", "model based rl", "model-based reinforcement learning"])
+            terms.extend(
+                [
+                    "model-based rl",
+                    "model based rl",
+                    "model-based reinforcement learning",
+                ]
+            )
         return list(dict.fromkeys(terms))
 
     @classmethod
@@ -772,14 +908,18 @@ class ControlledRelationExtractor:
         for label in cls._entity_labels(entity):
             words = [
                 word.lower()
-                for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", normalize_scientific_text(label))
+                for word in re.findall(
+                    r"[A-Za-z][A-Za-z0-9-]+", normalize_scientific_text(label)
+                )
             ]
             tokens.extend(
                 word
                 for word in words
                 if len(word) >= 4 and word not in cls.GENERIC_EVIDENCE_WORDS
             )
-        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        canonical_key = normalize_key(
+            entity.get("canonical_label") or entity.get("label")
+        )
         if canonical_key == "valence":
             tokens.append("valency")
         if canonical_key == "boltzmannactionselection":
@@ -796,7 +936,9 @@ class ControlledRelationExtractor:
         for label in cls._entity_labels(entity):
             words = [
                 word.lower()
-                for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", normalize_scientific_text(label))
+                for word in re.findall(
+                    r"[A-Za-z][A-Za-z0-9-]+", normalize_scientific_text(label)
+                )
             ]
             for word in words:
                 if len(word) >= 4 and word not in cls.GENERIC_EVIDENCE_WORDS:
@@ -816,9 +958,13 @@ class ControlledRelationExtractor:
             normalized = label.lower()
             if normalized:
                 terms.append(normalized)
-            words = [word.lower() for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", label)]
+            words = [
+                word.lower() for word in re.findall(r"[A-Za-z][A-Za-z0-9-]+", label)
+            ]
             terms.extend(word for word in words if len(word) >= 4)
-        canonical_key = normalize_key(entity.get("canonical_label") or entity.get("label"))
+        canonical_key = normalize_key(
+            entity.get("canonical_label") or entity.get("label")
+        )
         if canonical_key == "valence":
             terms.append("valency")
         if canonical_key == "boltzmannactionselection":
@@ -831,24 +977,61 @@ class ControlledRelationExtractor:
         subject: dict[str, Any],
         object_entity: dict[str, Any],
     ) -> list[str]:
-        subject_key = normalize_key(subject.get("canonical_label") or subject.get("label"))
-        object_key = normalize_key(object_entity.get("canonical_label") or object_entity.get("label"))
-        if relation_type == "MODULATED_BY" and subject_key == "boltzmannactionselection" and object_key == "valence":
+        subject_key = normalize_key(
+            subject.get("canonical_label") or subject.get("label")
+        )
+        object_key = normalize_key(
+            object_entity.get("canonical_label") or object_entity.get("label")
+        )
+        if (
+            relation_type == "MODULATED_BY"
+            and subject_key == "boltzmannactionselection"
+            and object_key == "valence"
+        ):
             return ["influenced", "modulated", "valency", "valence", "beta", "β"]
         if relation_type == "CORRESPONDS_TO":
             return ["connection", "correspond", "maps", "mapped"]
         if relation_type == "MEASURES":
             return ["measure", "derive", "distance"]
         if relation_type == "IMPLEMENTS":
-            return ["implements", "update", "approximate", "value-function", "value function"]
+            return [
+                "implements",
+                "update",
+                "approximate",
+                "value-function",
+                "value function",
+            ]
         if relation_type == "IMPLIES":
-            return ["implies", "imply", "entails", "enables", "therefore", "superselection", "pointer"]
+            return [
+                "implies",
+                "imply",
+                "entails",
+                "enables",
+                "therefore",
+                "superselection",
+                "pointer",
+            ]
         if relation_type == "ELICITS":
             return ["elicit", "elicits", "derive", "derives", "generate"]
         if relation_type == "USED_FOR":
-            return ["used for", "improve", "improved", "learning efficiency", "drive", "guide"]
+            return [
+                "used for",
+                "improve",
+                "improved",
+                "learning efficiency",
+                "drive",
+                "guide",
+            ]
         if relation_type == "USED_IN":
-            return ["used in", "basis", "defined", "definition", "compute", "computed", "framework"]
+            return [
+                "used in",
+                "basis",
+                "defined",
+                "definition",
+                "compute",
+                "computed",
+                "framework",
+            ]
         if relation_type == "PART_OF":
             return ["part of", "located", "system", "component", "subdivision"]
         if relation_type in {"CAUSES", "LEADS_TO"}:
@@ -878,19 +1061,47 @@ class ControlledRelationExtractor:
                 "validate",
             ]
         if relation_type == "PREVENTS":
-            return ["avoid", "discontinuation", "failure", "prevent", "robust", "single point"]
+            return [
+                "avoid",
+                "discontinuation",
+                "failure",
+                "prevent",
+                "robust",
+                "single point",
+            ]
         if relation_type == "AFFECTS":
-            return ["affect", "consequence", "impact", "quality", "repercussion", "risk"]
+            return [
+                "affect",
+                "consequence",
+                "impact",
+                "quality",
+                "repercussion",
+                "risk",
+            ]
         if relation_type == "BUILT_ON":
             return ["built", "built on", "based on", "framework", "simulation"]
         if relation_type == "PROVIDES":
-            return ["provide", "provided", "integration", "module", "exposes", "interface"]
+            return [
+                "provide",
+                "provided",
+                "integration",
+                "module",
+                "exposes",
+                "interface",
+            ]
         if relation_type == "SUPPORTS":
             return ["support", "supports", "encoding", "exposes", "strategy"]
         if relation_type == "USES":
             return ["use", "uses", "using", "with", "based on"]
         if relation_type == "REPRODUCES":
-            return ["reproduce", "reproduces", "replicate", "replicates", "benchmark", "implementation"]
+            return [
+                "reproduce",
+                "reproduces",
+                "replicate",
+                "replicates",
+                "benchmark",
+                "implementation",
+            ]
         if relation_type == "EVALUATED_ON":
             return ["dataset", "evaluated", "trained", "training", "benchmark", "on"]
         if relation_type == "DERIVED_FROM":
@@ -898,9 +1109,21 @@ class ControlledRelationExtractor:
         if relation_type == "OUTPERFORMS":
             return ["outperform", "outperforms", "better", "best", "higher", "improve"]
         if relation_type == "MORE_ROBUST_THAN":
-            return ["robust", "more robust", "vulnerable", "whereas", "than", "perturbation"]
+            return [
+                "robust",
+                "more robust",
+                "vulnerable",
+                "whereas",
+                "than",
+                "perturbation",
+            ]
         if relation_type == "RELATED_TO":
-            return ["related", "mapping", "cross-domain", "cross domain", "cross-modal", "analogy"]
+            return [
+                "related",
+                "mapping",
+                "cross-domain",
+                "cross domain",
+                "cross-modal",
+                "analogy",
+            ]
         return []
-
-

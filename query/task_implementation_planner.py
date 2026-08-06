@@ -79,9 +79,15 @@ def build_implementation_plan(
             "steps": [],
             "risks": [],
             "differentiator": "",
+            "plan_markdown": "",
+            "creativity_level": int(creativity_level),
             "error": f"Planer fehlgeschlagen: {exc}",
         }
-    return normalize_plan(payload, fallback_label=direction.get("label") or "Variante")
+    plan = normalize_plan(payload, fallback_label=direction.get("label") or "Variante")
+    # creativity_level vom Aufrufer durchreichen (das LLM kennt es nicht),
+    # damit das Frontend es anzeigen kann.
+    plan["creativity_level"] = int(creativity_level)
+    return plan
 
 
 def normalize_plan(payload: Any, fallback_label: str = "Variante") -> dict[str, Any]:
@@ -114,14 +120,21 @@ def normalize_plan(payload: Any, fallback_label: str = "Variante") -> dict[str, 
                     ):
                         clean_cites.append(cs)
                     # silently drop bare [1]/[2]/... per AGENTS.md convention
+                label = str(item.get("label") or "").strip()
+                detail = str(item.get("detail") or "").strip()
+                expected_outcome = str(item.get("expected_outcome") or "").strip()
                 steps.append(
                     {
-                        "label": str(item.get("label") or "").strip(),
-                        "detail": str(item.get("detail") or "").strip(),
+                        "label": label,
+                        "detail": detail,
+                        # Frontend-Aliase (TaskFocusedPane liest text/rationale/
+                        # citation).citation ist der erste saubere Verweis als
+                        # String, da die UI einen Einzel-String anzeigt.
+                        "text": label,
+                        "rationale": detail or expected_outcome,
+                        "citation": clean_cites[0] if clean_cites else "",
                         "citations": clean_cites,
-                        "expected_outcome": str(
-                            item.get("expected_outcome") or ""
-                        ).strip(),
+                        "expected_outcome": expected_outcome,
                         "effort": str(item.get("effort") or "medium").strip().lower()
                         or "medium",
                     }
@@ -132,12 +145,41 @@ def normalize_plan(payload: Any, fallback_label: str = "Variante") -> dict[str, 
         if isinstance(raw_risks, list)
         else []
     )
+    variant_label = (
+        str(payload.get("variant_label") or fallback_label).strip() or fallback_label
+    )
+    differentiator = str(payload.get("differentiator") or "").strip()
+    # plan_markdown: vom Frontend (TaskFocusedPane, ParallelResultsTab) als
+    # ``plan.plan_markdown.trim()`` verwendet — muss immer ein String sein,
+    # sonst TypeError → weißer Screen. Wir bauen ein kompaktes Markdown-Dump
+    # der Schritte, wenn das LLM kein explizites Feld lieferte.
+    plan_markdown = str(payload.get("plan_markdown") or "").strip()
+    if not plan_markdown and steps:
+        md_lines: list[str] = [f"## {variant_label}"]
+        if differentiator:
+            md_lines.append(f"\n_Differenzierer:_ {differentiator}")
+        for i, s in enumerate(steps, 1):
+            line = f"{i}. {s['label']}"
+            if s["detail"]:
+                line += f" — {s['detail']}"
+            if s["expected_outcome"]:
+                line += f"\n   _Erwartet:_ {s['expected_outcome']}"
+            if s["citations"]:
+                line += "\n   _Quellen:_ " + ", ".join(s["citations"])
+            md_lines.append(line)
+        if risks:
+            md_lines.append("\n_Risiken:_")
+            for r in risks:
+                md_lines.append(f"- {r}")
+        plan_markdown = "\n".join(md_lines)
     return {
-        "variant_label": str(payload.get("variant_label") or fallback_label).strip()
-        or fallback_label,
+        "variant_label": variant_label,
         "steps": steps[:10],
         "risks": risks[:6],
-        "differentiator": str(payload.get("differentiator") or "").strip(),
+        "differentiator": differentiator,
+        # Frontend-Felder — siehe Kommentar oben.
+        "plan_markdown": plan_markdown,
+        "creativity_level": int(payload.get("creativity_level") or 3),
     }
 
 

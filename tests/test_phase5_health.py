@@ -66,7 +66,9 @@ def test_build_health_report_summarizes_core_tables(tmp_path) -> None:
     assert report["action_items"][0]["kind"] == "review_queue"
 
 
-def test_build_health_report_uses_duckdb_fallback_when_kuzu_is_unavailable(tmp_path, monkeypatch) -> None:
+def test_build_health_report_uses_duckdb_fallback_when_kuzu_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
     db_path = tmp_path / "metadata.duckdb"
     with MetadataDB(str(db_path)) as db:
         db.insert_paper(
@@ -93,7 +95,10 @@ def test_build_health_report_uses_duckdb_fallback_when_kuzu_is_unavailable(tmp_p
     )
 
     assert report["graph_db"]["backend"] == "duckdb-fallback"
-    assert "Kuzu graph path does not exist; graph-only features may be unavailable." not in report["warnings"]
+    assert (
+        "Kuzu graph path does not exist; graph-only features may be unavailable."
+        not in report["warnings"]
+    )
     assert report["action_items"][0]["kind"] == "graph_backend"
 
 

@@ -42,8 +42,9 @@ class ExtractionMixin(_Base):
         if error_message is None:
             error_message = self._infer_extraction_error_message(raw_response)
         status = "success" if error_message is None else "failed"
-        
-        result_id = self._execute("""
+
+        result_id = self._execute(
+            """
             INSERT INTO extraction_results
             (paper_id, llm_provider, llm_model, extraction_status, paper_type, concepts, methods,
              concept_candidates, method_candidates, relations, claims,
@@ -51,31 +52,36 @@ class ExtractionMixin(_Base):
              raw_response, error_message, extraction_duration_seconds)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
-        """, [
-            paper_id,
-            llm_provider,
-            llm_model,
-            status,
-            paper_type,
-            json.dumps(concepts or []),
-            json.dumps(methods or []),
-            json.dumps(concept_candidates or []),
-            json.dumps(method_candidates or []),
-            json.dumps(relations or []),
-            json.dumps(claims or []),
-            json.dumps(cross_domain_hints or []),
-            json.dumps(terminology_conflicts or []),
-            json.dumps(temporal_coverage or {}),
-            json.dumps(mathematical_content or {}),
-            raw_response,
-            error_message,
-            duration_seconds,
-        ]).fetchone()
+        """,
+            [
+                paper_id,
+                llm_provider,
+                llm_model,
+                status,
+                paper_type,
+                json.dumps(concepts or []),
+                json.dumps(methods or []),
+                json.dumps(concept_candidates or []),
+                json.dumps(method_candidates or []),
+                json.dumps(relations or []),
+                json.dumps(claims or []),
+                json.dumps(cross_domain_hints or []),
+                json.dumps(terminology_conflicts or []),
+                json.dumps(temporal_coverage or {}),
+                json.dumps(mathematical_content or {}),
+                raw_response,
+                error_message,
+                duration_seconds,
+            ],
+        ).fetchone()
 
         if status == "success":
             self.enqueue_pending_entities(
                 paper_id=paper_id,
-                entities=list(concepts or []) + list(methods or []) + list(concept_candidates or []) + list(method_candidates or []),
+                entities=list(concepts or [])
+                + list(methods or [])
+                + list(concept_candidates or [])
+                + list(method_candidates or []),
             )
 
         return int(result_id[0]) if result_id else 0
@@ -94,17 +100,24 @@ class ExtractionMixin(_Base):
 
         reason = str(payload.get("failure_reason") or "").strip()
         if payload.get("fatal_llm_error"):
-            return reason or "LLM extraction failed before usable JSON could be produced."
+            return (
+                reason or "LLM extraction failed before usable JSON could be produced."
+            )
 
-        parse_quality = payload.get("extraction_parse_quality") or payload.get("parse_quality")
+        parse_quality = payload.get("extraction_parse_quality") or payload.get(
+            "parse_quality"
+        )
         if parse_quality != "failed":
             return None
         calls = [
             call
             for call in (payload.get("call_diagnostics") or payload.get("calls") or [])
-            if isinstance(call, dict) and str(call.get("call_type") or "") != "claims_retry"
+            if isinstance(call, dict)
+            and str(call.get("call_type") or "") != "claims_retry"
         ]
-        if calls and all(str(call.get("parse_quality") or "") == "failed" for call in calls):
+        if calls and all(
+            str(call.get("parse_quality") or "") == "failed" for call in calls
+        ):
             excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in calls)
             if "No models loaded" in excerpts:
                 return "LLM extraction failed: LM Studio has no model loaded."
@@ -131,7 +144,8 @@ class ExtractionMixin(_Base):
             label = str(entity.get("label") or "").strip()
             if not label:
                 continue
-            self._execute("""
+            self._execute(
+                """
                 INSERT INTO entity_review_queue
                 (
                     paper_id, label, entity_type, canonical_id, suggested_canonical,
@@ -139,19 +153,29 @@ class ExtractionMixin(_Base):
                     created_timestamp, updated_timestamp
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [
-                paper_id,
-                label,
-                entity.get("entity_type"),
-                entity.get("canonical_id"),
-                entity.get("suggested_canonical") or entity.get("canonical_label") or label,
-                "pending",
-                entity.get("evidence") or entity.get("evidence_span") or entity.get("context") or entity.get("description") or "",
-                json.dumps(entity.get("merge_candidates") or []),
-                entity.get("candidate_reason") or entity.get("acceptance_reason") or "",
-                now,
-                now,
-            ])
+            """,
+                [
+                    paper_id,
+                    label,
+                    entity.get("entity_type"),
+                    entity.get("canonical_id"),
+                    entity.get("suggested_canonical")
+                    or entity.get("canonical_label")
+                    or label,
+                    "pending",
+                    entity.get("evidence")
+                    or entity.get("evidence_span")
+                    or entity.get("context")
+                    or entity.get("description")
+                    or "",
+                    json.dumps(entity.get("merge_candidates") or []),
+                    entity.get("candidate_reason")
+                    or entity.get("acceptance_reason")
+                    or "",
+                    now,
+                    now,
+                ],
+            )
             inserted += 1
         return inserted
 
@@ -182,7 +206,8 @@ class ExtractionMixin(_Base):
         This table is intentionally append-only so quality trends can be
         inspected after prompt, parser, or model changes.
         """
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO extraction_quality
             (
                 paper_id, concept_count, method_count, claim_count, has_formulas,
@@ -193,27 +218,29 @@ class ExtractionMixin(_Base):
                 context_fallback_reason, timestamp
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            paper_id,
-            int(concept_count),
-            int(method_count),
-            int(claim_count),
-            bool(has_formulas),
-            int(auto_detected_concepts),
-            parse_quality,
-            call_1_tokens_used,
-            call_2_tokens_used,
-            duration_seconds,
-            model,
-            provider,
-            context_policy,
-            bool(whole_context_used) if whole_context_used is not None else False,
-            chunk_count,
-            estimated_prompt_tokens,
-            context_margin_tokens,
-            context_fallback_reason,
-            datetime.now(),
-        ])
+        """,
+            [
+                paper_id,
+                int(concept_count),
+                int(method_count),
+                int(claim_count),
+                bool(has_formulas),
+                int(auto_detected_concepts),
+                parse_quality,
+                call_1_tokens_used,
+                call_2_tokens_used,
+                duration_seconds,
+                model,
+                provider,
+                context_policy,
+                bool(whole_context_used) if whole_context_used is not None else False,
+                chunk_count,
+                estimated_prompt_tokens,
+                context_margin_tokens,
+                context_fallback_reason,
+                datetime.now(),
+            ],
+        )
 
     def list_extraction_quality(
         self,
@@ -224,18 +251,24 @@ class ExtractionMixin(_Base):
         List recent extraction quality telemetry rows.
         """
         if paper_id is None:
-            rows = self._execute("""
+            rows = self._execute(
+                """
                 SELECT * FROM extraction_quality
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, [limit]).fetchall()
+            """,
+                [limit],
+            ).fetchall()
         else:
-            rows = self._execute("""
+            rows = self._execute(
+                """
                 SELECT * FROM extraction_quality
                 WHERE paper_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, [paper_id, limit]).fetchall()
+            """,
+                [paper_id, limit],
+            ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         return [dict(zip(cols, row)) for row in rows]
 
@@ -244,16 +277,15 @@ class ExtractionMixin(_Base):
         Retrieve an extraction result by ID.
         """
         result = self._execute(
-            "SELECT * FROM extraction_results WHERE id = ?",
-            [result_id]
+            "SELECT * FROM extraction_results WHERE id = ?", [result_id]
         ).fetchone()
-        
+
         if result is None:
             return None
-        
+
         cols = [desc[0] for desc in self.conn.description]
         data = dict(zip(cols, result))
-        
+
         # Parse JSON fields
         for field in self.EXTRACTION_JSON_FIELDS:
             if data.get(field):
@@ -261,10 +293,12 @@ class ExtractionMixin(_Base):
                     data[field] = json.loads(data[field])
                 except (json.JSONDecodeError, TypeError):
                     pass
-        
+
         return data
 
-    def get_paper_extractions(self, paper_id: str, limit: int = 10) -> list[dict[str, Any]]:
+    def get_paper_extractions(
+        self, paper_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
         """
         Get all extraction results for a specific paper.
         """
@@ -292,16 +326,19 @@ class ExtractionMixin(_Base):
             aliases.update(alias for alias in raw_aliases if alias)
 
         placeholders = ", ".join("?" for _ in aliases)
-        results = self._execute(f"""
+        results = self._execute(
+            f"""
             SELECT * FROM extraction_results
             WHERE paper_id IN ({placeholders})
             ORDER BY extraction_timestamp DESC
             LIMIT ?
-        """, [*aliases, limit]).fetchall()
-        
+        """,
+            [*aliases, limit],
+        ).fetchall()
+
         cols = [desc[0] for desc in self.conn.description]
         data_list = []
-        
+
         for row in results:
             data = dict(zip(cols, row))
             # Parse JSON fields
@@ -312,18 +349,21 @@ class ExtractionMixin(_Base):
                     except (json.JSONDecodeError, TypeError):
                         pass
             data_list.append(data)
-        
+
         return data_list
 
     def list_extraction_results(self, limit: int = 50) -> list[dict[str, Any]]:
         """
         List recent extraction results across all papers.
         """
-        results = self._execute("""
+        results = self._execute(
+            """
             SELECT * FROM extraction_results
             ORDER BY extraction_timestamp DESC
             LIMIT ?
-        """, [limit]).fetchall()
+        """,
+            [limit],
+        ).fetchall()
 
         cols = [desc[0] for desc in self.conn.description]
         data_list = []
@@ -340,11 +380,14 @@ class ExtractionMixin(_Base):
 
     def list_extraction_statuses(self, limit: int = 50000) -> list[dict[str, Any]]:
         """Newest-first (paper_id, extraction_status) pairs without the heavy JSON columns."""
-        rows = self._execute("""
+        rows = self._execute(
+            """
             SELECT paper_id, extraction_status FROM extraction_results
             ORDER BY extraction_timestamp DESC
             LIMIT ?
-        """, [limit]).fetchall()
+        """,
+            [limit],
+        ).fetchall()
         return [{"paper_id": row[0], "extraction_status": row[1]} for row in rows]
 
     def list_entity_review_queue(
@@ -354,24 +397,32 @@ class ExtractionMixin(_Base):
     ) -> list[dict[str, Any]]:
         """List entity review queue items for approval/merge workflows."""
         if status is None:
-            rows = self._execute("""
+            rows = self._execute(
+                """
                 SELECT * FROM entity_review_queue
                 ORDER BY updated_timestamp DESC
                 LIMIT ?
-            """, [limit]).fetchall()
+            """,
+                [limit],
+            ).fetchall()
         else:
-            rows = self._execute("""
+            rows = self._execute(
+                """
                 SELECT * FROM entity_review_queue
                 WHERE review_status = ?
                 ORDER BY updated_timestamp DESC
                 LIMIT ?
-            """, [status, limit]).fetchall()
+            """,
+                [status, limit],
+            ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         output = []
         for row in rows:
             item = dict(zip(cols, row))
             try:
-                item["merge_candidates"] = json.loads(item.get("merge_candidates") or "[]")
+                item["merge_candidates"] = json.loads(
+                    item.get("merge_candidates") or "[]"
+                )
             except (TypeError, json.JSONDecodeError):
                 item["merge_candidates"] = []
             output.append(item)
@@ -400,18 +451,29 @@ class ExtractionMixin(_Base):
         placeholders = ",".join(["?"] * len(ids))
         # DuckDB liefert bei DML keine zuverlaessige rowcount; zaehle vorher.
         count_row = self._execute(
-            f"SELECT COUNT(*) AS n FROM extraction_results WHERE paper_id IN ({placeholders})", ids
+            f"SELECT COUNT(*) AS n FROM extraction_results WHERE paper_id IN ({placeholders})",
+            ids,
         ).fetchone()
         deleted = int(count_row[0]) if count_row else 0
-        self._execute(f"DELETE FROM extraction_results WHERE paper_id IN ({placeholders})", ids)
-        self._execute(f"DELETE FROM extraction_quality WHERE paper_id IN ({placeholders})", ids)
-        self._execute(f"DELETE FROM entity_review_queue WHERE paper_id IN ({placeholders})", ids)
+        self._execute(
+            f"DELETE FROM extraction_results WHERE paper_id IN ({placeholders})", ids
+        )
+        self._execute(
+            f"DELETE FROM extraction_quality WHERE paper_id IN ({placeholders})", ids
+        )
+        self._execute(
+            f"DELETE FROM entity_review_queue WHERE paper_id IN ({placeholders})", ids
+        )
         try:
-            self._execute(f"DELETE FROM entity_embeddings WHERE paper_id IN ({placeholders})", ids)
+            self._execute(
+                f"DELETE FROM entity_embeddings WHERE paper_id IN ({placeholders})", ids
+            )
         except Exception:
             pass
         try:
-            self._execute(f"DELETE FROM batch_job_items WHERE paper_id IN ({placeholders})", ids)
+            self._execute(
+                f"DELETE FROM batch_job_items WHERE paper_id IN ({placeholders})", ids
+            )
         except Exception:
             pass
         return deleted

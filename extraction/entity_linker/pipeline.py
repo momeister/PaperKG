@@ -1,4 +1,5 @@
 """ExtractionPipeline: parse -> extract -> link, end to end."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -39,7 +40,9 @@ class ExtractionPipeline:
         if linker is not None:
             self.linker = linker
         else:
-            resolver = CanonicalResolver(ontology=ontology, embedding_engine=embedding_engine)
+            resolver = CanonicalResolver(
+                ontology=ontology, embedding_engine=embedding_engine
+            )
             self.linker = EntityLinker(resolver=resolver)
 
     def process(

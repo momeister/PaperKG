@@ -1,4 +1,5 @@
 """Format, Namen und Sicherheitsregeln fuer Projekt-Bundles."""
+
 from __future__ import annotations
 
 import hashlib
@@ -79,7 +80,9 @@ class BundleManifest:
         try:
             version = int(data["bundle_version"])
         except (KeyError, TypeError, ValueError) as error:
-            raise BundleError("manifest.json fehlt oder hat keine bundle_version.") from error
+            raise BundleError(
+                "manifest.json fehlt oder hat keine bundle_version."
+            ) from error
         if version > BUNDLE_VERSION:
             raise BundleError(
                 f"Das Bundle wurde mit einer neueren Version erstellt (Format {version}, "
@@ -138,7 +141,9 @@ def read_jsonl(archive: zipfile.ZipFile, name: str) -> Iterator[dict[str, Any]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as error:
-                raise BundleError(f"{name}, Zeile {number}: ungueltiges JSON ({error}).") from error
+                raise BundleError(
+                    f"{name}, Zeile {number}: ungueltiges JSON ({error})."
+                ) from error
             if isinstance(row, dict):
                 yield row
 

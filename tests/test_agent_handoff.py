@@ -2,6 +2,7 @@
 
 The compiler is pure text-in/text-out (no vision); the LLM and retrieval are mocked, so
 these run fully offline and deterministically."""
+
 from __future__ import annotations
 
 import api.product_main as product_main
@@ -15,6 +16,7 @@ from storage.metadata_db import MetadataDB
 # Task-brief compiler                                                          #
 # --------------------------------------------------------------------------- #
 
+
 class _BriefRouter:
     default_provider = "fake"
 
@@ -22,7 +24,11 @@ class _BriefRouter:
         return {
             "goal": "Eine App bauen",
             "context": "Hintergrund.",
-            "steps": ["Editor öffnen", "Code schreiben", "Editor öffnen"],  # dup is dropped
+            "steps": [
+                "Editor öffnen",
+                "Code schreiben",
+                "Editor öffnen",
+            ],  # dup is dropped
             "constraints": ["nichts löschen"],
             "success_criteria": ["App startet"],
             "artifacts": ["app.py"],
@@ -46,7 +52,9 @@ def _variant(**over):
 
 
 def test_build_task_brief_uses_llm_output() -> None:
-    brief = agent_handoff.build_task_brief(_variant(), question="Frage", llm_router=_BriefRouter())
+    brief = agent_handoff.build_task_brief(
+        _variant(), question="Frage", llm_router=_BriefRouter()
+    )
     assert brief["goal"] == "Eine App bauen"
     # Steps are cleaned + deduped.
     assert brief["steps"] == ["Editor öffnen", "Code schreiben"]
@@ -56,14 +64,18 @@ def test_build_task_brief_uses_llm_output() -> None:
 
 
 def test_build_task_brief_fallback_without_router() -> None:
-    brief = agent_handoff.build_task_brief(_variant(), question="Frage", llm_router=None)
+    brief = agent_handoff.build_task_brief(
+        _variant(), question="Frage", llm_router=None
+    )
     # Deterministic fallback parses numbered steps from the suggested_prompt.
     assert brief["steps"] == ["Schritt eins", "Schritt zwei"]
     assert "Variante 1" in brief["goal"]
 
 
 def test_build_task_brief_falls_back_on_llm_error() -> None:
-    brief = agent_handoff.build_task_brief(_variant(), question="Frage", llm_router=_RaisingRouter())
+    brief = agent_handoff.build_task_brief(
+        _variant(), question="Frage", llm_router=_RaisingRouter()
+    )
     assert brief["steps"] == ["Schritt eins", "Schritt zwei"]
 
 
@@ -72,7 +84,9 @@ def test_build_task_brief_falls_back_on_empty_llm() -> None:
         def chat_json(self, messages, provider=None, overrides=None):  # noqa: ARG002
             return {"goal": "", "steps": []}
 
-    brief = agent_handoff.build_task_brief(_variant(), question="Frage", llm_router=_Empty())
+    brief = agent_handoff.build_task_brief(
+        _variant(), question="Frage", llm_router=_Empty()
+    )
     assert brief["steps"] == ["Schritt eins", "Schritt zwei"]
 
 
@@ -85,7 +99,9 @@ def test_build_task_brief_includes_stage_line() -> None:
             return super().chat_json(messages)
 
     agent_handoff.build_task_brief(
-        _variant(), question="Frage", llm_router=_Recording(),
+        _variant(),
+        question="Frage",
+        llm_router=_Recording(),
         stage={"name": "Etappe A", "goal": "Ziel A"},
     )
     assert "Etappe: Etappe A — Ziel: Ziel A" in captured["user"]
@@ -99,7 +115,9 @@ def test_steps_from_prompt_handles_unstructured_text() -> None:
 
 
 def test_render_task_brief_text_structure() -> None:
-    brief = agent_handoff.build_task_brief(_variant(), question="Frage", llm_router=_BriefRouter())
+    brief = agent_handoff.build_task_brief(
+        _variant(), question="Frage", llm_router=_BriefRouter()
+    )
     text = agent_handoff.render_task_brief_text(brief)
     assert text.startswith("Ziel: Eine App bauen")
     assert "Schritte:" in text
@@ -113,6 +131,7 @@ def test_render_task_brief_text_structure() -> None:
 # Product API endpoints                                                        #
 # --------------------------------------------------------------------------- #
 
+
 def test_handoff_endpoint_and_agent_config(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(product_main, "llm_router", _BriefRouter())
     client = TestClient(product_main.app)
@@ -121,14 +140,21 @@ def test_handoff_endpoint_and_agent_config(tmp_path, monkeypatch) -> None:
     with MetadataDB(db_path) as db:
         session = db.create_parallel_session("proj", "Wie X bauen?")
         variant = db.add_parallel_variant(
-            session["id"], "Variante 1", approach="A", rationale="R",
-            suggested_prompt="1. tu dies\n2. tu das", origin="ai",
+            session["id"],
+            "Variante 1",
+            approach="A",
+            rationale="R",
+            suggested_prompt="1. tu dies\n2. tu das",
+            origin="ai",
         )
 
     res = client.post(
         f"/parallel/variants/{variant['id']}/handoff",
-        json={"with_research_context": False, "metadata_db_path": db_path,
-              "graph_db_path": str(tmp_path / "g")},
+        json={
+            "with_research_context": False,
+            "metadata_db_path": db_path,
+            "graph_db_path": str(tmp_path / "g"),
+        },
     )
     assert res.status_code == 200
     body = res.json()
@@ -137,10 +163,13 @@ def test_handoff_endpoint_and_agent_config(tmp_path, monkeypatch) -> None:
     assert "enabled" in body["bridge"]
 
     # Unknown variant → 404.
-    assert client.post(
-        "/parallel/variants/does-not-exist/handoff",
-        json={"with_research_context": False, "metadata_db_path": db_path},
-    ).status_code == 404
+    assert (
+        client.post(
+            "/parallel/variants/does-not-exist/handoff",
+            json={"with_research_context": False, "metadata_db_path": db_path},
+        ).status_code
+        == 404
+    )
 
     # Agent config reads config.yaml (bridge ships disabled by default).
     cfg = client.get("/agent/config").json()
@@ -165,7 +194,9 @@ def test_handoff_endpoint_passes_variant_stage(tmp_path, monkeypatch) -> None:
 
     with MetadataDB(db_path) as db:
         session = db.create_parallel_session("proj", "Wie X bauen?")
-        stage = db.add_parallel_stage(session["id"], "Etappe A", goal="Ziel A", status="aktiv")
+        stage = db.add_parallel_stage(
+            session["id"], "Etappe A", goal="Ziel A", status="aktiv"
+        )
         variant = db.add_parallel_variant(session["id"], "V1", stage_id=stage["id"])
 
     res = client.post(
@@ -190,11 +221,17 @@ def test_dispatch_disabled_emits_error_event(tmp_path, monkeypatch) -> None:
 # Desktop-Agent v2: Selbst-Steuerung cancel + Assistent (helper) relays          #
 # --------------------------------------------------------------------------- #
 
+
 def test_agent_config_exposes_sidecar_and_helper_flags(monkeypatch) -> None:
     monkeypatch.setattr(
         product_main,
         "_AGENT_BRIDGE_CONFIG_CACHE",
-        {"enabled": True, "manage_sidecar": False, "helper_enabled": False, "observe_interval_seconds": 7},
+        {
+            "enabled": True,
+            "manage_sidecar": False,
+            "helper_enabled": False,
+            "observe_interval_seconds": 7,
+        },
     )
     client = TestClient(product_main.app)
     cfg = client.get("/agent/config").json()
@@ -225,7 +262,10 @@ def test_cancel_agent_rejects_non_loopback_bridge_base(monkeypatch) -> None:
     """A client-supplied bridge_base (the Tauri-managed sidecar port) must stay loopback-only."""
     monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
     client = TestClient(product_main.app)
-    res = client.post("/agent/cancel", json={"run_id": "abc", "bridge_base": "http://example.com:8787"})
+    res = client.post(
+        "/agent/cancel",
+        json={"run_id": "abc", "bridge_base": "http://example.com:8787"},
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is False
@@ -244,7 +284,9 @@ def test_observe_start_emits_error_without_bridge(monkeypatch) -> None:
 def test_observe_ask_without_bridge(monkeypatch) -> None:
     monkeypatch.setattr(product_main, "_AGENT_BRIDGE_CONFIG_CACHE", {"enabled": False})
     client = TestClient(product_main.app)
-    res = client.post("/agent/observe/ask", json={"session_id": "s1", "question": "Was siehst du?"})
+    res = client.post(
+        "/agent/observe/ask", json={"session_id": "s1", "question": "Was siehst du?"}
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["answer"] == ""

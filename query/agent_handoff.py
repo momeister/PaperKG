@@ -13,6 +13,7 @@ grounded evidence helpers from :mod:`query.parallel_research` so the brief's con
 backed by the same local papers, and degrades to a deterministic brief built straight
 from the variant when the LLM is unavailable (keeps the hand-off robust + unit-testable).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -135,7 +136,11 @@ def build_task_brief(
         f"Ansatz: {variant.get('approach') or ''}\n"
         f"Begründung: {variant.get('rationale') or ''}\n\n"
         f"Vorhandener Umsetzungs-Prompt:\n{variant.get('suggested_prompt') or '(keiner)'}\n\n"
-        + (f"Lokale Evidenz (zur Kontextualisierung):\n{evidence_block}\n\n" if evidence_block else "")
+        + (
+            f"Lokale Evidenz (zur Kontextualisierung):\n{evidence_block}\n\n"
+            if evidence_block
+            else ""
+        )
         + "Formuliere daraus eine Aufgabenanweisung für einen Desktop-Agenten. Antworte NUR als "
         "JSON in dieser Form:\n"
         '{"goal": "ein Satz: was am Ende erreicht sein soll", '
@@ -170,7 +175,9 @@ def build_task_brief(
         "context": (context or fallback["context"])[:1500],
         "steps": steps or fallback["steps"],
         "constraints": _clean_lines(data.get("constraints"), limit=MAX_LIST_ITEMS),
-        "success_criteria": _clean_lines(data.get("success_criteria"), limit=MAX_LIST_ITEMS),
+        "success_criteria": _clean_lines(
+            data.get("success_criteria"), limit=MAX_LIST_ITEMS
+        ),
         "artifacts": _clean_lines(data.get("artifacts"), limit=MAX_LIST_ITEMS),
         "raw_prompt": str(variant.get("suggested_prompt") or "").strip(),
     }

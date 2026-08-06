@@ -16,6 +16,7 @@ Only ``http`` and ``https`` are allowed. Every resolved IP for the host must be 
 global (public) address; if *any* resolved address is private/loopback/link-local/
 reserved the URL is rejected (defends against DNS rebinding to a private answer).
 """
+
 from __future__ import annotations
 
 import ipaddress

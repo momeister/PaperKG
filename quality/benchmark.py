@@ -70,7 +70,10 @@ def prf(expected: set[str], predicted: set[str]) -> PRF:
 def duplicate_canonical_rate(items: list[dict[str, Any]]) -> float:
     labels_by_canonical: dict[str, set[str]] = {}
     for item in items:
-        canonical = str(item.get("canonical_id") or _norm(item.get("canonical_label") or item.get("label"))).strip()
+        canonical = str(
+            item.get("canonical_id")
+            or _norm(item.get("canonical_label") or item.get("label"))
+        ).strip()
         label = _norm(item.get("label"))
         if canonical and label:
             labels_by_canonical.setdefault(canonical, set()).add(label)
@@ -80,7 +83,9 @@ def duplicate_canonical_rate(items: list[dict[str, Any]]) -> float:
     return duplicates / len(labels_by_canonical)
 
 
-def field_accuracy(expected_items: list[Any], predicted_items: list[Any], field: str) -> float:
+def field_accuracy(
+    expected_items: list[Any], predicted_items: list[Any], field: str
+) -> float:
     expected_by_label = {
         _norm(item.get("label")): str(item.get(field) or "")
         for item in expected_items
@@ -93,7 +98,11 @@ def field_accuracy(expected_items: list[Any], predicted_items: list[Any], field:
         for item in predicted_items
         if isinstance(item, dict) and _norm(item.get("label"))
     }
-    matches = sum(1 for label, value in expected_by_label.items() if predicted_by_label.get(label) == value)
+    matches = sum(
+        1
+        for label, value in expected_by_label.items()
+        if predicted_by_label.get(label) == value
+    )
     return matches / len(expected_by_label)
 
 
@@ -105,7 +114,9 @@ def _bool_value(value: Any) -> bool:
     return bool(value)
 
 
-def claim_negation_metrics(expected_items: list[Any], predicted_items: list[Any]) -> tuple[float, int, int]:
+def claim_negation_metrics(
+    expected_items: list[Any], predicted_items: list[Any]
+) -> tuple[float, int, int]:
     expected_by_statement = {
         _norm(item.get("statement")): _bool_value(item.get("negated"))
         for item in expected_items
@@ -119,7 +130,9 @@ def claim_negation_metrics(expected_items: list[Any], predicted_items: list[Any]
         if isinstance(item, dict) and _norm(item.get("statement"))
     }
     matches = sum(
-        1 for statement, negated in expected_by_statement.items() if predicted_by_statement.get(statement) == negated
+        1
+        for statement, negated in expected_by_statement.items()
+        if predicted_by_statement.get(statement) == negated
     )
     total = len(expected_by_statement)
     errors = total - matches
@@ -130,7 +143,9 @@ def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _prediction_for(gold_payload: dict[str, Any], pred_dir: Path | None) -> dict[str, Any]:
+def _prediction_for(
+    gold_payload: dict[str, Any], pred_dir: Path | None
+) -> dict[str, Any]:
     if pred_dir is None:
         return {}
     paper_id = str(gold_payload.get("paper_id") or "").strip()
@@ -146,7 +161,9 @@ def _prediction_for(gold_payload: dict[str, Any], pred_dir: Path | None) -> dict
     return {}
 
 
-def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> dict[str, Any]:
+def evaluate_case(
+    gold_payload: dict[str, Any], prediction: dict[str, Any]
+) -> dict[str, Any]:
     expected = gold_payload.get("expected") or gold_payload
     support_text = " ".join(
         str(value or "")
@@ -158,31 +175,49 @@ def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> d
             prediction.get("paper_text"),
         ]
     )
-    concepts = prf(_label_set(expected.get("concepts") or []), _label_set(prediction.get("concepts") or []))
+    concepts = prf(
+        _label_set(expected.get("concepts") or []),
+        _label_set(prediction.get("concepts") or []),
+    )
     concept_candidates = prf(
         _label_set(expected.get("concept_candidates") or []),
         _label_set(prediction.get("concept_candidates") or []),
     )
-    methods = prf(_label_set(expected.get("methods") or []), _label_set(prediction.get("methods") or []))
-    relations = prf(_relation_set(expected.get("relations") or []), _relation_set(prediction.get("relations") or []))
+    methods = prf(
+        _label_set(expected.get("methods") or []),
+        _label_set(prediction.get("methods") or []),
+    )
+    relations = prf(
+        _relation_set(expected.get("relations") or []),
+        _relation_set(prediction.get("relations") or []),
+    )
     claim_attribution_errors = [
         claim
         for claim in prediction.get("claims") or []
         if isinstance(claim, dict)
         and claim.get("attributed_to") not in {None, "this_paper", "cited_work"}
     ]
-    parser_warnings = list(prediction.get("parser_warnings") or prediction.get("quality_warnings") or [])
-    all_entities = list(prediction.get("concepts") or []) + list(prediction.get("methods") or [])
+    parser_warnings = list(
+        prediction.get("parser_warnings") or prediction.get("quality_warnings") or []
+    )
+    all_entities = list(prediction.get("concepts") or []) + list(
+        prediction.get("methods") or []
+    )
     pending_count = sum(
         1
         for item in all_entities
-        if isinstance(item, dict) and str(item.get("review_status") or "").lower() == "pending"
+        if isinstance(item, dict)
+        and str(item.get("review_status") or "").lower() == "pending"
     )
-    claim_negation_accuracy, claim_negation_errors, claim_negation_total = claim_negation_metrics(
-        expected.get("claims") or [],
-        prediction.get("claims") or [],
+    claim_negation_accuracy, claim_negation_errors, claim_negation_total = (
+        claim_negation_metrics(
+            expected.get("claims") or [],
+            prediction.get("claims") or [],
+        )
     )
-    supported_extras, unsupported_extras = supported_extra_items(expected, prediction, support_text)
+    supported_extras, unsupported_extras = supported_extra_items(
+        expected, prediction, support_text
+    )
     return {
         "paper_id": gold_payload.get("paper_id") or prediction.get("paper_id") or "",
         "concepts": concepts.to_dict(),
@@ -190,15 +225,27 @@ def evaluate_case(gold_payload: dict[str, Any], prediction: dict[str, Any]) -> d
         "methods": methods.to_dict(),
         "relations": relations.to_dict(),
         "entity_type_accuracy": round(
-            field_accuracy(expected.get("concepts") or [], prediction.get("concepts") or [], "entity_type"),
+            field_accuracy(
+                expected.get("concepts") or [],
+                prediction.get("concepts") or [],
+                "entity_type",
+            ),
             4,
         ),
         "method_source_type_accuracy": round(
-            field_accuracy(expected.get("methods") or [], prediction.get("methods") or [], "source_type"),
+            field_accuracy(
+                expected.get("methods") or [],
+                prediction.get("methods") or [],
+                "source_type",
+            ),
             4,
         ),
-        "duplicate_canonical_rate": round(duplicate_canonical_rate(prediction.get("concepts") or []), 4),
-        "pending_rate": round(pending_count / len(all_entities), 4) if all_entities else 0.0,
+        "duplicate_canonical_rate": round(
+            duplicate_canonical_rate(prediction.get("concepts") or []), 4
+        ),
+        "pending_rate": (
+            round(pending_count / len(all_entities), 4) if all_entities else 0.0
+        ),
         "claim_attribution_error_count": len(claim_attribution_errors),
         "claim_negation_accuracy": round(claim_negation_accuracy, 4),
         "claim_negation_error_count": claim_negation_errors,
@@ -238,7 +285,9 @@ def supported_extra_items(
                     "field": field_name,
                     "label": item.get("label"),
                     "evidence": evidence,
-                    "supported": _evidence_supported(evidence or item.get("label"), text_norm),
+                    "supported": _evidence_supported(
+                        evidence or item.get("label"), text_norm
+                    ),
                 }
             )
 
@@ -263,8 +312,16 @@ def supported_extra_items(
             }
         )
 
-    supported = [{k: v for k, v in row.items() if k != "supported"} for row in rows if row["supported"]]
-    unsupported = [{k: v for k, v in row.items() if k != "supported"} for row in rows if not row["supported"]]
+    supported = [
+        {k: v for k, v in row.items() if k != "supported"}
+        for row in rows
+        if row["supported"]
+    ]
+    unsupported = [
+        {k: v for k, v in row.items() if k != "supported"}
+        for row in rows
+        if not row["supported"]
+    ]
     return supported, unsupported
 
 
@@ -286,7 +343,9 @@ def _evidence_supported(evidence: Any, normalized_support_text: str) -> bool:
         return True
     tokens = [token for token in evidence_norm.split() if len(token) >= 4]
     if len(tokens) >= 3:
-        return sum(1 for token in tokens if token in normalized_support_text) >= max(2, len(tokens) - 1)
+        return sum(1 for token in tokens if token in normalized_support_text) >= max(
+            2, len(tokens) - 1
+        )
     return all(token in normalized_support_text for token in tokens)
 
 
@@ -312,20 +371,46 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
             "passes_parser_gate": True,
             "passes_claim_gate": True,
         }
-    concept_precision = sum(case["concepts"]["precision"] for case in case_reports) / len(case_reports)
-    concept_recall = sum(case["concepts"]["recall"] for case in case_reports) / len(case_reports)
-    method_precision = sum(case["methods"]["precision"] for case in case_reports) / len(case_reports)
-    method_recall = sum(case["methods"]["recall"] for case in case_reports) / len(case_reports)
-    relation_precision = sum(case["relations"]["precision"] for case in case_reports) / len(case_reports)
-    relation_recall = sum(case["relations"]["recall"] for case in case_reports) / len(case_reports)
-    dup_rate = sum(case["duplicate_canonical_rate"] for case in case_reports) / len(case_reports)
-    pending_rate = sum(case["pending_rate"] for case in case_reports) / len(case_reports)
+    concept_precision = sum(
+        case["concepts"]["precision"] for case in case_reports
+    ) / len(case_reports)
+    concept_recall = sum(case["concepts"]["recall"] for case in case_reports) / len(
+        case_reports
+    )
+    method_precision = sum(case["methods"]["precision"] for case in case_reports) / len(
+        case_reports
+    )
+    method_recall = sum(case["methods"]["recall"] for case in case_reports) / len(
+        case_reports
+    )
+    relation_precision = sum(
+        case["relations"]["precision"] for case in case_reports
+    ) / len(case_reports)
+    relation_recall = sum(case["relations"]["recall"] for case in case_reports) / len(
+        case_reports
+    )
+    dup_rate = sum(case["duplicate_canonical_rate"] for case in case_reports) / len(
+        case_reports
+    )
+    pending_rate = sum(case["pending_rate"] for case in case_reports) / len(
+        case_reports
+    )
     parser_warning_count = sum(case["parser_warning_count"] for case in case_reports)
-    claim_negation_accuracy = sum(case["claim_negation_accuracy"] for case in case_reports) / len(case_reports)
-    claim_negation_error_count = sum(case["claim_negation_error_count"] for case in case_reports)
-    claim_attribution_error_count = sum(case["claim_attribution_error_count"] for case in case_reports)
-    supported_extra_count = sum(int(case.get("supported_extra_count") or 0) for case in case_reports)
-    unsupported_extra_count = sum(int(case.get("unsupported_extra_count") or 0) for case in case_reports)
+    claim_negation_accuracy = sum(
+        case["claim_negation_accuracy"] for case in case_reports
+    ) / len(case_reports)
+    claim_negation_error_count = sum(
+        case["claim_negation_error_count"] for case in case_reports
+    )
+    claim_attribution_error_count = sum(
+        case["claim_attribution_error_count"] for case in case_reports
+    )
+    supported_extra_count = sum(
+        int(case.get("supported_extra_count") or 0) for case in case_reports
+    )
+    unsupported_extra_count = sum(
+        int(case.get("unsupported_extra_count") or 0) for case in case_reports
+    )
     return {
         "case_count": len(case_reports),
         "concept_precision": round(concept_precision, 4),
@@ -344,7 +429,8 @@ def aggregate(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "passes_precision_gate": concept_precision >= 0.85,
         "passes_duplicate_gate": dup_rate <= 0.05,
         "passes_parser_gate": parser_warning_count == 0,
-        "passes_claim_gate": claim_negation_error_count == 0 and claim_attribution_error_count == 0,
+        "passes_claim_gate": claim_negation_error_count == 0
+        and claim_attribution_error_count == 0,
     }
 
 
@@ -375,22 +461,44 @@ def run_benchmark(
     }
 
 
-def _benchmark_warnings(demo_predictions_used: int, missing_predictions: int) -> list[str]:
+def _benchmark_warnings(
+    demo_predictions_used: int, missing_predictions: int
+) -> list[str]:
     warnings: list[str] = []
     if demo_predictions_used:
-        warnings.append(f"Used embedded demo predictions for {demo_predictions_used} gold case(s).")
+        warnings.append(
+            f"Used embedded demo predictions for {demo_predictions_used} gold case(s)."
+        )
     if missing_predictions:
-        warnings.append(f"Missing prediction JSON for {missing_predictions} gold case(s).")
+        warnings.append(
+            f"Missing prediction JSON for {missing_predictions} gold case(s)."
+        )
     return warnings
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Evaluate extraction quality against curated gold JSON files.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate extraction quality against curated gold JSON files."
+    )
     parser.add_argument("--run", action="store_true", help="Run the benchmark.")
-    parser.add_argument("--gold-dir", default=str(DEFAULT_GOLD_DIR), help="Directory containing gold JSON files.")
-    parser.add_argument("--pred-dir", default=None, help="Optional directory containing prediction JSON files.")
-    parser.add_argument("--output", default=None, help="Optional path to write the JSON report.")
-    parser.add_argument("--ci", action="store_true", help="Fail when predictions are missing or only demo predictions are available.")
+    parser.add_argument(
+        "--gold-dir",
+        default=str(DEFAULT_GOLD_DIR),
+        help="Directory containing gold JSON files.",
+    )
+    parser.add_argument(
+        "--pred-dir",
+        default=None,
+        help="Optional directory containing prediction JSON files.",
+    )
+    parser.add_argument(
+        "--output", default=None, help="Optional path to write the JSON report."
+    )
+    parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="Fail when predictions are missing or only demo predictions are available.",
+    )
     args = parser.parse_args(argv)
 
     if not args.run:

@@ -1,19 +1,23 @@
 import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
   BrainCircuit,
+  ChevronDown,
+  ChevronRight,
   Code2,
   Columns3,
   FlaskConical,
   GitBranch,
   Library,
   Notebook,
+  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
   SlidersHorizontal,
+  Target,
   Telescope,
   Waypoints
 } from "lucide-react";
@@ -61,10 +65,39 @@ const WorkstationPage = lazy(() => import("./pages/WorkstationPage").then((m) =>
 const JupyterPage = lazy(() => import("./pages/JupyterPage").then((m) => ({ default: m.JupyterPage })));
 const CodeGraphPage = lazy(() => import("./pages/codegraph/CodeGraphPage").then((m) => ({ default: m.CodeGraphPage })));
 
-const navigation = [
+type NavEntry = {
+  to: string;
+  label: string;
+  icon: typeof Telescope;
+  group: string;
+  /** Optional ausklappbare Sub-Einträge. Wenn gesetzt, wird der Parent als
+   *  Gruppen-Kopf gerendert und die Sub-Einträge darunter eingeblendet. */
+  children?: Array<{
+    to: string;
+    label: string;
+    icon: typeof Telescope;
+    /** Workspace-Modus, der beim Aktivieren gesetzt wird (Task-Focused Mode). */
+    mode?: WorkspaceMode;
+  }>;
+};
+
+const navigation: NavEntry[] = [
   { to: "/forschung", label: "Forschung", icon: Telescope, group: "Erkunden" },
   { to: "/library", label: "Library", icon: Library, group: "Erkunden" },
-  { to: "/workspace", label: "Arbeitsplatz", icon: Columns3, group: "Arbeiten" },
+  {
+    to: "/workspace",
+    label: "Arbeitsplatz",
+    icon: Columns3,
+    group: "Arbeiten",
+    // Task-Focused Mode: der Arbeitsplatz hat zwei Gesichter — die klassische
+    // Forschungsansicht (Research) und den Task-Focused Mode (Kaggle/Hackathon/
+    // Anweisung). Beide leben unter derselben Route /workspace; der Modus wird
+    // pro Projekt in AppState gesetzt und persistiert.
+    children: [
+      { to: "/workspace", label: "Research", icon: NotebookPen, mode: "research" },
+      { to: "/workspace", label: "Task", icon: Target, mode: "task" }
+    ]
+  },
   { to: "/werkstatt", label: "Werkstatt", icon: Code2, group: "Arbeiten" },
   // Gruppe "Arbeiten", nicht "Analyse": dort steht schon /graph, der Wissensgraph
   // über Papers. Zwei Einträge namens "Graph" untereinander wären das Erste, was
@@ -112,6 +145,24 @@ export default function App() {
   const [provider, setProvider] = useState<string | undefined>(() => localStorage.getItem("sciencekg.provider") ?? undefined);
   const [model, setModel] = useState<string | undefined>(() => localStorage.getItem("sciencekg.model") ?? undefined);
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("sciencekg.sidebar.open") !== "false");
+  // Task-Focused Mode: welche Sidebar-Gruppen ausgeklappt sind. Default: alle
+  // Gruppen mit Sub-Einträgen (aktuell nur "Arbeitsplatz") offen, damit der
+  // Task-Modus direkt sichtbar ist. Persistiert in localStorage.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("sciencekg.sidebar.expandedGroups");
+      if (raw) {
+        const parsed = JSON.parse(raw) as string[];
+        if (Array.isArray(parsed)) {
+          return new Set(parsed);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    // Default: alle Gruppen mit children ausgeklappt.
+    return new Set(["Arbeitsplatz"]);
+  });
   const [llmParams, setLlmParams] = useState<LlmParams>(loadStoredLlmParams);
   const [paramsOpen, setParamsOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadStoredTheme);
@@ -127,6 +178,7 @@ export default function App() {
   // in a separate Tauri window; each renders only its own compact view and skips the
   // heavy main-shell queries.
   const location = useLocation();
+  const navigate = useNavigate();
   const isOverlay = window.__OVERLAY__ === true || location.pathname === "/overlay";
   const isControlBorder = window.__CONTROL_BORDER__ === true || location.pathname === "/control-border";
   const isPointerOverlay = window.__POINTER_OVERLAY__ === true || location.pathname === "/pointer";
@@ -173,6 +225,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("sciencekg.sidebar.open", String(sidebarOpen));
   }, [sidebarOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("sciencekg.sidebar.expandedGroups", JSON.stringify([...expandedGroups]));
+    } catch {
+      // ignore
+    }
+  }, [expandedGroups]);
 
   useEffect(() => {
     try {
@@ -292,13 +352,67 @@ export default function App() {
           <nav>
             {navigation.map((item, index) => {
               const startsGroup = index === 0 || navigation[index - 1].group !== item.group;
+              const hasChildren = !!item.children?.length;
+              const expanded = expandedGroups.has(item.label);
               return (
-                <Fragment key={item.to}>
+                <Fragment key={item.to + item.label}>
                   {startsGroup ? <span className="sidebar-group-label">{item.group}</span> : null}
-                  <NavLink to={item.to}>
-                    <item.icon size={18} />
-                    <span>{item.label}</span>
-                  </NavLink>
+                  {hasChildren ? (
+                    <div className="sidebar-group-parent">
+                      <NavLink to={item.to} className={expanded ? "sidebar-group-parent-link" : "sidebar-group-parent-link"}>
+                        <item.icon size={18} />
+                        <span>{item.label}</span>
+                        <button
+                          type="button"
+                          className="sidebar-group-chevron"
+                          aria-label={expanded ? "Untermenü einklappen" : "Untermenü ausklappen"}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setExpandedGroups((current) => {
+                              const next = new Set(current);
+                              if (next.has(item.label)) {
+                                next.delete(item.label);
+                              } else {
+                                next.add(item.label);
+                              }
+                              return next;
+                            });
+                          }}
+                        >
+                          {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                        </button>
+                      </NavLink>
+                      {expanded ? (
+                        <div className="sidebar-subnav">
+                          {item.children!.map((child) => {
+                            const active = location.pathname === child.to && workspaceMode === child.mode;
+                            return (
+                              <button
+                                key={child.label}
+                                type="button"
+                                className={`sidebar-subnav-link ${active ? "active" : ""}`}
+                                onClick={() => {
+                                  if (child.mode) {
+                                    setWorkspaceMode(child.mode);
+                                  }
+                                  navigate(child.to);
+                                }}
+                              >
+                                <child.icon size={15} />
+                                <span>{child.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <NavLink to={item.to}>
+                      <item.icon size={18} />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  )}
                 </Fragment>
               );
             })}

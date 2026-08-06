@@ -3,6 +3,7 @@
 Covers the Markdown→LaTeX conversion and citation mapping, the BibTeX file, the
 ZIP fallback when no LaTeX engine is present, and the graceful ComfyUI skip.
 """
+
 from __future__ import annotations
 
 import io
@@ -24,7 +25,13 @@ from export.pdf_render import compile_to_pdf
 
 
 SOURCES = [
-    {"paper_id": "arxiv:2310.12345", "title": "Attention Paper", "year": 2023, "url": "http://x", "doi": "10.1/x"},
+    {
+        "paper_id": "arxiv:2310.12345",
+        "title": "Attention Paper",
+        "year": 2023,
+        "url": "http://x",
+        "doi": "10.1/x",
+    },
     {"paper_id": "grey::abc-1", "title": "A Web Source"},
 ]
 
@@ -47,28 +54,77 @@ Schluss [grey::abc-1].
 """
 
 NODES = [
-    {"id": "r", "parent_id": None, "question": "Hauptfrage", "depth": 0, "chapter_question": None,
-     "answer": {"answer": "x", "sources": [SOURCES[0]]}},
-    {"id": "c1", "parent_id": "r", "question": "Kapitel Eins", "depth": 1, "chapter_question": "Kapitel Eins",
-     "answer": {"answer": "y", "sources": [SOURCES[0]]}},
-    {"id": "c1a", "parent_id": "c1", "question": "Unterfrage 1a", "depth": 2, "chapter_question": "Kapitel Eins",
-     "answer": {"answer": "z", "sources": [SOURCES[1]]}},
+    {
+        "id": "r",
+        "parent_id": None,
+        "question": "Hauptfrage",
+        "depth": 0,
+        "chapter_question": None,
+        "answer": {"answer": "x", "sources": [SOURCES[0]]},
+    },
+    {
+        "id": "c1",
+        "parent_id": "r",
+        "question": "Kapitel Eins",
+        "depth": 1,
+        "chapter_question": "Kapitel Eins",
+        "answer": {"answer": "y", "sources": [SOURCES[0]]},
+    },
+    {
+        "id": "c1a",
+        "parent_id": "c1",
+        "question": "Unterfrage 1a",
+        "depth": 2,
+        "chapter_question": "Kapitel Eins",
+        "answer": {"answer": "z", "sources": [SOURCES[1]]},
+    },
 ]
 
 
 # A tree exactly as the frontend posts it: the SSE events carry no ``chapter_question``
 # (that field only exists server-side), and the synthesis event rides along in the list.
 POSTED_NODES = [
-    {"id": "r", "parent_id": None, "question": "Hauptfrage", "depth": 0, "status": "done",
-     "answer": {"answer": "x", "sources": [SOURCES[0]]}},
-    {"id": "c1", "parent_id": "r", "question": "Kapitel Eins", "depth": 1, "status": "done",
-     "answer": {"answer": "y", "sources": [SOURCES[0]]}},
-    {"id": "c1a", "parent_id": "c1", "question": "Unterfrage 1a", "depth": 2, "status": "done",
-     "answer": {"answer": "z", "sources": [SOURCES[1]]}},
-    {"id": "c1b", "parent_id": "c1a", "question": "Unterfrage 1b", "depth": 3, "status": "done",
-     "answer": {"answer": "z", "sources": [SOURCES[0]]}},
-    {"id": "synthesis", "parent_id": None, "question": "Hauptfrage", "depth": 0,
-     "status": "synthesis", "answer": None, "document": "## Kapitel Eins\n\nText."},
+    {
+        "id": "r",
+        "parent_id": None,
+        "question": "Hauptfrage",
+        "depth": 0,
+        "status": "done",
+        "answer": {"answer": "x", "sources": [SOURCES[0]]},
+    },
+    {
+        "id": "c1",
+        "parent_id": "r",
+        "question": "Kapitel Eins",
+        "depth": 1,
+        "status": "done",
+        "answer": {"answer": "y", "sources": [SOURCES[0]]},
+    },
+    {
+        "id": "c1a",
+        "parent_id": "c1",
+        "question": "Unterfrage 1a",
+        "depth": 2,
+        "status": "done",
+        "answer": {"answer": "z", "sources": [SOURCES[1]]},
+    },
+    {
+        "id": "c1b",
+        "parent_id": "c1a",
+        "question": "Unterfrage 1b",
+        "depth": 3,
+        "status": "done",
+        "answer": {"answer": "z", "sources": [SOURCES[0]]},
+    },
+    {
+        "id": "synthesis",
+        "parent_id": None,
+        "question": "Hauptfrage",
+        "depth": 0,
+        "status": "synthesis",
+        "answer": None,
+        "document": "## Kapitel Eins\n\nText.",
+    },
 ]
 
 
@@ -77,14 +133,18 @@ def test_chapter_map_uses_parent_chain_not_chapter_question() -> None:
     chapters = figures.chapter_map(POSTED_NODES)
     assert chapters["c1"] == "Kapitel Eins"
     assert chapters["c1a"] == "Kapitel Eins"
-    assert chapters["c1b"] == "Kapitel Eins"  # depth 3 still belongs to the depth-1 chapter
+    assert (
+        chapters["c1b"] == "Kapitel Eins"
+    )  # depth 3 still belongs to the depth-1 chapter
     assert "r" not in chapters  # the root question is no chapter
     assert "synthesis" not in chapters  # the synthesis event is not a tree node
 
 
 def test_overview_table_counts_subquestions_and_accumulated_sources() -> None:
     table = figures.overview_table_latex(POSTED_NODES)
-    row = next(line for line in table.splitlines() if "Kapitel Eins" in line and "&" in line)
+    row = next(
+        line for line in table.splitlines() if "Kapitel Eins" in line and "&" in line
+    )
     cells = [cell.strip() for cell in row.rstrip("\\").split("&")]
     assert cells[2] == "2"  # two sub-questions (depth >= 2) below the chapter
     assert cells[3] == "2"  # distinct sources accumulated over the whole subtree
@@ -94,7 +154,9 @@ def test_overview_table_counts_subquestions_and_accumulated_sources() -> None:
 
 def test_sources_table_breaks_long_ids() -> None:
     long_id = "semantic_scholar:16cb4a482d0e00fb63886abcdef0123456789"
-    table = figures.sources_table_latex([{"paper_id": long_id, "title": "T", "year": 2024}])
+    table = figures.sources_table_latex(
+        [{"paper_id": long_id, "title": "T", "year": 2024}]
+    )
     assert r"\allowbreak{}" in table
     assert r"\texttt{" in table
     assert r"\raggedright\arraybackslash" in table
@@ -114,7 +176,9 @@ def test_research_tree_forest_is_landscape_and_scaled() -> None:
     # text width/align only wrap when passed through node options — set directly in
     # "for tree" forest ignores them and the labels run out of their boxes.
     assert "node options={align=left, text width=" in tree
-    assert "align=flush left" not in tree  # aborts compilation together with the array pkg
+    assert (
+        "align=flush left" not in tree
+    )  # aborts compilation together with the array pkg
     # Only the chapter level is drawn; deeper questions go into the outline instead.
     assert "Kapitel Eins" in tree and "Unterfrage 1a" not in tree
 
@@ -127,8 +191,13 @@ def test_outline_lists_chapters_with_subquestions() -> None:
 
 def test_build_latex_document_loads_landscape_packages() -> None:
     tex = build_latex_document(
-        title="T", body_latex="Body", has_bibliography=False, use_forest=True,
-        use_graphics=False, use_landscape=True, appendix_blocks=[r"\begin{landscape}\end{landscape}"],
+        title="T",
+        body_latex="Body",
+        has_bibliography=False,
+        use_forest=True,
+        use_graphics=False,
+        use_landscape=True,
+        appendix_blocks=[r"\begin{landscape}\end{landscape}"],
     )
     assert r"\usepackage{pdflscape}" in tex
     assert r"\usepackage{graphicx}" in tex  # \resizebox needs it even without images
@@ -153,7 +222,9 @@ def test_markdown_to_latex_body_sections_and_citations() -> None:
 def test_markdown_to_latex_body_h4_becomes_subsubsection() -> None:
     # A `####` heading must render as a real (unnumbered) subsubsection, never leak as the
     # literal "####" into the body text.
-    body = markdown_to_latex_body("#### Die Rolle der Verstärkung\n\nText.", CitationIndex([]))
+    body = markdown_to_latex_body(
+        "#### Die Rolle der Verstärkung\n\nText.", CitationIndex([])
+    )
     assert r"\subsubsection*{Die Rolle der Verstärkung}" in body
     assert "####" not in body
 
@@ -195,7 +266,12 @@ def test_latex_escape_strips_math_symbols_keeps_ascii_operators() -> None:
     # (``! LaTeX Error: Unicode character ∗``). Non-ASCII Sm symbols are dropped,
     # but ASCII operators (also category Sm) such as + = < > must be preserved.
     escaped = latex_escape("…Nutzung? ∗ × − ≤ → und a + b = c < d > e")
-    assert "∗" not in escaped and "×" not in escaped and "≤" not in escaped and "→" not in escaped
+    assert (
+        "∗" not in escaped
+        and "×" not in escaped
+        and "≤" not in escaped
+        and "→" not in escaped
+    )
     assert "a + b = c < d > e" in escaped
 
 
@@ -221,7 +297,9 @@ def test_build_bibfile_escapes_hash_and_underscore() -> None:
     # A raw '#' in a title reached the engine via the bibliography and aborted with
     # "Illegal parameter number in definition of \\NewValue"; '_' in a grey:: note
     # field would trigger a math-mode error. Both must be escaped.
-    bib = build_bibfile([{"paper_id": "grey::grey_5d5c2", "title": "C# and A∗ Formative Analysis"}])
+    bib = build_bibfile(
+        [{"paper_id": "grey::grey_5d5c2", "title": "C# and A∗ Formative Analysis"}]
+    )
     assert "∗" not in bib
     assert "C\\#" in bib  # hash escaped in the title
     assert "grey::grey\\_5d5c2" in bib  # underscore escaped in the note field
@@ -239,8 +317,11 @@ def test_build_bibfile_entries() -> None:
 
 def test_build_export_zip_contains_sources(tmp_path) -> None:
     result = build_export(
-        root_question="Hauptfrage", document=DOC, nodes=NODES,
-        export_format="zip", exports_dir=tmp_path,
+        root_question="Hauptfrage",
+        document=DOC,
+        nodes=NODES,
+        export_format="zip",
+        exports_dir=tmp_path,
         options=ExportOptions(charts=False, comfyui_images=False),
     )
     assert result.media_type == "application/zip"
@@ -252,12 +333,16 @@ def test_build_export_zip_contains_sources(tmp_path) -> None:
 
 def test_build_export_empty_document_raises(tmp_path) -> None:
     with pytest.raises(ValueError):
-        build_export(root_question="X", document="   ", nodes=NODES, exports_dir=tmp_path)
+        build_export(
+            root_question="X", document="   ", nodes=NODES, exports_dir=tmp_path
+        )
 
 
 def test_compile_to_pdf_without_engine_returns_none(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(pdf_render, "find_engine", lambda: None)
-    (tmp_path / "main.tex").write_text(r"\documentclass{article}\begin{document}x\end{document}", encoding="utf-8")
+    (tmp_path / "main.tex").write_text(
+        r"\documentclass{article}\begin{document}x\end{document}", encoding="utf-8"
+    )
     result = compile_to_pdf(tmp_path)
     assert result.pdf_bytes is None
     assert result.engine is None
@@ -267,7 +352,10 @@ def test_find_engine_prefers_pdflatex_over_latexmk_without_perl(monkeypatch) -> 
     # On a MiKTeX box the backend's PATH usually has no Perl, so latexmk (a Perl script)
     # would fail. find_engine must therefore pick the direct pdflatex engine.
     def which(tool):
-        return {"pdflatex": r"C:\miktex\pdflatex.exe", "latexmk": r"C:\miktex\latexmk.exe"}.get(tool)
+        return {
+            "pdflatex": r"C:\miktex\pdflatex.exe",
+            "latexmk": r"C:\miktex\latexmk.exe",
+        }.get(tool)
 
     monkeypatch.setattr(pdf_render.shutil, "which", which)
     monkeypatch.setattr(pdf_render, "_miktex_bin_dirs", lambda: [])
@@ -294,24 +382,36 @@ def test_build_export_pdf_failure_surfaces_log_excerpt(tmp_path, monkeypatch) ->
     # An engine *is* present but compilation fails: the warning must include the reason.
     monkeypatch.setattr(
         "export.builder.compile_to_pdf",
-        lambda *a, **k: pdf_render.CompileResult(None, "! LaTeX Error: something broke", "pdflatex"),
+        lambda *a, **k: pdf_render.CompileResult(
+            None, "! LaTeX Error: something broke", "pdflatex"
+        ),
     )
     result = build_export(
-        root_question="Hauptfrage", document=DOC, nodes=NODES,
-        export_format="pdf", exports_dir=tmp_path,
+        root_question="Hauptfrage",
+        document=DOC,
+        nodes=NODES,
+        export_format="pdf",
+        exports_dir=tmp_path,
         options=ExportOptions(charts=False, comfyui_images=False),
     )
     assert result.media_type == "application/zip"
     assert any("something broke" in w for w in result.warnings)
 
 
-def test_build_export_pdf_falls_back_to_zip_without_engine(tmp_path, monkeypatch) -> None:
+def test_build_export_pdf_falls_back_to_zip_without_engine(
+    tmp_path, monkeypatch
+) -> None:
     # Force "no LaTeX engine" so PDF requests degrade to a ZIP with a clear warning.
-    monkeypatch.setattr("export.builder.compile_to_pdf",
-                        lambda *a, **k: pdf_render.CompileResult(None, "no engine", None))
+    monkeypatch.setattr(
+        "export.builder.compile_to_pdf",
+        lambda *a, **k: pdf_render.CompileResult(None, "no engine", None),
+    )
     result = build_export(
-        root_question="Hauptfrage", document=DOC, nodes=NODES,
-        export_format="pdf", exports_dir=tmp_path,
+        root_question="Hauptfrage",
+        document=DOC,
+        nodes=NODES,
+        export_format="pdf",
+        exports_dir=tmp_path,
         options=ExportOptions(charts=False, comfyui_images=False),
     )
     assert result.media_type == "application/zip"
@@ -321,8 +421,11 @@ def test_build_export_pdf_falls_back_to_zip_without_engine(tmp_path, monkeypatch
 def test_build_export_comfyui_unreachable_is_graceful(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("export.comfyui_client.is_available", lambda *a, **k: False)
     result = build_export(
-        root_question="Hauptfrage", document=DOC, nodes=NODES,
-        export_format="tex", exports_dir=tmp_path,
+        root_question="Hauptfrage",
+        document=DOC,
+        nodes=NODES,
+        export_format="tex",
+        exports_dir=tmp_path,
         options=ExportOptions(charts=False, comfyui_images=True),
     )
     # No exception, .tex still produced, and a warning explains the skip.

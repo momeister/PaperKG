@@ -60,7 +60,9 @@ def test_pdf_annotation_crud_roundtrip(tmp_path) -> None:
     annotation_id = ann["id"]
 
     # List now returns it.
-    listed2 = client.get("/papers/paper-1/annotations", params={"metadata_db_path": dbp})
+    listed2 = client.get(
+        "/papers/paper-1/annotations", params={"metadata_db_path": dbp}
+    )
     assert len(listed2.json()["annotations"]) == 1
 
     # Patch the body.
@@ -107,7 +109,12 @@ def test_pdf_annotation_point_kind_and_validation(tmp_path) -> None:
     # Unknown kind is rejected.
     bad = client.post(
         "/papers/paper-1/annotations",
-        json={"metadata_db_path": dbp, "page_number": 1, "kind": "scribble", "body": "x"},
+        json={
+            "metadata_db_path": dbp,
+            "page_number": 1,
+            "kind": "scribble",
+            "body": "x",
+        },
     )
     assert bad.status_code == 400
 

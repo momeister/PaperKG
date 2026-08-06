@@ -106,6 +106,17 @@ Windows notes from `CLAUDE.md`: use `npm.cmd` instead of `npm`, and
   allocate unbounded memory. `MarkerParser.parse()` is the guard shell; the real
   parser is `parse_direct()`. **Do not use `multiprocessing`** — `spawn`
   re-imports the parent's `__main__` under uvicorn.
+- **Task-Focused URL ingestion bei JS-SPAs** (`query/task_extractor.py`):
+  Kaggle/Hackathon-Seiten sind client-side gerendert — die statische
+  Server-HTML enthält nur ein leeres `<div id="root">` + Meta-Tags, der Inhalt
+  (Ziel, Hintergrund, Evaluation, Timeline, Regeln, Daten) wird via XHR
+  nachgeladen. `_fetch_url_text` nutzt daher optional Playwright/Chromium als
+  Headless-Renderer, sobald der statische Text < 300 Zeichen liefert (nur dann).
+  Playwright ist **nicht** im Default-`requirements.txt` — bei Bedarf
+  `pip install playwright && playwright install chromium`. Ohne Playwright
+  bleibt der Meta-Fallback (kurze, weniger nützliche Extraktion).
+  `SCIENCEKG_DISABLE_HEADLESS_RENDER=1` schaltet es ganz ab. SSRF-Guard
+  (`is_safe_public_url`) bleibt vor dem Browser-Start aktiv.
 - **`POST /extraction/batch` creates the `batch_jobs` row immediately**, before
   PDFs are resolved; the frontend polls `/extraction/batch/{id}/items` from
   submit. Don't defer the row write to `process_papers` (every poll 404s until

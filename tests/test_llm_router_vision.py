@@ -4,6 +4,7 @@ Fully offline: every provider call goes through an `httpx.MockTransport` injecte
 the router's `client=` constructor arg, and the captured request payloads are asserted
 against each provider's wire format (OpenAI parts passthrough, Ollama `images`,
 Anthropic content blocks + headers)."""
+
 from __future__ import annotations
 
 import json
@@ -45,13 +46,18 @@ def _router(
 # OpenAI-compatible (LM Studio/Ollama-OpenAI): parts lists pass through as-is   #
 # --------------------------------------------------------------------------- #
 
+
 def test_openai_compatible_passes_parts_through() -> None:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["payload"] = json.loads(request.content)
         return httpx.Response(
-            200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
+            200,
+            json={
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {},
+            },
         )
 
     router = _router("lm_studio", handler)
@@ -71,7 +77,10 @@ def test_openai_compatible_flags_reasoning_fallback() -> None:
             json={
                 "choices": [
                     {
-                        "message": {"content": "", "reasoning_content": "The user is asking…"},
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "The user is asking…",
+                        },
                         "finish_reason": "length",
                     }
                 ],
@@ -86,7 +95,11 @@ def test_openai_compatible_flags_reasoning_fallback() -> None:
 
     def handler_normal(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
         return httpx.Response(
-            200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
+            200,
+            json={
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {},
+            },
         )
 
     router = _router("lm_studio", handler_normal)
@@ -98,6 +111,7 @@ def test_openai_compatible_flags_reasoning_fallback() -> None:
 # Ollama native API: text flattened, images moved to the per-message field      #
 # --------------------------------------------------------------------------- #
 
+
 def test_ollama_converts_parts_to_images_field() -> None:
     captured: dict[str, Any] = {}
 
@@ -106,7 +120,10 @@ def test_ollama_converts_parts_to_images_field() -> None:
         return httpx.Response(200, json={"message": {"content": "ok"}})
 
     router = _router("ollama", handler)
-    assert router.chat([{"role": "system", "content": "Systemtext"}, PARTS_MESSAGE]) == "ok"
+    assert (
+        router.chat([{"role": "system", "content": "Systemtext"}, PARTS_MESSAGE])
+        == "ok"
+    )
 
     messages = captured["payload"]["messages"]
     # Plain-string messages stay untouched.
@@ -119,6 +136,7 @@ def test_ollama_converts_parts_to_images_field() -> None:
 # --------------------------------------------------------------------------- #
 # Anthropic Messages API                                                       #
 # --------------------------------------------------------------------------- #
+
 
 def test_anthropic_payload_shape_and_headers() -> None:
     captured: dict[str, Any] = {}
@@ -200,15 +218,24 @@ def test_anthropic_model_discovery() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
         assert request.headers["x-api-key"] == "sk-test"
-        return httpx.Response(200, json={"data": [{"id": "claude-sonnet-5"}, {"id": "claude-haiku-4-5-20251001"}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": "claude-sonnet-5"}, {"id": "claude-haiku-4-5-20251001"}]
+            },
+        )
 
     router = _router("anthropic", handler, api_key="sk-test")
-    assert router.discover_provider_models() == ["claude-sonnet-5", "claude-haiku-4-5-20251001"]
+    assert router.discover_provider_models() == [
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001",
+    ]
 
 
 # --------------------------------------------------------------------------- #
 # Smart-resize maths (port of bridge/uitars/server.mjs smartResizeToBudget)     #
 # --------------------------------------------------------------------------- #
+
 
 def test_smart_resize_keeps_in_budget_dimensions() -> None:
     # Already 28-multiples and inside the budget → unchanged.

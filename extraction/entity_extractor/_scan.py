@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -91,11 +92,26 @@ class ScanMixin(_Base):
 
         method_patterns = (
             ("Checklist for Changing Data Sources", r"\bchecklist\b"),
-            ("Data Source Monitoring", r"\bmonitor(?:ing)? changes? in (?:incoming )?data\b|\bmonitoring\b"),
-            ("Robust Data Sourcing", r"\brobust(?:ness)? in (?:both )?data sourcing\b|\brobust data sourcing\b"),
-            ("Robust Statistical Techniques", r"\brobust(?:ness)? in .*statistical techniques\b|\brobust statistical techniques\b"),
-            ("Model Retraining", r"\bperiodically reevaluate and retrain models\b|\bretrain(?:ing)? models\b"),
-            ("Data Pipeline Monitoring", r"\bdata pipelines? should (?:be designed to )?monitor\b|\bpipeline monitoring\b"),
+            (
+                "Data Source Monitoring",
+                r"\bmonitor(?:ing)? changes? in (?:incoming )?data\b|\bmonitoring\b",
+            ),
+            (
+                "Robust Data Sourcing",
+                r"\brobust(?:ness)? in (?:both )?data sourcing\b|\brobust data sourcing\b",
+            ),
+            (
+                "Robust Statistical Techniques",
+                r"\brobust(?:ness)? in .*statistical techniques\b|\brobust statistical techniques\b",
+            ),
+            (
+                "Model Retraining",
+                r"\bperiodically reevaluate and retrain models\b|\bretrain(?:ing)? models\b",
+            ),
+            (
+                "Data Pipeline Monitoring",
+                r"\bdata pipelines? should (?:be designed to )?monitor\b|\bpipeline monitoring\b",
+            ),
             ("Precautionary Measures", r"\bprecautionary measures\b"),
         )
         for label, pattern in method_patterns:
@@ -108,14 +124,23 @@ class ScanMixin(_Base):
         rl_method_patterns = (
             ("Q-learning", r"\bQ[\s-]?learning\b"),
             ("SARSA", r"\bSARSA\b"),
-            ("TD(lambda)", r"\bTD\s*\(?\s*(?:lambda|\\lambda|Î»|λ)\s*\)?|\bTD\s*\(\s*(?:Î»|λ)\s*\)"),
+            (
+                "TD(lambda)",
+                r"\bTD\s*\(?\s*(?:lambda|\\lambda|Î»|λ)\s*\)?|\bTD\s*\(\s*(?:Î»|λ)\s*\)",
+            ),
             ("Actor-Critic", r"\bActor[-\s]?Critic\b"),
             ("Dynamic Programming", r"\bDynamic Programming\b"),
             ("Reward shaping", r"\breward shaping\b|\bshap(?:e|ed|ing)\s+rewards?\b"),
             ("Policy gradient", r"\bpolicy gradient(?:s)?\b"),
             ("Value iteration", r"\bvalue iteration\b"),
-            ("Homeostatic reinforcement learning", r"\bhomeostatic reinforcement learning\b"),
-            ("Appraisal-based reward modulation", r"\bappraisal\b.{0,80}\breward\b|\breward\b.{0,80}\bappraisal\b"),
+            (
+                "Homeostatic reinforcement learning",
+                r"\bhomeostatic reinforcement learning\b",
+            ),
+            (
+                "Appraisal-based reward modulation",
+                r"\bappraisal\b.{0,80}\breward\b|\breward\b.{0,80}\bappraisal\b",
+            ),
         )
         for label, pattern in rl_method_patterns:
             if not is_rl_emotion:
@@ -124,7 +149,10 @@ class ScanMixin(_Base):
             if match:
                 add_method(label, cls._context_for_match(body_text, match), 0.76)
 
-        for match in re.finditer(r"\b([A-Z][A-Za-z][A-Za-z0-9 /-]{2,80}?)\s+\(([A-Z][A-Z0-9-]{1,12})\)", body_text):
+        for match in re.finditer(
+            r"\b([A-Z][A-Za-z][A-Za-z0-9 /-]{2,80}?)\s+\(([A-Z][A-Z0-9-]{1,12})\)",
+            body_text,
+        ):
             long_form, short_form = match.group(1).strip(), match.group(2).strip()
             long_form = cls._trim_acronym_long_form(long_form, short_form)
             if cls._is_good_acronym_pair(long_form, short_form):
@@ -136,13 +164,25 @@ class ScanMixin(_Base):
             add_concept(label, context, 0.64)
 
         if is_official_statistics:
-            for phrase, count in cls._repeated_domain_phrases(body_text).most_common(20):
+            for phrase, count in cls._repeated_domain_phrases(body_text).most_common(
+                20
+            ):
                 if count >= 2:
-                    add_concept(phrase, f"Repeated phrase in parsed paper text ({count} mentions).", 0.60)
+                    add_concept(
+                        phrase,
+                        f"Repeated phrase in parsed paper text ({count} mentions).",
+                        0.60,
+                    )
         if is_rl_emotion:
-            for phrase, count in cls._repeated_rl_emotion_phrases(body_text).most_common(20):
+            for phrase, count in cls._repeated_rl_emotion_phrases(
+                body_text
+            ).most_common(20):
                 if count >= 2:
-                    add_concept(phrase, f"Repeated phrase in parsed paper text ({count} mentions).", 0.60)
+                    add_concept(
+                        phrase,
+                        f"Repeated phrase in parsed paper text ({count} mentions).",
+                        0.60,
+                    )
 
         return DeterministicScanResult(
             concepts=concepts,
@@ -154,7 +194,9 @@ class ScanMixin(_Base):
     def _heading_candidates(cls, text: str) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         for raw_line in (text or "").splitlines()[:500]:
-            numbered_heading = re.match(r"^\s*\d+(?:\.\d+)*\s+([A-Z][^.!?]{3,70})\s*$", raw_line)
+            numbered_heading = re.match(
+                r"^\s*\d+(?:\.\d+)*\s+([A-Z][^.!?]{3,70})\s*$", raw_line
+            )
             if numbered_heading:
                 line = numbered_heading.group(1).strip()
             else:
@@ -163,9 +205,14 @@ class ScanMixin(_Base):
             words = line.split()
             if not (4 <= len(line) <= 70 and 1 <= len(words) <= 8):
                 continue
-            if raw_line.rstrip().endswith((".", ",", ";", ":")) and not numbered_heading:
+            if (
+                raw_line.rstrip().endswith((".", ",", ";", ":"))
+                and not numbered_heading
+            ):
                 continue
-            if len(words) > 3 and sum(1 for word in words if word[:1].isupper()) < max(2, len(words) // 2):
+            if len(words) > 3 and sum(1 for word in words if word[:1].isupper()) < max(
+                2, len(words) // 2
+            ):
                 continue
             if not re.search(
                 r"\b(data|source|statistics|machine learning|bias|validity|accuracy|availability|ownership|ethics|regulation|privacy|monitoring|robustness|concept drift|frequency|completeness|neutrality)\b",
@@ -173,7 +220,12 @@ class ScanMixin(_Base):
                 flags=re.IGNORECASE,
             ):
                 continue
-            rows.append((line.title() if line.isupper() else line, f"Section or heading: {line}"))
+            rows.append(
+                (
+                    line.title() if line.isupper() else line,
+                    f"Section or heading: {line}",
+                )
+            )
         return rows
 
     @staticmethod
@@ -185,7 +237,9 @@ class ScanMixin(_Base):
         )
         if match:
             return raw[: match.start()]
-        match = re.search(r"\n\s*(?:references|bibliography)\s*\n", raw, flags=re.IGNORECASE)
+        match = re.search(
+            r"\n\s*(?:references|bibliography)\s*\n", raw, flags=re.IGNORECASE
+        )
         if not match:
             return raw
         return raw[: match.start()]
@@ -202,7 +256,10 @@ class ScanMixin(_Base):
     @classmethod
     def _looks_like_rl_emotion_paper(cls, text: str) -> bool:
         normalized = (text or "").lower()
-        has_rl = "reinforcement learning" in normalized or re.search(r"\bRL\b", text or "") is not None
+        has_rl = (
+            "reinforcement learning" in normalized
+            or re.search(r"\bRL\b", text or "") is not None
+        )
         has_emotion = (
             "emotion" in normalized
             or "affective" in normalized
@@ -250,12 +307,27 @@ class ScanMixin(_Base):
         if any(term in lowered for term in reject_terms):
             return False
         first_word = re.match(r"[A-Za-z]+", long_form)
-        if first_word and first_word.group(0).lower() in {"for", "in", "the", "this", "these", "those", "a", "an", "we"}:
+        if first_word and first_word.group(0).lower() in {
+            "for",
+            "in",
+            "the",
+            "this",
+            "these",
+            "those",
+            "a",
+            "an",
+            "we",
+        }:
             return False
         if len(long_form) > 70:
             return False
-        initials = "".join(word[0] for word in re.findall(r"[A-Za-z]+", long_form)).upper()
-        return short_form.upper() == initials[: len(short_form)] or short_form.upper() in initials
+        initials = "".join(
+            word[0] for word in re.findall(r"[A-Za-z]+", long_form)
+        ).upper()
+        return (
+            short_form.upper() == initials[: len(short_form)]
+            or short_form.upper() in initials
+        )
 
     @staticmethod
     def _trim_acronym_long_form(long_form: str, short_form: str) -> str:
@@ -286,12 +358,27 @@ class ScanMixin(_Base):
             "regulation",
             "ownership",
         }
-        stop = {"the", "and", "for", "with", "from", "that", "this", "are", "can", "will", "have", "has"}
+        stop = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "that",
+            "this",
+            "are",
+            "can",
+            "will",
+            "have",
+            "has",
+        }
         counts: Counter[str] = Counter()
         for size in (2, 3, 4):
             for index in range(0, max(0, len(words) - size + 1)):
                 phrase_words = words[index : index + size]
-                if phrase_words[0] not in domain_heads and not any(word in domain_heads for word in phrase_words):
+                if phrase_words[0] not in domain_heads and not any(
+                    word in domain_heads for word in phrase_words
+                ):
                     continue
                 if any(word in stop for word in (phrase_words[0], phrase_words[-1])):
                     continue
@@ -321,7 +408,22 @@ class ScanMixin(_Base):
             "homeostatic",
             "drive",
         }
-        stop = {"the", "and", "for", "with", "from", "that", "this", "are", "can", "will", "have", "has", "paper", "article"}
+        stop = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "that",
+            "this",
+            "are",
+            "can",
+            "will",
+            "have",
+            "has",
+            "paper",
+            "article",
+        }
         counts: Counter[str] = Counter()
         for size in (2, 3, 4):
             for index in range(0, max(0, len(words) - size + 1)):
@@ -351,11 +453,16 @@ class ScanMixin(_Base):
     def _context_for_match(text: str, match: re.Match[str], window: int = 180) -> str:
         start_floor = max(0, match.start() - window)
         end_ceiling = min(len(text), match.end() + window)
-        prefix = text[start_floor: match.start()]
-        suffix = text[match.end(): end_ceiling]
+        prefix = text[start_floor : match.start()]
+        suffix = text[match.end() : end_ceiling]
 
         start = start_floor
-        sentence_start = max(prefix.rfind(". "), prefix.rfind("! "), prefix.rfind("? "), prefix.rfind("\n"))
+        sentence_start = max(
+            prefix.rfind(". "),
+            prefix.rfind("! "),
+            prefix.rfind("? "),
+            prefix.rfind("\n"),
+        )
         if sentence_start >= 0:
             start = start_floor + sentence_start + 1
 
@@ -366,15 +473,19 @@ class ScanMixin(_Base):
 
         context = re.sub(r"\s+", " ", text[start:end]).strip()
         if context and context[0].islower() and match.start() > start_floor:
-            fallback = re.sub(r"\s+", " ", text[match.start():end]).strip()
+            fallback = re.sub(r"\s+", " ", text[match.start() : end]).strip()
             if fallback:
                 context = fallback
         return context
 
     @classmethod
     def _clean_label(cls, label: str) -> str:
-        cleaned = re.sub(r"\s+", " ", normalize_scientific_text(label)).strip(" .,:;[]{}")
-        cleaned = cleaned.replace("---PAGE BREAK---", " ").replace("---Page Break---", " ")
+        cleaned = re.sub(r"\s+", " ", normalize_scientific_text(label)).strip(
+            " .,:;[]{}"
+        )
+        cleaned = cleaned.replace("---PAGE BREAK---", " ").replace(
+            "---Page Break---", " "
+        )
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;[]{}")
         cleaned = cls._repair_label_fragments(cleaned)
         if cleaned.count("(") < cleaned.count(")"):
@@ -391,7 +502,9 @@ class ScanMixin(_Base):
             for item in entity_list:
                 if not isinstance(item, dict):
                     continue
-                label = cls._clean_label(str(item.get("label") or item.get("term") or ""))
+                label = cls._clean_label(
+                    str(item.get("label") or item.get("term") or "")
+                )
                 normalized = cls._normalize_label(label)
                 if not normalized:
                     continue
@@ -419,5 +532,7 @@ class ScanMixin(_Base):
                     if extra and extra not in current:
                         existing[key] = (current + " | " + extra).strip(" |")[:700]
                 if candidate.get("auto_detected"):
-                    existing["auto_detected"] = existing.get("auto_detected", False) or candidate.get("auto_detected")
+                    existing["auto_detected"] = existing.get(
+                        "auto_detected", False
+                    ) or candidate.get("auto_detected")
         return [merged[key] for key in order]

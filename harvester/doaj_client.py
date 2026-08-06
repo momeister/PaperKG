@@ -28,7 +28,10 @@ class DoajClient:
         self.config = config or DoajConfig()
         self._client = httpx.AsyncClient(
             timeout=self.config.timeout_seconds,
-            headers={"User-Agent": "ScienceKG/Phase5 (local-development)", "Accept": "application/json"},
+            headers={
+                "User-Agent": "ScienceKG/Phase5 (local-development)",
+                "Accept": "application/json",
+            },
         )
         self._lock = asyncio.Lock()
         self._last_request_ts = 0.0
@@ -45,7 +48,9 @@ class DoajClient:
                 await asyncio.sleep(min_interval - elapsed)
             self._last_request_ts = time.monotonic()
 
-    async def search_articles(self, query: str, page_size: int = 20) -> list[dict[str, Any]]:
+    async def search_articles(
+        self, query: str, page_size: int = 20
+    ) -> list[dict[str, Any]]:
         await self._throttle()
         # DOAJ takes the search term as a path segment; it must be URL-encoded.
         encoded = quote(query, safe="")

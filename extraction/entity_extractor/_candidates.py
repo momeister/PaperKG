@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,13 +39,19 @@ class CandidatesMixin(_Base):
             return True
 
         evidence_text = cls._candidate_evidence_text(item)
-        if re.search(r"(?:^|\|\s*)repeated phrase in parsed paper text", evidence_text.lower()):
+        if re.search(
+            r"(?:^|\|\s*)repeated phrase in parsed paper text", evidence_text.lower()
+        ):
             return True
 
         if cls._looks_like_heading_artifact(item, clean_label):
             return True
 
-        if bool(item.get("auto_detected")) and normalized in {"datasource", "datasources", "changingdata"}:
+        if bool(item.get("auto_detected")) and normalized in {
+            "datasource",
+            "datasources",
+            "changingdata",
+        }:
             return True
 
         normalized_title = cls._normalize_label(title or "")
@@ -69,8 +76,13 @@ class CandidatesMixin(_Base):
     @classmethod
     def _looks_like_heading_artifact(cls, item: dict[str, Any], label: str) -> bool:
         evidence_text = cls._candidate_evidence_text(item)
-        is_heading = bool(re.search(r"(?:^|\|\s*)section or heading:", evidence_text.lower()))
-        if not is_heading and str(item.get("evidence_role") or "").lower() != "environment":
+        is_heading = bool(
+            re.search(r"(?:^|\|\s*)section or heading:", evidence_text.lower())
+        )
+        if (
+            not is_heading
+            and str(item.get("evidence_role") or "").lower() != "environment"
+        ):
             return False
 
         if cls._starts_with_fragment_preposition(label):
@@ -83,7 +95,13 @@ class CandidatesMixin(_Base):
 
     @staticmethod
     def _starts_with_fragment_preposition(label: str) -> bool:
-        return bool(re.match(r"^(?:and|by|for|from|in|of|on|or|to|with)\b", str(label or "").strip(), flags=re.IGNORECASE))
+        return bool(
+            re.match(
+                r"^(?:and|by|for|from|in|of|on|or|to|with)\b",
+                str(label or "").strip(),
+                flags=re.IGNORECASE,
+            )
+        )
 
     @staticmethod
     def _looks_like_affiliation_label(label: str) -> bool:
@@ -96,7 +114,11 @@ class CandidatesMixin(_Base):
             lowered,
         ):
             return True
-        if re.match(r"^statistics\s+[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)?$", clean, flags=re.IGNORECASE):
+        if re.match(
+            r"^statistics\s+[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)?$",
+            clean,
+            flags=re.IGNORECASE,
+        ):
             return True
         return False
 
@@ -120,7 +142,10 @@ class CandidatesMixin(_Base):
             return True
 
         evidence_text = cls._candidate_evidence_text(item).lower()
-        if re.search(r"(?:^|\|\s*)section or heading:\s*(?:\d+\.?\s*)?(?:references|bibliography|works cited|literature cited)\b", evidence_text):
+        if re.search(
+            r"(?:^|\|\s*)section or heading:\s*(?:\d+\.?\s*)?(?:references|bibliography|works cited|literature cited)\b",
+            evidence_text,
+        ):
             return True
         return False
 
@@ -157,9 +182,19 @@ class CandidatesMixin(_Base):
             fragments = {"Cation", "Fication", "Tion", "Zation", "Sation", "Modi"}
             if any(token in fragments for token in normalized.split()):
                 return True
-        if re.search(r"\b(?:modi|fication|cation|tion|zation|sation)$", normalized, flags=re.IGNORECASE):
+        if re.search(
+            r"\b(?:modi|fication|cation|tion|zation|sation)$",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
             words = normalized.split()
-            return len(words) > 1 and words[-1].lower() in {"modi", "cation", "tion", "zation", "sation"}
+            return len(words) > 1 and words[-1].lower() in {
+                "modi",
+                "cation",
+                "tion",
+                "zation",
+                "sation",
+            }
         return False
 
     @classmethod
@@ -214,18 +249,25 @@ class CandidatesMixin(_Base):
         body_text = cls._text_before_references(paper_text or "")
         title = cls._paper_title_from_text(body_text)
         accepted: list[dict[str, Any]] = []
-        blocked = {cls._normalize_label(label) for label in cls.GENERIC_ACCEPTED_CONCEPT_BLOCKLIST}
+        blocked = {
+            cls._normalize_label(label)
+            for label in cls.GENERIC_ACCEPTED_CONCEPT_BLOCKLIST
+        }
         for concept in concepts:
             if not isinstance(concept, dict):
                 continue
-            item = cls._annotate_entity_for_acceptance(concept, body_text, default_role="domain_concept")
+            item = cls._annotate_entity_for_acceptance(
+                concept, body_text, default_role="domain_concept"
+            )
             label = str(item.get("label") or "")
             normalized = cls._normalize_label(label)
             if not normalized or normalized in blocked:
                 continue
             if cls._is_reference_only_entity(item, label, body_text):
                 continue
-            if item.get("candidate_source") == "deterministic_scan" or item.get("auto_detected"):
+            if item.get("candidate_source") == "deterministic_scan" or item.get(
+                "auto_detected"
+            ):
                 continue
             if (
                 title
@@ -244,7 +286,9 @@ class CandidatesMixin(_Base):
             if evidence_role in {"generic_field", "environment", "background"}:
                 continue
             item["accepted"] = True
-            item["acceptance_reason"] = item.get("acceptance_reason") or "llm_supported_high_precision"
+            item["acceptance_reason"] = (
+                item.get("acceptance_reason") or "llm_supported_high_precision"
+            )
             accepted.append(item)
         return accepted
 
@@ -261,13 +305,17 @@ class CandidatesMixin(_Base):
         for method in methods:
             if not isinstance(method, dict):
                 continue
-            item = cls._annotate_entity_for_acceptance(method, body_text, default_role="method")
+            item = cls._annotate_entity_for_acceptance(
+                method, body_text, default_role="method"
+            )
             label = str(item.get("label") or "")
             if not cls._normalize_label(label):
                 continue
             if cls._is_reference_only_entity(item, label, body_text):
                 continue
-            if item.get("candidate_source") == "deterministic_scan" or item.get("auto_detected"):
+            if item.get("candidate_source") == "deterministic_scan" or item.get(
+                "auto_detected"
+            ):
                 continue
             confidence = cls._coerce_float(item.get("confidence"), 0.75)
             salience = str(item.get("salience") or "background").lower()
@@ -276,7 +324,9 @@ class CandidatesMixin(_Base):
             if paper_type_hint == "survey":
                 item["source_type"] = cls._survey_safe_method_source_type(item)
             item["accepted"] = True
-            item["acceptance_reason"] = item.get("acceptance_reason") or "llm_supported_high_precision"
+            item["acceptance_reason"] = (
+                item.get("acceptance_reason") or "llm_supported_high_precision"
+            )
             accepted.append(item)
         return accepted
 
@@ -299,7 +349,9 @@ class CandidatesMixin(_Base):
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
-            item = cls._annotate_entity_for_acceptance(candidate, body_text, default_role=default_role)
+            item = cls._annotate_entity_for_acceptance(
+                candidate, body_text, default_role=default_role
+            )
             label = cls._clean_label(str(item.get("label") or ""))
             normalized = cls._normalize_label(label)
             if not normalized or normalized in accepted or normalized in seen:
@@ -308,12 +360,16 @@ class CandidatesMixin(_Base):
                 continue
             if cls._is_reference_only_entity(item, label, body_text):
                 continue
-            if cls._is_candidate_noise_artifact(item, label, title=cls._paper_title_from_text(body_text)):
+            if cls._is_candidate_noise_artifact(
+                item, label, title=cls._paper_title_from_text(body_text)
+            ):
                 continue
             seen.add(normalized)
             item["label"] = label
             item["accepted"] = False
-            item.setdefault("candidate_reason", item.get("candidate_source") or "needs_review")
+            item.setdefault(
+                "candidate_reason", item.get("candidate_source") or "needs_review"
+            )
             output.append(item)
         return output
 
@@ -361,10 +417,17 @@ class CandidatesMixin(_Base):
             salience = cls._derive_salience(confidence, count)
         item["salience"] = salience
         item.setdefault("evidence_role", default_role)
-        item.setdefault("entity_type", cls._entity_type_from_role(item.get("evidence_role"), label))
+        item.setdefault(
+            "entity_type", cls._entity_type_from_role(item.get("evidence_role"), label)
+        )
         item.setdefault("evidence_span", cls._evidence_span_for_entity(item))
         item.setdefault("section", cls._section_from_entity_context(item))
-        item.setdefault("canonical_id", stable_canonical_id(label, prefix="method" if default_role == "method" else "concept"))
+        item.setdefault(
+            "canonical_id",
+            stable_canonical_id(
+                label, prefix="method" if default_role == "method" else "concept"
+            ),
+        )
         item.setdefault("review_status", "pending")
         return item
 
@@ -390,13 +453,20 @@ class CandidatesMixin(_Base):
 
     @staticmethod
     def _evidence_span_for_entity(entity: dict[str, Any]) -> str:
-        text = str(entity.get("evidence_span") or entity.get("context") or entity.get("description") or "").strip()
+        text = str(
+            entity.get("evidence_span")
+            or entity.get("context")
+            or entity.get("description")
+            or ""
+        ).strip()
         return re.sub(r"\s+", " ", text)[:360]
 
     @staticmethod
     def _section_from_entity_context(entity: dict[str, Any]) -> str:
         context = str(entity.get("context") or entity.get("description") or "")
-        match = re.search(r"(?:section|heading):\s*([^|.;]{2,80})", context, flags=re.IGNORECASE)
+        match = re.search(
+            r"(?:section|heading):\s*([^|.;]{2,80})", context, flags=re.IGNORECASE
+        )
         return re.sub(r"\s+", " ", match.group(1)).strip()[:80] if match else ""
 
     @staticmethod
@@ -404,9 +474,13 @@ class CandidatesMixin(_Base):
         if not label:
             return 0
         label_pattern = re.escape(label).replace(r"\ ", r"[\s-]+")
-        count = len(re.findall(rf"\b{label_pattern}\b", text or "", flags=re.IGNORECASE))
+        count = len(
+            re.findall(rf"\b{label_pattern}\b", text or "", flags=re.IGNORECASE)
+        )
         if count == 0 and " " in label:
-            initials = "".join(word[0] for word in re.findall(r"[A-Za-z]+", label)).upper()
+            initials = "".join(
+                word[0] for word in re.findall(r"[A-Za-z]+", label)
+            ).upper()
             if 2 <= len(initials) <= 8:
                 count = len(re.findall(rf"\b{re.escape(initials)}\b", text or ""))
         return count
@@ -425,11 +499,15 @@ class CandidatesMixin(_Base):
     def _survey_safe_method_source_type(cls, method: dict[str, Any]) -> str:
         label = str(method.get("label") or "")
         normalized = cls._normalize_label(label)
-        background = {cls._normalize_label(item) for item in cls.SURVEY_BACKGROUND_METHODS}
+        background = {
+            cls._normalize_label(item) for item in cls.SURVEY_BACKGROUND_METHODS
+        }
         if normalized in background:
             return "reviewed_method"
         source_type = str(method.get("source_type") or "reviewed_method")
-        if source_type == "paper_contribution" and not re.search(r"\b(taxonom|framework|survey)\b", label, flags=re.IGNORECASE):
+        if source_type == "paper_contribution" and not re.search(
+            r"\b(taxonom|framework|survey)\b", label, flags=re.IGNORECASE
+        ):
             return "reviewed_method"
         return source_type
 

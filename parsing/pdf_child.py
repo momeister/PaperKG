@@ -18,7 +18,10 @@ from pathlib import Path
 
 def main(argv: list[str]) -> int:
     if len(argv) != 5:
-        print("usage: python -m parsing.pdf_child <pdf> <paper_id> <progress> <result> <mem_bytes>", file=sys.stderr)
+        print(
+            "usage: python -m parsing.pdf_child <pdf> <paper_id> <progress> <result> <mem_bytes>",
+            file=sys.stderr,
+        )
         return 2
     file_path, paper_id, progress_path, result_path, memory_cap_raw = argv
     memory_cap = int(memory_cap_raw)
@@ -33,7 +36,9 @@ def main(argv: list[str]) -> int:
 
     from parsing.marker_parser import MarkerParser
 
-    document = MarkerParser().parse_direct(file_path, paper_id, progress_path=progress_path)
+    document = MarkerParser().parse_direct(
+        file_path, paper_id, progress_path=progress_path
+    )
     Path(result_path).write_text(
         json.dumps(
             {

@@ -8,6 +8,7 @@ untrusted data, so embedded instructions cannot hijack the run.
 Grey sources are intentionally kept out of the knowledge graph; callers persist
 them per project as supplementary, lower-trust context only.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,12 @@ from harvester.url_guard import is_safe_public_url
 from query.discovery import analyze_topic
 from query.llm_router import LLMRouter
 from research.sanitize import FULL_TEXT_MAX_LEN, sanitize_web_text, wrap_as_untrusted
-from research.search_provider import ResearchConfig, SearchHit, load_research_config, run_web_search
+from research.search_provider import (
+    ResearchConfig,
+    SearchHit,
+    load_research_config,
+    run_web_search,
+)
 
 
 # How much of each article is fed to the summarizer LLM. The full article is still
@@ -47,7 +53,11 @@ _SUMMARY_SYSTEM = (
 
 
 def _summarize_source(
-    llm_router: LLMRouter, question: str, source_label: str, clean_text: str, provider: str | None
+    llm_router: LLMRouter,
+    question: str,
+    source_label: str,
+    clean_text: str,
+    provider: str | None,
 ) -> tuple[str, list[str]]:
     """Return (summary, evidence_quotes) for one sanitized source.
 
@@ -67,7 +77,9 @@ def _summarize_source(
     ]
     try:
         payload = llm_router.chat_json(
-            messages, provider=provider, overrides={"temperature": 0.1, "max_tokens": 600}
+            messages,
+            provider=provider,
+            overrides={"temperature": 0.1, "max_tokens": 600},
         )
     except Exception as exc:  # noqa: BLE001
         return f"(summary unavailable: {exc})", []
@@ -89,7 +101,9 @@ def _summarize_source(
     return summary, evidence
 
 
-async def _fetch_clean(client: httpx.AsyncClient, url: str, max_len: int) -> tuple[str, list[str], str | None]:
+async def _fetch_clean(
+    client: httpx.AsyncClient, url: str, max_len: int
+) -> tuple[str, list[str], str | None]:
     if not await asyncio.to_thread(is_safe_public_url, url):
         return "", [], "URL verweist nicht auf eine öffentliche Adresse"
     try:
@@ -116,7 +130,9 @@ async def run_deep_research(
     warnings: list[str] = []
 
     analysis = await asyncio.to_thread(analyze_topic, llm_router, question, provider)
-    queries = [entry["query"] for entry in analysis.get("queries", []) if entry.get("query")][:max_queries]
+    queries = [
+        entry["query"] for entry in analysis.get("queries", []) if entry.get("query")
+    ][:max_queries]
     if not queries:
         queries = [question]
 
@@ -125,7 +141,9 @@ async def run_deep_research(
     seen_urls: set[str] = set()
     for query in queries:
         try:
-            query_hits = await run_web_search(query, config, provider=search_provider, max_results=results_per_query)
+            query_hits = await run_web_search(
+                query, config, provider=search_provider, max_results=results_per_query
+            )
         except Exception as exc:  # noqa: BLE001 - surface provider errors as warnings
             warnings.append(f"search '{query}': {exc}")
             continue
@@ -143,7 +161,9 @@ async def run_deep_research(
         follow_redirects=True,
     ) as client:
         for hit in hits:
-            clean, flags, error = await _fetch_clean(client, hit.url, max_len=FULL_TEXT_MAX_LEN)
+            clean, flags, error = await _fetch_clean(
+                client, hit.url, max_len=FULL_TEXT_MAX_LEN
+            )
             if error:
                 warnings.append(f"fetch {hit.url}: {error}")
                 continue

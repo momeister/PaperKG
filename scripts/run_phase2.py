@@ -47,10 +47,16 @@ def _trigger_build(base_url: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="One-command runner for ScienceKG Phase 2")
-    parser.add_argument("--skip-build", action="store_true", help="Skip graph build step")
+    parser = argparse.ArgumentParser(
+        description="One-command runner for ScienceKG Phase 2"
+    )
+    parser.add_argument(
+        "--skip-build", action="store_true", help="Skip graph build step"
+    )
     parser.add_argument("--api-only", action="store_true", help="Start only FastAPI")
-    parser.add_argument("--ui-only", action="store_true", help="Start only Streamlit UI")
+    parser.add_argument(
+        "--ui-only", action="store_true", help="Start only Streamlit UI"
+    )
     parser.add_argument("--api-port", type=int, default=8000, help="FastAPI port")
     return parser.parse_args()
 
@@ -69,15 +75,17 @@ def main() -> None:
     if not args.ui_only:
         print(f"[phase2] Starting API on {base_url}")
         processes.append(
-            _start([
-                python,
-                "-m",
-                "uvicorn",
-                "api.main:app",
-                "--reload",
-                "--port",
-                str(args.api_port),
-            ])
+            _start(
+                [
+                    python,
+                    "-m",
+                    "uvicorn",
+                    "api.main:app",
+                    "--reload",
+                    "--port",
+                    str(args.api_port),
+                ]
+            )
         )
 
         if not args.skip_build:
@@ -93,13 +101,15 @@ def main() -> None:
     if not args.api_only:
         print("[phase2] Starting Streamlit UI on http://localhost:8501")
         processes.append(
-            _start([
-                python,
-                "-m",
-                "streamlit",
-                "run",
-                "ui/graph_visualization.py",
-            ])
+            _start(
+                [
+                    python,
+                    "-m",
+                    "streamlit",
+                    "run",
+                    "ui/graph_visualization.py",
+                ]
+            )
         )
 
     if not processes:

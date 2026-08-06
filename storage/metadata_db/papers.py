@@ -21,7 +21,8 @@ class PapersMixin(_Base):
         Insert or update a paper record.
         """
         paper_id = record.get("id") or f"{record['source']}:{record['source_id']}"
-        self._execute("""
+        self._execute(
+            """
             INSERT OR REPLACE INTO papers
             (
                 id, source, source_id, title, abstract, authors, year, doi,
@@ -32,32 +33,37 @@ class PapersMixin(_Base):
                 updated_timestamp
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, [
-            paper_id,
-            record.get("source"),
-            record.get("source_id"),
-            record.get("title"),
-            record.get("abstract"),
-            json.dumps(record.get("authors", [])),
-            record.get("year"),
-            record.get("doi"),
-            record.get("pdf_url"),
-            record.get("landing_page_url"),
-            json.dumps(record.get("references", [])),
-            json.dumps(record.get("citations", [])),
-            int(record.get("citation_count") or len(record.get("citations") or record.get("references") or [])),
-            record.get("superseded_by"),
-            bool(record.get("peer_reviewed", False)),
-            bool(record.get("retracted", False)),
-            record.get("language_original") or "unknown",
-            float(record.get("confidence_score") or 0.5),
-            float(record.get("obsolescence_score") or 0.0),
-            bool(record.get("conflict_flag", False)),
-            record.get("embedding_model"),
-            int(record.get("embedding_version") or 0),
-            bool(record.get("has_full_text", bool(record.get("pdf_url")))),
-            record.get("version", 1),
-        ])
+        """,
+            [
+                paper_id,
+                record.get("source"),
+                record.get("source_id"),
+                record.get("title"),
+                record.get("abstract"),
+                json.dumps(record.get("authors", [])),
+                record.get("year"),
+                record.get("doi"),
+                record.get("pdf_url"),
+                record.get("landing_page_url"),
+                json.dumps(record.get("references", [])),
+                json.dumps(record.get("citations", [])),
+                int(
+                    record.get("citation_count")
+                    or len(record.get("citations") or record.get("references") or [])
+                ),
+                record.get("superseded_by"),
+                bool(record.get("peer_reviewed", False)),
+                bool(record.get("retracted", False)),
+                record.get("language_original") or "unknown",
+                float(record.get("confidence_score") or 0.5),
+                float(record.get("obsolescence_score") or 0.0),
+                bool(record.get("conflict_flag", False)),
+                record.get("embedding_model"),
+                int(record.get("embedding_version") or 0),
+                bool(record.get("has_full_text", bool(record.get("pdf_url")))),
+                record.get("version", 1),
+            ],
+        )
 
     def batch_insert_papers(self, records: list[dict[str, Any]]) -> int:
         """
@@ -72,8 +78,7 @@ class PapersMixin(_Base):
         Retrieve a paper by ID.
         """
         result = self._execute(
-            "SELECT * FROM papers WHERE id = ?",
-            [paper_id]
+            "SELECT * FROM papers WHERE id = ?", [paper_id]
         ).fetchone()
         if result is None:
             return None
@@ -87,7 +92,9 @@ class PapersMixin(_Base):
         self._execute("DELETE FROM paper_sources WHERE paper_id = ?", [paper_id])
         self._execute("DELETE FROM extraction_results WHERE paper_id = ?", [paper_id])
         try:
-            self._execute("DELETE FROM entity_embeddings WHERE paper_id = ?", [paper_id])
+            self._execute(
+                "DELETE FROM entity_embeddings WHERE paper_id = ?", [paper_id]
+            )
         except Exception:
             pass
         try:
@@ -132,7 +139,11 @@ class PapersMixin(_Base):
 
         Returns the canonical paper ID used for extraction history.
         """
-        canonical_id = self.resolve_paper_id(paper_id) or self._canonical_from_identifier(paper_id) or paper_id
+        canonical_id = (
+            self.resolve_paper_id(paper_id)
+            or self._canonical_from_identifier(paper_id)
+            or paper_id
+        )
         existing = self.get_paper(canonical_id)
         if existing is not None:
             self.update_paper_metadata_if_missing(
@@ -190,15 +201,20 @@ class PapersMixin(_Base):
             [title, paper_id],
         )
 
-    def search_by_title(self, title_query: str, limit: int = 50) -> list[dict[str, Any]]:
+    def search_by_title(
+        self, title_query: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
         """
         Search papers by title substring.
         """
-        results = self._execute("""
+        results = self._execute(
+            """
             SELECT * FROM papers
             WHERE title ILIKE ?
             LIMIT ?
-        """, [f"%{title_query}%", limit]).fetchall()
+        """,
+            [f"%{title_query}%", limit],
+        ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         return [self._parse_paper_row(dict(zip(cols, row))) for row in results]
 
@@ -206,11 +222,14 @@ class PapersMixin(_Base):
         """
         List all papers with pagination.
         """
-        results = self._execute("""
+        results = self._execute(
+            """
             SELECT * FROM papers
             ORDER BY added_timestamp DESC
             LIMIT ? OFFSET ?
-        """, [limit, offset]).fetchall()
+        """,
+            [limit, offset],
+        ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         return [self._parse_paper_row(dict(zip(cols, row))) for row in results]
 
@@ -242,7 +261,9 @@ class PapersMixin(_Base):
             aliases.update(cls._identifier_aliases(f"{source}:{source_id}"))
             title_slug = cls._slug(record.get("title") or "")
             if title_slug:
-                aliases.update(cls._identifier_aliases(f"{source}__{title_slug}__{source_id}"))
+                aliases.update(
+                    cls._identifier_aliases(f"{source}__{title_slug}__{source_id}")
+                )
         return aliases
 
     @classmethod
@@ -293,7 +314,9 @@ class PapersMixin(_Base):
     @classmethod
     def _extract_arxiv_id(cls, value: str) -> str | None:
         text = str(value or "")
-        match = re.search(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", text, flags=re.IGNORECASE)
+        match = re.search(
+            r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", text, flags=re.IGNORECASE
+        )
         if match:
             return match.group(0)
         legacy = re.search(
@@ -318,7 +341,9 @@ class PapersMixin(_Base):
     def _infer_source(cls, paper_id: str) -> tuple[str, str]:
         arxiv_id = cls._extract_arxiv_id(paper_id)
         if str(paper_id).startswith("arxiv:") or arxiv_id:
-            return "arxiv", re.sub(r"v\d+$", "", arxiv_id or str(paper_id).split(":", 1)[-1])
+            return "arxiv", re.sub(
+                r"v\d+$", "", arxiv_id or str(paper_id).split(":", 1)[-1]
+            )
         if "/" in str(paper_id) and str(paper_id).lower().startswith("10."):
             return "doi", str(paper_id)
         return "local", str(paper_id)
@@ -352,7 +377,10 @@ class PapersMixin(_Base):
         """
         Log a deduplication decision.
         """
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO dedup_log (kept_id, dropped_id, reason)
             VALUES (?, ?, ?)
-        """, [kept_id, dropped_id, reason])
+        """,
+            [kept_id, dropped_id, reason],
+        )

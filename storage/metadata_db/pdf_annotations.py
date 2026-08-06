@@ -42,23 +42,26 @@ class PdfAnnotationsMixin(_Base):
         """Persist a PDF annotation. Returns the stored record."""
         annotation_id = str(ann.get("id") or f"pdfann_{uuid.uuid4().hex}")
         now = datetime.now()
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO pdf_annotations
             (id, paper_id, page_number, kind, rects, quote, body, color,
              created_timestamp, updated_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            annotation_id,
-            str(ann.get("paper_id") or ""),
-            int(ann.get("page_number") or 1),
-            str(ann.get("kind") or "highlight"),
-            json.dumps(ann.get("rects") or [], ensure_ascii=False),
-            ann.get("quote"),
-            ann.get("body"),
-            str(ann.get("color") or _DEFAULT_COLOR),
-            now,
-            now,
-        ])
+        """,
+            [
+                annotation_id,
+                str(ann.get("paper_id") or ""),
+                int(ann.get("page_number") or 1),
+                str(ann.get("kind") or "highlight"),
+                json.dumps(ann.get("rects") or [], ensure_ascii=False),
+                ann.get("quote"),
+                ann.get("body"),
+                str(ann.get("color") or _DEFAULT_COLOR),
+                now,
+                now,
+            ],
+        )
         return self.get_pdf_annotation(annotation_id)  # type: ignore[return-value]
 
     def get_pdf_annotation(self, annotation_id: str) -> dict[str, Any] | None:

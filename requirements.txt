@@ -2,6 +2,11 @@
 httpx[http2]==0.27.0
 aiofiles==24.1.0
 
+# JSON-Reparatur für LLM-Antworten (truncated JSON bei max_tokens-Limit,
+# siehe query/llm_router.py:_repair_json_safe + _extract_json). Fail-soft,
+# liefert bei Fehlern ein leeres Dict.
+json_repair==0.62.0
+
 # Data Processing
 pandas==2.2.3
 numpy==1.26.4
@@ -13,6 +18,14 @@ pdfplumber==0.11.4
 
 # Images (Desktop Companion screenshot resize; also a pdfplumber dependency)
 pillow==12.2.0
+
+# Optional: Headless-Render von JS-SPAs im Task-Focused Mode (Kaggle-Competition-
+# Seiten, Hackathon-Hosts). Nicht im Default-Install enthalten; bei Bedarf
+# `pip install playwright && playwright install chromium` nachziehen. Ohne
+# Playwright fällt _fetch_url_text auf den statischen Meta-Tag-Fallback zurück
+# (Server-HTML einer JS-SPA enthält nur og:title + description → sehr kurze
+# Extraktion). SCIENCEKG_DISABLE_HEADLESS_RENDER=1 schaltet es ganz ab.
+# playwright==1.49.0
 
 # Tiefenanalyse LaTeX/PDF export — statistic charts in the generated document
 matplotlib==3.11.0

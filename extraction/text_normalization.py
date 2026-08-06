@@ -55,5 +55,7 @@ def normalize_key(value: Any) -> str:
 
 
 def slugify_label(value: Any, max_length: int = 96) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", normalize_scientific_text(value).lower()).strip("-")
+    slug = re.sub(r"[^a-z0-9]+", "-", normalize_scientific_text(value).lower()).strip(
+        "-"
+    )
     return slug[:max_length]

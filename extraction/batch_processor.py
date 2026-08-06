@@ -11,7 +11,12 @@ from extraction.entity_extractor import EntityExtractor, extraction_failure_reas
 from extraction.entity_linker import ExtractionPipeline
 from extraction.embedding_engine import EmbeddingEngine
 from parsing.parser_router import ParserRouter, ParserType
-from query.llm_errors import classify_llm_error, is_provider_limit, parse_tagged_error, tag_error
+from query.llm_errors import (
+    classify_llm_error,
+    is_provider_limit,
+    parse_tagged_error,
+    tag_error,
+)
 from query.llm_router import LLMRouter
 
 logger = logging.getLogger(__name__)
@@ -131,10 +136,14 @@ class BatchProcessor:
             "llm_provider": llm_provider,
             "llm_overrides": llm_overrides or {},
             "parser_selection": {
-                paper_id: str(parser_type.value if hasattr(parser_type, "value") else parser_type)
+                paper_id: str(
+                    parser_type.value if hasattr(parser_type, "value") else parser_type
+                )
                 for paper_id, parser_type in (parser_selection or {}).items()
             },
-            "request_hash": self._request_hash(paper_ids, pdf_paths, llm_provider, llm_overrides),
+            "request_hash": self._request_hash(
+                paper_ids, pdf_paths, llm_provider, llm_overrides
+            ),
         }
 
         try:
@@ -179,13 +188,18 @@ class BatchProcessor:
 
                 if metadata_db is not None:
                     current_job = metadata_db.get_batch_job(job_id)
-                    if current_job and current_job.get("status") in {"cancelled", "superseded"}:
+                    if current_job and current_job.get("status") in {
+                        "cancelled",
+                        "superseded",
+                    }:
                         return self._status_from_record(current_job)
 
                 pdf_path = pdf_paths.get(paper_id)
                 inline_text = str((texts or {}).get(paper_id) or "").strip()
                 if not pdf_path and not inline_text:
-                    missing_message = f"Missing PDF path and abstract text for {paper_id}"
+                    missing_message = (
+                        f"Missing PDF path and abstract text for {paper_id}"
+                    )
                     status.papers_failed += 1
                     if status.error_message is None:
                         status.error_message = missing_message
@@ -197,7 +211,9 @@ class BatchProcessor:
                             "failed",
                             error_message=missing_message,
                         )
-                        self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                        self._persist_job_status(
+                            metadata_db, status, request_payload, llm_provider
+                        )
                     continue
 
                 last_error: Exception | None = None
@@ -210,11 +226,19 @@ class BatchProcessor:
                             "processing",
                             attempts=attempt + 1,
                         )
-                        self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                        self._persist_job_status(
+                            metadata_db, status, request_payload, llm_provider
+                        )
                     try:
                         if pdf_path:
-                            forced_parser = parser_selection.get(paper_id) if parser_selection else None
-                            parsed = self.parser_router.parse(pdf_path, paper_id, force_parser=forced_parser)
+                            forced_parser = (
+                                parser_selection.get(paper_id)
+                                if parser_selection
+                                else None
+                            )
+                            parsed = self.parser_router.parse(
+                                pdf_path, paper_id, force_parser=forced_parser
+                            )
                             paper_text = parsed.text
                         else:
                             paper_text = inline_text
@@ -232,8 +256,12 @@ class BatchProcessor:
                             raise RuntimeError(failure_reason)
 
                         if self.embed_concepts and failure_reason is None:
-                            concept_labels = [c.get("label", "") for c in extraction.concepts]
-                            embedding_results = self.embedding_engine.embed_batch(concept_labels)
+                            concept_labels = [
+                                c.get("label", "") for c in extraction.concepts
+                            ]
+                            embedding_results = self.embedding_engine.embed_batch(
+                                concept_labels
+                            )
                             if metadata_db is not None:
                                 for embedding in embedding_results:
                                     metadata_db.upsert_entity_embedding(
@@ -254,11 +282,15 @@ class BatchProcessor:
                             metadata_db.save_extraction_result(
                                 paper_id=canonical_paper_id,
                                 llm_provider=llm_provider or "default",
-                                llm_model=getattr(
-                                    self.llm_router.provider_settings(llm_provider),
-                                    "model",
-                                    "unknown",
-                                ) if hasattr(self.llm_router, "provider_settings") else "unknown",
+                                llm_model=(
+                                    getattr(
+                                        self.llm_router.provider_settings(llm_provider),
+                                        "model",
+                                        "unknown",
+                                    )
+                                    if hasattr(self.llm_router, "provider_settings")
+                                    else "unknown"
+                                ),
                                 paper_type=extraction.paper_type,
                                 concepts=extraction.concepts,
                                 methods=extraction.methods,
@@ -287,14 +319,23 @@ class BatchProcessor:
                                 "completed",
                                 attempts=attempt + 1,
                             )
-                            self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                            self._persist_job_status(
+                                metadata_db, status, request_payload, llm_provider
+                            )
                         break
                     except Exception as exc:
                         last_error = exc
-                        error_kind = parse_tagged_error(str(exc))[0] or classify_llm_error(str(exc))[0]
+                        error_kind = (
+                            parse_tagged_error(str(exc))[0]
+                            or classify_llm_error(str(exc))[0]
+                        )
                         # Bei einem Rate-Limit lohnt genau ein Wiederholungsversuch;
                         # bei erschoepftem Kontingent oder ungueltigem Key nicht.
-                        retriable = attempt < self.max_retries and error_kind != "quota" and error_kind != "auth"
+                        retriable = (
+                            attempt < self.max_retries
+                            and error_kind != "quota"
+                            and error_kind != "auth"
+                        )
                         if metadata_db is not None:
                             metadata_db.upsert_batch_job_item(
                                 job_id,
@@ -314,13 +355,18 @@ class BatchProcessor:
                     if status.error_message is None:
                         status.error_message = str(last_error)
                     if metadata_db is not None:
-                        self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                        self._persist_job_status(
+                            metadata_db, status, request_payload, llm_provider
+                        )
 
                     # Anbieter-Limit erreicht (Kontingent/429/Auth): jeder weitere
                     # Aufruf scheitert genauso. Frueher lief der Batch stur weiter und
                     # verbrannte hunderte Paper an derselben Absage — die restlichen
                     # bleiben jetzt `pending` und sind mit einem neuen Lauf nachholbar.
-                    limit_kind = parse_tagged_error(str(last_error))[0] or classify_llm_error(str(last_error))[0]
+                    limit_kind = (
+                        parse_tagged_error(str(last_error))[0]
+                        or classify_llm_error(str(last_error))[0]
+                    )
                     if is_provider_limit(limit_kind):
                         _kind, human = classify_llm_error(str(last_error))
                         status.status = "failed"
@@ -330,14 +376,22 @@ class BatchProcessor:
                             f"{status.papers_total} Papern gestoppt; der Rest bleibt offen und kann "
                             "nach dem Zurücksetzen des Limits erneut gestartet werden.",
                         )
-                        logger.warning("Batch %s gestoppt: %s", job_id, status.error_message)
+                        logger.warning(
+                            "Batch %s gestoppt: %s", job_id, status.error_message
+                        )
                         if metadata_db is not None:
-                            self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                            self._persist_job_status(
+                                metadata_db, status, request_payload, llm_provider
+                            )
                         return status
 
-            status.status = "completed_with_errors" if status.papers_failed else "completed"
+            status.status = (
+                "completed_with_errors" if status.papers_failed else "completed"
+            )
             if metadata_db is not None:
-                self._persist_job_status(metadata_db, status, request_payload, llm_provider)
+                self._persist_job_status(
+                    metadata_db, status, request_payload, llm_provider
+                )
             return status
         finally:
             if close_metadata_db and metadata_db is not None:
@@ -390,7 +444,9 @@ class BatchProcessor:
             "llm_provider": llm_provider,
             "llm_overrides": llm_overrides or {},
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod

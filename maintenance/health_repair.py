@@ -42,7 +42,9 @@ def repair_health_state(
     }
 
 
-def initialize_graph_storage(graph_db_path: str = "data/graphs/global_kg") -> dict[str, Any]:
+def initialize_graph_storage(
+    graph_db_path: str = "data/graphs/global_kg",
+) -> dict[str, Any]:
     graph_path = Path(graph_db_path)
     graph_path.mkdir(parents=True, exist_ok=True)
     kuzu_available, reason = _kuzu_available()
@@ -58,7 +60,9 @@ def initialize_graph_storage(graph_db_path: str = "data/graphs/global_kg") -> di
     }
     if reason:
         manifest["reason"] = reason
-    (graph_path / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (graph_path / "manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
     return {
         "kind": "graph_storage",
         "status": "completed",
@@ -78,7 +82,9 @@ def _kuzu_available() -> tuple[bool, str | None]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Repair local ScienceKG health prerequisites.")
+    parser = argparse.ArgumentParser(
+        description="Repair local ScienceKG health prerequisites."
+    )
     parser.add_argument("--metadata-db", default="data/metadata.duckdb")
     parser.add_argument("--graph-db", default="data/graphs/global_kg")
     parser.add_argument("--pdf-dir", default="data/pdfs")

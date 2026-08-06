@@ -110,14 +110,15 @@ def _render_source_verifier(answer: dict[str, Any], pdf_base_dir: str) -> None:
         return
 
     with st.expander("Verify cited source", expanded=False):
-        labels = {
-            _source_label(source): source
-            for source in sources
-        }
-        selected_label = st.selectbox("Source", options=list(labels), key="phase4_verify_source")
+        labels = {_source_label(source): source for source in sources}
+        selected_label = st.selectbox(
+            "Source", options=list(labels), key="phase4_verify_source"
+        )
         selected_source = labels[selected_label]
         paper_id = str(selected_source.get("paper_id") or "")
-        source_evidence = [item for item in evidence if item.get("paper_id") == paper_id]
+        source_evidence = [
+            item for item in evidence if item.get("paper_id") == paper_id
+        ]
         if not source_evidence:
             st.info("No evidence rows are attached to this source.")
             return
@@ -162,15 +163,22 @@ def _render_source_verifier(answer: dict[str, Any], pdf_base_dir: str) -> None:
 
         with right:
             st.caption("Referenced evidence")
-            st.markdown(_highlight_terms(reference_text, reference_text), unsafe_allow_html=True)
+            st.markdown(
+                _highlight_terms(reference_text, reference_text), unsafe_allow_html=True
+            )
             if pdf_path:
                 parsed_text = _parsed_pdf_text(pdf_path, paper_id)
                 excerpt = _best_excerpt(parsed_text, reference_text)
                 if excerpt:
                     st.caption("Nearest extracted PDF text")
-                    st.markdown(_highlight_terms(excerpt, reference_text), unsafe_allow_html=True)
+                    st.markdown(
+                        _highlight_terms(excerpt, reference_text),
+                        unsafe_allow_html=True,
+                    )
                 else:
-                    st.info("The selected evidence was not found in extracted PDF text.")
+                    st.info(
+                        "The selected evidence was not found in extracted PDF text."
+                    )
 
 
 def _source_label(source: dict[str, Any]) -> str:
@@ -265,7 +273,9 @@ def run_chat_interface() -> None:
                 st.markdown(message["content"])
 
         if question:
-            st.session_state.phase4_messages.append({"role": "user", "content": question})
+            st.session_state.phase4_messages.append(
+                {"role": "user", "content": question}
+            )
             with st.chat_message("user"):
                 st.markdown(question)
 
@@ -276,26 +286,34 @@ def run_chat_interface() -> None:
                         limit=limit,
                         provider=provider,
                         model=model,
-                )
+                    )
                 st.markdown(answer.answer)
                 if answer.generation_error:
-                    st.warning(f"Answer generation fell back to evidence mode: {answer.generation_error}")
+                    st.warning(
+                        f"Answer generation fell back to evidence mode: {answer.generation_error}"
+                    )
                 if answer.sources:
                     st.caption("Sources")
                     st.dataframe(
-                        _source_rows_from_sources([source.to_dict() for source in answer.sources]),
+                        _source_rows_from_sources(
+                            [source.to_dict() for source in answer.sources]
+                        ),
                         width="stretch",
                         hide_index=True,
                     )
                 if answer.evidence:
                     with st.expander("Evidence"):
                         st.dataframe(
-                            _evidence_rows_from_answer([item.to_dict() for item in answer.evidence]),
+                            _evidence_rows_from_answer(
+                                [item.to_dict() for item in answer.evidence]
+                            ),
                             width="stretch",
                             hide_index=True,
                         )
                 st.session_state.phase4_last_answer = answer.to_dict()
-            st.session_state.phase4_messages.append({"role": "assistant", "content": answer.answer})
+            st.session_state.phase4_messages.append(
+                {"role": "assistant", "content": answer.answer}
+            )
 
         if st.session_state.get("phase4_last_answer"):
             _render_source_verifier(st.session_state.phase4_last_answer, pdf_base_dir)

@@ -6,6 +6,7 @@ from extraction.conflict_detector import ConflictDetector
 
 from tests.llm_fakes import FakeLLMRouter
 
+
 class TestVocabularyManager:
     """Test vocabulary normalization."""
 
@@ -165,7 +166,12 @@ class TestConflictDetector:
         assert mock_router.last_overrides["max_tokens"] == 800
         assert mock_router.last_overrides["temperature"] == 0.1
         assert mock_router.last_overrides["extra"]["json_mode"] is True
-        assert mock_router.last_overrides["extra"]["chat_template_kwargs"]["enable_thinking"] is False
+        assert (
+            mock_router.last_overrides["extra"]["chat_template_kwargs"][
+                "enable_thinking"
+            ]
+            is False
+        )
 
     def test_conflict_detector_caps_large_batches_to_related_pairs(self):
         """Regression: large claim sets should not trigger O(n^2) LLM calls."""
@@ -194,7 +200,9 @@ class TestConflictDetector:
         assert len(analyses) <= 5
         assert mock_router.chat_json_calls <= 5
         assert analyses
-        assert any("reinforcement learning" in " ".join(a.claim_pair).lower() for a in analyses)
+        assert any(
+            "reinforcement learning" in " ".join(a.claim_pair).lower() for a in analyses
+        )
 
     def test_conflict_detector_find_contradictions(self):
         """Test filtering high-confidence contradictions."""
@@ -222,9 +230,9 @@ class TestConflictDetector:
         ]
 
         detector = ConflictDetector(FakeLLMRouter())
-        contradictions = detector.find_contradictions(analyses, confidence_threshold=0.7)
+        contradictions = detector.find_contradictions(
+            analyses, confidence_threshold=0.7
+        )
 
         assert len(contradictions) == 1
         assert contradictions[0].claim_pair == ("A", "B")
-
-

@@ -11,13 +11,18 @@ import httpx
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
-_ARXIV_ID_PATTERN = re.compile(r"(?:https?://arxiv.org/abs/)?(?P<base>[a-z\-]+/\d{7}|\d{4}\.\d{4,5})(?:v(?P<version>\d+))?", re.IGNORECASE)
+_ARXIV_ID_PATTERN = re.compile(
+    r"(?:https?://arxiv.org/abs/)?(?P<base>[a-z\-]+/\d{7}|\d{4}\.\d{4,5})(?:v(?P<version>\d+))?",
+    re.IGNORECASE,
+)
 
 
 @dataclass
 class ArxivClientConfig:
     base_url: str = ARXIV_API_URL
-    requests_per_second: float = 1 / 3  # arXiv recommends a 3 second pause between requests.
+    requests_per_second: float = (
+        1 / 3
+    )  # arXiv recommends a 3 second pause between requests.
     timeout_seconds: float = 60.0
 
 
@@ -108,7 +113,11 @@ class ArxivClient:
             "title": (entry.get("title") or "").strip().replace("\n", " "),
             "abstract": (entry.get("summary") or "").strip(),
             "authors": [author.get("name", "") for author in entry.get("authors", [])],
-            "year": int((entry.get("published") or "0000")[:4]) if entry.get("published") else None,
+            "year": (
+                int((entry.get("published") or "0000")[:4])
+                if entry.get("published")
+                else None
+            ),
             "doi": doi,
             "pdf_url": ArxivClient._extract_pdf_url(entry),
             "landing_page_url": raw_id,

@@ -5,6 +5,7 @@ Paper mit lokalem PDF) und "Nicht extrahiert (480)" (zusaetzlich Paper, die nur
 einen Abstract haben). Beide stimmten, aber nichts sagte das. Diese Tests halten
 fest, welche Felder die Zaehlung traegt und dass Abstract-only wirklich laeuft.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,8 +17,13 @@ from api import product_main
 from storage.metadata_db import MetadataDB
 
 
-def _library(client: TestClient, db_path: Path, pdf_dir: Path, project_id: str | None = None) -> dict[str, Any]:
-    params: dict[str, Any] = {"metadata_db_path": str(db_path), "pdf_base_dir": str(pdf_dir)}
+def _library(
+    client: TestClient, db_path: Path, pdf_dir: Path, project_id: str | None = None
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "metadata_db_path": str(db_path),
+        "pdf_base_dir": str(pdf_dir),
+    }
     if project_id:
         params["project_id"] = project_id
     response = client.get("/extraction/library", params=params)
@@ -30,15 +36,25 @@ def test_library_marks_abstract_only_papers_as_extractable(tmp_path: Path) -> No
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
     with MetadataDB(str(db_path)) as db:
-        db.insert_paper({
-            "id": "mit-abstract",
-            "source": "fixture", "source_id": "a", "title": "Hat Abstract",
-            "abstract": "Ein aussagekraeftiger Abstract ueber Graphen.", "year": 2024,
-        })
-        db.insert_paper({
-            "id": "ohne-alles",
-            "source": "fixture", "source_id": "b", "title": "Nur Titel", "year": 2024,
-        })
+        db.insert_paper(
+            {
+                "id": "mit-abstract",
+                "source": "fixture",
+                "source_id": "a",
+                "title": "Hat Abstract",
+                "abstract": "Ein aussagekraeftiger Abstract ueber Graphen.",
+                "year": 2024,
+            }
+        )
+        db.insert_paper(
+            {
+                "id": "ohne-alles",
+                "source": "fixture",
+                "source_id": "b",
+                "title": "Nur Titel",
+                "year": 2024,
+            }
+        )
 
     with TestClient(product_main.app) as client:
         items = {i["paper_id"]: i for i in _library(client, db_path, pdf_dir)["items"]}
@@ -67,10 +83,16 @@ def test_two_papers_sharing_one_pdf_both_keep_it(tmp_path: Path) -> None:
         # pdf_url traegt nach einem Download den *lokalen* Pfad (siehe
         # _paper_local_pdf_path); beide Paper zeigen hier auf dieselbe Datei.
         for pid in ("preprint:1", "journal:1"):
-            db.insert_paper({
-                "id": pid, "source": "fixture", "source_id": pid,
-                "title": pid, "year": 2024, "pdf_url": str(shared),
-            })
+            db.insert_paper(
+                {
+                    "id": pid,
+                    "source": "fixture",
+                    "source_id": pid,
+                    "title": pid,
+                    "year": 2024,
+                    "pdf_url": str(shared),
+                }
+            )
 
     with TestClient(product_main.app) as client:
         items = {i["paper_id"]: i for i in _library(client, db_path, pdf_dir)["items"]}
@@ -88,12 +110,16 @@ def test_abstract_only_paper_completes_a_batch(tmp_path: Path, monkeypatch) -> N
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
     with MetadataDB(str(db_path)) as db:
-        db.insert_paper({
-            "id": "nur-abstract", "source": "fixture", "source_id": "c",
-            "title": "Aufmerksamkeit in neuronalen Netzen",
-            "abstract": "Wir untersuchen Attention-Mechanismen und ihre Wirkung.",
-            "year": 2024,
-        })
+        db.insert_paper(
+            {
+                "id": "nur-abstract",
+                "source": "fixture",
+                "source_id": "c",
+                "title": "Aufmerksamkeit in neuronalen Netzen",
+                "abstract": "Wir untersuchen Attention-Mechanismen und ihre Wirkung.",
+                "year": 2024,
+            }
+        )
 
     captured: dict[str, Any] = {}
 
@@ -104,22 +130,35 @@ def test_abstract_only_paper_completes_a_batch(tmp_path: Path, monkeypatch) -> N
             from extraction.entity_extractor import ExtractionResult
 
             return ExtractionResult(
-                paper_id=paper_id, paper_type="empirical",
-                concepts=[{"label": "Attention", "confidence": 0.9}], methods=[],
-                concept_candidates=[], method_candidates=[], relations=[], claims=[],
-                cross_domain_hints=[], terminology_conflicts=[], temporal_coverage={},
-                mathematical_content={}, raw_response={},
+                paper_id=paper_id,
+                paper_type="empirical",
+                concepts=[{"label": "Attention", "confidence": 0.9}],
+                methods=[],
+                concept_candidates=[],
+                method_candidates=[],
+                relations=[],
+                claims=[],
+                cross_domain_hints=[],
+                terminology_conflicts=[],
+                temporal_coverage={},
+                mathematical_content={},
+                raw_response={},
             )
 
-    monkeypatch.setattr("extraction.batch_processor.ExtractionPipeline", lambda *a, **k: _Pipeline())
+    monkeypatch.setattr(
+        "extraction.batch_processor.ExtractionPipeline", lambda *a, **k: _Pipeline()
+    )
 
     with TestClient(product_main.app) as client:
-        response = client.post("/extraction/batch", json={
-            "items": [{"paper_id": "nur-abstract"}],
-            "job_id": "job-abstract",
-            "metadata_db_path": str(db_path),
-            "pdf_base_dir": str(pdf_dir),
-        })
+        response = client.post(
+            "/extraction/batch",
+            json={
+                "items": [{"paper_id": "nur-abstract"}],
+                "job_id": "job-abstract",
+                "metadata_db_path": str(db_path),
+                "pdf_base_dir": str(pdf_dir),
+            },
+        )
     assert response.status_code == 200, response.text
     job = response.json()["job"]
     assert job["papers_processed"] == 1

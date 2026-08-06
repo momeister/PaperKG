@@ -8,9 +8,7 @@ from harvester.http_client import HttpSourceConfig, ThrottledJsonClient
 
 HAL_BASE = "https://api.archives-ouvertes.fr/search/"
 
-HAL_FIELDS = (
-    "docid,title_s,abstract_s,authFullName_s,producedDateY_i,doiId_s,uri_s,fileMain_s,openAccess_bool"
-)
+HAL_FIELDS = "docid,title_s,abstract_s,authFullName_s,producedDateY_i,doiId_s,uri_s,fileMain_s,openAccess_bool"
 
 
 @dataclass
@@ -28,9 +26,16 @@ class HalClient(ThrottledJsonClient):
     def __init__(self, config: HalConfig | None = None) -> None:
         super().__init__(config or HalConfig())
 
-    async def search_documents(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    async def search_documents(
+        self, query: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
         payload = await self.get_json(
             "",
-            {"q": query, "wt": "json", "rows": min(max(limit, 1), 100), "fl": HAL_FIELDS},
+            {
+                "q": query,
+                "wt": "json",
+                "rows": min(max(limit, 1), 100),
+                "fl": HAL_FIELDS,
+            },
         )
         return list(((payload or {}).get("response") or {}).get("docs") or [])

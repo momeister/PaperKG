@@ -130,14 +130,20 @@ def test_file_and_dir_crud(tmp_path, monkeypatch) -> None:
         "/workspaces/open", json={"path": str(external), **common}
     ).json()["id"]
 
-    assert client.post(
-        f"/workspaces/{pid}/dir", json={"path": "pkg", **common}
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/workspaces/{pid}/dir", json={"path": "pkg", **common}
+        ).status_code
+        == 200
+    )
     assert (external / "pkg").is_dir()
 
-    assert client.post(
-        f"/workspaces/{pid}/file", json={"path": "pkg/__init__.py", **common}
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/workspaces/{pid}/file", json={"path": "pkg/__init__.py", **common}
+        ).status_code
+        == 200
+    )
     assert (external / "pkg" / "__init__.py").exists()
 
     # Creating the same file again is a conflict.

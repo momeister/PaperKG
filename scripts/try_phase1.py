@@ -18,7 +18,10 @@ from harvester.arxiv_client import ArxivClient, ArxivClientConfig
 from harvester.deduplication import deduplicate_papers
 from harvester.openalex_client import OpenAlexClient, OpenAlexConfig
 from harvester.papers_with_code_client import PapersWithCodeClient, PapersWithCodeConfig
-from harvester.semantic_scholar_client import SemanticScholarClient, SemanticScholarConfig
+from harvester.semantic_scholar_client import (
+    SemanticScholarClient,
+    SemanticScholarConfig,
+)
 from harvester.unpaywall_client import UnpaywallClient, UnpaywallConfig
 from storage.metadata_db import MetadataDB
 from storage.file_manager import FileManager
@@ -82,7 +85,9 @@ def _extract_first_doi(records: list[dict]) -> str | None:
     return None
 
 
-async def _download_pdfs(file_manager: FileManager, records: list[dict]) -> tuple[int, int, int]:
+async def _download_pdfs(
+    file_manager: FileManager, records: list[dict]
+) -> tuple[int, int, int]:
     downloaded = 0
     skipped = 0
     failed = 0
@@ -112,7 +117,9 @@ async def _download_pdfs(file_manager: FileManager, records: list[dict]) -> tupl
     return downloaded, skipped, failed
 
 
-async def run_demo(query: str, max_results: int, download: bool = False, full_phase1: bool = False) -> None:
+async def run_demo(
+    query: str, max_results: int, download: bool = False, full_phase1: bool = False
+) -> None:
     db_path = PROJECT_ROOT / "data" / "metadata.duckdb"
     pdf_dir = PROJECT_ROOT / "data" / "pdfs"
     config = _load_config(PROJECT_ROOT / "config.yaml")
@@ -123,12 +130,20 @@ async def run_demo(query: str, max_results: int, download: bool = False, full_ph
     arxiv = ArxivClient(ArxivClientConfig())
     s2_cfg = harvester_cfg.get("semantic_scholar", {})
     semantic_scholar = SemanticScholarClient(
-        SemanticScholarConfig(api_key=s2_cfg.get("api_key") or os.getenv("SEMANTIC_SCHOLAR_API_KEY"))
+        SemanticScholarConfig(
+            api_key=s2_cfg.get("api_key") or os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+        )
     )
     oa_cfg = harvester_cfg.get("openalex", {})
-    openalex = OpenAlexClient(OpenAlexConfig(api_key=oa_cfg.get("api_key") or os.getenv("OPENALEX_API_KEY")))
+    openalex = OpenAlexClient(
+        OpenAlexConfig(api_key=oa_cfg.get("api_key") or os.getenv("OPENALEX_API_KEY"))
+    )
     pwc_cfg = harvester_cfg.get("papers_with_code", {})
-    papers_with_code = PapersWithCodeClient(PapersWithCodeConfig(token=pwc_cfg.get("token") or os.getenv("PAPERS_WITH_CODE_TOKEN")))
+    papers_with_code = PapersWithCodeClient(
+        PapersWithCodeConfig(
+            token=pwc_cfg.get("token") or os.getenv("PAPERS_WITH_CODE_TOKEN")
+        )
+    )
     unpaywall = None
 
     up_cfg = harvester_cfg.get("unpaywall", {})
@@ -160,15 +175,21 @@ async def run_demo(query: str, max_results: int, download: bool = False, full_ph
                 print(f"[WARN] Semantic Scholar unavailable: {exc}")
 
             try:
-                oa_data = await openalex.list_works(search=query, per_page=min(max_results, 10), page=1)
-                oa_records = [_normalize_openalex_work(w) for w in oa_data.get("results", [])]
+                oa_data = await openalex.list_works(
+                    search=query, per_page=min(max_results, 10), page=1
+                )
+                oa_records = [
+                    _normalize_openalex_work(w) for w in oa_data.get("results", [])
+                ]
                 combined_records.extend(oa_records)
                 print(f"[OK] OpenAlex fetched: {len(oa_records)}")
             except Exception as exc:
                 print(f"[WARN] OpenAlex unavailable: {exc}")
 
             try:
-                pwc_data = await papers_with_code.search_papers(query, page=1, items_per_page=min(max_results, 10))
+                pwc_data = await papers_with_code.search_papers(
+                    query, page=1, items_per_page=min(max_results, 10)
+                )
                 pwc_count = len(pwc_data.get("results", []))
                 print(f"[OK] PapersWithCode responded: {pwc_count} results")
             except Exception as exc:
@@ -182,7 +203,9 @@ async def run_demo(query: str, max_results: int, download: bool = False, full_ph
                 except Exception as exc:
                     print(f"[WARN] Unpaywall unavailable: {exc}")
             elif not unpaywall:
-                print("[INFO] Unpaywall skipped (set UNPAYWALL_EMAIL or config.harvester.unpaywall.email)")
+                print(
+                    "[INFO] Unpaywall skipped (set UNPAYWALL_EMAIL or config.harvester.unpaywall.email)"
+                )
             else:
                 print("[INFO] Unpaywall skipped (no DOI found in fetched records)")
 
@@ -190,9 +213,14 @@ async def run_demo(query: str, max_results: int, download: bool = False, full_ph
 
         inserted = metadata_db.batch_insert_papers(unique_papers)
         for decision in decisions:
-            keep_id = decision.keep.get("id") or f"{decision.keep['source']}:{decision.keep['source_id']}"
+            keep_id = (
+                decision.keep.get("id")
+                or f"{decision.keep['source']}:{decision.keep['source_id']}"
+            )
             for dropped in decision.dropped:
-                dropped_id = dropped.get("id") or f"{dropped['source']}:{dropped['source_id']}"
+                dropped_id = (
+                    dropped.get("id") or f"{dropped['source']}:{dropped['source_id']}"
+                )
                 metadata_db.log_dedup(keep_id, dropped_id, decision.reason)
 
         print(f"Fetched total (all sources): {len(combined_records)}")
@@ -215,11 +243,17 @@ async def run_demo(query: str, max_results: int, download: bool = False, full_ph
             print(f"   storage_path: {storage_path}")
 
         if len(unique_papers) > 5:
-            print(f"\n... {len(unique_papers) - 5} weitere Einträge wurden gespeichert.")
+            print(
+                f"\n... {len(unique_papers) - 5} weitere Einträge wurden gespeichert."
+            )
 
         if download:
-            downloaded, skipped, failed = await _download_pdfs(file_manager, unique_papers)
-            print(f"Download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}")
+            downloaded, skipped, failed = await _download_pdfs(
+                file_manager, unique_papers
+            )
+            print(
+                f"Download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}"
+            )
 
         print("\nPhase 1 summary:")
         print("[OK] Harvester APIs queried (optional APIs fail-soft)")
@@ -242,7 +276,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a Phase 1 ScienceKG demo")
     parser.add_argument("query", nargs="?", default="machine learning")
     parser.add_argument("--max-results", type=int, default=10)
-    parser.add_argument("--download", action="store_true", help="Download PDFs for fetched papers")
+    parser.add_argument(
+        "--download", action="store_true", help="Download PDFs for fetched papers"
+    )
     parser.add_argument(
         "--full-phase1",
         action="store_true",
@@ -253,7 +289,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    asyncio.run(run_demo(args.query, args.max_results, download=args.download, full_phase1=args.full_phase1))
+    asyncio.run(
+        run_demo(
+            args.query,
+            args.max_results,
+            download=args.download,
+            full_phase1=args.full_phase1,
+        )
+    )
 
 
 if __name__ == "__main__":

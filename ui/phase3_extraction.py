@@ -42,7 +42,11 @@ from harvester.semantic_scholar_client import (
 from parsing.marker_parser import MarkerParser
 from parsing.parser_router import ParserRouter, ParserType
 from query.llm_router import LLMRouter
-from query.nim_container import NIMCommandResult, NIMContainerConfig, NIMContainerManager
+from query.nim_container import (
+    NIMCommandResult,
+    NIMContainerConfig,
+    NIMContainerManager,
+)
 from storage.file_manager import FileManager
 from storage.metadata_db import MetadataDB
 
@@ -69,7 +73,9 @@ st.set_page_config(
 )
 
 st.title("ScienceKG Phase 3: Entity Extraction")
-st.markdown("Extract concepts, methods, and claims from research papers with configurable LLMs")
+st.markdown(
+    "Extract concepts, methods, and claims from research papers with configurable LLMs"
+)
 
 
 # Initialize session state
@@ -224,7 +230,7 @@ def _harvester_config() -> dict:
 
 
 def _semantic_scholar_config_from_project() -> SemanticScholarConfig:
-    raw = (_harvester_config().get("semantic_scholar") or {})
+    raw = _harvester_config().get("semantic_scholar") or {}
     api_key = (
         os.getenv("SEMANTIC_SCHOLAR_API_KEY")
         or os.getenv("S2_API_KEY")
@@ -241,15 +247,23 @@ def _semantic_scholar_config_from_project() -> SemanticScholarConfig:
         requests_per_second=requests_per_second,
         timeout_seconds=float(raw.get("timeout_seconds") or 30.0),
         max_retries=int(raw.get("max_retries") or 3),
-        initial_retry_delay_seconds=float(raw.get("initial_retry_delay_seconds") or 2.0),
+        initial_retry_delay_seconds=float(
+            raw.get("initial_retry_delay_seconds") or 2.0
+        ),
     )
 
 
-async def _search_phase1_papers(query: str, sources: list[str], max_results: int) -> tuple[list[dict], list[str]]:
+async def _search_phase1_papers(
+    query: str, sources: list[str], max_results: int
+) -> tuple[list[dict], list[str]]:
     combined: list[dict] = []
     warnings: list[str] = []
     arxiv = ArxivClient(ArxivClientConfig()) if "arxiv" in sources else None
-    s2 = SemanticScholarClient(_semantic_scholar_config_from_project()) if "semantic_scholar" in sources else None
+    s2 = (
+        SemanticScholarClient(_semantic_scholar_config_from_project())
+        if "semantic_scholar" in sources
+        else None
+    )
     openalex = OpenAlexClient(OpenAlexConfig()) if "openalex" in sources else None
 
     try:
@@ -272,8 +286,12 @@ async def _search_phase1_papers(query: str, sources: list[str], max_results: int
                 warnings.append(f"Semantic Scholar search skipped: {exc}")
         if openalex is not None:
             try:
-                payload = await openalex.list_works(search=query, per_page=min(max_results, 20), page=1)
-                combined.extend(_normalize_openalex_work(w) for w in payload.get("results", []))
+                payload = await openalex.list_works(
+                    search=query, per_page=min(max_results, 20), page=1
+                )
+                combined.extend(
+                    _normalize_openalex_work(w) for w in payload.get("results", [])
+                )
             except Exception as exc:
                 warnings.append(f"OpenAlex search skipped: {exc}")
     finally:
@@ -290,7 +308,9 @@ async def _search_phase1_papers(query: str, sources: list[str], max_results: int
     return unique, warnings
 
 
-async def _download_search_results(results: list[dict], pdf_dir: str | Path = PDF_DIR) -> tuple[int, int, int]:
+async def _download_search_results(
+    results: list[dict], pdf_dir: str | Path = PDF_DIR
+) -> tuple[int, int, int]:
     file_manager = FileManager(_project_path(pdf_dir))
     downloaded = 0
     skipped = 0
@@ -336,7 +356,9 @@ def _list_harvested_pdfs(pdf_dir: str | Path = PDF_DIR) -> list[tuple[str, str]]
         return []
 
     pdfs: list[tuple[str, str]] = []
-    for pdf_file in sorted(pdf_root.rglob("*.pdf"), key=lambda path: path.stat().st_mtime, reverse=True):
+    for pdf_file in sorted(
+        pdf_root.rglob("*.pdf"), key=lambda path: path.stat().st_mtime, reverse=True
+    ):
         try:
             label = str(pdf_file.relative_to(pdf_root))
         except ValueError:
@@ -394,7 +416,9 @@ def _render_extraction_history_detail(ext: dict[str, object]) -> None:
         st.metric("Methods", _payload_count(ext.get("methods")))
         st.metric("Claims", _payload_count(ext.get("claims")))
         if ext.get("extraction_duration_seconds"):
-            st.metric("Duration", _format_duration(ext.get("extraction_duration_seconds")))
+            st.metric(
+                "Duration", _format_duration(ext.get("extraction_duration_seconds"))
+            )
 
     if ext.get("error_message"):
         st.error(f"Error: {ext['error_message']}")
@@ -402,7 +426,9 @@ def _render_extraction_history_detail(ext: dict[str, object]) -> None:
     if ext.get("concepts"):
         st.subheader("Concepts")
         for concept in ext["concepts"]:
-            st.write(f"- {concept.get('label', 'Unknown')} (confidence: {concept.get('confidence', 0):.1%})")
+            st.write(
+                f"- {concept.get('label', 'Unknown')} (confidence: {concept.get('confidence', 0):.1%})"
+            )
 
     if ext.get("methods"):
         st.subheader("Methods")
@@ -423,7 +449,9 @@ def _render_extraction_history_detail(ext: dict[str, object]) -> None:
         st.subheader("Terminology Conflicts")
         st.dataframe(ext["terminology_conflicts"], width="stretch", hide_index=True)
 
-    if ext.get("raw_response") and st.checkbox("Show raw extraction payload", value=False, key="history_show_raw_payload"):
+    if ext.get("raw_response") and st.checkbox(
+        "Show raw extraction payload", value=False, key="history_show_raw_payload"
+    ):
         parsed_raw = _safe_json_parse(str(ext.get("raw_response")))
         if parsed_raw is not None:
             st.json(parsed_raw)
@@ -431,7 +459,9 @@ def _render_extraction_history_detail(ext: dict[str, object]) -> None:
             st.code(str(ext.get("raw_response")))
 
 
-def _render_pdf_preview(pdf_path: str, title: str = "PDF Preview", key_scope: str = "default") -> None:
+def _render_pdf_preview(
+    pdf_path: str, title: str = "PDF Preview", key_scope: str = "default"
+) -> None:
     path = Path(pdf_path)
     if not path.exists():
         st.info("PDF preview is unavailable because the file does not exist.")
@@ -489,7 +519,9 @@ def _pdf_text_preview(path: Path, max_pages: int = 3, max_chars: int = 6000) -> 
 def _default_paper_id_from_pdf(label_or_path: str) -> str:
     stem = Path(label_or_path).stem
     base = stem.rsplit("_v", 1)[0] or "document"
-    arxiv_match = re.search(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", base, flags=re.IGNORECASE)
+    arxiv_match = re.search(
+        r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", base, flags=re.IGNORECASE
+    )
     if arxiv_match:
         return f"arxiv:{arxiv_match.group(1)}"
     legacy_category = (
@@ -532,7 +564,9 @@ def _loaded_text_can_be_reused(requested_paper_id: str, loaded_paper_id: str) ->
     return not requested_key or not loaded_key or requested_key == loaded_key
 
 
-def _nvidia_preflight_ok(llm_router: LLMRouter, provider: str, model: str, timeout_seconds: int) -> bool:
+def _nvidia_preflight_ok(
+    llm_router: LLMRouter, provider: str, model: str, timeout_seconds: int
+) -> bool:
     """Check NVIDIA/NIM connectivity before starting a multi-call extraction."""
     provider_config = llm_router.provider_config(provider)
     if provider_config.provider_type != "nvidia":
@@ -639,11 +673,15 @@ def _render_nim_container_controls(provider_config: object) -> NIMContainerConfi
 
         action_cols = st.columns(4)
         if action_cols[0].button("Docker login", width="stretch"):
-            _show_nim_command_result(manager.login_registry(), "Docker login to nvcr.io succeeded.")
+            _show_nim_command_result(
+                manager.login_registry(), "Docker login to nvcr.io succeeded."
+            )
         if action_cols[1].button("Pull image", width="stretch"):
             _show_nim_command_result(manager.pull_image(), "NIM image pull finished.")
         if action_cols[2].button("Start NIM", width="stretch", type="primary"):
-            _show_nim_command_result(manager.start_container(), "NIM container start requested.")
+            _show_nim_command_result(
+                manager.start_container(), "NIM container start requested."
+            )
         if action_cols[3].button("Stop NIM", width="stretch"):
             _show_nim_command_result(manager.stop_container(), "NIM container stopped.")
 
@@ -834,7 +872,7 @@ def _embedding_rows(labels: list[str]) -> list[dict[str, object]]:
             {
                 "label": label,
                 "dimension": result.dimension,
-                "norm": float((result.vector ** 2).sum() ** 0.5),
+                "norm": float((result.vector**2).sum() ** 0.5),
             }
         )
     return rows
@@ -857,7 +895,9 @@ def _parse_pdf_document(
         "page_count": getattr(parsed, "page_count", None),
         "preview_excerpt": preview.text[:1200],
         "parsed_excerpt": parsed.text[:1200],
-        "parsed_metadata": getattr(parsed, "metadata", None) or getattr(parsed, "meta", None) or {},
+        "parsed_metadata": getattr(parsed, "metadata", None)
+        or getattr(parsed, "meta", None)
+        or {},
     }
     return parsed, diagnostics
 
@@ -1001,7 +1041,9 @@ def _snapshot_extraction_result(result: object) -> dict[str, object]:
         "method_candidates": list(getattr(result, "method_candidates", []) or []),
         "claims": list(getattr(result, "claims", []) or []),
         "cross_domain_hints": list(getattr(result, "cross_domain_hints", []) or []),
-        "terminology_conflicts": list(getattr(result, "terminology_conflicts", []) or []),
+        "terminology_conflicts": list(
+            getattr(result, "terminology_conflicts", []) or []
+        ),
         "temporal_coverage": dict(getattr(result, "temporal_coverage", {}) or {}),
         "mathematical_content": dict(getattr(result, "mathematical_content", {}) or {}),
         "raw_response": getattr(result, "raw_response", "") or "",
@@ -1009,7 +1051,9 @@ def _snapshot_extraction_result(result: object) -> dict[str, object]:
     }
 
 
-def _entity_label_rows(items: list[dict[str, object]], label_key: str, secondary_key: str | None = None) -> list[dict[str, object]]:
+def _entity_label_rows(
+    items: list[dict[str, object]], label_key: str, secondary_key: str | None = None
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for item in items:
         label = str(item.get(label_key, "")).strip()
@@ -1025,7 +1069,11 @@ def _entity_label_rows(items: list[dict[str, object]], label_key: str, secondary
 
 
 def _extract_label_set(items: list[dict[str, object]], key: str) -> set[str]:
-    return {str(item.get(key, "")).strip() for item in items if str(item.get(key, "")).strip()}
+    return {
+        str(item.get(key, "")).strip()
+        for item in items
+        if str(item.get(key, "")).strip()
+    }
 
 
 def _sync_vocabulary_from_concepts(concepts: list[dict[str, object]]) -> list[str]:
@@ -1069,7 +1117,9 @@ def _sync_vocabulary_from_concepts(concepts: list[dict[str, object]]) -> list[st
     return added_labels
 
 
-def _render_extraction_diff(current: dict[str, object], previous: dict[str, object]) -> None:
+def _render_extraction_diff(
+    current: dict[str, object], previous: dict[str, object]
+) -> None:
     st.subheader("Re-run Diff")
 
     current_concepts = current.get("concepts", []) or []
@@ -1179,7 +1229,11 @@ with st.sidebar:
     selected_provider = st.selectbox(
         "LLM Provider",
         options=providers,
-        index=providers.index(llm_router.default_provider) if llm_router.default_provider in providers else 0,
+        index=(
+            providers.index(llm_router.default_provider)
+            if llm_router.default_provider in providers
+            else 0
+        ),
         help="Select which LLM provider to use for extraction",
     )
     selected_provider_config = llm_router.provider_config(selected_provider)
@@ -1190,8 +1244,12 @@ with st.sidebar:
     )
 
     if selected_provider_is_hosted_nvidia:
-        st.caption("NVIDIA NIM keys are used only from the environment or this Streamlit session.")
-        env_key_name = "NVIDIA_API_KEY" if os.getenv("NVIDIA_API_KEY") else "NGC_API_KEY"
+        st.caption(
+            "NVIDIA NIM keys are used only from the environment or this Streamlit session."
+        )
+        env_key_name = (
+            "NVIDIA_API_KEY" if os.getenv("NVIDIA_API_KEY") else "NGC_API_KEY"
+        )
         env_key = os.getenv("NVIDIA_API_KEY") or os.getenv("NGC_API_KEY")
         session_key = st.session_state.get("nvidia_api_key")
         key_generation = int(st.session_state.get("nvidia_api_key_generation", 0))
@@ -1216,7 +1274,9 @@ with st.sidebar:
             selected_provider_config.api_key = env_key
             st.success(f"Using {env_key_name} from the environment or local .env.")
         else:
-            st.warning("No NVIDIA API key configured yet. Set NVIDIA_API_KEY/NGC_API_KEY or paste one above.")
+            st.warning(
+                "No NVIDIA API key configured yet. Set NVIDIA_API_KEY/NGC_API_KEY or paste one above."
+            )
 
         if session_key and st.button("Forget session NVIDIA key", width="stretch"):
             st.session_state.pop("nvidia_api_key", None)
@@ -1231,12 +1291,18 @@ with st.sidebar:
         _render_nim_container_controls(selected_provider_config)
 
     refresh_models = st.button("Refresh models manually")
-    provider_models = llm_router.provider_model_options(selected_provider, refresh=refresh_models)
+    provider_models = llm_router.provider_model_options(
+        selected_provider, refresh=refresh_models
+    )
     default_model = llm_router.provider_default_model(selected_provider)
     selected_model = st.selectbox(
         "Model",
         options=provider_models,
-        index=provider_models.index(default_model) if default_model in provider_models else 0,
+        index=(
+            provider_models.index(default_model)
+            if default_model in provider_models
+            else 0
+        ),
         help="Choose the model that should answer the extraction prompt",
     )
     if selected_provider_is_nvidia:
@@ -1248,8 +1314,12 @@ with st.sidebar:
         ).strip()
         if custom_nvidia_model:
             selected_model = custom_nvidia_model
-    recommended_settings = llm_router.recommended_settings(selected_provider, selected_model, refresh=False)
-    settings_key = re.sub(r"[^A-Za-z0-9_]+", "_", f"v3_{selected_provider}_{selected_model}")
+    recommended_settings = llm_router.recommended_settings(
+        selected_provider, selected_model, refresh=False
+    )
+    settings_key = re.sub(
+        r"[^A-Za-z0-9_]+", "_", f"v3_{selected_provider}_{selected_model}"
+    )
 
     st.divider()
 
@@ -1292,7 +1362,9 @@ with st.sidebar:
         key=f"context_size_{settings_key}",
     )
     if selected_provider == "lm_studio":
-        st.caption("LM Studio must load the model with at least this context length. This slider controls PaperKG chunking, not the server slot size.")
+        st.caption(
+            "LM Studio must load the model with at least this context length. This slider controls PaperKG chunking, not the server slot size."
+        )
 
     max_tokens = st.slider(
         "Max Tokens",
@@ -1308,11 +1380,15 @@ with st.sidebar:
         "LLM Request Timeout (seconds)",
         min_value=60,
         max_value=3600,
-        value=max(1800, int(llm_router.provider_config(selected_provider).timeout_seconds)),
+        value=max(
+            1800, int(llm_router.provider_config(selected_provider).timeout_seconds)
+        ),
         step=60,
         help="How long Streamlit waits for a local model response before aborting the request.",
     )
-    if selected_provider_is_nvidia and st.button("Test NVIDIA/NIM connection", width="stretch"):
+    if selected_provider_is_nvidia and st.button(
+        "Test NVIDIA/NIM connection", width="stretch"
+    ):
         if _nvidia_preflight_ok(
             llm_router,
             selected_provider,
@@ -1374,7 +1450,11 @@ with st.sidebar:
             elif reset_scope == "Extraction history only":
                 with init_metadata_db() as metadata_db:
                     metadata_db.clear_extraction_results()
-                for key in ["last_extraction", "last_extraction_previous", "batch_extractions"]:
+                for key in [
+                    "last_extraction",
+                    "last_extraction_previous",
+                    "batch_extractions",
+                ]:
                     st.session_state.pop(key, None)
                 st.success("Extraction history cleared.")
             else:
@@ -1398,7 +1478,9 @@ with st.sidebar:
                         f"processes that use {METADATA_DB_PATH}, then try again. Details: {exc}"
                     )
 
-    st.caption("Graph visualization stays in Phase 2: streamlit run ui/graph_visualization.py")
+    st.caption(
+        "Graph visualization stays in Phase 2: streamlit run ui/graph_visualization.py"
+    )
 
 
 # Main content
@@ -1409,8 +1491,14 @@ with tabs[0]:
     st.header("Extract Entities from Paper")
     if st.session_state.get("loaded_paper_text"):
         parse_debug = st.session_state.get("last_parse_debug", {})
-        metadata = parse_debug.get("parsed_metadata", {}) if isinstance(parse_debug, dict) else {}
-        loaded_title = _title_from_parsed_text(str(st.session_state.get("loaded_paper_text") or ""))
+        metadata = (
+            parse_debug.get("parsed_metadata", {})
+            if isinstance(parse_debug, dict)
+            else {}
+        )
+        loaded_title = _title_from_parsed_text(
+            str(st.session_state.get("loaded_paper_text") or "")
+        )
         title_suffix = f" | title={loaded_title[:90]}" if loaded_title else ""
         st.info(
             f"Current input: {st.session_state.get('loaded_paper_id', 'document')} | "
@@ -1451,7 +1539,9 @@ with tabs[0]:
             uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
             if uploaded_file:
-                selected_input_source = f"upload:{uploaded_file.name}:{uploaded_file.size}"
+                selected_input_source = (
+                    f"upload:{uploaded_file.name}:{uploaded_file.size}"
+                )
                 paper_id = _paper_id_input(
                     "Paper ID",
                     _default_paper_id_from_pdf(uploaded_file.name),
@@ -1470,7 +1560,9 @@ with tabs[0]:
                 )
 
                 if st.button("Save and Parse Upload", width="stretch"):
-                    saved_path = file_manager.save_pdf(paper_id or uploaded_file.name, file_bytes)
+                    saved_path = file_manager.save_pdf(
+                        paper_id or uploaded_file.name, file_bytes
+                    )
 
                     with st.spinner("Parsing PDF..."):
                         try:
@@ -1479,8 +1571,15 @@ with tabs[0]:
                                 paper_id or "pdf_document",
                             )
                             paper_text = parsed.text
-                            _set_loaded_paper(paper_id or "pdf_document", paper_text, str(saved_path), parse_debug)
-                            st.success(f"Parsed {parsed.page_count} pages and saved to {saved_path}")
+                            _set_loaded_paper(
+                                paper_id or "pdf_document",
+                                paper_text,
+                                str(saved_path),
+                                parse_debug,
+                            )
+                            st.success(
+                                f"Parsed {parsed.page_count} pages and saved to {saved_path}"
+                            )
                             st.caption("PDF preview is available below after parsing.")
 
                         except Exception as e:
@@ -1497,7 +1596,11 @@ with tabs[0]:
             selected_input_source = f"url:{pdf_url.strip()}"
             paper_id = _paper_id_input(
                 "Paper ID",
-                _default_paper_id_from_pdf(pdf_url) if pdf_url.strip() else "pdf_from_url",
+                (
+                    _default_paper_id_from_pdf(pdf_url)
+                    if pdf_url.strip()
+                    else "pdf_from_url"
+                ),
                 selected_input_source,
                 "phase3_pdf_url_paper_id",
                 "Stable ID used to group extraction history and later KG records.",
@@ -1510,13 +1613,19 @@ with tabs[0]:
                 else:
                     with st.spinner("Downloading PDF..."):
                         try:
-                            response = httpx.get(pdf_url, follow_redirects=True, timeout=60.0)
+                            response = httpx.get(
+                                pdf_url, follow_redirects=True, timeout=60.0
+                            )
                             response.raise_for_status()
                             content_type = response.headers.get("content-type", "")
                             if "pdf" not in content_type.lower():
-                                st.warning(f"Content type looks unusual: {content_type}")
+                                st.warning(
+                                    f"Content type looks unusual: {content_type}"
+                                )
 
-                            saved_path = file_manager.save_pdf(paper_id or "pdf_from_url", response.content)
+                            saved_path = file_manager.save_pdf(
+                                paper_id or "pdf_from_url", response.content
+                            )
                             st.success(f"PDF downloaded to {saved_path}")
 
                             parsed, parse_debug = _parse_pdf_document(
@@ -1524,7 +1633,12 @@ with tabs[0]:
                                 paper_id or "pdf_from_url",
                             )
                             paper_text = parsed.text
-                            _set_loaded_paper(paper_id or "pdf_from_url", paper_text, str(saved_path), parse_debug)
+                            _set_loaded_paper(
+                                paper_id or "pdf_from_url",
+                                paper_text,
+                                str(saved_path),
+                                parse_debug,
+                            )
                             st.success(f"Parsed {parsed.page_count} pages")
                             st.caption("PDF preview is available below after parsing.")
 
@@ -1536,7 +1650,11 @@ with tabs[0]:
 
         else:  # input_method == "From Harvest"
             st.subheader("Select Recently Harvested PDF")
-            if st.button("Refresh harvested PDFs", width="content", key="phase3_refresh_harvested_pdfs"):
+            if st.button(
+                "Refresh harvested PDFs",
+                width="content",
+                key="phase3_refresh_harvested_pdfs",
+            ):
                 st.rerun()
 
             harvested_pdfs = _list_harvested_pdfs()
@@ -1544,7 +1662,11 @@ with tabs[0]:
                 st.write(f"Found {len(harvested_pdfs)} harvested PDFs in {PDF_DIR}")
 
                 pdf_options = {label: path for label, path in harvested_pdfs}
-                selected_pdf_name = st.selectbox("Select PDF", options=list(pdf_options.keys()), key="phase3_single_harvest_pdf")
+                selected_pdf_name = st.selectbox(
+                    "Select PDF",
+                    options=list(pdf_options.keys()),
+                    key="phase3_single_harvest_pdf",
+                )
                 selected_pdf_path = pdf_options[selected_pdf_name]
                 selected_input_source = str(selected_pdf_path)
 
@@ -1565,8 +1687,15 @@ with tabs[0]:
                             )
                             paper_text = parsed.text
                             paper_id = single_paper_id
-                            _set_loaded_paper(single_paper_id, paper_text, selected_pdf_path, parse_debug)
-                            st.success(f"Parsed {parsed.page_count} pages from {selected_pdf_name}")
+                            _set_loaded_paper(
+                                single_paper_id,
+                                paper_text,
+                                selected_pdf_path,
+                                parse_debug,
+                            )
+                            st.success(
+                                f"Parsed {parsed.page_count} pages from {selected_pdf_name}"
+                            )
                             st.caption("PDF preview is available below after parsing.")
                         except Exception as e:
                             st.error(f"Failed to parse PDF: {e}")
@@ -1576,11 +1705,21 @@ with tabs[0]:
                 st.caption("Use the Batch tab to run extraction for multiple PDFs.")
 
             else:
-                st.warning("No harvested PDFs found. Use Harvest tab to download PDFs first.")
+                st.warning(
+                    "No harvested PDFs found. Use Harvest tab to download PDFs first."
+                )
 
         loaded_path = str(st.session_state.get("last_pdf_path") or "")
-        selected_source_changed = bool(selected_input_source and loaded_path and str(selected_input_source) != loaded_path)
-        if not paper_text and st.session_state.get("loaded_paper_text") and not selected_source_changed:
+        selected_source_changed = bool(
+            selected_input_source
+            and loaded_path
+            and str(selected_input_source) != loaded_path
+        )
+        if (
+            not paper_text
+            and st.session_state.get("loaded_paper_text")
+            and not selected_source_changed
+        ):
             loaded_paper_id = str(st.session_state.get("loaded_paper_id") or "")
             requested_paper_id = str(paper_id or "").strip()
             if _loaded_text_can_be_reused(requested_paper_id, loaded_paper_id):
@@ -1621,8 +1760,9 @@ with tabs[0]:
 
         else:
             import time
+
             start_time = time.time()
-            
+
             with st.spinner("Extracting entities..."):
                 overrides = {
                     "model": selected_model,
@@ -1649,15 +1789,20 @@ with tabs[0]:
                         overrides=overrides,
                         link_concepts=link_concepts,
                     )
-                    
+
                     duration = time.time() - start_time
 
                     # Store result in session
                     st.session_state.last_extraction = result
                     st.session_state.last_extract_paper_id = paper_id or "document"
-                    if "last_pdf_path" not in st.session_state and input_method == "Paste text":
+                    if (
+                        "last_pdf_path" not in st.session_state
+                        and input_method == "Paste text"
+                    ):
                         st.session_state.last_pdf_path = None
-                    st.session_state.last_parse_debug = st.session_state.get("last_parse_debug", {})
+                    st.session_state.last_parse_debug = st.session_state.get(
+                        "last_parse_debug", {}
+                    )
 
                     # Save to database
                     with init_metadata_db() as metadata_db:
@@ -1671,10 +1816,20 @@ with tabs[0]:
                             paper_text=paper_text,
                             pdf_path=st.session_state.get("last_pdf_path"),
                         )
-                        previous_runs = metadata_db.get_paper_extractions(canonical_paper_id, limit=2)
+                        previous_runs = metadata_db.get_paper_extractions(
+                            canonical_paper_id, limit=2
+                        )
                     failure_reason = extraction_failure_reason(result)
-                    added_vocabulary = [] if failure_reason else _sync_vocabulary_from_concepts(result.concepts)
-                    previous_snapshot = _snapshot_extraction_result(previous_runs[1]) if len(previous_runs) > 1 else None
+                    added_vocabulary = (
+                        []
+                        if failure_reason
+                        else _sync_vocabulary_from_concepts(result.concepts)
+                    )
+                    previous_snapshot = (
+                        _snapshot_extraction_result(previous_runs[1])
+                        if len(previous_runs) > 1
+                        else None
+                    )
 
                     if failure_reason:
                         st.error(
@@ -1686,24 +1841,36 @@ with tabs[0]:
                             f"Extraction complete. Result ID: {result_id}, Duration: {_format_duration(duration)}"
                         )
                     if added_vocabulary:
-                        st.info(f"Vocabulary grew by {len(added_vocabulary)} concept(s): {', '.join(added_vocabulary[:12])}")
+                        st.info(
+                            f"Vocabulary grew by {len(added_vocabulary)} concept(s): {', '.join(added_vocabulary[:12])}"
+                        )
                     st.session_state.last_extraction_previous = previous_snapshot
                     st.session_state.last_extract_paper_id = canonical_paper_id
 
-                    claim_texts = [claim.get("statement", "") for claim in result.claims if claim.get("statement")]
-                    if not failure_reason and run_conflict_detection and len(claim_texts) >= 2:
+                    claim_texts = [
+                        claim.get("statement", "")
+                        for claim in result.claims
+                        if claim.get("statement")
+                    ]
+                    if (
+                        not failure_reason
+                        and run_conflict_detection
+                        and len(claim_texts) >= 2
+                    ):
                         detector = init_conflict_detector()
-                        st.session_state.last_conflict_analyses = detector.analyze_claims_batch(
-                            claim_texts,
-                            provider=selected_provider,
-                            overrides=overrides,
-                            max_pairs=conflict_max_pairs,
+                        st.session_state.last_conflict_analyses = (
+                            detector.analyze_claims_batch(
+                                claim_texts,
+                                provider=selected_provider,
+                                overrides=overrides,
+                                max_pairs=conflict_max_pairs,
+                            )
                         )
 
                 except Exception as e:
                     error_msg = f"Extraction failed: {e}"
                     st.error(error_msg)
-                    
+
                     # Save error to database
                     try:
                         with init_metadata_db() as metadata_db:
@@ -1723,7 +1890,9 @@ with tabs[0]:
         paper_identifier = st.session_state.get("last_extract_paper_id", "document")
         st.divider()
 
-        if result.raw_response and st.checkbox("Show extraction payload", value=False, key="last_extraction_show_payload"):
+        if result.raw_response and st.checkbox(
+            "Show extraction payload", value=False, key="last_extraction_show_payload"
+        ):
             st.subheader("Extraction Payload")
             parsed_raw = _safe_json_parse(result.raw_response)
             if parsed_raw is not None:
@@ -1738,11 +1907,15 @@ with tabs[0]:
         previous_snapshot = st.session_state.get("last_extraction_previous")
         if previous_snapshot:
             with st.expander("Re-run Diff", expanded=True):
-                _render_extraction_diff(_snapshot_extraction_result(result), previous_snapshot)
+                _render_extraction_diff(
+                    _snapshot_extraction_result(result), previous_snapshot
+                )
 
         if parse_debug:
             with st.expander("Parsing Diagnostics", expanded=True):
-                st.write(f"**Selected parser:** {parse_debug.get('selected_parser', 'n/a')}")
+                st.write(
+                    f"**Selected parser:** {parse_debug.get('selected_parser', 'n/a')}"
+                )
                 st.write(f"**Reason:** {parse_debug.get('selection_reason', 'n/a')}")
                 st.write(f"**Indicators:** {parse_debug.get('parser_indicators', {})}")
                 st.text_area(
@@ -1764,21 +1937,44 @@ with tabs[0]:
                 st.caption(
                     "Preview rendering is lazy because embedded PDFs can make every Streamlit interaction slow."
                 )
-                if st.button("Render current PDF preview", width="stretch", key="render_current_pdf_preview"):
-                    _render_pdf_preview(str(st.session_state.last_pdf_path), title="Current paper PDF", key_scope="current")
+                if st.button(
+                    "Render current PDF preview",
+                    width="stretch",
+                    key="render_current_pdf_preview",
+                ):
+                    _render_pdf_preview(
+                        str(st.session_state.last_pdf_path),
+                        title="Current paper PDF",
+                        key_scope="current",
+                    )
 
         meta_cols = st.columns(4)
-        meta_cols[0].metric("Paper Type", str(getattr(result, "paper_type", "unknown")).title())
-        meta_cols[1].metric("Language", str(getattr(result, "language_detected", "unknown")))
-        meta_cols[2].metric("Formulas", "Yes" if result.mathematical_content.get("has_formulas") else "No")
+        meta_cols[0].metric(
+            "Paper Type", str(getattr(result, "paper_type", "unknown")).title()
+        )
+        meta_cols[1].metric(
+            "Language", str(getattr(result, "language_detected", "unknown"))
+        )
+        meta_cols[2].metric(
+            "Formulas",
+            "Yes" if result.mathematical_content.get("has_formulas") else "No",
+        )
         meta_cols[3].metric("Term Conflicts", len(result.terminology_conflicts))
 
         with st.expander("Stored KG Snapshot", expanded=False):
-            st.caption("Load this only when you need the persisted record for the current paper.")
-            if st.button("Load stored KG snapshot", width="stretch", key="load_stored_kg_snapshot"):
+            st.caption(
+                "Load this only when you need the persisted record for the current paper."
+            )
+            if st.button(
+                "Load stored KG snapshot",
+                width="stretch",
+                key="load_stored_kg_snapshot",
+            ):
                 with init_metadata_db() as metadata_db:
                     paper_record = metadata_db.get_paper(paper_identifier)
-                    stored_results = metadata_db.get_paper_extractions(paper_identifier, limit=5)
+                    stored_results = metadata_db.get_paper_extractions(
+                        paper_identifier, limit=5
+                    )
                 if paper_record:
                     st.write("**Paper node:**")
                     st.json(paper_record)
@@ -1830,7 +2026,9 @@ with tabs[0]:
             for claim in result.claims:
                 with st.expander(claim.get("statement", "")[:50]):
                     st.write(f"**Type:** {claim.get('evidence_type')}")
-                    st.write(f"**Attributed to:** {claim.get('attributed_to', 'this_paper')}")
+                    st.write(
+                        f"**Attributed to:** {claim.get('attributed_to', 'this_paper')}"
+                    )
                     if claim.get("negated"):
                         st.warning("Negative finding")
 
@@ -1892,10 +2090,16 @@ with tabs[0]:
                 st.info("No concepts were extracted, so no linking could be shown.")
 
         with st.expander("Embedding Diagnostics", expanded=True):
-            labels = [concept.get("label", "").strip() for concept in result.concepts if concept.get("label")]
+            labels = [
+                concept.get("label", "").strip()
+                for concept in result.concepts
+                if concept.get("label")
+            ]
             if labels:
                 demo_labels = labels[:3]
-                st.dataframe(_embedding_rows(demo_labels), width="stretch", hide_index=True)
+                st.dataframe(
+                    _embedding_rows(demo_labels), width="stretch", hide_index=True
+                )
 
                 same_a = embedding_engine.embed(demo_labels[0])
                 same_b = embedding_engine.embed(demo_labels[0])
@@ -1927,13 +2131,23 @@ with tabs[0]:
                     for analysis in analyses
                 ]
                 st.dataframe(conflict_rows, width="stretch", hide_index=True)
-                contradictions = [row for row in conflict_rows if row["type"] == "contradictory" and row["confidence"] >= 0.7]
+                contradictions = [
+                    row
+                    for row in conflict_rows
+                    if row["type"] == "contradictory" and row["confidence"] >= 0.7
+                ]
                 if contradictions:
-                    st.error(f"Found {len(contradictions)} high-confidence contradictions.")
+                    st.error(
+                        f"Found {len(contradictions)} high-confidence contradictions."
+                    )
                 else:
-                    st.success("No high-confidence contradictions detected for the current claims.")
+                    st.success(
+                        "No high-confidence contradictions detected for the current claims."
+                    )
             else:
-                st.info("Need at least two claims from a successful extraction to run conflict detection.")
+                st.info(
+                    "Need at least two claims from a successful extraction to run conflict detection."
+                )
 
     if "batch_extractions" in st.session_state and st.session_state.batch_extractions:
         st.divider()
@@ -1941,7 +2155,9 @@ with tabs[0]:
 
         for item in st.session_state.batch_extractions:
             result = item["result"]
-            with st.expander(f"{item['paper_id']} | Result {item['result_id']} | {item['parsed_pages']} pages"):
+            with st.expander(
+                f"{item['paper_id']} | Result {item['result_id']} | {item['parsed_pages']} pages"
+            ):
                 parse_debug = item.get("parse_debug", {})
                 if result.raw_response:
                     parsed_raw = _safe_json_parse(result.raw_response)
@@ -1965,7 +2181,9 @@ with tabs[0]:
                         st.info(_format_cross_domain_hint(hint))
                 if result.terminology_conflicts:
                     st.write("**Terminology conflicts:**")
-                    st.dataframe(result.terminology_conflicts, width="stretch", hide_index=True)
+                    st.dataframe(
+                        result.terminology_conflicts, width="stretch", hide_index=True
+                    )
                 if parse_debug:
                     with st.expander("Parser details"):
                         st.write(parse_debug.get("parser_indicators", {}))
@@ -1990,7 +2208,9 @@ with tabs[1]:
     harvested_pdfs = _list_harvested_pdfs()
 
     if not harvested_pdfs:
-        st.info(f"No local PDFs found in {PDF_DIR}. Use Upload PDF, PDF URL, or Harvest first.")
+        st.info(
+            f"No local PDFs found in {PDF_DIR}. Use Upload PDF, PDF URL, or Harvest first."
+        )
     else:
         pdf_options = {label: path for label, path in harvested_pdfs}
         selected_pdf_name = st.selectbox(
@@ -2010,17 +2230,33 @@ with tabs[1]:
 
         stat_cols = st.columns(3)
         stat_cols[0].metric("PDFs", len(harvested_pdfs))
-        stat_cols[1].metric("Size", f"{selected_path.stat().st_size / 1024 / 1024:.2f} MB")
-        stat_cols[2].metric("Modified", time.strftime("%Y-%m-%d %H:%M", time.localtime(selected_path.stat().st_mtime)))
+        stat_cols[1].metric(
+            "Size", f"{selected_path.stat().st_size / 1024 / 1024:.2f} MB"
+        )
+        stat_cols[2].metric(
+            "Modified",
+            time.strftime(
+                "%Y-%m-%d %H:%M", time.localtime(selected_path.stat().st_mtime)
+            ),
+        )
 
         action_cols = st.columns([1, 1])
         with action_cols[0]:
             if st.button("Load for Extract tab", width="stretch"):
                 with st.spinner(f"Parsing {selected_pdf_name}..."):
                     try:
-                        parsed, parse_debug = _parse_pdf_document(selected_pdf_path, selected_paper_id)
-                        _set_loaded_paper(selected_paper_id, parsed.text, selected_pdf_path, parse_debug)
-                        st.success(f"Loaded {parsed.page_count} page(s) for extraction.")
+                        parsed, parse_debug = _parse_pdf_document(
+                            selected_pdf_path, selected_paper_id
+                        )
+                        _set_loaded_paper(
+                            selected_paper_id,
+                            parsed.text,
+                            selected_pdf_path,
+                            parse_debug,
+                        )
+                        st.success(
+                            f"Loaded {parsed.page_count} page(s) for extraction."
+                        )
                     except Exception as exc:
                         st.error(f"Failed to parse PDF: {exc}")
         with action_cols[1]:
@@ -2032,8 +2268,14 @@ with tabs[1]:
             st.caption(
                 "Preview rendering is intentionally lazy because Streamlit runs every tab on each interaction."
             )
-            if st.button("Render selected PDF preview", width="stretch", key="render_library_pdf_preview"):
-                _render_pdf_preview(selected_pdf_path, title=selected_pdf_name, key_scope="library")
+            if st.button(
+                "Render selected PDF preview",
+                width="stretch",
+                key="render_library_pdf_preview",
+            ):
+                _render_pdf_preview(
+                    selected_pdf_path, title=selected_pdf_name, key_scope="library"
+                )
 
         if st.session_state.get("loaded_paper_text"):
             with st.expander("Loaded parsed text", expanded=False):
@@ -2098,7 +2340,9 @@ with tabs[2]:
 # Tab 4: Batch
 with tabs[3]:
     st.header("Batch Processing")
-    st.write("Run the same extraction settings over multiple PDFs from the local PDF Library.")
+    st.write(
+        "Run the same extraction settings over multiple PDFs from the local PDF Library."
+    )
 
     harvested_pdfs = _list_harvested_pdfs()
     if not harvested_pdfs:
@@ -2109,19 +2353,25 @@ with tabs[3]:
         batch_selection = st.multiselect(
             "PDFs to process",
             options=list(pdf_options.keys()),
-            default=list(pdf_options.keys()) if select_all else list(pdf_options.keys())[:1],
+            default=(
+                list(pdf_options.keys()) if select_all else list(pdf_options.keys())[:1]
+            ),
             key="batch_pdf_selection",
         )
         batch_preview_rows = [
             {
                 "PDF": name,
                 "Paper ID": _default_paper_id_from_pdf(name),
-                "Size MB": round(Path(pdf_options[name]).stat().st_size / 1024 / 1024, 2),
+                "Size MB": round(
+                    Path(pdf_options[name]).stat().st_size / 1024 / 1024, 2
+                ),
             }
             for name in batch_selection
         ]
         st.dataframe(batch_preview_rows, width="stretch", hide_index=True)
-        st.caption("Paper ID groups extraction history and later KG records. It is derived from the PDF filename.")
+        st.caption(
+            "Paper ID groups extraction history and later KG records. It is derived from the PDF filename."
+        )
 
         if st.button("Start Batch Extraction", width="stretch", type="primary"):
             if not batch_selection:
@@ -2142,9 +2392,14 @@ with tabs[3]:
                 )
                 st.session_state.batch_extractions = batch_results
                 if batch_results:
-                    st.success(f"Batch extraction complete for {len(batch_results)} PDF(s).")
+                    st.success(
+                        f"Batch extraction complete for {len(batch_results)} PDF(s)."
+                    )
                 if batch_errors:
-                    st.warning("Some PDFs failed:\n" + "\n".join(f"- {error}" for error in batch_errors))
+                    st.warning(
+                        "Some PDFs failed:\n"
+                        + "\n".join(f"- {error}" for error in batch_errors)
+                    )
 
     if st.session_state.get("batch_extractions"):
         st.subheader("Last Batch Results")
@@ -2171,7 +2426,9 @@ with tabs[4]:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        harvest_query = st.text_input("Research topic / query", value="machine learning")
+        harvest_query = st.text_input(
+            "Research topic / query", value="machine learning"
+        )
         harvest_sources = st.multiselect(
             "Sources",
             options=["arxiv", "semantic_scholar", "openalex"],
@@ -2194,7 +2451,9 @@ with tabs[4]:
             with st.spinner("Searching papers..."):
                 try:
                     results, search_warnings = asyncio.run(
-                        _search_phase1_papers(harvest_query.strip(), harvest_sources, harvest_limit)
+                        _search_phase1_papers(
+                            harvest_query.strip(), harvest_sources, harvest_limit
+                        )
                     )
                     st.session_state.harvest_results = results
 
@@ -2203,8 +2462,12 @@ with tabs[4]:
                             metadata_db.batch_insert_papers(results)
 
                     if download_pdfs and results:
-                        downloaded, skipped, failed = asyncio.run(_download_search_results(results))
-                        st.info(f"PDF download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}")
+                        downloaded, skipped, failed = asyncio.run(
+                            _download_search_results(results)
+                        )
+                        st.info(
+                            f"PDF download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}"
+                        )
 
                     for warning in search_warnings:
                         st.warning(warning)
@@ -2219,7 +2482,9 @@ with tabs[4]:
 
         for index, paper in enumerate(results, start=1):
             title = paper.get("title") or "Untitled paper"
-            paper_id = paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+            paper_id = (
+                paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+            )
             with st.expander(f"{index}. {title}"):
                 st.write(f"**ID:** {paper_id}")
                 st.write(f"**Source:** {paper.get('source')}")
@@ -2232,8 +2497,12 @@ with tabs[4]:
                     if st.button("Download PDF", key=f"download_{paper_id}"):
                         with st.spinner("Downloading PDF..."):
                             try:
-                                downloaded, skipped, failed = asyncio.run(_download_search_results([paper]))
-                                st.success(f"Download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}")
+                                downloaded, skipped, failed = asyncio.run(
+                                    _download_search_results([paper])
+                                )
+                                st.success(
+                                    f"Download summary: downloaded={downloaded}, skipped={skipped}, failed={failed}"
+                                )
                             except Exception as exc:
                                 st.error(f"Download failed: {exc}")
                 else:
@@ -2244,21 +2513,25 @@ with tabs[4]:
 with tabs[5]:
     st.header("Extraction History")
     st.write("View and manage past extraction results")
-    
+
     col1, col2 = st.columns([2, 1])
-    
+
     with col1:
-        paper_id_filter = st.text_input("Filter by paper ID (optional)", placeholder="e.g., arxiv_2301.12345")
-    
+        paper_id_filter = st.text_input(
+            "Filter by paper ID (optional)", placeholder="e.g., arxiv_2301.12345"
+        )
+
     with col2:
         if st.button("Refresh History"):
             st.rerun()
-    
+
     try:
         with init_metadata_db() as metadata_db:
             if paper_id_filter.strip():
                 # Show specific paper's extractions
-                extractions = metadata_db.get_paper_extractions(paper_id_filter.strip(), limit=50)
+                extractions = metadata_db.get_paper_extractions(
+                    paper_id_filter.strip(), limit=50
+                )
                 history_title = f"Extractions for {paper_id_filter}"
             else:
                 # Show most recent extractions across all papers
@@ -2271,7 +2544,7 @@ with tabs[5]:
             "Could not open the metadata database. Close other running ScienceKG/Streamlit/Python "
             f"processes that use {METADATA_DB_PATH}, then refresh. Details: {exc}"
         )
-    
+
     if extractions:
         st.write(f"Found {len(extractions)} extraction(s)")
 
@@ -2287,9 +2560,11 @@ with tabs[5]:
                     "concepts": _payload_count(ext.get("concepts")),
                     "methods": _payload_count(ext.get("methods")),
                     "claims": _payload_count(ext.get("claims")),
-                    "duration": _format_duration(ext.get("extraction_duration_seconds"))
-                    if ext.get("extraction_duration_seconds")
-                    else "",
+                    "duration": (
+                        _format_duration(ext.get("extraction_duration_seconds"))
+                        if ext.get("extraction_duration_seconds")
+                        else ""
+                    ),
                 }
                 for ext in extractions
             ],
@@ -2304,13 +2579,17 @@ with tabs[5]:
         selected_history = st.selectbox(
             "Show details for extraction",
             options=[""] + list(detail_options.keys()),
-            format_func=lambda value: "Select an extraction..." if value == "" else value,
+            format_func=lambda value: (
+                "Select an extraction..." if value == "" else value
+            ),
             key="history_detail_selection",
         )
         if selected_history:
             _render_extraction_history_detail(detail_options[selected_history])
     else:
-        st.info("No extraction history found. Start by extracting entities from papers.")
+        st.info(
+            "No extraction history found. Start by extracting entities from papers."
+        )
 
 
 # Footer
@@ -2326,4 +2605,3 @@ with col2:
 
 with col3:
     st.caption("ScienceKG Knowledge Graph")
-

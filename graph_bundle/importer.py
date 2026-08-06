@@ -1,4 +1,5 @@
 """Ein Projekt-Bundle pruefen (Dry-Run) und einspielen."""
+
 from __future__ import annotations
 
 import hashlib
@@ -24,7 +25,13 @@ from storage.metadata_db import MetadataDB
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ImportMode", "BundlePreview", "ImportReport", "preview_bundle", "import_bundle"]
+__all__ = [
+    "ImportMode",
+    "BundlePreview",
+    "ImportReport",
+    "preview_bundle",
+    "import_bundle",
+]
 
 ImportMode = Literal["merge", "replace"]
 
@@ -91,7 +98,9 @@ class ImportReport:
 
 def _read_manifest(archive: zipfile.ZipFile) -> BundleManifest:
     if MANIFEST_NAME not in archive.namelist():
-        raise BundleError("Kein manifest.json im Archiv — das ist kein ScienceKG-Bundle.")
+        raise BundleError(
+            "Kein manifest.json im Archiv — das ist kein ScienceKG-Bundle."
+        )
     with archive.open(MANIFEST_NAME) as handle:
         try:
             data = json.loads(handle.read().decode("utf-8"))
@@ -104,7 +113,12 @@ def _read_manifest(archive: zipfile.ZipFile) -> BundleManifest:
 
 def _read_project(archive: zipfile.ZipFile, manifest: BundleManifest) -> dict[str, Any]:
     if PROJECT_NAME not in archive.namelist():
-        return {"id": manifest.project, "paper_ids": [], "primary_paper_id": None, "pinned": False}
+        return {
+            "id": manifest.project,
+            "paper_ids": [],
+            "primary_paper_id": None,
+            "pinned": False,
+        }
     with archive.open(PROJECT_NAME) as handle:
         try:
             data = json.loads(handle.read().decode("utf-8"))
@@ -190,7 +204,9 @@ def import_bundle(
         _validate_members(archive)
         manifest = _read_manifest(archive)
         project = _read_project(archive, manifest)
-        project_id = (target_project or str(project.get("id") or manifest.project)).strip()
+        project_id = (
+            target_project or str(project.get("id") or manifest.project)
+        ).strip()
         if not project_id:
             raise BundleError("Das Bundle nennt keinen Projektnamen.")
 
@@ -223,7 +239,8 @@ def import_bundle(
                 )
 
             existing_extractions = {
-                _extraction_fingerprint(e) for e in db.list_extraction_results(limit=200_000)
+                _extraction_fingerprint(e)
+                for e in db.list_extraction_results(limit=200_000)
             }
             for row in read_jsonl(archive, TABLE_FILES["extraction_results"]):
                 paper_id = str(row.get("paper_id") or "").strip()
@@ -291,6 +308,7 @@ def _extraction_fingerprint(row: dict[str, Any]) -> str:
     dieselbe Extraktion erneut angelegt. Der Fingerabdruck bleibt dagegen ueber
     Export und Import hinweg gleich.
     """
+
     def _labels(field: str) -> list[str]:
         values = row.get(field) or []
         if isinstance(values, str):
@@ -338,9 +356,19 @@ def _paper_record(row: dict[str, Any]) -> dict[str, Any]:
 
 
 _EXTRACTION_FIELDS = (
-    "paper_type", "concepts", "methods", "concept_candidates", "method_candidates",
-    "relations", "claims", "cross_domain_hints", "terminology_conflicts",
-    "temporal_coverage", "mathematical_content", "error_message", "duration_seconds",
+    "paper_type",
+    "concepts",
+    "methods",
+    "concept_candidates",
+    "method_candidates",
+    "relations",
+    "claims",
+    "cross_domain_hints",
+    "terminology_conflicts",
+    "temporal_coverage",
+    "mathematical_content",
+    "error_message",
+    "duration_seconds",
 )
 
 
@@ -355,7 +383,9 @@ def _extraction_kwargs(row: dict[str, Any]) -> dict[str, Any]:
             kwargs[name] = row[name]
     raw = row.get("raw_response")
     if raw is not None:
-        kwargs["raw_response"] = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+        kwargs["raw_response"] = (
+            raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+        )
     return kwargs
 
 
@@ -368,7 +398,7 @@ def _restore_pdfs(archive: zipfile.ZipFile, pdf_base_dir: str) -> int:
     for name in archive.namelist():
         if not name.startswith(PDF_PREFIX) or name.endswith("/"):
             continue
-        relative = safe_member_path(name)[len(PDF_PREFIX):]
+        relative = safe_member_path(name)[len(PDF_PREFIX) :]
         target = (base / relative).resolve()
         # Zweiter Riegel nach safe_member_path: auch symlink-/normalisierungsbedingte
         # Ausbrueche landen so nicht ausserhalb der PDF-Bibliothek.

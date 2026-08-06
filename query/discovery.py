@@ -6,6 +6,7 @@ harvest sources to propose additional, contextually-related papers. The LLM only
 suggests *search queries* — it never invents paper metadata; the actual papers come
 from the real harvest APIs.
 """
+
 from __future__ import annotations
 
 import json
@@ -36,7 +37,9 @@ _SCHEMA_HINT = (
 )
 
 
-def analyze_topic(llm_router: LLMRouter, topic: str, provider: str | None = None) -> dict[str, Any]:
+def analyze_topic(
+    llm_router: LLMRouter, topic: str, provider: str | None = None
+) -> dict[str, Any]:
     messages = [
         {"role": "system", "content": _FROM_TOPIC_SYSTEM + " " + _SCHEMA_HINT},
         {"role": "user", "content": f"Topic or question:\n{topic.strip()}"},
@@ -44,7 +47,9 @@ def analyze_topic(llm_router: LLMRouter, topic: str, provider: str | None = None
     return _safe_chat_json(llm_router, messages, provider)
 
 
-def analyze_paper(llm_router: LLMRouter, paper_text: str, provider: str | None = None) -> dict[str, Any]:
+def analyze_paper(
+    llm_router: LLMRouter, paper_text: str, provider: str | None = None
+) -> dict[str, Any]:
     excerpt = (paper_text or "")[:12000]
     messages = [
         {"role": "system", "content": _FROM_PAPER_SYSTEM + " " + _SCHEMA_HINT},
@@ -77,11 +82,22 @@ def normalize_analysis(payload: Any) -> dict[str, Any]:
     queries: list[dict[str, str]] = []
     for item in raw_queries:
         if isinstance(item, dict) and item.get("query"):
-            queries.append({"query": str(item["query"]).strip(), "reason": str(item.get("reason") or "").strip()})
+            queries.append(
+                {
+                    "query": str(item["query"]).strip(),
+                    "reason": str(item.get("reason") or "").strip(),
+                }
+            )
         elif isinstance(item, str) and item.strip():
             queries.append({"query": item.strip(), "reason": ""})
-    methods = [str(method).strip() for method in (payload.get("methods") or []) if str(method).strip()]
-    related_topics = [str(t).strip() for t in (payload.get("related_topics") or []) if str(t).strip()]
+    methods = [
+        str(method).strip()
+        for method in (payload.get("methods") or [])
+        if str(method).strip()
+    ]
+    related_topics = [
+        str(t).strip() for t in (payload.get("related_topics") or []) if str(t).strip()
+    ]
     return {
         "topic_summary": str(payload.get("topic_summary") or "").strip(),
         "methods": methods,

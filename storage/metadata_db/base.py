@@ -62,6 +62,7 @@ class MetadataDBBase:
     ]
 
     if TYPE_CHECKING:  # provided by SchemaMixin at composition time
+
         def _init_schema(self) -> None: ...
 
     def __init__(self, db_path: str = "data/metadata.duckdb") -> None:
@@ -105,7 +106,9 @@ class MetadataDBBase:
     def is_closed(self) -> bool:
         return self._closed
 
-    def _execute(self, query: str, parameters: list[Any] | tuple[Any, ...] | None = None):
+    def _execute(
+        self, query: str, parameters: list[Any] | tuple[Any, ...] | None = None
+    ):
         if self._closed:
             raise RuntimeError(f"MetadataDB connection is closed: {self.db_path}")
         with self._lock:

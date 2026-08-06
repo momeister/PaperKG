@@ -1,4 +1,5 @@
 """EntityLinker: enrich extracted entities and align them with the KG layers."""
+
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
     Links extracted entities to external knowledge bases (OpenAlex, Wikidata, etc).
     Enriches extraction results with authoritative IDs and metadata.
     """
+
     CORE_KG_KEYS = {
         "actionselection",
         "affectivecomputing",
@@ -217,9 +219,7 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
         self.strategy = strategy or OpenAlexLinkageStrategy()
         self.resolver = resolver or CanonicalResolver()
 
-    def enrich_extraction(
-        self, extraction: ExtractionResult
-    ) -> ExtractionResult:
+    def enrich_extraction(self, extraction: ExtractionResult) -> ExtractionResult:
         """
         Enrich extraction result with external knowledge base links.
 
@@ -232,7 +232,9 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
         enriched_concepts = []
 
         for concept in extraction.concepts:
-            enriched_concepts.append(self._enrich_entity(concept, default_entity_type="DomainConcept"))
+            enriched_concepts.append(
+                self._enrich_entity(concept, default_entity_type="DomainConcept")
+            )
 
         enriched_methods = [
             self._enrich_entity(method, default_entity_type="Algorithm")
@@ -243,23 +245,29 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
             enriched_methods,
         )
         enriched_concept_candidates = [
-            self._enrich_candidate_entity(candidate, default_entity_type="DomainConcept")
+            self._enrich_candidate_entity(
+                candidate, default_entity_type="DomainConcept"
+            )
             for candidate in extraction.concept_candidates
         ]
         enriched_method_candidates = [
             self._enrich_candidate_entity(candidate, default_entity_type="Algorithm")
             for candidate in extraction.method_candidates
         ]
-        enriched_concepts, enriched_concept_candidates = self._promote_exact_review_candidates(
-            extraction.paper_type,
-            enriched_concepts,
-            enriched_concept_candidates,
-            extraction.paper_node,
+        enriched_concepts, enriched_concept_candidates = (
+            self._promote_exact_review_candidates(
+                extraction.paper_type,
+                enriched_concepts,
+                enriched_concept_candidates,
+                extraction.paper_node,
+            )
         )
-        enriched_methods, enriched_method_candidates = self._promote_exact_review_method_candidates(
-            extraction.paper_type,
-            enriched_methods,
-            enriched_method_candidates,
+        enriched_methods, enriched_method_candidates = (
+            self._promote_exact_review_method_candidates(
+                extraction.paper_type,
+                enriched_methods,
+                enriched_method_candidates,
+            )
         )
         (
             enriched_concepts,
@@ -277,13 +285,19 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
             enriched_concepts,
             enriched_methods,
         )
-        enriched_concepts = self._annotate_kg_layers(enriched_concepts, extraction.paper_type, "concept")
-        enriched_methods = self._annotate_kg_layers(enriched_methods, extraction.paper_type, "method")
-        enriched_concept_candidates, enriched_method_candidates = self._filter_shadowed_candidates(
-            enriched_concept_candidates,
-            enriched_method_candidates,
-            enriched_concepts,
-            enriched_methods,
+        enriched_concepts = self._annotate_kg_layers(
+            enriched_concepts, extraction.paper_type, "concept"
+        )
+        enriched_methods = self._annotate_kg_layers(
+            enriched_methods, extraction.paper_type, "method"
+        )
+        enriched_concept_candidates, enriched_method_candidates = (
+            self._filter_shadowed_candidates(
+                enriched_concept_candidates,
+                enriched_method_candidates,
+                enriched_concepts,
+                enriched_methods,
+            )
         )
         relations = ControlledRelationExtractor(self.resolver).extract(
             enriched_concepts,
@@ -321,7 +335,9 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
             raw_response=extraction.raw_response,
             extraction_mode=extraction.extraction_mode,
         )
-        enriched_result.raw_response = self._render_raw_response(enriched_result, extraction.raw_response)
+        enriched_result.raw_response = self._render_raw_response(
+            enriched_result, extraction.raw_response
+        )
         return enriched_result
 
     def _enrich_entity(
@@ -332,8 +348,12 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
         item = dict(entity)
         item.setdefault("entity_type", default_entity_type)
         if default_entity_type == "Algorithm" and not item.get("canonical_id"):
-            item["canonical_id"] = stable_canonical_id(item.get("label", ""), prefix="method")
-        linked = self.strategy.link(item) if default_entity_type == "DomainConcept" else None
+            item["canonical_id"] = stable_canonical_id(
+                item.get("label", ""), prefix="method"
+            )
+        linked = (
+            self.strategy.link(item) if default_entity_type == "DomainConcept" else None
+        )
         if linked:
             item = dict(linked)
         resolved = self.resolver.resolve(item)
@@ -355,7 +375,9 @@ class EntityLinker(LinkerDedupeMixin, LinkerKgLayersMixin, LinkerPromotionMixin)
         item["accepted"] = False
         item["accepted_for_kg_write"] = False
         item["kg_layer"] = "candidate_review"
-        item.setdefault("candidate_reason", item.get("candidate_source") or "needs_review")
+        item.setdefault(
+            "candidate_reason", item.get("candidate_source") or "needs_review"
+        )
         return item
 
     @staticmethod

@@ -27,7 +27,10 @@ class EuropePMCClient:
         self.config = config or EuropePMCConfig()
         self._client = httpx.AsyncClient(
             timeout=self.config.timeout_seconds,
-            headers={"User-Agent": "ScienceKG/Phase5 (local-development)", "Accept": "application/json"},
+            headers={
+                "User-Agent": "ScienceKG/Phase5 (local-development)",
+                "Accept": "application/json",
+            },
         )
         self._lock = asyncio.Lock()
         self._last_request_ts = 0.0
@@ -52,7 +55,9 @@ class EuropePMCClient:
             "pageSize": min(max(page_size, 1), 100),
             "resultType": "core",
         }
-        response = await self._client.get(f"{self.config.base_url}/search", params=params)
+        response = await self._client.get(
+            f"{self.config.base_url}/search", params=params
+        )
         response.raise_for_status()
         payload = response.json()
         return list(payload.get("resultList", {}).get("result", []))

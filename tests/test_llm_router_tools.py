@@ -10,6 +10,7 @@ ihre Zwischenschritte in OpenAI-Form an; wenn Anthropic daraus keine ``tool_use`
 zurueckbekommt, faellt das nicht als Fehler auf — das Modell ruft dann einfach
 dasselbe Werkzeug noch einmal auf.
 """
+
 from __future__ import annotations
 
 import json
@@ -82,7 +83,9 @@ def test_openai_compatible_offers_tools_and_reads_the_calls_back() -> None:
         )
 
     router = _router("lm_studio", handler)
-    text, calls = router.chat_with_tools([{"role": "user", "content": "was parst hier?"}], TOOLS)
+    text, calls = router.chat_with_tools(
+        [{"role": "user", "content": "was parst hier?"}], TOOLS
+    )
 
     assert captured["payload"]["tools"] == TOOLS
     assert captured["payload"]["tool_choice"] == "auto"
@@ -105,9 +108,12 @@ def test_a_server_that_rejects_tools_gets_asked_again_without_them() -> None:
         payload = json.loads(request.content)
         seen.append(payload)
         if "tools" in payload:
-            return httpx.Response(400, json={"error": "tools are not supported by this model"})
+            return httpx.Response(
+                400, json={"error": "tools are not supported by this model"}
+            )
         return httpx.Response(
-            200, json={"choices": [{"message": {"content": "ohne Werkzeuge"}}], "usage": {}}
+            200,
+            json={"choices": [{"message": {"content": "ohne Werkzeuge"}}], "usage": {}},
         )
 
     router = _router("lm_studio", handler)
@@ -140,7 +146,8 @@ def test_chat_without_tools_is_unchanged() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         captured["payload"] = json.loads(request.content)
         return httpx.Response(
-            200, json={"choices": [{"message": {"content": "  Antwort  "}}], "usage": {}}
+            200,
+            json={"choices": [{"message": {"content": "  Antwort  "}}], "usage": {}},
         )
 
     router = _router("lm_studio", handler)
@@ -165,7 +172,12 @@ def test_ollama_arguments_arrive_as_an_object_and_leave_as_text() -> None:
                 "message": {
                     "content": "",
                     "tool_calls": [
-                        {"function": {"name": "search_symbols", "arguments": {"query": "parse"}}}
+                        {
+                            "function": {
+                                "name": "search_symbols",
+                                "arguments": {"query": "parse"},
+                            }
+                        }
                     ],
                 }
             },
@@ -205,7 +217,10 @@ def test_ollama_gets_its_own_tool_call_back_as_an_object() -> None:
                 "tool_calls": [
                     {
                         "id": "call_0",
-                        "function": {"name": "search_symbols", "arguments": '{"query": "parse"}'},
+                        "function": {
+                            "name": "search_symbols",
+                            "arguments": '{"query": "parse"}',
+                        },
                     }
                 ],
             },
@@ -268,7 +283,9 @@ def test_anthropic_merges_consecutive_tool_results_into_one_user_message() -> No
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["payload"] = json.loads(request.content)
-        return httpx.Response(200, json={"content": [{"type": "text", "text": "fertig"}], "usage": {}})
+        return httpx.Response(
+            200, json={"content": [{"type": "text", "text": "fertig"}], "usage": {}}
+        )
 
     router = _router("anthropic", handler, api_key="k")
     router.chat_with_tools(
@@ -279,8 +296,20 @@ def test_anthropic_merges_consecutive_tool_results_into_one_user_message() -> No
                 "role": "assistant",
                 "content": "ich sehe nach",
                 "tool_calls": [
-                    {"id": "t1", "function": {"name": "search_symbols", "arguments": '{"query": "a"}'}},
-                    {"id": "t2", "function": {"name": "search_symbols", "arguments": '{"query": "b"}'}},
+                    {
+                        "id": "t1",
+                        "function": {
+                            "name": "search_symbols",
+                            "arguments": '{"query": "a"}',
+                        },
+                    },
+                    {
+                        "id": "t2",
+                        "function": {
+                            "name": "search_symbols",
+                            "arguments": '{"query": "b"}',
+                        },
+                    },
                 ],
             },
             {"role": "tool", "tool_call_id": "t1", "content": "erstes Ergebnis"},
@@ -308,71 +337,81 @@ def test_anthropic_merges_consecutive_tool_results_into_one_user_message() -> No
 # --------------------------------------------------------------------------- #
 
 
-def test_ollama_translates_chat_template_kwargs_enable_thinking_to_top_level_think() -> None:
-	"""``chat_template_kwargs.enable_thinking: false`` muss Denken abschalten.
+def test_ollama_translates_chat_template_kwargs_enable_thinking_to_top_level_think() -> (
+    None
+):
+    """``chat_template_kwargs.enable_thinking: false`` muss Denken abschalten.
 
-	Bisher wurde das Feld auf dem Ollama-Pfad stillschweigend weggeworfen — ein
-	Reasoning-Modell (deepseek) dachte also ungeachtet der Konfiguration weiter.
-	Ollama schaltet Denken seit 0.5+0 ueber das Top-Level-Feld ``think``.
-	"""
-	captured: dict[str, Any] = {}
+    Bisher wurde das Feld auf dem Ollama-Pfad stillschweigend weggeworfen — ein
+    Reasoning-Modell (deepseek) dachte also ungeachtet der Konfiguration weiter.
+    Ollama schaltet Denken seit 0.5+0 ueber das Top-Level-Feld ``think``.
+    """
+    captured: dict[str, Any] = {}
 
-	def handler(request: httpx.Request) -> httpx.Response:
-		captured["payload"] = json.loads(request.content)
-		return httpx.Response(200, json={"message": {"content": "fertig"}})
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"content": "fertig"}})
 
-	router = _router("ollama", handler)
-	router.chat_with_tools(
-		[{"role": "user", "content": "frage"}],
-		None,
-		overrides={
-			"model": "deepseek-r1",
-			"extra": {"chat_template_kwargs": {"enable_thinking": False}, "keep_alive": "0s"},
-		},
-	)
-	assert captured["payload"].get("think") is False
-	# chat_template_kwargs darf nicht durchgereicht werden — Ollama kennt es nicht.
-	assert "chat_template_kwargs" not in captured["payload"]
-	assert "chat_template_kwargs" not in captured["payload"].get("options", {})
+    router = _router("ollama", handler)
+    router.chat_with_tools(
+        [{"role": "user", "content": "frage"}],
+        None,
+        overrides={
+            "model": "deepseek-r1",
+            "extra": {
+                "chat_template_kwargs": {"enable_thinking": False},
+                "keep_alive": "0s",
+            },
+        },
+    )
+    assert captured["payload"].get("think") is False
+    # chat_template_kwargs darf nicht durchgereicht werden — Ollama kennt es nicht.
+    assert "chat_template_kwargs" not in captured["payload"]
+    assert "chat_template_kwargs" not in captured["payload"].get("options", {})
 
 
 def test_ollama_falls_back_to_thinking_field_when_content_is_empty() -> None:
-	"""Ollama legt Chain-of-Thought in ``message.thinking`` und laesst content leer.
+    """Ollama legt Chain-of-Thought in ``message.thinking`` und laesst content leer.
 
-	Ohne den Fallback saehe der Aufrufer einen leeren String und meldete
-	„keine Antwort", obwohl das Modell Reasoning geliefert hat.
-	"""
+    Ohne den Fallback saehe der Aufrufer einen leeren String und meldete
+    „keine Antwort", obwohl das Modell Reasoning geliefert hat.
+    """
 
-	def handler(request: httpx.Request) -> httpx.Response:
-		return httpx.Response(
-			200,
-			json={"message": {"content": "", "thinking": "ich ueberlege... die Antwort ist 42"}},
-		)
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "content": "",
+                    "thinking": "ich ueberlege... die Antwort ist 42",
+                }
+            },
+        )
 
-	router = _router("ollama", handler)
-	text = router.chat([{"role": "user", "content": "frage"}])
-	# Der Fallback reicht das Reasoning als Text durch (spiegelt den OpenAI-Pfad
-	# mit ``reasoning_content``); das Flag erlaubt Aufrufern, das zu erkennen.
-	assert "die Antwort ist 42" in text
-	assert router.last_response_metadata["reasoning_fallback"] is True
+    router = _router("ollama", handler)
+    text = router.chat([{"role": "user", "content": "frage"}])
+    # Der Fallback reicht das Reasoning als Text durch (spiegelt den OpenAI-Pfad
+    # mit ``reasoning_content``); das Flag erlaubt Aufrufern, das zu erkennen.
+    assert "die Antwort ist 42" in text
+    assert router.last_response_metadata["reasoning_fallback"] is True
 
 
 def test_unterminated_think_block_sets_reasoning_truncated() -> None:
-	"""Ein abgeschnittener ``<think>``-Block darf nicht als Antwort erscheinen,
+    """Ein abgeschnittener ``<think>``-Block darf nicht als Antwort erscheinen,
 
-	aber der Aufrufer muss erfahren, *warum* der Text leer ist — sonst ist
-	„Token-Budget im Denken verbraucht" von „keine Antwort" nicht zu unterscheiden.
-	"""
+    aber der Aufrufer muss erfahren, *warum* der Text leer ist — sonst ist
+    „Token-Budget im Denken verbraucht" von „keine Antwort" nicht zu unterscheiden.
+    """
 
-	def handler(request: httpx.Request) -> httpx.Response:
-		# Ollama gibt den Content inkl. oeffnendem think-Tag zurueck, wenn das
-		# Modell mitten im Denken das Token-Limit trifft (kein schliessendes Tag).
-		return httpx.Response(
-			200,
-			json={"message": {"content": "<think>also zuerst muss ich"}},
-		)
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Ollama gibt den Content inkl. oeffnendem think-Tag zurueck, wenn das
+        # Modell mitten im Denken das Token-Limit trifft (kein schliessendes Tag).
+        return httpx.Response(
+            200,
+            json={"message": {"content": "<think>also zuerst muss ich"}},
+        )
 
-	router = _router("ollama", handler)
-	text = router.chat([{"role": "user", "content": "frage"}])
-	assert text == ""
-	assert router.last_response_metadata["reasoning_truncated"] is True
+    router = _router("ollama", handler)
+    text = router.chat([{"role": "user", "content": "frage"}])
+    assert text == ""
+    assert router.last_response_metadata["reasoning_truncated"] is True

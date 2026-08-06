@@ -6,6 +6,7 @@ a thesis-/paper-style LaTeX source with a title page, table of contents and a
 numeric biblatex bibliography ("Quellenverzeichnis"), keeping the citations visible
 in the text (rendered as ``[1]``) and listed in the bibliography.
 """
+
 from __future__ import annotations
 
 import re
@@ -60,7 +61,9 @@ def _strip_unsupported(text: str) -> str:
 
 def latex_escape(text: str) -> str:
     """Escape LaTeX-special characters in plain text (after dropping emoji/symbols)."""
-    return re.sub(r"[\\&%$#_{}~^]", lambda m: _ESCAPE[m.group()], _strip_unsupported(text))
+    return re.sub(
+        r"[\\&%$#_{}~^]", lambda m: _ESCAPE[m.group()], _strip_unsupported(text)
+    )
 
 
 def _citekey(paper_id: str) -> str:
@@ -307,7 +310,9 @@ def build_latex_document(
         if not use_graphics:
             packages.append(r"\usepackage{graphicx}")
     if has_bibliography:
-        packages.append(r"\usepackage[backend=bibtex,style=numeric,sorting=none]{biblatex}")
+        packages.append(
+            r"\usepackage[backend=bibtex,style=numeric,sorting=none]{biblatex}"
+        )
         packages.append(r"\addbibresource{refs.bib}")
 
     safe_title = _inline(title, CitationIndex([]))

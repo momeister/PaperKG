@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from quality.benchmark import claim_negation_metrics, duplicate_canonical_rate, evaluate_case, run_benchmark
+from quality.benchmark import (
+    claim_negation_metrics,
+    duplicate_canonical_rate,
+    evaluate_case,
+    run_benchmark,
+)
 
 
 def test_benchmark_evaluates_precision_recall_and_duplicates(tmp_path):
@@ -72,8 +77,14 @@ def test_duplicate_canonical_rate_counts_alias_collisions():
     rate = duplicate_canonical_rate(
         [
             {"label": "Appraisal theory", "canonical_id": "concept:appraisal"},
-            {"label": "Cognitive appraisal theory", "canonical_id": "concept:appraisal"},
-            {"label": "Appraisal dimensions", "canonical_id": "concept:appraisal-dimensions"},
+            {
+                "label": "Cognitive appraisal theory",
+                "canonical_id": "concept:appraisal",
+            },
+            {
+                "label": "Appraisal dimensions",
+                "canonical_id": "concept:appraisal-dimensions",
+            },
         ]
     )
 
@@ -99,8 +110,14 @@ def test_benchmark_reports_supported_extras_separately_from_hallucinations():
         {
             "concepts": [
                 {"label": "Clinical Validation"},
-                {"label": "Adaptive Optics", "evidence_span": "adaptive optics calibration"},
-                {"label": "Imaginary Solver", "evidence_span": "imaginary solver benchmark"},
+                {
+                    "label": "Adaptive Optics",
+                    "evidence_span": "adaptive optics calibration",
+                },
+                {
+                    "label": "Imaginary Solver",
+                    "evidence_span": "imaginary solver benchmark",
+                },
             ],
             "methods": [],
         },
@@ -138,7 +155,9 @@ def test_claim_negation_metrics_accept_string_booleans():
 def test_real_gold_benchmark_includes_merlin_qml_case():
     report = run_benchmark(gold_dir=Path("quality/gold"))
 
-    merlin_case = next(case for case in report["cases"] if case["paper_id"] == "arxiv:2602.11092")
+    merlin_case = next(
+        case for case in report["cases"] if case["paper_id"] == "arxiv:2602.11092"
+    )
     assert report["summary"]["case_count"] >= 2
     assert merlin_case["concepts"]["f1"] == 1.0
     assert merlin_case["concept_candidates"]["f1"] == 1.0

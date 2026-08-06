@@ -7,7 +7,9 @@ from quality import benchmark_suite
 from quality.benchmark_suite import SuiteConfig, latest_suite_report, run_suite
 
 
-def test_benchmark_suite_writes_reports_and_summary(monkeypatch, tmp_path: Path) -> None:
+def test_benchmark_suite_writes_reports_and_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
     class FakeLLMRouter:
         default_provider = "fake"
 
@@ -19,7 +21,10 @@ def test_benchmark_suite_writes_reports_and_summary(monkeypatch, tmp_path: Path)
         return {
             "policy": policy,
             "duration_seconds": 0.1,
-            "summary": {"case_count": 1, "average_f1": 1.0 if policy == "auto" else 0.5},
+            "summary": {
+                "case_count": 1,
+                "average_f1": 1.0 if policy == "auto" else 0.5,
+            },
             "cases": [],
             "pdf_provenance": [],
             "warnings": [],
@@ -33,8 +38,14 @@ def test_benchmark_suite_writes_reports_and_summary(monkeypatch, tmp_path: Path)
             "warnings": ["answer warning"],
         }
 
-    monkeypatch.setattr(benchmark_suite.LLMRouter, "from_config_file", staticmethod(lambda path: FakeLLMRouter()))
-    monkeypatch.setattr(benchmark_suite, "_run_extraction_policy", fake_extraction_policy)
+    monkeypatch.setattr(
+        benchmark_suite.LLMRouter,
+        "from_config_file",
+        staticmethod(lambda path: FakeLLMRouter()),
+    )
+    monkeypatch.setattr(
+        benchmark_suite, "_run_extraction_policy", fake_extraction_policy
+    )
     monkeypatch.setattr(benchmark_suite, "_run_answer_benchmark", fake_answer_benchmark)
 
     report = run_suite(
@@ -70,8 +81,12 @@ def test_latest_suite_report_loads_newest_report(tmp_path: Path) -> None:
     newer = tmp_path / "20260102_000000"
     older.mkdir()
     newer.mkdir()
-    (older / "report.json").write_text('{"run_id": "old", "summary": {"answer_score": 0.1}}', encoding="utf-8")
-    (newer / "report.json").write_text('{"run_id": "new", "summary": {"answer_score": 0.9}}', encoding="utf-8")
+    (older / "report.json").write_text(
+        '{"run_id": "old", "summary": {"answer_score": 0.1}}', encoding="utf-8"
+    )
+    (newer / "report.json").write_text(
+        '{"run_id": "new", "summary": {"answer_score": 0.9}}', encoding="utf-8"
+    )
     os.utime(older / "report.json", (1000, 1000))
     os.utime(newer / "report.json", (2000, 2000))
 

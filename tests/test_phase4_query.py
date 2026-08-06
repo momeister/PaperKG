@@ -1727,7 +1727,9 @@ def test_sparse_repair_fires_when_cited_marker_does_not_resolve_to_evidence() ->
 def test_sparse_repair_skipped_when_single_citation_matches_single_source() -> None:
     """One valid citation against one available source is sufficient — desired_count
     is adaptive (max(1, min(3, n))), so no repair should fire."""
-    fake_llm = FakeLLMRouter()  # would return a cited answer, but shouldn't be called again
+    fake_llm = (
+        FakeLLMRouter()
+    )  # would return a cited answer, but shouldn't be called again
     responder = GroundedResponder(retriever=None, llm_router=fake_llm)
     real_id = "arxiv:2501.00002"
     evidence = _evidence_for(real_id)

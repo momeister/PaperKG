@@ -7,6 +7,7 @@ without importing ``api/`` (which would create a circular import).
 The contact email required by the Unpaywall API is read from the ``UNPAYWALL_EMAIL`` env
 var or the ``harvester.unpaywall`` section of ``config.yaml``.
 """
+
 from __future__ import annotations
 
 import os
@@ -48,7 +49,9 @@ async def resolve_oa_pdf_url(doi: str | None) -> str | None:
         return None
     unpaywall = UnpaywallClient(UnpaywallConfig(email=email))
     try:
-        return await unpaywall.best_oa_url(str(doi).replace("https://doi.org/", "").strip())
+        return await unpaywall.best_oa_url(
+            str(doi).replace("https://doi.org/", "").strip()
+        )
     except Exception:
         return None
     finally:

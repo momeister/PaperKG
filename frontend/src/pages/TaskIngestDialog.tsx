@@ -27,9 +27,13 @@ type Props = {
   onClose: () => void;
   /** Wird gerufen, wenn eine Task erfolgreich extrahiert+gespeichert wurde. */
   onTaskCreated: (task: Task) => void;
+  /** Aktuell in der Topbar gewählter LLM-Provider/-Modell — wird an das Backend
+   *  weitergereicht, damit die Extraktion denselben LLM nutzt wie der Assistant. */
+  provider?: string | null;
+  model?: string | null;
 };
 
-export function TaskIngestDialog({ projectId, open, onClose, onTaskCreated }: Props) {
+export function TaskIngestDialog({ projectId, open, onClose, onTaskCreated, provider = null, model = null }: Props) {
   const [source, setSource] = useState<Source>("text");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
@@ -101,6 +105,8 @@ export function TaskIngestDialog({ projectId, open, onClose, onTaskCreated }: Pr
         source_url: source === "url" ? url.trim() : null,
         source_text: source === "text" ? text.trim() : null,
         source_pdf_path: pdfPath,
+        provider,
+        model,
       };
 
       let task: Task;

@@ -18,6 +18,7 @@ Set ``SCIENCEKG_DISABLE_PATH_GUARD=1`` to bypass entirely (escape hatch for unus
 deployments). The check is intentionally lenient toward the dev/test tree and strict
 only about escaping it — appropriate for a local single-user tool.
 """
+
 from __future__ import annotations
 
 import os
@@ -34,7 +35,11 @@ class PathSafetyError(ValueError):
 
 
 def _guard_disabled() -> bool:
-    return os.getenv("SCIENCEKG_DISABLE_PATH_GUARD", "").strip().lower() in {"1", "true", "yes"}
+    return os.getenv("SCIENCEKG_DISABLE_PATH_GUARD", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def allowed_roots() -> list[Path]:

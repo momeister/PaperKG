@@ -3,6 +3,7 @@
 Konstanten, JSON-Helfer, Dataclasses und die oeffentlichen Modul-Funktionen.
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import json
@@ -166,7 +167,11 @@ def safe_llm_extract(
             logger.exception("LLM extraction call for %s failed", field_name)
             continue
 
-        last_raw = str(raw_response.get("content") or raw_response) if isinstance(raw_response, dict) else str(raw_response or "")
+        last_raw = (
+            str(raw_response.get("content") or raw_response)
+            if isinstance(raw_response, dict)
+            else str(raw_response or "")
+        )
         parsed = _parse_llm_json_value(last_raw)
         values: list[Any] | None = None
         if isinstance(parsed, list):
@@ -193,7 +198,11 @@ def safe_llm_extract(
             + "The paper definitely contains content for this field. Please try again."
         )
 
-    logger.warning("Returning empty %s after malformed LLM JSON. Raw response: %s", field_name, last_raw[:2000])
+    logger.warning(
+        "Returning empty %s after malformed LLM JSON. Raw response: %s",
+        field_name,
+        last_raw[:2000],
+    )
     return []
 
 
@@ -206,7 +215,10 @@ def filter_concepts(
     # Lazy import: die komponierte Klasse lebt im Paket-__init__ (zyklusfrei).
     from extraction.entity_extractor import EntityExtractor
 
-    blocked = {EntityExtractor._normalize_label(item) for item in (blocklist or DEFAULT_CONCEPT_BLOCKLIST)}
+    blocked = {
+        EntityExtractor._normalize_label(item)
+        for item in (blocklist or DEFAULT_CONCEPT_BLOCKLIST)
+    }
     normalized_title = EntityExtractor._normalize_label(title or "")
     output: list[dict[str, Any]] = []
     for concept in concepts:
@@ -253,7 +265,9 @@ def deduplicate_methods(methods: list[Any]) -> list[dict[str, Any]]:
         if not isinstance(method, dict):
             continue
         candidate = dict(method)
-        candidate["label"] = EntityExtractor._clean_label(str(candidate.get("label") or ""))
+        candidate["label"] = EntityExtractor._clean_label(
+            str(candidate.get("label") or "")
+        )
         if not candidate["label"]:
             continue
 
@@ -266,7 +280,11 @@ def deduplicate_methods(methods: list[Any]) -> list[dict[str, Any]]:
             ).ratio()
             existing_source = str(existing.get("source_type") or "")
             candidate_source = str(candidate.get("source_type") or "")
-            source_types_differ = bool(existing_source and candidate_source and existing_source != candidate_source)
+            source_types_differ = bool(
+                existing_source
+                and candidate_source
+                and existing_source != candidate_source
+            )
             if similarity <= 0.75:
                 continue
             if source_types_differ and similarity <= 0.9:
@@ -274,7 +292,11 @@ def deduplicate_methods(methods: list[Any]) -> list[dict[str, Any]]:
 
             existing_description = str(existing.get("description") or "")
             candidate_description = str(candidate.get("description") or "")
-            keep = candidate if len(candidate_description) > len(existing_description) else existing
+            keep = (
+                candidate
+                if len(candidate_description) > len(existing_description)
+                else existing
+            )
             merge_from = existing if keep is candidate else candidate
             for key, value in merge_from.items():
                 if key not in keep or keep.get(key) in (None, "", [], {}):
@@ -364,9 +386,7 @@ def extraction_failure_reason(result: ExtractionResult | object) -> str | None:
         if isinstance(call, dict) and str(call.get("call_type") or "") != "claims_retry"
     ]
     failed_calls = [
-        call
-        for call in calls
-        if str(call.get("parse_quality") or "") == "failed"
+        call for call in calls if str(call.get("parse_quality") or "") == "failed"
     ]
     if failed_calls and len(failed_calls) == len(calls):
         excerpts = " ".join(str(call.get("raw_excerpt") or "") for call in failed_calls)
@@ -407,5 +427,3 @@ class DeterministicScanResult:
     concepts: list[dict[str, Any]]
     methods: list[dict[str, Any]]
     paper_year: int | None = None
-
-

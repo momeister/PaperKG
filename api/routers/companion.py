@@ -6,6 +6,7 @@ singletons (``llm_router``, ``_COMPANION_CONFIG_CACHE``, ``_companion_context``,
 ``_SELF_DRIVE_STORE``) stay in product_main and are referenced as ``pm.<name>``
 at call time so existing monkeypatch-based tests keep working.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,12 +31,14 @@ router = APIRouter()
 
 class CompanionTurn(BaseModel):
     """One prior Desktop-Companion chat turn (text only — screenshots are never replayed)."""
+
     role: str = Field(min_length=1, max_length=20)
     content: str = Field(default="", max_length=8000)
 
 
 class CompanionAskRequest(BaseModel):
     """Free-form question about the screen or a snipped region — answer only, no pointing."""
+
     question: str = Field(min_length=1, max_length=4000)
     image_base64: str | None = None
     history: list[CompanionTurn] = Field(default_factory=list)
@@ -55,6 +58,7 @@ class CompanionAskRequest(BaseModel):
 
 class CompanionGuideRequest(BaseModel):
     """Question about a full screenshot; the model may return click-guidance steps."""
+
     question: str = Field(min_length=1, max_length=4000)
     image_base64: str = Field(min_length=1)
     history: list[CompanionTurn] = Field(default_factory=list)
@@ -87,6 +91,7 @@ class CompanionSessionUpdateRequest(BaseModel):
 
 class SelfDriveStartRequest(BaseModel):
     """Begin a native Selbst-Steuerung session (R7)."""
+
     goal: str = Field(min_length=1, max_length=2000)
     monitor: int | None = None
     provider: str | None = None
@@ -98,6 +103,7 @@ class SelfDriveStartRequest(BaseModel):
 
 class SelfDriveStepRequest(BaseModel):
     """One planning round: current screenshot → next action."""
+
     session_id: str = Field(min_length=1, max_length=64)
     image_base64: str = Field(min_length=1)
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
@@ -109,6 +115,7 @@ class SelfDriveStopRequest(BaseModel):
 
 class SelfDriveAnswerRequest(BaseModel):
     """The user's reply to an ``ask`` action — the loop resumes with the next /step."""
+
     session_id: str = Field(min_length=1, max_length=64)
     answer: str = Field(min_length=1, max_length=4000)
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
@@ -116,6 +123,7 @@ class SelfDriveAnswerRequest(BaseModel):
 
 class GuideStartRequest(BaseModel):
     """Begin an incremental guided sequence (auto-advance via native click watcher)."""
+
     goal: str = Field(min_length=1, max_length=2000)
     provider: str | None = None
     model: str | None = None
@@ -131,6 +139,7 @@ class GuideStartRequest(BaseModel):
 
 class GuideStepRequest(BaseModel):
     """One guidance round: fresh screenshot (+ what the user just did) → next step."""
+
     guide_id: str = Field(min_length=1, max_length=64)
     image_base64: str = Field(min_length=1)
     event: str = Field(default="start", pattern="^(start|click|skip)$")
@@ -208,7 +217,9 @@ async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
             **params,
         )
         result["sources"] = sources
-        _persist_message(request.metadata_db_path, request.session_id, "user", request.question)
+        _persist_message(
+            request.metadata_db_path, request.session_id, "user", request.question
+        )
         _persist_message(
             request.metadata_db_path,
             request.session_id,
@@ -218,7 +229,13 @@ async def companion_guide(request: CompanionGuideRequest) -> dict[str, Any]:
         )
         return result
     except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
-        return {"answer": "", "found": False, "steps": [], "sources": [], "error": str(exc)}
+        return {
+            "answer": "",
+            "found": False,
+            "steps": [],
+            "sources": [],
+            "error": str(exc),
+        }
 
 
 @router.post("/companion/ask")
@@ -245,9 +262,15 @@ async def companion_ask(request: CompanionAskRequest) -> dict[str, Any]:
             context_blocks=context_blocks or None,
             **params,
         )
-        _persist_message(request.metadata_db_path, request.session_id, "user", request.question)
         _persist_message(
-            request.metadata_db_path, request.session_id, "assistant", answer, {"sources": sources}
+            request.metadata_db_path, request.session_id, "user", request.question
+        )
+        _persist_message(
+            request.metadata_db_path,
+            request.session_id,
+            "assistant",
+            answer,
+            {"sources": sources},
         )
         return {"answer": answer, "sources": sources}
     except Exception as exc:  # noqa: BLE001 - surface as a normal JSON error
@@ -265,12 +288,16 @@ def companion_config() -> dict[str, Any]:
     verify_cfg = _companion_sub_config("verify")
     guide_cfg = _companion_sub_config("guide")
     return {
-        "provider": str(cfg.get("provider") or "").strip() or pm.llm_router.default_provider,
+        "provider": str(cfg.get("provider") or "").strip()
+        or pm.llm_router.default_provider,
         "model": str(cfg.get("model") or "").strip(),
         "language": str(cfg.get("language") or "de"),
         "default_provider": pm.llm_router.default_provider,
         "providers": [
-            {"name": name, "models": pm.llm_router.provider_model_options(name, refresh=False)}
+            {
+                "name": name,
+                "models": pm.llm_router.provider_model_options(name, refresh=False),
+            }
             for name in pm.llm_router.available_providers()
         ],
         # Everything the overlay needs to run its loops — no second config fetch.
@@ -356,10 +383,13 @@ def delete_companion_session(
 @router.post("/selfdrive/start")
 def self_drive_start(request: SelfDriveStartRequest) -> dict[str, Any]:
     """Open a Selbst-Steuerung session. Gated on ``companion.self_drive.enabled``;
-    the native shell still requires an explicit arm (autopilot or per-action confirm)."""
+    the native shell still requires an explicit arm (autopilot or per-action confirm).
+    """
     cfg = _self_drive_config()
     if not bool(cfg.get("enabled", False)):
-        return {"error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."}
+        return {
+            "error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."
+        }
     params = pm._companion_llm_params(request.provider, request.model)
     session = pm._SELF_DRIVE_STORE.create(
         goal=request.goal,
@@ -388,7 +418,9 @@ async def self_drive_step(request: SelfDriveStepRequest) -> dict[str, Any]:
     history and re-planned on the same screenshot."""
     sd_cfg = _self_drive_config()
     if not bool(sd_cfg.get("enabled", False)):
-        return {"error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."}
+        return {
+            "error": "Selbst-Steuerung ist deaktiviert (companion.self_drive.enabled)."
+        }
     session = pm._SELF_DRIVE_STORE.get(request.session_id)
     if session is None:
         return {"error": "Unbekannte Sitzung."}
@@ -409,12 +441,17 @@ async def self_drive_step(request: SelfDriveStepRequest) -> dict[str, Any]:
         "lookup_cfg": lookup_cfg,
         "sensitive_cfg": sensitive_cfg,
         "max_consecutive_failures": int(
-            sd_cfg.get("max_consecutive_failures") or self_drive.DEFAULT_MAX_CONSECUTIVE_FAILURES
+            sd_cfg.get("max_consecutive_failures")
+            or self_drive.DEFAULT_MAX_CONSECUTIVE_FAILURES
         ),
     }
     try:
         result = await asyncio.to_thread(
-            self_drive.plan_step, pm.llm_router, session, request.image_base64, **plan_kwargs
+            self_drive.plan_step,
+            pm.llm_router,
+            session,
+            request.image_base64,
+            **plan_kwargs,
         )
         if result.get("action", {}).get("type") == "lookup":
             query = str(result["action"].get("query") or "")
@@ -435,7 +472,11 @@ async def self_drive_step(request: SelfDriveStepRequest) -> dict[str, Any]:
             )
             # Re-plan on the same frame, now with the research in the history.
             result = await asyncio.to_thread(
-                self_drive.plan_step, pm.llm_router, session, request.image_base64, **plan_kwargs
+                self_drive.plan_step,
+                pm.llm_router,
+                session,
+                request.image_base64,
+                **plan_kwargs,
             )
         _persist_message(
             request.metadata_db_path,
@@ -465,7 +506,10 @@ def self_drive_answer(request: SelfDriveAnswerRequest) -> dict[str, Any]:
         return {"error": "Unbekannte Sitzung."}
     self_drive.inject_user_answer(session, request.answer)
     _persist_message(
-        request.metadata_db_path, getattr(session, "db_session_id", None), "user", request.answer
+        request.metadata_db_path,
+        getattr(session, "db_session_id", None),
+        "user",
+        request.answer,
     )
     return {"ok": True}
 
@@ -518,7 +562,8 @@ async def guide_start(request: GuideStartRequest) -> dict[str, Any]:
 @router.post("/companion/guide/step")
 async def guide_step(request: GuideStepRequest) -> dict[str, Any]:
     """One guidance round trip: verify the user's click (event 'click') against the
-    previous step's expectation, then plan the next pointer step from the fresh frame."""
+    previous step's expectation, then plan the next pointer step from the fresh frame.
+    """
     session = pm._GUIDE_STORE.get(request.guide_id)
     if session is None:
         return {"error": "Unbekannte Sitzung."}

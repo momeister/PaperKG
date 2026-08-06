@@ -51,7 +51,6 @@ import {
   Sparkles,
   Square,
   Star,
-  Target,
   Trash2,
   Upload,
   X,
@@ -352,6 +351,12 @@ export function WorkspacePage() {
   const [pdfOpen, setPdfOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "pdfOpen", true));
   // Center column can swap between the PDF viewer, the Analyse-Werkstatt and Datensätze.
   const [centerView, setCenterView] = useState<"pdf" | "analysis" | "datasets">("pdf");
+  // Im Task-Modus: Task- und Bibliothek-Block verhalten sich wie eine Radio-
+  // Gruppe — genau einer ist aufgeklappt. taskBlockOpen=true => Task-Block
+  // offen (Header only) und der Body zeigt TaskFocusedPane; false => Bibliothek-
+  // Block offen (Notizen/PDFs/Sessions/Analyse/Daten) und der Body zeigt
+  // WorkspaceNavigatorBody. Beide Header toggeln denselben Schalter.
+  const [taskBlockOpen, setTaskBlockOpen] = useState(true);
   const [notesOpen, setNotesOpen] = useState(() => loadWorkspaceBoolean(scopedProjectId, "notesOpen", true));
   // Notes pane sub-view: the normal note editor, or the Parallel-Research "Ergebnisse" view.
   const [notesTab, setNotesTab] = useState<"note" | "results">("note");
@@ -1869,7 +1874,14 @@ export function WorkspacePage() {
       .createParallelSession(activeProject || scopedProjectId, {
         question,
         variant_count: 3,
-        paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : undefined,
+        // "__none__" keeps the scope honest: when the user is in project-only
+        // mode but the project has no papers, the backend must NOT fall back
+        // to the global KG. Mirrors the regular assistant scope logic (:472).
+        paper_ids: info.scopedPaperIds.length
+          ? info.scopedPaperIds
+          : info.projectOnlyScope
+            ? ["__none__"]
+            : undefined,
         provider: provider || undefined,
         model: model || undefined,
         task_id: taskId ?? undefined,
@@ -1905,7 +1917,13 @@ export function WorkspacePage() {
     api
       .askParallelFollowup(session.id, {
         question,
-        paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : undefined,
+        // "__none__" fallback mirrors createParallelSession + regular assistant
+        // (:472): project-only mode with no papers must not leak into the global KG.
+        paper_ids: info.scopedPaperIds.length
+          ? info.scopedPaperIds
+          : info.projectOnlyScope
+            ? ["__none__"]
+            : undefined,
         provider: provider || undefined,
         model: model || undefined,
       })
@@ -3410,43 +3428,87 @@ export function WorkspacePage() {
           {navigatorOpen ? (
             <aside className="workspace-nav-pane">
               <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => navPanelRef.current?.collapse()} collapseSide="left"
-                actions={
-                  <div className="segmented workspace-mode-toggle" aria-label="Workspace-Modus" title="Research-Modus (klassische Forschungsansicht) vs. Task-Focused Mode (Hackathon/Kaggle/Anweisung)">
-                    <button type="button" className={workspaceMode === "research" ? "active" : ""} onClick={() => setWorkspaceMode("research")}>
-                      <NotebookPen size={14} />
-                      <span>Research</span>
-                    </button>
-                    <button type="button" className={workspaceMode === "task" ? "active" : ""} onClick={() => setWorkspaceMode("task")}>
-                      <Target size={14} />
-                      <span>Task</span>
-                    </button>
-                  </div>
-                }
               />
               <div className="segmented workspace-nav-tabs" aria-label="Arbeitsplatz Navigation">
-                <button type="button" className={centerView === "pdf" && navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
-                  <NotebookPen size={15} />
-                  <span>Notizen</span>
-                  <strong>{notesSnapshot.notes.length}</strong>
-                </button>
-                <button type="button" className={centerView === "pdf" && navigatorTab === "pdfs" ? "active" : ""} onClick={() => { setNavigatorTab("pdfs"); setCenterView("pdf"); }}>
-                  <FileText size={15} />
-                  <span>PDFs</span>
-                  <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
-                </button>
-                <button type="button" className={`workspace-nav-tab--wide ${centerView === "pdf" && navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => { setNavigatorTab("assistantSessions"); setCenterView("pdf"); }}>
-                  <MessageSquareText size={15} />
-                  <span>KI-Sessions</span>
-                  <strong>{history.length}</strong>
-                </button>
-                <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
-                  <FlaskConical size={15} />
-                  <span>Analyse</span>
-                </button>
-                <button type="button" className={centerView === "datasets" ? "active" : ""} title="Datensätze aus freien Registries suchen und sammeln" onClick={() => setCenterView("datasets")}>
-                  <Database size={15} />
-                  <span>Daten</span>
-                </button>
+                {workspaceMode === "task" ? (
+                  <>
+                    {/* Task-Block (oben): der Header IST der Toggle für den
+                        gesamten Task-Focus-Mode. Kein Button innen — ein
+                        Klick auf den Header klappt den Task-Body (und damit
+                        die TaskFocusedPane) ein/aus. Eingeklappt fällt der
+                        Navigator-Body an die Bibliothek zurück. */}
+                    <CollapsibleSidebarBlock
+                      label="Task"
+                      controlled
+                      open={taskBlockOpen}
+                      onToggle={() => setTaskBlockOpen(true)}
+                      active={taskBlockOpen}
+                    />
+
+                    {/* Bibliothek-Block (unten): Radio-Partner des Task-Blocks —
+                        genau einer der beiden Blöcke ist offen. Der Body
+                        (WorkspaceNavigatorBody) folgt taskBlockOpen: Task offen
+                        => TaskFocusedPane, Bibliothek offen => Navigator-Body.
+                        Die Tabs steuern zusätzlich die Center-Spalte. */}
+                    <CollapsibleSidebarBlock
+                      label="Bibliothek"
+                      controlled
+                      open={!taskBlockOpen}
+                      onToggle={() => setTaskBlockOpen(false)}
+                      active={!taskBlockOpen}
+                    >
+                      <button type="button" className={navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
+                        <NotebookPen size={15} />
+                        <span>Notizen</span>
+                        <strong>{notesSnapshot.notes.length}</strong>
+                      </button>
+                      <button type="button" className={navigatorTab === "pdfs" ? "active" : ""} onClick={() => { setNavigatorTab("pdfs"); setCenterView("pdf"); }}>
+                        <FileText size={15} />
+                        <span>PDFs</span>
+                        <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
+                      </button>
+                      <button type="button" className={`workspace-nav-tab--wide ${navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => { setNavigatorTab("assistantSessions"); setCenterView("pdf"); }}>
+                        <MessageSquareText size={15} />
+                        <span>KI-Sessions</span>
+                        <strong>{history.length}</strong>
+                      </button>
+                      <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
+                        <FlaskConical size={15} />
+                        <span>Analyse</span>
+                      </button>
+                      <button type="button" className={centerView === "datasets" ? "active" : ""} title="Datensätze aus freien Registries suchen und sammeln" onClick={() => setCenterView("datasets")}>
+                        <Database size={15} />
+                        <span>Daten</span>
+                      </button>
+                    </CollapsibleSidebarBlock>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className={centerView === "pdf" && navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
+                      <NotebookPen size={15} />
+                      <span>Notizen</span>
+                      <strong>{notesSnapshot.notes.length}</strong>
+                    </button>
+                    <button type="button" className={centerView === "pdf" && navigatorTab === "pdfs" ? "active" : ""} onClick={() => { setNavigatorTab("pdfs"); setCenterView("pdf"); }}>
+                      <FileText size={15} />
+                      <span>PDFs</span>
+                      <strong>{notesSnapshot.citations.length + pdfPapers.length}</strong>
+                    </button>
+                    <button type="button" className={`workspace-nav-tab--wide ${centerView === "pdf" && navigatorTab === "assistantSessions" ? "active" : ""}`} onClick={() => { setNavigatorTab("assistantSessions"); setCenterView("pdf"); }}>
+                      <MessageSquareText size={15} />
+                      <span>KI-Sessions</span>
+                      <strong>{history.length}</strong>
+                    </button>
+                    <button type="button" className={centerView === "analysis" ? "active" : ""} title="Analyse-Werkstatt: KI schreibt + führt Analyse-Skripte aus (reproduzierbar)" onClick={() => setCenterView("analysis")}>
+                      <FlaskConical size={15} />
+                      <span>Analyse</span>
+                    </button>
+                    <button type="button" className={centerView === "datasets" ? "active" : ""} title="Datensätze aus freien Registries suchen und sammeln" onClick={() => setCenterView("datasets")}>
+                      <Database size={15} />
+                      <span>Daten</span>
+                    </button>
+                  </>
+                )}
               </div>
               {sessionLoadFailed ? (
                 <div className="status-strip status-strip--error">
@@ -3454,70 +3516,82 @@ export function WorkspacePage() {
                   <span>Backend nicht erreichbar — es wird nichts gespeichert, bis die Verbindung steht.</span>
                 </div>
               ) : null}
-              <WorkspaceNavigatorBody
-                tab={navigatorTab}
-                query={navigatorQuery}
-                setQuery={setNavigatorQuery}
-                notes={visibleNotes}
-                notesLoading={notesSnapshot.notesLoading}
-                activeNoteId={notesSnapshot.activeNoteId}
-                citations={notesSnapshot.citationRows}
-                selectedCitation={notesSnapshot.selectedCitation}
-                papers={pdfPapers}
-                papersLoading={papersQuery.isLoading}
-                greySources={greySources}
-                primaryPaperId={primaryPaperId}
-                pdfTarget={pdfTarget}
-                activeAssistantSource={selectedSource}
-                activeAssistantEvidenceIndex={activeEvidenceIndex}
-                selectedPaperIds={selectedPaperIds}
-                pdfCitationListHeight={pdfCitationListHeight}
-                sessions={history}
-                activeSessionId={activeTurnId}
-                sessionProjectId={scopedProjectId}
-                onSessionRestored={() => setSessionReloadNonce((current) => current + 1)}
-                onCreateNote={() => notesActionsRef.current?.createNote()}
-                onSelectNote={(noteId) => {
-                  setControlledNoteId(noteId);
-                  notesActionsRef.current?.selectNote(noteId);
-                  setNavigatorTab("notes");
-                }}
-                onOpenCitation={(citation) => {
-                  if (notesActionsRef.current) {
-                    setRequestedCitationId("");
-                    notesActionsRef.current.openCitation(citation);
-                  } else {
-                    setRequestedCitationId(citation.id);
-                  }
-                  setPdfTarget({ kind: "noteCitation", citation });
-                  setPdfOpen(true);
-                }}
-                onOpenPaper={(paper) => {
-                  setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(paper) });
-                  setPdfOpen(true);
-                }}
-                onOpenGrey={openGreySource}
-                onToggleScopedPaper={toggleScopedPaper}
-                selectedGreyIds={selectedGreyIds}
-                onToggleScopedGrey={toggleScopedGrey}
-                greySourceListHeight={greySourceListHeight}
-                onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90)}
-                onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80)}
-                onOpenAssistantPdf={openSelectedAssistantPdf}
-                onActivateSession={activateAssistantTurn}
-                onDeleteSession={deleteAssistantTurn}
-                onDeleteNote={(noteId) => notesActionsRef.current?.deleteNote(noteId)}
-                isRealProject={isRealProject}
-                onDeletePaper={(paperId) => removePaperMutation.mutate(paperId)}
-                onDeleteGrey={(greyId) => deleteGreyMutation.mutate(greyId)}
-                onSetPrimary={(paperId) => setPrimaryMutation.mutate(paperId)}
-                onDeleteCitation={(citation) => {
-                  const noteId = notesSnapshot.activeNoteId || controlledNoteId;
-                  if (noteId) {
-                    deleteCitationMutation.mutate({ noteId, citationId: citation.id });
-                  }
-                }}
-              />
+              {workspaceMode === "task" && taskBlockOpen ? (
+                <TaskFocusedPane
+                  projectId={scopedProjectId}
+                  provider={provider}
+                  model={model}
+                  creativityLevel={creativityLevel}
+                  setCreativityLevel={setCreativityLevel}
+                  onStartParallelSession={(q, taskId) => startParallelSession(q, taskId)}
+                  onClose={() => setWorkspaceMode("research")}
+                />
+              ) : (
+                <WorkspaceNavigatorBody
+                  tab={navigatorTab}
+                  query={navigatorQuery}
+                  setQuery={setNavigatorQuery}
+                  notes={visibleNotes}
+                  notesLoading={notesSnapshot.notesLoading}
+                  activeNoteId={notesSnapshot.activeNoteId}
+                  citations={notesSnapshot.citationRows}
+                  selectedCitation={notesSnapshot.selectedCitation}
+                  papers={pdfPapers}
+                  papersLoading={papersQuery.isLoading}
+                  greySources={greySources}
+                  primaryPaperId={primaryPaperId}
+                  pdfTarget={pdfTarget}
+                  activeAssistantSource={selectedSource}
+                  activeAssistantEvidenceIndex={activeEvidenceIndex}
+                  selectedPaperIds={selectedPaperIds}
+                  pdfCitationListHeight={pdfCitationListHeight}
+                  sessions={history}
+                  activeSessionId={activeTurnId}
+                  sessionProjectId={scopedProjectId}
+                  onSessionRestored={() => setSessionReloadNonce((current) => current + 1)}
+                  onCreateNote={() => notesActionsRef.current?.createNote()}
+                  onSelectNote={(noteId) => {
+                    setControlledNoteId(noteId);
+                    notesActionsRef.current?.selectNote(noteId);
+                    setNavigatorTab("notes");
+                  }}
+                  onOpenCitation={(citation) => {
+                    if (notesActionsRef.current) {
+                      setRequestedCitationId("");
+                      notesActionsRef.current.openCitation(citation);
+                    } else {
+                      setRequestedCitationId(citation.id);
+                    }
+                    setPdfTarget({ kind: "noteCitation", citation });
+                    setPdfOpen(true);
+                  }}
+                  onOpenPaper={(paper) => {
+                    setPdfTarget({ kind: "paper", paper: normalizeWorkspacePaper(paper) });
+                    setPdfOpen(true);
+                  }}
+                  onOpenGrey={openGreySource}
+                  onToggleScopedPaper={toggleScopedPaper}
+                  selectedGreyIds={selectedGreyIds}
+                  onToggleScopedGrey={toggleScopedGrey}
+                  greySourceListHeight={greySourceListHeight}
+                  onResizeCitationList={(event) => startVerticalResize(event, pdfCitationListHeight, setPdfCitationListHeight, pdfCitationResizeFrameRef, 90)}
+                  onResizeGreyList={(event) => startVerticalResize(event, greySourceListHeight, setGreySourceListHeight, greySourceResizeFrameRef, 80)}
+                  onOpenAssistantPdf={openSelectedAssistantPdf}
+                  onActivateSession={activateAssistantTurn}
+                  onDeleteSession={deleteAssistantTurn}
+                  onDeleteNote={(noteId) => notesActionsRef.current?.deleteNote(noteId)}
+                  isRealProject={isRealProject}
+                  onDeletePaper={(paperId) => removePaperMutation.mutate(paperId)}
+                  onDeleteGrey={(greyId) => deleteGreyMutation.mutate(greyId)}
+                  onSetPrimary={(paperId) => setPrimaryMutation.mutate(paperId)}
+                  onDeleteCitation={(citation) => {
+                    const noteId = notesSnapshot.activeNoteId || controlledNoteId;
+                    if (noteId) {
+                      deleteCitationMutation.mutate({ noteId, citationId: citation.id });
+                    }
+                  }}
+                />
+              )}
             </aside>
           ) : (
             <CollapsedPane label="Navigator" icon={<PanelLeftOpen size={17} />} onOpen={() => navPanelRef.current?.expand()} />
@@ -3537,17 +3611,7 @@ export function WorkspacePage() {
           onCollapse={() => setPdfOpen(false)}
           onExpand={() => setPdfOpen(true)}
         >
-          {workspaceMode === "task" ? (
-            <TaskFocusedPane
-              projectId={scopedProjectId}
-              provider={provider}
-              model={model}
-              creativityLevel={creativityLevel}
-              setCreativityLevel={setCreativityLevel}
-              onStartParallelSession={(q, taskId) => startParallelSession(q, taskId)}
-              onClose={() => setWorkspaceMode("research")}
-            />
-          ) : centerView === "analysis" ? (
+          {centerView === "analysis" ? (
             <AnalysisPanel
               projectId={scopedProjectId}
               provider={provider}
@@ -4016,4 +4080,60 @@ export type WorkspacePaperRecord = Paper & {
   pdf_path?: string;
   path?: string;
 };
+
+/**
+ * Einklappbarer Block in der Workspace-Sidebar (Task-Modus).
+ *
+ * Gruppiert mehrere Reiter-Buttons unter einem Label, das per Klick auf das
+ * Chevron ein-/ausgeklappt wird. ``active`` hebt den Block hervor, wenn
+ * einer seiner Buttons aktuell aktiv ist.
+ *
+ * Zwei Modi:
+ *  - **uncontrolled** (Default): ``defaultOpen`` setzt den internen State.
+ *  - **controlled**: ``controlled`` + ``open`` + ``onToggle`` — der Aufrufer
+ *    steuert den Open-State. Wird vom Task-Block genutzt, dessen Header-Klick
+ *    den gesamten Task-Focus-Mode toggelt (und keinen Button-Körper hat).
+ *    In diesem Modus wird nur der Header gerendert (keine Children).
+ */
+function CollapsibleSidebarBlock({
+  label,
+  defaultOpen = true,
+  active = false,
+  controlled = false,
+  open: controlledOpen,
+  onToggle,
+  children,
+}: {
+  label: string;
+  defaultOpen?: boolean;
+  active?: boolean;
+  controlled?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
+  children?: React.ReactNode;
+}) {
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const open = controlled ? Boolean(controlledOpen) : internalOpen;
+  const handleToggle = () => {
+    if (controlled) {
+      onToggle?.();
+    } else {
+      setInternalOpen((o) => !o);
+    }
+  };
+  return (
+    <div className={`sidebar-block ${active ? "sidebar-block--active" : ""}`}>
+      <button
+        type="button"
+        className="sidebar-block-head"
+        onClick={handleToggle}
+        aria-expanded={open}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span>{label}</span>
+      </button>
+      {open ? <div className="sidebar-block-body">{children}</div> : null}
+    </div>
+  );
+}
 

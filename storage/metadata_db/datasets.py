@@ -43,31 +43,38 @@ class DatasetsMixin(_Base):
         source = str(ds.get("source") or "")
         external_id = str(ds.get("external_id") or "")
         project_id = ds.get("project_id")
-        existing = self.get_dataset_by_source(project_id, source, external_id) if external_id else None
+        existing = (
+            self.get_dataset_by_source(project_id, source, external_id)
+            if external_id
+            else None
+        )
         if existing is not None:
             return existing
         dataset_id = str(ds.get("id") or f"ds_{uuid.uuid4().hex}")
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO datasets
             (id, project_id, source, external_id, title, description, url, doi, license,
              size, year, linked_paper_id, metadata, created_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            dataset_id,
-            project_id,
-            source,
-            external_id,
-            ds.get("title"),
-            ds.get("description"),
-            ds.get("url"),
-            ds.get("doi"),
-            ds.get("license"),
-            ds.get("size"),
-            int(ds["year"]) if ds.get("year") is not None else None,
-            ds.get("linked_paper_id"),
-            json.dumps(ds.get("metadata") or {}, ensure_ascii=False),
-            datetime.now(),
-        ])
+        """,
+            [
+                dataset_id,
+                project_id,
+                source,
+                external_id,
+                ds.get("title"),
+                ds.get("description"),
+                ds.get("url"),
+                ds.get("doi"),
+                ds.get("license"),
+                ds.get("size"),
+                int(ds["year"]) if ds.get("year") is not None else None,
+                ds.get("linked_paper_id"),
+                json.dumps(ds.get("metadata") or {}, ensure_ascii=False),
+                datetime.now(),
+            ],
+        )
         return self.get_dataset(dataset_id)  # type: ignore[return-value]
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any] | None:

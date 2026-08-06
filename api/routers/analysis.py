@@ -2,6 +2,7 @@
 
 Split out of api/product_main.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,7 +14,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import api.product_main as pm  # patchable singletons (llm_router, workspace_manager)
-from analysis import runner as analysis_runner, service as analysis_service, verify as analysis_verify
+from analysis import (
+    runner as analysis_runner,
+    service as analysis_service,
+    verify as analysis_verify,
+)
 from storage.metadata_db import MetadataDB
 from workspace.manager import WorkspaceError
 
@@ -24,6 +29,7 @@ router = APIRouter()
 
 class AnalysisRunRequest(BaseModel):
     """Start a reproducible analysis run (AI writes + executes a Python script)."""
+
     request: str = Field(min_length=1, max_length=4000)
     project_id: str | None = None
     provider: str | None = None
@@ -39,6 +45,7 @@ class AnalysisRunRequest(BaseModel):
 
 class AnalysisReviseRequest(BaseModel):
     """Revise an existing run in place (new instruction and/or figure annotation)."""
+
     request: str | None = Field(default=None, max_length=4000)
     annotation: str | None = Field(default=None, max_length=4000)
     provider: str | None = None
@@ -55,7 +62,9 @@ def _analysis_defaults() -> dict[str, Any]:
     except (FileNotFoundError, OSError, yaml.YAMLError):
         section = {}
     return {
-        "timeout_seconds": float(section.get("timeout_seconds", analysis_runner.DEFAULT_TIMEOUT_SECONDS)),
+        "timeout_seconds": float(
+            section.get("timeout_seconds", analysis_runner.DEFAULT_TIMEOUT_SECONDS)
+        ),
         "seed": int(section.get("seed", analysis_runner.DEFAULT_SEED)),
     }
 
@@ -89,20 +98,32 @@ def _code_graph_context(db: MetadataDB, code_project_id: str | None) -> str | No
         "Kennzahlen: "
         + ", ".join(
             f"{key}={stats.get(key, 0)}"
-            for key in ("files", "parsed_files", "nodes", "edges", "guessed_edges", "dynamic_gaps")
+            for key in (
+                "files",
+                "parsed_files",
+                "nodes",
+                "edges",
+                "guessed_edges",
+                "dynamic_gaps",
+            )
         ),
     ]
     important = overview.get("important") or []
     if important:
         lines.append(
             "Wichtigste Symbole: "
-            + ", ".join(f"{item.get('qualified')} ({item.get('path')})" for item in important[:10])
+            + ", ".join(
+                f"{item.get('qualified')} ({item.get('path')})"
+                for item in important[:10]
+            )
         )
     hot = overview.get("hot_files") or []
     if hot:
         lines.append(
             "Häufig geänderte Dateien: "
-            + ", ".join(f"{item.get('path')} ({item.get('churn')}×)" for item in hot[:10])
+            + ", ".join(
+                f"{item.get('path')} ({item.get('churn')}×)" for item in hot[:10]
+            )
         )
     return "\n".join(lines)
 
@@ -272,9 +293,13 @@ def get_analysis_artifact(
     # Werkstatt file routes. NOT ensure_safe_path: run folders live under the managed
     # workspace base dir (~/Documents/PaperKG-Projekte), outside the project/data tree.
     try:
-        target = pm.workspace_manager.resolve_within(run_dir, str(art.get("rel_path")), must_exist=True)
+        target = pm.workspace_manager.resolve_within(
+            run_dir, str(art.get("rel_path")), must_exist=True
+        )
     except WorkspaceError:
         raise HTTPException(status_code=400, detail="Ungültiger Artefakt-Pfad")
     if not target.is_file():
-        raise HTTPException(status_code=404, detail="Artefakt-Datei fehlt auf der Platte")
+        raise HTTPException(
+            status_code=404, detail="Artefakt-Datei fehlt auf der Platte"
+        )
     return FileResponse(str(target), filename=str(art.get("filename") or target.name))

@@ -50,8 +50,12 @@ class NougatParser:
                 return ParsedDocument(
                     paper_id=paper_id,
                     parser="nougat",
-                    text=payload.get("markdown") or payload.get("text") or marker_result.text,
-                    page_count=int(payload.get("page_count") or marker_result.page_count),
+                    text=payload.get("markdown")
+                    or payload.get("text")
+                    or marker_result.text,
+                    page_count=int(
+                        payload.get("page_count") or marker_result.page_count
+                    ),
                     metadata={
                         "status": "remote",
                         "source_path": str(path),

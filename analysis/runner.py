@@ -17,6 +17,7 @@ die bestehende Werkstatt-Terminal-/Jupyter-Fläche). Echte Isolation (Docker,
 ``--network none``) ist ein optionaler späterer Modus; hier zählt Pfad-Containment,
 Timeout und ein bereinigtes Environment, nicht Kernel-Isolation.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -286,7 +287,7 @@ def run_existing_script(
         stdout = exc.stdout or ""
         if isinstance(stdout, bytes):
             stdout = stdout.decode("utf-8", errors="replace")
-        stderr = (exc.stderr or "")
+        stderr = exc.stderr or ""
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", errors="replace")
         stderr = (stderr + f"\n[Timeout nach {timeout:.0f}s abgebrochen]").strip()
@@ -297,7 +298,9 @@ def run_existing_script(
     duration = time.monotonic() - start
 
     # stdout+stderr immer als log-Artefakt festhalten.
-    log_text = f"$ {python} {SCRIPT_FILENAME}\n\n[stdout]\n{stdout}\n\n[stderr]\n{stderr}\n"
+    log_text = (
+        f"$ {python} {SCRIPT_FILENAME}\n\n[stdout]\n{stdout}\n\n[stderr]\n{stderr}\n"
+    )
     (outputs_dir / STDOUT_FILENAME).write_text(log_text, encoding="utf-8", newline="\n")
 
     artifacts = collect_artifacts(run_path)
@@ -312,7 +315,9 @@ def run_existing_script(
     )
 
 
-def stage_input(run_dir: str | os.PathLike[str], src: str | os.PathLike[str], name: str) -> str:
+def stage_input(
+    run_dir: str | os.PathLike[str], src: str | os.PathLike[str], name: str
+) -> str:
     """Eine Eingabedatei sicher nach ``inputs/<name>`` im Lauf-Ordner kopieren.
 
     Der Zielname wird über :func:`workspace.manager.resolve_within` gegen einen

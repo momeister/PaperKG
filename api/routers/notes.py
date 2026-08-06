@@ -3,6 +3,7 @@
 Split out of api/product_main.py. Behaviour unchanged. Patchbare Namen laufen
 ueber pm.<name>: llm_router, _slug (bleibt in product_main als geteilter Helfer).
 """
+
 from __future__ import annotations
 
 import re
@@ -91,7 +92,10 @@ def list_project_notes(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
-        notes = [db.get_note(str(note.get("id"))) or note for note in db.list_notes(project_id=project_id, limit=1000)]
+        notes = [
+            db.get_note(str(note.get("id"))) or note
+            for note in db.list_notes(project_id=project_id, limit=1000)
+        ]
     return {"items": [_note_summary(note) for note in notes], "total": len(notes)}
 
 
@@ -102,12 +106,16 @@ def create_project_note(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
-        note = db.create_note(project_id=project_id, title=payload.title, markdown=payload.markdown)
+        note = db.create_note(
+            project_id=project_id, title=payload.title, markdown=payload.markdown
+        )
     return {"note": _note_view(note)}
 
 
 @router.get("/notes/{note_id}")
-def get_note(note_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def get_note(
+    note_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         note = db.get_note(note_id)
     if note is None:
@@ -148,29 +156,37 @@ def note_as_source(
             raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
         markdown = str(note.get("markdown") or "").strip()
         if not markdown:
-            raise HTTPException(status_code=400, detail="Leere Notizen können nicht als Quelle gespeichert werden.")
+            raise HTTPException(
+                status_code=400,
+                detail="Leere Notizen können nicht als Quelle gespeichert werden.",
+            )
         citations = note.get("citations") or []
         paper_ids: list[str] = []
         for citation in citations:
             pid = str(citation.get("paper_id") or "").strip()
             if pid and pid not in paper_ids:
                 paper_ids.append(pid)
-        saved = db.add_grey_source(str(note.get("project_id") or ""), {
-            "id": f"grey_note_{note_id}",
-            "url": "",
-            "title": str(note.get("title") or "Notiz"),
-            "summary": _note_excerpt(markdown)[:400],
-            "full_text": markdown[:FULL_TEXT_MAX_LEN],
-            "query": "Notiz",
-            "source_kind": "note",
-            "origin_id": note_id,
-            "source_paper_ids": paper_ids,
-        })
+        saved = db.add_grey_source(
+            str(note.get("project_id") or ""),
+            {
+                "id": f"grey_note_{note_id}",
+                "url": "",
+                "title": str(note.get("title") or "Notiz"),
+                "summary": _note_excerpt(markdown)[:400],
+                "full_text": markdown[:FULL_TEXT_MAX_LEN],
+                "query": "Notiz",
+                "source_kind": "note",
+                "origin_id": note_id,
+                "source_paper_ids": paper_ids,
+            },
+        )
     return {"saved": saved}
 
 
 @router.delete("/notes/{note_id}")
-def delete_note(note_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def delete_note(
+    note_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         deleted = db.delete_note(note_id)
     if not deleted:
@@ -205,12 +221,16 @@ def delete_note_citation(
     with MetadataDB(metadata_db_path) as db:
         deleted = db.delete_note_citation(note_id, citation_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail=f"Citation not found: {citation_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Citation not found: {citation_id}"
+        )
     return {"deleted": True, "id": citation_id}
 
 
 @router.post("/notes/{note_id}/versions/restore-latest")
-def restore_latest_note_version(note_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def restore_latest_note_version(
+    note_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         note = db.restore_latest_note_version(note_id)
     if note is None:
@@ -236,18 +256,24 @@ def create_note_ai_thread(note_id: str, request: NoteAiThreadRequest) -> dict[st
     thread = _create_note_ai_thread(note_id, request)
     return {
         "thread": thread,
-        "replacement_text": thread.get("replacement_text") or thread.get("response_text") or "",
+        "replacement_text": thread.get("replacement_text")
+        or thread.get("response_text")
+        or "",
         "answer": thread.get("answer_payload") or {},
         "model": _note_ai_model(request),
     }
 
 
 @router.patch("/notes/{note_id}/ai-threads/{thread_id}")
-def patch_note_ai_thread(note_id: str, thread_id: str, request: NoteAiThreadPatch) -> dict[str, Any]:
+def patch_note_ai_thread(
+    note_id: str, thread_id: str, request: NoteAiThreadPatch
+) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         thread = db.get_note_ai_thread(thread_id)
         if thread is None or str(thread.get("note_id")) != note_id:
-            raise HTTPException(status_code=404, detail=f"AI thread not found: {thread_id}")
+            raise HTTPException(
+                status_code=404, detail=f"AI thread not found: {thread_id}"
+            )
         updated = db.update_note_ai_thread(thread_id, ui_state=request.ui_state or {})
     return {"thread": updated}
 
@@ -270,11 +296,15 @@ def delete_note_ai_thread_action(
     return _delete_note_ai_thread(note_id, thread_id, metadata_db_path)
 
 
-def _delete_note_ai_thread(note_id: str, thread_id: str, metadata_db_path: str) -> dict[str, Any]:
+def _delete_note_ai_thread(
+    note_id: str, thread_id: str, metadata_db_path: str
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         thread = db.get_note_ai_thread(thread_id)
         if thread is None or str(thread.get("note_id")) != note_id:
-            raise HTTPException(status_code=404, detail=f"AI thread not found: {thread_id}")
+            raise HTTPException(
+                status_code=404, detail=f"AI thread not found: {thread_id}"
+            )
         db.delete_note_ai_thread(thread_id)
     return {"deleted": True}
 
@@ -304,11 +334,15 @@ def _delete_note_ai_threads(note_id: str, metadata_db_path: str) -> dict[str, An
 
 
 @router.post("/notes/{note_id}/ai-threads/{thread_id}/messages")
-def append_note_ai_message(note_id: str, thread_id: str, request: NoteAiMessageRequest) -> dict[str, Any]:
+def append_note_ai_message(
+    note_id: str, thread_id: str, request: NoteAiMessageRequest
+) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         thread = db.get_note_ai_thread(thread_id)
         if thread is None or str(thread.get("note_id")) != note_id:
-            raise HTTPException(status_code=404, detail=f"AI thread not found: {thread_id}")
+            raise HTTPException(
+                status_code=404, detail=f"AI thread not found: {thread_id}"
+            )
 
     selected = str(thread.get("selected_text") or "").strip()
     evidence_request = NoteAiEditRequest(
@@ -320,19 +354,29 @@ def append_note_ai_message(note_id: str, thread_id: str, request: NoteAiMessageR
         graph_db_path=request.graph_db_path,
         use_kg_evidence=request.use_kg_evidence,
     )
-    answer_payload = _note_evidence_payload(evidence_request) if request.use_kg_evidence else {}
+    answer_payload = (
+        _note_evidence_payload(evidence_request) if request.use_kg_evidence else {}
+    )
     response = _run_note_ai_chat(
         selected_text=selected,
         instruction=request.message,
         evidence_block=_note_evidence_prompt(answer_payload),
         provider=request.provider,
         model=request.model,
-        prior_messages=thread.get("messages") if isinstance(thread.get("messages"), list) else [],
+        prior_messages=(
+            thread.get("messages") if isinstance(thread.get("messages"), list) else []
+        ),
     )
     with MetadataDB(request.metadata_db_path) as db:
-        user_message = db.add_note_ai_message(thread_id, note_id, "user", request.message.strip())
-        assistant_message = db.add_note_ai_message(thread_id, note_id, "assistant", response)
-        updated = db.update_note_ai_thread(thread_id, response_text=response, replacement_text=response)
+        user_message = db.add_note_ai_message(
+            thread_id, note_id, "user", request.message.strip()
+        )
+        assistant_message = db.add_note_ai_message(
+            thread_id, note_id, "assistant", response
+        )
+        updated = db.update_note_ai_thread(
+            thread_id, response_text=response, replacement_text=response
+        )
         thread = updated or db.get_note_ai_thread(thread_id)
     return {
         "thread": thread,
@@ -360,7 +404,9 @@ def note_ai_edit(note_id: str, request: NoteAiEditRequest) -> dict[str, Any]:
     )
     return {
         "thread": thread,
-        "replacement_text": thread.get("replacement_text") or thread.get("response_text") or "",
+        "replacement_text": thread.get("replacement_text")
+        or thread.get("response_text")
+        or "",
         "answer": thread.get("answer_payload") or {},
         "model": _note_ai_model(request),
     }
@@ -386,7 +432,9 @@ def ask_note(note_id: str, request: NoteAskRequest) -> dict[str, Any]:
         graph_db_path=request.graph_db_path,
         use_kg_evidence=request.use_kg_evidence,
     )
-    answer_payload = _note_evidence_payload(evidence_request) if request.use_kg_evidence else {}
+    answer_payload = (
+        _note_evidence_payload(evidence_request) if request.use_kg_evidence else {}
+    )
     response = _run_note_ai_chat(
         selected_text=_note_ai_context(markdown),
         instruction=request.question,
@@ -414,7 +462,9 @@ def ask_note(note_id: str, request: NoteAskRequest) -> dict[str, Any]:
     }
 
 
-def _create_note_ai_thread(note_id: str, request: NoteAiThreadRequest) -> dict[str, Any]:
+def _create_note_ai_thread(
+    note_id: str, request: NoteAiThreadRequest
+) -> dict[str, Any]:
     with MetadataDB(request.metadata_db_path) as db:
         if db.get_note(note_id) is None:
             raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
@@ -458,20 +508,29 @@ async def upload_note_asset(
         raise HTTPException(status_code=400, detail="Upload body is empty.")
     content_type = request.headers.get("content-type") or "application/octet-stream"
     if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only image assets are supported for notes.")
+        raise HTTPException(
+            status_code=400, detail="Only image assets are supported for notes."
+        )
 
     with MetadataDB(metadata_db_path) as db:
         if db.get_note(note_id) is None:
             raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
 
     filename = _safe_asset_filename(request.headers.get("x-filename") or "note-image")
-    target_dir = ensure_safe_path(note_asset_dir, what="note asset dir") / pm._slug(note_id)
+    target_dir = ensure_safe_path(note_asset_dir, what="note asset dir") / pm._slug(
+        note_id
+    )
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{filename}"
     target_path.write_bytes(content)
 
     with MetadataDB(metadata_db_path) as db:
-        asset = db.add_note_asset(note_id, filename=filename, content_type=content_type, asset_path=str(target_path))
+        asset = db.add_note_asset(
+            note_id,
+            filename=filename,
+            content_type=content_type,
+            asset_path=str(target_path),
+        )
     return {"asset": {**asset, "url": f"/notes/assets/{asset['id']}"}}
 
 
@@ -514,7 +573,10 @@ def _note_summary(note: dict[str, Any]) -> dict[str, Any]:
 
 def _note_view(note: dict[str, Any]) -> dict[str, Any]:
     citations = [dict(item) for item in note.get("citations") or []]
-    assets = [{**dict(item), "url": f"/notes/assets/{item.get('id')}"} for item in note.get("assets") or []]
+    assets = [
+        {**dict(item), "url": f"/notes/assets/{item.get('id')}"}
+        for item in note.get("assets") or []
+    ]
     return {
         **_note_summary({**note, "citations": citations, "assets": assets}),
         "citations": citations,
@@ -622,7 +684,9 @@ def _run_note_ai_chat(
                     ),
                 },
             ]
-            response = pm.llm_router.chat(retry_messages, provider=provider, overrides=retry_overrides)
+            response = pm.llm_router.chat(
+                retry_messages, provider=provider, overrides=retry_overrides
+            )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI edit failed: {exc}") from exc
     response_text = str(response or "").strip()
@@ -644,7 +708,9 @@ def _note_ai_response_needs_retry(response: Any, selected_text: str) -> bool:
         return False
     if answer == selected:
         return True
-    if len(answer) >= int(len(selected) * 0.9) and (answer in selected or selected in answer):
+    if len(answer) >= int(len(selected) * 0.9) and (
+        answer in selected or selected in answer
+    ):
         return True
     return False
 
@@ -666,7 +732,9 @@ def _normalize_note_ai_echo_text(value: str) -> str:
     return text
 
 
-def _note_ai_model(request: NoteAiEditRequest | NoteAiMessageRequest | NoteAskRequest) -> str:
+def _note_ai_model(
+    request: NoteAiEditRequest | NoteAiMessageRequest | NoteAskRequest,
+) -> str:
     return request.model or pm.llm_router.provider_default_model(request.provider)
 
 
@@ -677,12 +745,27 @@ def _note_ai_context(markdown: str, max_chars: int = 16000) -> str:
 
 def _instruction_needs_evidence(instruction: str) -> bool:
     text = instruction.lower()
-    return any(token in text for token in ["beleg", "beweis", "evidence", "quelle", "zitat", "citation", "argument"])
+    return any(
+        token in text
+        for token in [
+            "beleg",
+            "beweis",
+            "evidence",
+            "quelle",
+            "zitat",
+            "citation",
+            "argument",
+        ]
+    )
 
 
 def _note_evidence_prompt(answer_payload: dict[str, Any]) -> str:
-    evidence = answer_payload.get("evidence") if isinstance(answer_payload, dict) else None
-    sources = answer_payload.get("sources") if isinstance(answer_payload, dict) else None
+    evidence = (
+        answer_payload.get("evidence") if isinstance(answer_payload, dict) else None
+    )
+    sources = (
+        answer_payload.get("sources") if isinstance(answer_payload, dict) else None
+    )
     if not evidence:
         return "Keine zusaetzliche KG-Evidenz bereitgestellt."
     titles = {
@@ -696,7 +779,9 @@ def _note_evidence_prompt(answer_payload: dict[str, Any]) -> str:
             continue
         paper_id = str(item.get("paper_id") or "")
         text = re.sub(r"\s+", " ", str(item.get("text") or "")).strip()
-        lines.append(f"{index}. [{paper_id}] {titles.get(paper_id, paper_id)} | {item.get('kind')}: {text}")
+        lines.append(
+            f"{index}. [{paper_id}] {titles.get(paper_id, paper_id)} | {item.get('kind')}: {text}"
+        )
     return "\n".join(lines)
 
 

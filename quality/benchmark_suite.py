@@ -17,7 +17,12 @@ from query.kg_retriever import KGRetriever
 from query.llm_router import LLMRouter
 from quality.benchmark import DEFAULT_GOLD_DIR, evaluate_case
 from quality.pdf_resolver import BenchmarkPdfResolver
-from quality.phase4_eval import DEFAULT_CASES_PATH, evaluate_answer, load_cases, summarize
+from quality.phase4_eval import (
+    DEFAULT_CASES_PATH,
+    evaluate_answer,
+    load_cases,
+    summarize,
+)
 
 
 @dataclass(frozen=True)
@@ -88,7 +93,8 @@ def run_suite(config: SuiteConfig) -> dict[str, Any]:
         "provider": provider,
         "model": model,
         "context_policy": config.context_policy,
-        "compare_context_policies": config.compare_context_policies or [config.context_policy],
+        "compare_context_policies": config.compare_context_policies
+        or [config.context_policy],
         "answer_context_mode": config.answer_context_mode,
         "metadata_db_path": metadata_db_path,
         "pdf_base_dir": config.pdf_base_dir,
@@ -99,12 +105,18 @@ def run_suite(config: SuiteConfig) -> dict[str, Any]:
     }
     report["summary"] = _suite_summary(report)
 
-    (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    (run_dir / "report.md").write_text(_render_markdown_report(report), encoding="utf-8")
+    (run_dir / "report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (run_dir / "report.md").write_text(
+        _render_markdown_report(report), encoding="utf-8"
+    )
     return report
 
 
-def latest_suite_report(output_dir: Path | str = Path("data/eval/benchmarks")) -> dict[str, Any]:
+def latest_suite_report(
+    output_dir: Path | str = Path("data/eval/benchmarks"),
+) -> dict[str, Any]:
     """Return the newest persisted benchmark-suite report, if one exists."""
     base = Path(output_dir)
     if not base.exists():
@@ -151,7 +163,13 @@ def _run_extraction_policy(
             doi=doi,
             download_missing=config.download_missing,
         )
-        provenance.append({"paper_id": paper_id, **resolution.provenance, "warnings": resolution.warnings})
+        provenance.append(
+            {
+                "paper_id": paper_id,
+                **resolution.provenance,
+                "warnings": resolution.warnings,
+            }
+        )
         warnings.extend(f"{paper_id}: {warning}" for warning in resolution.warnings)
         parsed_text = ""
         prediction: dict[str, Any] = {}
@@ -176,15 +194,23 @@ def _run_extraction_policy(
                 extraction_duration = time.perf_counter() - extraction_started
                 prediction = _prediction_from_result(result)
                 prediction["parsed_text"] = parsed_text
-                prediction["parse_duration_seconds"] = round(time.perf_counter() - parse_started, 4)
-                prediction["extraction_duration_seconds"] = round(extraction_duration, 4)
+                prediction["parse_duration_seconds"] = round(
+                    time.perf_counter() - parse_started, 4
+                )
+                prediction["extraction_duration_seconds"] = round(
+                    extraction_duration, 4
+                )
             except Exception as exc:
-                warnings.append(f"{paper_id}: extraction failed for policy={policy}: {exc}")
+                warnings.append(
+                    f"{paper_id}: extraction failed for policy={policy}: {exc}"
+                )
         if not prediction:
             prediction = dict(gold.get("prediction") or {})
             if prediction:
                 prediction["benchmark_prediction_source"] = "embedded_gold_prediction"
-                warnings.append(f"{paper_id}: used embedded gold prediction for policy={policy}.")
+                warnings.append(
+                    f"{paper_id}: used embedded gold prediction for policy={policy}."
+                )
             else:
                 warnings.append(f"{paper_id}: missing prediction for policy={policy}.")
         prediction.setdefault("paper_id", paper_id)
@@ -192,12 +218,17 @@ def _run_extraction_policy(
             prediction["parsed_text"] = parsed_text
 
         pred_path = predictions_dir / f"{_safe_name(paper_id)}.json"
-        pred_path.write_text(json.dumps(prediction, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        pred_path.write_text(
+            json.dumps(prediction, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
         case_report = evaluate_case({**gold, "parsed_text": parsed_text}, prediction)
         case_report["prediction_path"] = str(pred_path)
         case_report["pdf_path"] = resolution.pdf_path
         case_report["extraction_duration_seconds"] = extraction_duration
-        case_report["context_diagnostics"] = _context_diagnostics_from_prediction(prediction)
+        case_report["context_diagnostics"] = _context_diagnostics_from_prediction(
+            prediction
+        )
         cases.append(case_report)
 
     return {
@@ -221,7 +252,9 @@ def _run_answer_benchmark(
     pdf_base_dir: str,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    retriever = HybridRetriever(KGRetriever(metadata_db_path=metadata_db_path, graph_db_path=graph_db_path))
+    retriever = HybridRetriever(
+        KGRetriever(metadata_db_path=metadata_db_path, graph_db_path=graph_db_path)
+    )
     responder = GroundedResponder(retriever=retriever, llm_router=llm_router)
     case_reports = []
     warnings: list[str] = []
@@ -232,7 +265,11 @@ def _run_answer_benchmark(
                 limit=8,
                 provider=provider,
                 model=model,
-                paper_ids=case.expected_sources if answer_context_mode == "pdf_if_fits" else None,
+                paper_ids=(
+                    case.expected_sources
+                    if answer_context_mode == "pdf_if_fits"
+                    else None
+                ),
                 answer_context_mode=answer_context_mode,
                 pdf_base_dir=pdf_base_dir,
             )
@@ -295,15 +332,24 @@ def _aggregate_extraction_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "method_f1": round(method_f1, 4),
         "relation_f1": round(relation_f1, 4),
         "average_f1": round((concept_f1 + method_f1 + relation_f1) / 3, 4),
-        "supported_extra_count": sum(int(case.get("supported_extra_count") or 0) for case in cases),
-        "unsupported_extra_count": sum(int(case.get("unsupported_extra_count") or 0) for case in cases),
+        "supported_extra_count": sum(
+            int(case.get("supported_extra_count") or 0) for case in cases
+        ),
+        "unsupported_extra_count": sum(
+            int(case.get("unsupported_extra_count") or 0) for case in cases
+        ),
     }
 
 
 def _summarize_policy_reports(policy_reports: list[dict[str, Any]]) -> dict[str, Any]:
     best = None
     if policy_reports:
-        best = max(policy_reports, key=lambda report: float(report.get("summary", {}).get("average_f1") or 0.0))
+        best = max(
+            policy_reports,
+            key=lambda report: float(
+                report.get("summary", {}).get("average_f1") or 0.0
+            ),
+        )
     return {
         "best_policy": best.get("policy") if best else None,
         "policies": policy_reports,
@@ -313,12 +359,23 @@ def _summarize_policy_reports(policy_reports: list[dict[str, Any]]) -> dict[str,
 def _suite_summary(report: dict[str, Any]) -> dict[str, Any]:
     policies = report.get("extraction", {}).get("policies") or []
     selected_policy = next(
-        (item for item in policies if item.get("policy") == report.get("context_policy")),
+        (
+            item
+            for item in policies
+            if item.get("policy") == report.get("context_policy")
+        ),
         policies[0] if policies else {},
     )
-    extraction_score = float((selected_policy.get("summary") or {}).get("average_f1") or 0.0)
-    answer_score = float((report.get("answering", {}).get("summary") or {}).get("average_score") or 0.0)
-    cross_paper_score = float((report.get("answering", {}).get("summary") or {}).get("cross_paper_score") or 0.0)
+    extraction_score = float(
+        (selected_policy.get("summary") or {}).get("average_f1") or 0.0
+    )
+    answer_score = float(
+        (report.get("answering", {}).get("summary") or {}).get("average_score") or 0.0
+    )
+    cross_paper_score = float(
+        (report.get("answering", {}).get("summary") or {}).get("cross_paper_score")
+        or 0.0
+    )
     return {
         "model": report.get("model"),
         "provider": report.get("provider"),
@@ -334,15 +391,22 @@ def _suite_summary(report: dict[str, Any]) -> dict[str, Any]:
 
 def _cross_paper_score(case_reports: list[dict[str, Any]]) -> float:
     cross_cases = [
-        case for case in case_reports
-        if len(case.get("expected_sources") or []) > 1 or "cross" in str(case.get("id") or "").lower()
+        case
+        for case in case_reports
+        if len(case.get("expected_sources") or []) > 1
+        or "cross" in str(case.get("id") or "").lower()
     ]
     if not cross_cases:
         return 0.0
-    return round(sum(float(case.get("score") or 0.0) for case in cross_cases) / len(cross_cases), 4)
+    return round(
+        sum(float(case.get("score") or 0.0) for case in cross_cases) / len(cross_cases),
+        4,
+    )
 
 
-def _collect_warnings(policy_reports: list[dict[str, Any]], answer_report: dict[str, Any]) -> list[str]:
+def _collect_warnings(
+    policy_reports: list[dict[str, Any]], answer_report: dict[str, Any]
+) -> list[str]:
     warnings: list[str] = []
     for report in policy_reports:
         warnings.extend(str(item) for item in report.get("warnings") or [])
@@ -369,7 +433,13 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
     ]
     for policy in report.get("extraction", {}).get("policies") or []:
         lines.append(f"- `{policy.get('policy')}`: {policy.get('summary')}")
-    lines.extend(["", "## Answering", json.dumps(report.get("answering", {}).get("summary") or {}, indent=2)])
+    lines.extend(
+        [
+            "",
+            "## Answering",
+            json.dumps(report.get("answering", {}).get("summary") or {}, indent=2),
+        ]
+    )
     if report.get("warnings"):
         lines.extend(["", "## Warnings"])
         lines.extend(f"- {warning}" for warning in report["warnings"][:80])
@@ -380,7 +450,11 @@ def _case_title(gold: dict[str, Any]) -> str:
     for source in [gold.get("expected"), gold.get("prediction"), gold]:
         if not isinstance(source, dict):
             continue
-        paper_node = source.get("paper_node") if isinstance(source.get("paper_node"), dict) else {}
+        paper_node = (
+            source.get("paper_node")
+            if isinstance(source.get("paper_node"), dict)
+            else {}
+        )
         title = paper_node.get("title") or source.get("title")
         if title:
             return str(title)
@@ -391,7 +465,11 @@ def _case_doi(gold: dict[str, Any]) -> str | None:
     for source in [gold.get("expected"), gold.get("prediction"), gold]:
         if not isinstance(source, dict):
             continue
-        paper_node = source.get("paper_node") if isinstance(source.get("paper_node"), dict) else {}
+        paper_node = (
+            source.get("paper_node")
+            if isinstance(source.get("paper_node"), dict)
+            else {}
+        )
         doi = paper_node.get("doi") or source.get("doi")
         if doi:
             return str(doi).removeprefix("https://doi.org/")
@@ -403,29 +481,49 @@ def _context_diagnostics_from_prediction(prediction: dict[str, Any]) -> dict[str
     if isinstance(diagnostics, dict):
         return diagnostics
     extraction_diagnostics = prediction.get("extraction_diagnostics")
-    if isinstance(extraction_diagnostics, dict) and isinstance(extraction_diagnostics.get("context_diagnostics"), dict):
+    if isinstance(extraction_diagnostics, dict) and isinstance(
+        extraction_diagnostics.get("context_diagnostics"), dict
+    ):
         return extraction_diagnostics["context_diagnostics"]
     return {}
 
 
 def _safe_name(value: str) -> str:
-    return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)[:160] or "case"
+    return (
+        "".join(char if char.isalnum() or char in "._-" else "_" for char in value)[
+            :160
+        ]
+        or "case"
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the ScienceKG local LLM benchmark suite.")
+    parser = argparse.ArgumentParser(
+        description="Run the ScienceKG local LLM benchmark suite."
+    )
     parser.add_argument("--suite", choices=["core", "extended"], default="core")
     parser.add_argument("--provider", default=None)
     parser.add_argument("--model", default=None)
-    parser.add_argument("--context-policy", choices=["auto", "whole", "chunk"], default="auto")
-    parser.add_argument("--compare-context-policies", nargs="*", choices=["auto", "whole", "chunk"], default=None)
-    parser.add_argument("--answer-context-mode", choices=["kg", "pdf_if_fits"], default="kg")
+    parser.add_argument(
+        "--context-policy", choices=["auto", "whole", "chunk"], default="auto"
+    )
+    parser.add_argument(
+        "--compare-context-policies",
+        nargs="*",
+        choices=["auto", "whole", "chunk"],
+        default=None,
+    )
+    parser.add_argument(
+        "--answer-context-mode", choices=["kg", "pdf_if_fits"], default="kg"
+    )
     parser.add_argument("--download-missing", action="store_true")
     parser.add_argument("--metadata-db", default="data/metadata.duckdb")
     parser.add_argument("--graph-db", default="data/graphs/global_kg")
     parser.add_argument("--pdf-base-dir", default="data/pdfs")
     parser.add_argument("--output", default="data/eval/benchmarks")
-    parser.add_argument("--isolated-db", dest="isolated_db", action="store_true", default=True)
+    parser.add_argument(
+        "--isolated-db", dest="isolated_db", action="store_true", default=True
+    )
     parser.add_argument("--no-isolated-db", dest="isolated_db", action="store_false")
     return parser.parse_args(argv)
 
@@ -441,7 +539,11 @@ def main(argv: list[str] | None = None) -> int:
             context_policy=args.context_policy,
             compare_context_policies=policies,
             answer_context_mode=args.answer_context_mode,
-            download_missing=bool(args.download_missing or args.suite == "extended" and args.download_missing),
+            download_missing=bool(
+                args.download_missing
+                or args.suite == "extended"
+                and args.download_missing
+            ),
             metadata_db_path=args.metadata_db,
             graph_db_path=args.graph_db,
             pdf_base_dir=args.pdf_base_dir,

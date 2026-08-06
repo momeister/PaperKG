@@ -30,7 +30,11 @@ class FileManager:
             if not text:
                 continue
             colon_replacement = " " if index == 1 else "_"
-            text = text.replace("/", "_").replace("\\", "_").replace(":", colon_replacement)
+            text = (
+                text.replace("/", "_")
+                .replace("\\", "_")
+                .replace(":", colon_replacement)
+            )
             text = re.sub(r"\s+", "-", text)
             text = re.sub(r"[^A-Za-z0-9._-]+", "-", text)
             text = re.sub(r"-{2,}", "-", text).strip("._-")
@@ -52,7 +56,9 @@ class FileManager:
         """
         if version is None:
             version = 1
-        safe_id = self.safe_storage_id(paper_id, display_name=display_name, source=source)
+        safe_id = self.safe_storage_id(
+            paper_id, display_name=display_name, source=source
+        )
         path = self.base_dir / safe_id / f"{safe_id}_v{version}.pdf"
         return path
 
@@ -67,7 +73,9 @@ class FileManager:
         """
         Save PDF content to disk.
         """
-        path = self.get_storage_path(paper_id, version, display_name=display_name, source=source)
+        path = self.get_storage_path(
+            paper_id, version, display_name=display_name, source=source
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         return path

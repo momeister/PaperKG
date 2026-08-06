@@ -10,7 +10,11 @@ from typing import Any
 import yaml
 
 from extraction.embedding_engine import EmbeddingEngine
-from extraction.text_normalization import normalize_key, normalize_scientific_text, slugify_label
+from extraction.text_normalization import (
+    normalize_key,
+    normalize_scientific_text,
+    slugify_label,
+)
 
 
 DEFAULT_ONTOLOGY_PATH = Path("ontology.yaml")
@@ -25,7 +29,9 @@ def stable_canonical_id(label: str, prefix: str = "concept") -> str:
     slug = slugify_label(label)
     if slug:
         return f"{prefix}:{slug[:96]}"
-    digest = hashlib.sha1(normalize_scientific_text(label).encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(normalize_scientific_text(label).encode("utf-8")).hexdigest()[
+        :16
+    ]
     return f"{prefix}:{digest}"
 
 
@@ -80,7 +86,9 @@ class Ontology:
                     entity_type=entity_type,
                     aliases=aliases,
                     domain=str(raw.get("domain") or "").strip(),
-                    canonical_id=str(raw.get("canonical_id") or stable_canonical_id(label)),
+                    canonical_id=str(
+                        raw.get("canonical_id") or stable_canonical_id(label)
+                    ),
                 )
             )
         return cls(
@@ -190,7 +198,8 @@ class CanonicalResolver:
     def degraded_similarity(self) -> bool:
         return bool(
             self.embedding_engine is None
-            or getattr(self.embedding_engine, "backend", "hash-fallback") != "sentence-transformers"
+            or getattr(self.embedding_engine, "backend", "hash-fallback")
+            != "sentence-transformers"
         )
 
     def resolve(self, entity: dict[str, Any]) -> dict[str, Any]:
@@ -200,7 +209,12 @@ class CanonicalResolver:
         entity_type = self.ontology.validate_entity_type(item.get("entity_type"))
         item["entity_type"] = entity_type
         item.setdefault("evidence_span", self._evidence_span(item))
-        item.setdefault("section", self._section_from_context(str(item.get("context") or item.get("description") or "")))
+        item.setdefault(
+            "section",
+            self._section_from_context(
+                str(item.get("context") or item.get("description") or "")
+            ),
+        )
 
         match = self.find_match(label, entity_type=entity_type)
         confidence = self._coerce_float(item.get("confidence"), 0.0)
@@ -210,14 +224,27 @@ class CanonicalResolver:
             item["entity_type"] = self.ontology.validate_entity_type(match.entity_type)
             item["domain"] = item.get("domain") or match.domain
             item["aliases"] = self._merge_aliases(item.get("aliases"), match.aliases)
-            item["review_status"] = self._review_status_for_match(match, confidence, item)
+            item["review_status"] = self._review_status_for_match(
+                match, confidence, item
+            )
             item["canonical_match"] = {
                 "match_type": match.match_type,
                 "score": match.score,
                 "degraded_similarity": self.degraded_similarity,
             }
-        elif item.get("canonical_id") or item.get("openalx_id") or item.get("openalex_id"):
-            item.setdefault("canonical_id", str(item.get("canonical_id") or item.get("openalx_id") or item.get("openalex_id")))
+        elif (
+            item.get("canonical_id")
+            or item.get("openalx_id")
+            or item.get("openalex_id")
+        ):
+            item.setdefault(
+                "canonical_id",
+                str(
+                    item.get("canonical_id")
+                    or item.get("openalx_id")
+                    or item.get("openalex_id")
+                ),
+            )
             item.setdefault("canonical_label", item.get("openalx_label") or label)
             requested_status = str(item.get("review_status") or "").lower()
             if requested_status == "rejected":
@@ -244,18 +271,31 @@ class CanonicalResolver:
             }
         if item["review_status"] == "pending":
             item.setdefault("suggested_canonical", item.get("canonical_label") or label)
-            item.setdefault("merge_candidates", self.merge_candidates(label, entity_type=entity_type))
-            item.setdefault("evidence", item.get("evidence_span") or item.get("context") or item.get("description") or "")
+            item.setdefault(
+                "merge_candidates",
+                self.merge_candidates(label, entity_type=entity_type),
+            )
+            item.setdefault(
+                "evidence",
+                item.get("evidence_span")
+                or item.get("context")
+                or item.get("description")
+                or "",
+            )
         return item
 
     def validate_relation(self, relation: dict[str, Any]) -> dict[str, Any]:
         item = dict(relation)
-        item["relation_type"] = self.ontology.validate_relation_type(item.get("relation_type") or item.get("type"))
+        item["relation_type"] = self.ontology.validate_relation_type(
+            item.get("relation_type") or item.get("type")
+        )
         if not item.get("subject") or not item.get("object"):
             raise ValueError("Relation requires subject and object")
         return item
 
-    def find_match(self, label: str, entity_type: str | None = None) -> CanonicalMatch | None:
+    def find_match(
+        self, label: str, entity_type: str | None = None
+    ) -> CanonicalMatch | None:
         normalized = normalize_label(label)
         if not normalized:
             return None
@@ -274,7 +314,9 @@ class CanonicalResolver:
             return None
         return self._embedding_match(label, entity_type=entity_type)
 
-    def merge_candidates(self, label: str, entity_type: str | None = None, top_k: int = 5) -> list[dict[str, Any]]:
+    def merge_candidates(
+        self, label: str, entity_type: str | None = None, top_k: int = 5
+    ) -> list[dict[str, Any]]:
         if self.degraded_similarity or self.embedding_engine is None:
             return []
         query_vector = self.embedding_engine.embed(label)
@@ -283,7 +325,9 @@ class CanonicalResolver:
             if not self._type_compatible(str(record["entity_type"]), entity_type):
                 continue
             score = self.embedding_engine.similarity(query_vector, record["vector"])
-            if score >= float(self.ontology.policy.get("candidate_similarity_threshold", 0.78)):
+            if score >= float(
+                self.ontology.policy.get("candidate_similarity_threshold", 0.78)
+            ):
                 rows.append(
                     {
                         "canonical_id": record["canonical_id"],
@@ -295,15 +339,26 @@ class CanonicalResolver:
         rows.sort(key=lambda row: row["score"], reverse=True)
         return rows[:top_k]
 
-    def _embedding_match(self, label: str, entity_type: str | None = None) -> CanonicalMatch | None:
+    def _embedding_match(
+        self, label: str, entity_type: str | None = None
+    ) -> CanonicalMatch | None:
         candidates = self.merge_candidates(label, entity_type=entity_type, top_k=1)
         if not candidates:
             return None
         best = candidates[0]
-        threshold = float(self.ontology.policy.get("auto_merge_similarity_threshold", 0.92))
+        threshold = float(
+            self.ontology.policy.get("auto_merge_similarity_threshold", 0.92)
+        )
         if float(best["score"]) < threshold:
             return None
-        seed = next((item for item in self.ontology.seeds if item.canonical_id == best["canonical_id"]), None)
+        seed = next(
+            (
+                item
+                for item in self.ontology.seeds
+                if item.canonical_id == best["canonical_id"]
+            ),
+            None,
+        )
         if seed is None:
             return None
         return CanonicalMatch(
@@ -359,12 +414,19 @@ class CanonicalResolver:
 
     @staticmethod
     def _evidence_span(item: dict[str, Any]) -> str:
-        text = str(item.get("evidence_span") or item.get("context") or item.get("description") or "").strip()
+        text = str(
+            item.get("evidence_span")
+            or item.get("context")
+            or item.get("description")
+            or ""
+        ).strip()
         return re.sub(r"\s+", " ", text)[:360]
 
     @staticmethod
     def _section_from_context(context: str) -> str:
-        match = re.search(r"(?:section|heading):\s*([^|.;]{2,80})", context or "", flags=re.IGNORECASE)
+        match = re.search(
+            r"(?:section|heading):\s*([^|.;]{2,80})", context or "", flags=re.IGNORECASE
+        )
         return re.sub(r"\s+", " ", match.group(1)).strip()[:80] if match else ""
 
     @staticmethod
@@ -385,10 +447,16 @@ class CanonicalResolver:
         return output
 
     @staticmethod
-    def _review_status_for_match(match: CanonicalMatch, confidence: float, item: dict[str, Any]) -> str:
+    def _review_status_for_match(
+        match: CanonicalMatch, confidence: float, item: dict[str, Any]
+    ) -> str:
         if str(item.get("review_status") or "").lower() == "rejected":
             return "rejected"
-        if item.get("accepted") is True and match.match_type in {"exact_alias", "embedding"} and confidence >= 0.70:
+        if (
+            item.get("accepted") is True
+            and match.match_type in {"exact_alias", "embedding"}
+            and confidence >= 0.70
+        ):
             return "approved"
         if match.match_type == "exact_alias" and confidence >= 0.85:
             return "approved"

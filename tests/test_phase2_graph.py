@@ -37,7 +37,9 @@ class FakeGraph:
     def merge_citation(self, from_paper_id: str, to_paper_id: str) -> None:
         self.citations.append((from_paper_id, to_paper_id))
 
-    def merge_similarity(self, from_paper_id: str, to_paper_id: str, score: float, similarity_type: str) -> None:
+    def merge_similarity(
+        self, from_paper_id: str, to_paper_id: str, score: float, similarity_type: str
+    ) -> None:
         self.similarities.append((from_paper_id, to_paper_id, score, similarity_type))
 
     def merge_concept(self, concept: dict) -> None:
@@ -56,7 +58,9 @@ class FakeGraph:
         confidence: float = 0.0,
         source: str = "",
     ) -> None:
-        self.has_concepts.append((paper_id, concept_id, weight, relation, evidence_span, confidence, source))
+        self.has_concepts.append(
+            (paper_id, concept_id, weight, relation, evidence_span, confidence, source)
+        )
 
     def merge_has_method(
         self,
@@ -68,9 +72,13 @@ class FakeGraph:
         confidence: float = 0.0,
         source: str = "",
     ) -> None:
-        self.has_methods.append((paper_id, method_id, weight, relation, evidence_span, confidence, source))
+        self.has_methods.append(
+            (paper_id, method_id, weight, relation, evidence_span, confidence, source)
+        )
 
-    def merge_related_concept(self, subject_id: str, object_id: str, relation_type: str) -> None:
+    def merge_related_concept(
+        self, subject_id: str, object_id: str, relation_type: str
+    ) -> None:
         self.related_concepts.append((subject_id, object_id, relation_type))
 
 
@@ -154,8 +162,16 @@ def test_ingest_extractions_writes_semantic_edges_from_canonical_paper() -> None
             llm_provider="fake",
             llm_model="fake-model",
             concepts=[
-                {"label": "Concept Drift", "confidence": 0.91, "review_status": "approved"},
-                {"label": "Concept Drift", "confidence": 0.42, "review_status": "approved"},
+                {
+                    "label": "Concept Drift",
+                    "confidence": 0.91,
+                    "review_status": "approved",
+                },
+                {
+                    "label": "Concept Drift",
+                    "confidence": 0.42,
+                    "review_status": "approved",
+                },
                 {"label": ""},
             ],
             methods=[
@@ -181,7 +197,9 @@ def test_ingest_extractions_writes_semantic_edges_from_canonical_paper() -> None
         assert graph.has_methods[0][3] == "INTRODUCES"
         assert graph.has_methods[0][4] == "monitoring changes in data sources"
         assert next(iter(graph.concepts.values()))["label"] == "Concept Drift"
-        assert "Machine Learning" not in {node["label"] for node in graph.concepts.values()}
+        assert "Machine Learning" not in {
+            node["label"] for node in graph.concepts.values()
+        }
         assert "Q-learning" not in {node["label"] for node in graph.methods.values()}
     finally:
         if not db.is_closed:
@@ -197,18 +215,35 @@ def test_ingest_extractions_filters_legacy_deterministic_scan_noise() -> None:
                     "extraction_status": "success",
                     "paper_id": "paper_001",
                     "concepts": [
-                        {"label": "Accepted Concept", "confidence": 0.91, "review_status": "approved"},
+                        {
+                            "label": "Accepted Concept",
+                            "confidence": 0.91,
+                            "review_status": "approved",
+                        },
                         {
                             "label": "Deterministic Noise",
                             "confidence": 0.93,
                             "review_status": "approved",
                             "candidate_source": "deterministic_scan",
                         },
-                        {"label": "Low Confidence", "confidence": 0.50, "review_status": "approved"},
+                        {
+                            "label": "Low Confidence",
+                            "confidence": 0.50,
+                            "review_status": "approved",
+                        },
                     ],
                     "methods": [
-                        {"label": "Accepted Method", "confidence": 0.8, "review_status": "approved"},
-                        {"label": "Auto Method", "confidence": 0.9, "review_status": "approved", "auto_detected": True},
+                        {
+                            "label": "Accepted Method",
+                            "confidence": 0.8,
+                            "review_status": "approved",
+                        },
+                        {
+                            "label": "Auto Method",
+                            "confidence": 0.9,
+                            "review_status": "approved",
+                            "auto_detected": True,
+                        },
                     ],
                 }
             ]
@@ -226,7 +261,9 @@ def test_ingest_extractions_filters_legacy_deterministic_scan_noise() -> None:
     assert {node["label"] for node in graph.methods.values()} == {"Accepted Method"}
 
 
-def test_ingest_extractions_creates_stub_paper_anchor_when_metadata_is_missing() -> None:
+def test_ingest_extractions_creates_stub_paper_anchor_when_metadata_is_missing() -> (
+    None
+):
     class Metadata:
         def list_extraction_results(self, limit: int = 5000):
             return [
@@ -544,7 +581,9 @@ def test_build_co_citation_similarity_creates_bidirectional_edges() -> None:
 
 def test_obsolescence_score_decreases_with_more_citations() -> None:
     old_low = compute_obsolescence_score(year=2010, citation_count=5, current_year=2026)
-    old_high = compute_obsolescence_score(year=2010, citation_count=500, current_year=2026)
+    old_high = compute_obsolescence_score(
+        year=2010, citation_count=500, current_year=2026
+    )
 
     assert old_low > old_high
 

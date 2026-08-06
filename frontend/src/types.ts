@@ -761,12 +761,39 @@ export type TaskTimeline = { start: string; end: string };
 export type TaskSpec = {
   title: string;
   objective: string;
+  /** Hintergrund/Kontext der Aufgabe — warum sie existiert, Domäne. */
+  background?: string;
   evaluation: string;
   datasets: TaskDataset[];
   timeline: TaskTimeline;
+  /** Endgültige Einreichungsfrist (ISO-Datum oder wie in der Quelle angegeben). */
+  deadline?: string;
+  /** Vorgeschlagene/erforderliche Methoden/Ansätze (z. B. »supervised classification«). */
+  methodology?: string[];
   rules: string[];
   constraints: string[];
+  /** Akzeptanzkriterien — was erfüllt sein muss (z. B. Metrik-Schwellen). */
+  inclusion_criteria: string[];
+  /** Ausschlusskriterien — was disqualifiziert (verbotene Methoden, Leakage). */
+  exclusion_criteria: string[];
   suggested_directions: TaskResearchDirection[];
+  /** Dynamische Catch-All-Sections (Prizes, Score, Submission File,
+   *  Code-Requirements, Efficiency Prize, …). LLM erzeugt sie via
+   *  extra_sections im Schema; Frontend rendert sie als zusätzliche
+   *  einklappbare Sections (label = Titel, body = Text). */
+  extra_sections?: { label: string; body: string }[];
+  /** Verifikations-Rohtext der Quelle (gekürzt auf 8 KB vom Backend). Wird beim
+   *  Extrahieren gesetzt, beim PATCH-edit mitgeführt. Frontend zeigt ihn als
+   *  einklappbare Quelle. */
+  source_raw_text?: string;
+  /** Fehler bei der Extraktion (z. B. LLM nicht erreichbar). Backend liefert HTTP
+   *  200 mit leerem Spec + error-Feld statt eines Fehler-Status, damit das
+   *  Frontend den Spec trotzdem rendern kann. Prominent als Banner anzeigen. */
+  error?: string;
+  /** Per-Richtung Tiefensuche-Ergebnisse (key = direction.label). Wird vom
+   *  Backend nach Stream-Ende in task_json.deep_searches persistiert, damit
+   *  die Ergebnisse beim Neuladen erhalten bleiben. */
+  deep_searches?: Record<string, TaskDeepSearchResult>;
 };
 
 /**
@@ -812,6 +839,48 @@ export type TaskGreySourceResponse = {
   task_id: string;
   grey_source: GreySource;
   citation: string; // "grey::task_{id}"
+};
+
+/** Request-Body für ``POST /tasks/{task_id}/deep-search``. */
+export type TaskDeepSearchRequest = {
+  direction: TaskResearchDirection;
+  max_papers?: number;
+  max_web_sources?: number;
+  provider?: string | null;
+  model?: string | null;
+  creativity_level?: number | null;
+};
+
+/** Ein SSE-Event vom deep-search-Stream (status-Feld diskriminiert). */
+export type TaskDeepSearchEvent =
+  | { status: "planning"; direction: TaskResearchDirection; query: string }
+  | { status: "harvesting_papers"; query: string }
+  | { status: "search_complete"; phase: "papers"; found: number }
+  | { status: "ingesting"; paper: { id: string; title: string } }
+  | { status: "ingested"; paper: { id: string; title: string } }
+  | { status: "ingest_failed"; paper: { id: string; title: string } }
+  | { status: "papers_harvested"; count: number; papers: { id: string; title: string }[] }
+  | { status: "harvesting_grey"; query: string }
+  | { status: "grey_search_complete"; found: number }
+  | { status: "fetched"; source: { id: string; title: string; url: string } }
+  | {
+      status: "grey_harvested";
+      count: number;
+      sources: { id: string; title: string; url: string }[];
+    }
+  | { status: "synthesizing"; papers: number; grey_sources: number }
+  | { status: "done"; summary: Answer; papers_count: number; grey_count: number; paper_ids: string[]; grey_ids: string[]; direction: TaskResearchDirection }
+  | { status: "harvest_error"; phase: "papers" | "grey"; error: string }
+  | { status: "error"; error: string; phase?: string };
+
+/** Persistiertes Ergebnis einer Richtung-Tiefensuche (in task_json.deep_searches[label]). */
+export type TaskDeepSearchResult = {
+  summary: Answer;
+  papers_count: number;
+  grey_count: number;
+  paper_ids: string[];
+  grey_ids: string[];
+  direction: TaskResearchDirection;
 };
 
 export type AgentHandoffResponse = {

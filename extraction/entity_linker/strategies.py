@@ -1,4 +1,5 @@
 """Concept-linkage strategies (base + OpenAlex) and shared coercion helper."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -108,12 +109,12 @@ class OpenAlexLinkageStrategy(ConceptLinkageStrategy):
             **concept,
             "openalx_id": cached.get("id"),
             "openalx_label": cached.get("display_name"),
-            "canonical_id": str(cached.get("id") or stable_canonical_id(concept.get("label", ""))),
+            "canonical_id": str(
+                cached.get("id") or stable_canonical_id(concept.get("label", ""))
+            ),
             "canonical_label": cached.get("display_name") or concept.get("label", ""),
             "review_status": concept.get("review_status") or "approved",
         }
         if "link_score" in cached:
             enriched["link_score"] = cached["link_score"]
         return enriched
-
-

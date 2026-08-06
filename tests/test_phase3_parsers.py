@@ -16,6 +16,7 @@ from parsing.marker_parser import (
     _text_needs_char_reconstruction,
 )
 
+
 class TestParserRouter:
     """Test intelligent parser selection."""
 
@@ -29,7 +30,9 @@ class TestParserRouter:
 
     def test_parser_characteristics_detect_tables(self):
         """Test table detection."""
-        text_with_tables = "Results:\nKey | Value | Count\n---|---|---\nA | 1 | 100\nB | 2 | 200"
+        text_with_tables = (
+            "Results:\nKey | Value | Count\n---|---|---\nA | 1 | 100\nB | 2 | 200"
+        )
         text_without = "The results show that the method works well."
 
         assert ParserCharacteristics.has_complex_tables(text_with_tables)
@@ -135,7 +138,9 @@ class TestColumnAwareExtraction:
     PAGE_WIDTH = 600.0
     PAGE_HEIGHT = 800.0
 
-    def _two_column_words(self, left_x=(50, 200), right_x=(350, 500), tops=(100, 200, 300, 400, 500, 600)):
+    def _two_column_words(
+        self, left_x=(50, 200), right_x=(350, 500), tops=(100, 200, 300, 400, 500, 600)
+    ):
         words = []
         for i, top in enumerate(tops):
             words.append(_word(f"L{i}", left_x[0], left_x[1], top, top + 12))
@@ -165,8 +170,10 @@ class TestColumnAwareExtraction:
     def test_find_column_gutter_excludes_header_and_footer_margins(self):
         # A full-width running head/footer would otherwise mask the real body gutter.
         words = self._two_column_words()
-        words.append(_word("Running Head", 50, 550, 10, 30))   # top margin = 0.08 * 800 = 64
-        words.append(_word("Page 7", 50, 550, 770, 790))        # bottom margin = 736
+        words.append(
+            _word("Running Head", 50, 550, 10, 30)
+        )  # top margin = 0.08 * 800 = 64
+        words.append(_word("Page 7", 50, 550, 770, 790))  # bottom margin = 736
         gutter = _find_column_gutter(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
         assert gutter is not None
         assert 200.0 < gutter < 350.0
@@ -188,7 +195,9 @@ class TestColumnAwareExtraction:
         words = self._two_column_words(tops=(100, 200))
         words.append(_word("HEADER", 50, 550, 10, 30))
         words.append(_word("FOOTER", 50, 550, 770, 790))
-        header, left, right, footer = _classify_and_split_words(words, gutter_x=275.0, page_height=self.PAGE_HEIGHT)
+        header, left, right, footer = _classify_and_split_words(
+            words, gutter_x=275.0, page_height=self.PAGE_HEIGHT
+        )
         assert [w["text"] for w in header] == ["HEADER"]
         assert [w["text"] for w in footer] == ["FOOTER"]
         assert [w["text"] for w in left] == ["L0", "L1"]
@@ -206,7 +215,12 @@ class TestColumnAwareExtraction:
         ]
         text = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
         assert text is not None
-        assert text.index("Left1") < text.index("Left2") < text.index("Right1") < text.index("Right2")
+        assert (
+            text.index("Left1")
+            < text.index("Left2")
+            < text.index("Right1")
+            < text.index("Right2")
+        )
 
     def test_reconstruct_page_text_returns_none_without_gutter(self):
         words = []
@@ -232,18 +246,31 @@ class TestColumnAwareExtraction:
 
 class TestReconstructPageTextCharRepair:
     """The two-column path must fall back to char-gap reconstruction when the column-ordered
-    word text is itself glued (extract_words inherits extract_text()'s dropped-space glyphs)."""
+    word text is itself glued (extract_words inherits extract_text()'s dropped-space glyphs).
+    """
 
     PAGE_WIDTH = 600.0
     PAGE_HEIGHT = 800.0
 
-    def _char(self, text: str, x0: float, x1: float, top: float, size: float = 10.0) -> dict[str, Any]:
-        return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + size, "size": size}
+    def _char(
+        self, text: str, x0: float, x1: float, top: float, size: float = 10.0
+    ) -> dict[str, Any]:
+        return {
+            "text": text,
+            "x0": x0,
+            "x1": x1,
+            "top": top,
+            "bottom": top + size,
+            "size": size,
+        }
 
-    def _phrase_chars(self, phrase: str, start_x: float, top: float, cw: float = 3.0, gap: float = 3.0) -> list[dict]:
+    def _phrase_chars(
+        self, phrase: str, start_x: float, top: float, cw: float = 3.0, gap: float = 3.0
+    ) -> list[dict]:
         """Chars for a space-separated phrase: 0 gap within a word, >2.24pt gap between words
         (the effective floor is 0.28 * max(size, 8)), and no glyph emitted for the space itself.
-        Widths stay narrow so every char's center remains on its own side of the gutter."""
+        Widths stay narrow so every char's center remains on its own side of the gutter.
+        """
         chars: list[dict] = []
         x = start_x
         for word in phrase.split(" "):
@@ -259,15 +286,19 @@ class TestReconstructPageTextCharRepair:
         words: list[dict] = []
         chars: list[dict] = []
         for top in (100.0, 150.0, 200.0):
-            words.append(_word(left.replace(" ", ""), 50, 200, top, top + 10))   # one glued token
+            words.append(
+                _word(left.replace(" ", ""), 50, 200, top, top + 10)
+            )  # one glued token
             words.append(_word(right.replace(" ", ""), 350, 500, top, top + 10))
             chars.extend(self._phrase_chars(left, 50, top))
             chars.extend(self._phrase_chars(right, 350, top))
 
-        result = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT, chars=chars)
+        result = _reconstruct_page_text(
+            words, self.PAGE_WIDTH, self.PAGE_HEIGHT, chars=chars
+        )
         assert result is not None
-        assert left in result                              # de-glued via char gaps
-        assert left.replace(" ", "") not in result         # the glued token is gone
+        assert left in result  # de-glued via char gaps
+        assert left.replace(" ", "") not in result  # the glued token is gone
 
     def test_well_spaced_two_column_words_ignore_chars(self):
         # extract_words already produced clean tokens → the check never fires → chars are ignored
@@ -276,8 +307,12 @@ class TestReconstructPageTextCharRepair:
         for i, top in enumerate((100.0, 150.0, 200.0, 250.0)):
             words.append(_word(f"Leftword{i}", 50, 200, top, top + 10))
             words.append(_word(f"Rightword{i}", 350, 500, top, top + 10))
-        chars = [self._char("Z", 50, 53, 100.0)]  # would corrupt output if wrongly applied
-        with_chars = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT, chars=chars)
+        chars = [
+            self._char("Z", 50, 53, 100.0)
+        ]  # would corrupt output if wrongly applied
+        with_chars = _reconstruct_page_text(
+            words, self.PAGE_WIDTH, self.PAGE_HEIGHT, chars=chars
+        )
         without = _reconstruct_page_text(words, self.PAGE_WIDTH, self.PAGE_HEIGHT)
         assert with_chars == without
         assert with_chars is not None and "Leftword0" in with_chars
@@ -286,15 +321,27 @@ class TestReconstructPageTextCharRepair:
 class TestCharsToSpacedText:
     """Tests for _chars_to_spaced_text char-level space insertion."""
 
-    def _char(self, text: str, x0: float, x1: float, top: float = 100.0, size: float = 10.0) -> dict:
-        return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + size, "size": size}
+    def _char(
+        self, text: str, x0: float, x1: float, top: float = 100.0, size: float = 10.0
+    ) -> dict:
+        return {
+            "text": text,
+            "x0": x0,
+            "x1": x1,
+            "top": top,
+            "bottom": top + size,
+            "size": size,
+        }
 
     def test_inserts_space_at_word_boundary(self):
         # Two words separated by a gap larger than 0.28 * font_size
         # font_size=10, threshold = 0.28 * 10 = 2.8 — gap of 12 should insert space
         chars = [
             *[self._char(c, 10 * i, 10 * i + 8) for i, c in enumerate("Hello")],
-            *[self._char(c, 60 + 10 * i, 60 + 10 * i + 8) for i, c in enumerate("World")],
+            *[
+                self._char(c, 60 + 10 * i, 60 + 10 * i + 8)
+                for i, c in enumerate("World")
+            ],
         ]
         result = _chars_to_spaced_text(chars)
         assert result == "Hello World"
@@ -349,21 +396,36 @@ class TestParseTextCleanup:
     """Tests for naive-text preference and de-hyphenation helpers."""
 
     def test_join_hyphenated_linebreaks_joins_lowercase_continuation(self):
-        assert _join_hyphenated_linebreaks("for assess-\ning model quality") == "for assessing model quality"
+        assert (
+            _join_hyphenated_linebreaks("for assess-\ning model quality")
+            == "for assessing model quality"
+        )
         # Column reconstruction flattens line breaks to spaces before this runs.
-        assert _join_hyphenated_linebreaks("the bevaci- zumab group") == "the bevacizumab group"
+        assert (
+            _join_hyphenated_linebreaks("the bevaci- zumab group")
+            == "the bevacizumab group"
+        )
 
     def test_join_hyphenated_linebreaks_keeps_capitalized_compounds(self):
         # "Wilcoxon-\nMann" is a real hyphenated compound, not a broken word.
-        assert _join_hyphenated_linebreaks("the Wilcoxon-\nMann test") == "the Wilcoxon-\nMann test"
+        assert (
+            _join_hyphenated_linebreaks("the Wilcoxon-\nMann test")
+            == "the Wilcoxon-\nMann test"
+        )
 
     def test_join_hyphenated_linebreaks_keeps_suspended_hyphens(self):
         # Suspended hyphenation ("pre- and post-") must not be glued into "preand".
-        assert _join_hyphenated_linebreaks("pre- and post-treatment") == "pre- and post-treatment"
-        assert _join_hyphenated_linebreaks("mid- to long-term effects") == "mid- to long-term effects"
+        assert (
+            _join_hyphenated_linebreaks("pre- and post-treatment")
+            == "pre- and post-treatment"
+        )
+        assert (
+            _join_hyphenated_linebreaks("mid- to long-term effects")
+            == "mid- to long-term effects"
+        )
 
     def test_text_needs_char_reconstruction_false_for_normal_text(self):
-        text = ("This page has perfectly ordinary spacing between all of its words. " * 5)
+        text = "This page has perfectly ordinary spacing between all of its words. " * 5
         assert _text_needs_char_reconstruction(text) is False
 
     def test_text_needs_char_reconstruction_true_for_glued_text(self):
@@ -384,7 +446,9 @@ class TestParseTextCleanup:
             "To address this gap we present GenAU a Generalist "
             "visionlanguageframeworkforindustrialAnomalyUnderstanding that works well here. "
         ) * 2
-        assert len(re.findall(r"[A-Za-z]{16,}", text)) < 3  # thresholds alone would say False
+        assert (
+            len(re.findall(r"[A-Za-z]{16,}", text)) < 3
+        )  # thresholds alone would say False
         assert _text_needs_char_reconstruction(text) is True
 
     def test_text_needs_char_reconstruction_true_for_localized_paren_gluing(self):
@@ -400,7 +464,9 @@ class TestParseTextCleanup:
             _repair_glued_parens("Simulation Environment(MOOSE)framework")
             == "Simulation Environment (MOOSE) framework"
         )
-        assert _repair_glued_parens("the results(2020)show") == "the results (2020) show"
+        assert (
+            _repair_glued_parens("the results(2020)show") == "the results (2020) show"
+        )
 
     def test_repair_glued_parens_keeps_single_letter_math_and_punctuation(self):
         # single-letter functions and a closing paren before non-letters stay intact
@@ -491,5 +557,3 @@ class TestParserImplementations:
         assert result.paper_id == "paper_002"
         assert "not yet implemented" not in result.text.lower()
         assert result.metadata.get("status") in {"fallback", "remote"}
-
-

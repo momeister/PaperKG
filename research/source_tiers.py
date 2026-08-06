@@ -11,6 +11,7 @@ Wichtig: Alle Webinhalte bleiben unabhaengig von der Stufe *untrusted data* im
 Sinne der Prompt-Injection-Abwehr (siehe research/sanitize.py). ``trusted`` sagt
 etwas ueber die inhaltliche Verlaesslichkeit, nichts ueber die Sicherheit.
 """
+
 from __future__ import annotations
 
 import re
@@ -91,7 +92,9 @@ DEFAULT_TRUSTED_DOMAINS: tuple[str, ...] = (
 
 def host_of(url: str) -> str:
     """Hostname einer URL in Kleinschreibung, ohne fuehrendes ``www.``."""
-    host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(url or "").strip(), flags=re.IGNORECASE)
+    host = re.sub(
+        r"^[a-z][a-z0-9+.-]*://", "", str(url or "").strip(), flags=re.IGNORECASE
+    )
     host = host.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
     host = host.split("@")[-1].split(":", 1)[0].lower()
     return host[4:] if host.startswith("www.") else host
@@ -106,7 +109,9 @@ def classify_url(
     host = host_of(url)
     if not host:
         return UNKNOWN
-    domains = [d.strip().lower().lstrip(".") for d in (trusted_domains or []) if str(d).strip()]
+    domains = [
+        d.strip().lower().lstrip(".") for d in (trusted_domains or []) if str(d).strip()
+    ]
     domains.extend(DEFAULT_TRUSTED_DOMAINS)
     for domain in domains:
         if host == domain or host.endswith("." + domain):

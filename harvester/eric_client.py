@@ -9,7 +9,9 @@ from harvester.http_client import HttpSourceConfig, ThrottledJsonClient
 
 ERIC_BASE = "https://api.ies.ed.gov/eric/"
 
-ERIC_FIELDS = "id,title,author,description,publicationdateyear,source,peerreviewed,e_fulltextauth"
+ERIC_FIELDS = (
+    "id,title,author,description,publicationdateyear,source,peerreviewed,e_fulltextauth"
+)
 
 
 @dataclass
@@ -31,7 +33,12 @@ class EricClient(ThrottledJsonClient):
         # ERIC antwortet mit JSON, deklariert aber text/plain — daher selbst parsen.
         text = await self.get_text(
             "",
-            {"search": query, "format": "json", "rows": min(max(limit, 1), 200), "fields": ERIC_FIELDS},
+            {
+                "search": query,
+                "format": "json",
+                "rows": min(max(limit, 1), 200),
+                "fields": ERIC_FIELDS,
+            },
         )
         try:
             payload = json.loads(text)

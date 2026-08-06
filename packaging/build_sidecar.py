@@ -27,8 +27,18 @@ DIST = PROJECT_ROOT / "src-tauri" / "sidecar"
 # that ImportErrors at runtime (e.g. "No module named 'duckdb'"). Always checked,
 # even for a lean build. Names are import names, not PyPI names.
 CORE_RUNTIME_DEPS = [
-    "duckdb", "httpx", "yaml", "fastapi", "uvicorn", "pydantic",
-    "numpy", "pandas", "feedparser", "pypdf", "networkx", "aiofiles",
+    "duckdb",
+    "httpx",
+    "yaml",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "numpy",
+    "pandas",
+    "feedparser",
+    "pypdf",
+    "networkx",
+    "aiofiles",
 ]
 
 # Extra deps needed for the FULL bundle (embeddings work out of the box). The spec
@@ -64,7 +74,9 @@ def _preflight() -> int:
         return 1
 
     if os.environ.get("SCIENCEKG_BUNDLE_LEAN"):
-        print("[build_sidecar] SCIENCEKG_BUNDLE_LEAN set -> lean bundle (hash-fallback embeddings).")
+        print(
+            "[build_sidecar] SCIENCEKG_BUNDLE_LEAN set -> lean bundle (hash-fallback embeddings)."
+        )
         return 0
     missing = _missing(FULL_BUNDLE_DEPS)
     if missing:
@@ -80,8 +92,10 @@ def _preflight() -> int:
         )
         return 1
     if importlib.util.find_spec("kuzu") is None:
-        print("[build_sidecar] note: kuzu not installed (no wheel on Python >= 3.14); "
-              "graph build will use the non-Kuzu fallback in the bundle.")
+        print(
+            "[build_sidecar] note: kuzu not installed (no wheel on Python >= 3.14); "
+            "graph build will use the non-Kuzu fallback in the bundle."
+        )
     return 0
 
 

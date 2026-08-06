@@ -24,6 +24,7 @@ zitiert, Code mit ``pfad/datei.py:zeile``, und ein nacktes ``[1]`` ist ein
 Qualitätsfehler. Geprüft wird beides — Code in Rust, Papers gegen die Menge der
 tatsächlich abgerufenen IDs.
 """
+
 from __future__ import annotations
 
 import json
@@ -226,7 +227,9 @@ def _paper_evidence(
         from query.hybrid_retriever import HybridRetriever
         from query.kg_retriever import KGRetriever
 
-        retriever = HybridRetriever(kg_retriever=KGRetriever(metadata_db_path=metadata_db_path))
+        retriever = HybridRetriever(
+            kg_retriever=KGRetriever(metadata_db_path=metadata_db_path)
+        )
         hits = retriever.search(question, limit=limit, paper_ids=paper_ids)
     except Exception:  # noqa: BLE001 — Papers sind eine Zugabe, kein Muss
         return []
@@ -234,7 +237,9 @@ def _paper_evidence(
     evidence: list[PaperEvidence] = []
     for hit in hits:
         snippets: list[str] = []
-        for item in sorted(hit.evidence, key=lambda entry: entry.score, reverse=True)[:3]:
+        for item in sorted(hit.evidence, key=lambda entry: entry.score, reverse=True)[
+            :3
+        ]:
             text = " ".join(str(item.text or "").split())
             if text:
                 snippets.append(text[:600])
@@ -334,7 +339,12 @@ def ask_stream(
     history = history or []
 
     def rpc(method: str, params: dict[str, Any] | None = None) -> Any:
-        return service.query(project, method, {**(params or {}), "session": session}, config_path=config_path)
+        return service.query(
+            project,
+            method,
+            {**(params or {}), "session": session},
+            config_path=config_path,
+        )
 
     try:
         router = router or LLMRouter.from_config_file(config_path)
@@ -417,7 +427,10 @@ def ask_stream(
     for entry in history[-HISTORY_TURNS:]:
         messages.append({"role": "user", "content": str(entry.get("question") or "")})
         messages.append(
-            {"role": "assistant", "content": str(entry.get("answer") or "")[:HISTORY_CHARS]}
+            {
+                "role": "assistant",
+                "content": str(entry.get("answer") or "")[:HISTORY_CHARS],
+            }
         )
     messages.append({"role": "user", "content": "\n\n---\n\n".join(user_parts)})
 
@@ -443,7 +456,9 @@ def ask_stream(
                 provider=provider_name,
                 overrides=overrides,
             )
-            fallback = fallback or bool(router.last_response_metadata.get("tool_calling_fallback"))
+            fallback = fallback or bool(
+                router.last_response_metadata.get("tool_calling_fallback")
+            )
             if not calls:
                 final_text = content or ""
                 truncated = False
@@ -454,14 +469,24 @@ def ask_stream(
                     "role": "assistant",
                     "content": content,
                     "tool_calls": [
-                        {"id": call.id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.arguments,
+                            },
+                        }
                         for call in calls
                     ],
                 }
             )
             for call in calls:
                 tool_calls_made += 1
-                yield {"event": "activity", "text": describe_tool_call(call.name, call.arguments)}
+                yield {
+                    "event": "activity",
+                    "text": describe_tool_call(call.name, call.arguments),
+                }
                 result = _dispatch(rpc, call)
                 for node_id in _nodes_from_tool(call.name, call.arguments, result):
                     note(node_id, "nachgeschlagen")
@@ -528,7 +553,9 @@ def ask_stream(
     text = str(verified.get("text") or prose)
     citations = []
     for citation in verified.get("citations") or []:
-        start, end = _utf16_offsets(text, int(citation.get("start") or 0), int(citation.get("end") or 0))
+        start, end = _utf16_offsets(
+            text, int(citation.get("start") or 0), int(citation.get("end") or 0)
+        )
         citations.append({**citation, "start": start, "end": end})
 
     # Die stärkste Herkunft zuletzt eintragen, damit sie gewinnt: eine Stelle,
@@ -543,7 +570,10 @@ def ask_stream(
         try:
             hit = rpc(
                 "symbol_at",
-                {"path": citation.get("path"), "line": int(citation.get("from_line") or 1)},
+                {
+                    "path": citation.get("path"),
+                    "line": int(citation.get("from_line") or 1),
+                },
             )
         except CodeGraphError:
             continue
@@ -633,7 +663,9 @@ def _nodes_from_tool(name: str, arguments: Any, result: str) -> list[str]:
     return found
 
 
-def _hydrate_focus(rpc: Callable[..., Any], focus: dict[str, str]) -> list[dict[str, Any]]:
+def _hydrate_focus(
+    rpc: Callable[..., Any], focus: dict[str, str]
+) -> list[dict[str, Any]]:
     """Aus IDs anzeigbare Zeilen machen, stärkste Herkunft zuerst."""
     ordered = sorted(
         focus.items(), key=lambda pair: (_FOCUS_RANK.get(pair[1], 9), pair[0])

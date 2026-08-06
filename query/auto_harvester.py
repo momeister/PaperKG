@@ -5,11 +5,12 @@ so subsequent answers can use them. Deliberately minimal dependencies — no
 api/ imports at module level to avoid circular imports with product_main
 (die Quellen-Aufaecherung wird zur Laufzeit importiert, mit Fallback).
 """
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import httpx
 
@@ -42,7 +43,10 @@ def _load_projects(path: Path) -> dict[str, list[str]]:
     # Gleiche Semantik wie api/routers/projects.py: kaputtes JSON meldet sich laut,
     # statt still als "keine Projekte" durchzugehen (siehe storage/atomic_json.py).
     data = read_json_dict(path)
-    return {str(k): [str(v) for v in vs] if isinstance(vs, list) else [] for k, vs in data.items()}
+    return {
+        str(k): [str(v) for v in vs] if isinstance(vs, list) else []
+        for k, vs in data.items()
+    }
 
 
 def _save_projects(projects: dict[str, list[str]], path: Path) -> None:
@@ -64,7 +68,9 @@ async def _download_pdf_if_available(
     by DOI via Unpaywall — so harvested papers that only expose a landing page (e.g. many
     open-access journal articles) still end up with a real local PDF instead of metadata only.
     """
-    canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+    canonical_id = str(
+        paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+    )
     title = str(paper.get("title") or canonical_id)
 
     async def _try(url: str) -> Path | None:
@@ -75,7 +81,9 @@ async def _download_pdf_if_available(
             response.raise_for_status()
         except Exception:
             return None
-        if not _looks_like_pdf(response.content, response.headers.get("content-type", "")):
+        if not _looks_like_pdf(
+            response.content, response.headers.get("content-type", "")
+        ):
             return None
         return storage.save_pdf(
             canonical_id,
@@ -118,7 +126,9 @@ async def ingest_paper_record(
     Returns ``{"id", "title", "has_local_pdf", "pdf_path"}``. The paper is assumed to already
     exist in ``db`` (the caller inserts it).
     """
-    canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+    canonical_id = str(
+        paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+    )
     title = str(paper.get("title") or canonical_id)
     abstract = str(paper.get("abstract") or "")
 
@@ -143,17 +153,31 @@ async def ingest_paper_record(
             # Prefer a real Phase-3 extraction of the downloaded PDF; fall back to a synthetic
             # title+abstract extraction so the KG retriever can still find this paper.
             extracted = False
-            if pdf_path is not None and extraction_pipeline is not None and parser_router is not None:
+            if (
+                pdf_path is not None
+                and extraction_pipeline is not None
+                and parser_router is not None
+            ):
                 try:
                     extracted = await asyncio.to_thread(
-                        _extract_pdf_into_db, db, extraction_pipeline, parser_router,
-                        canonical_id, str(pdf_path), provider, model,
+                        _extract_pdf_into_db,
+                        db,
+                        extraction_pipeline,
+                        parser_router,
+                        canonical_id,
+                        str(pdf_path),
+                        provider,
+                        model,
                     )
                 except Exception:
                     extracted = False
             if not extracted:
                 try:
-                    concepts = [{"label": title, "description": abstract[:400]}] if title else []
+                    concepts = (
+                        [{"label": title, "description": abstract[:400]}]
+                        if title
+                        else []
+                    )
                     claims = [{"text": abstract[:600]}] if abstract else []
                     db.save_extraction_result(
                         paper_id=canonical_id,
@@ -196,11 +220,15 @@ def _extract_pdf_into_db(
     if not text:
         return False
     overrides = {"model": model} if model else None
-    result = pipeline.process(canonical_id, text, provider=provider, overrides=overrides, link_concepts=False)
+    result = pipeline.process(
+        canonical_id, text, provider=provider, overrides=overrides, link_concepts=False
+    )
     failure = extraction_failure_reason(result)
     db.save_extraction_result(
         paper_id=canonical_id,
-        llm_provider=provider or getattr(pipeline, "default_provider", "extraction") or "extraction",
+        llm_provider=provider
+        or getattr(pipeline, "default_provider", "extraction")
+        or "extraction",
         llm_model=model or "default",
         paper_type=getattr(result, "paper_type", None),
         concepts=result.concepts,
@@ -219,7 +247,9 @@ def _extract_pdf_into_db(
     return failure is None
 
 
-async def _search_scientific_sources(question: str, sources: list[str], max_papers: int) -> list[dict[str, Any]]:
+async def _search_scientific_sources(
+    question: str, sources: list[str], max_papers: int
+) -> list[dict[str, Any]]:
     """Dieselbe Quellen-Aufaecherung wie der Import (api/routers/harvest.py).
 
     Ohne sie kaeme die Auto-Recherche nur an arXiv und Semantic Scholar. Der Import
@@ -247,6 +277,7 @@ async def harvest_for_question(
     llm_router: "LLMRouter | None" = None,
     provider: str | None = None,
     model: str | None = None,
+    progress_callback: "Callable[[dict[str, Any]], None] | None" = None,
 ) -> list[dict[str, Any]]:
     """Search for papers relevant to *question*, insert into DB, attach to project.
 
@@ -254,10 +285,26 @@ async def harvest_for_question(
     extraction pipeline (entities/claims), falling back to a synthetic title+abstract
     extraction only when there is no PDF or extraction fails.
 
+    When ``progress_callback`` is supplied it is invoked with phase dicts
+    (``{"phase": "search_complete", "found": N}`` / ``{"phase": "ingesting",
+    "paper": {...}}`` / ``{"phase": "ingested", "paper": {...}}``) so callers
+    can stream per-paper progress for long-running harvests. Backward compatible:
+    ``None`` means no callbacks, identical behavior as before.
+
     Returns list of dicts with at least ``{"id": str, "title": str}`` for each inserted paper.
     """
+
+    def _emit(payload: dict[str, Any]) -> None:
+        if progress_callback is not None:
+            try:
+                progress_callback(payload)
+            except Exception:
+                pass
+
     sources = sources or list(DEFAULT_SCIENTIFIC_SOURCES)
-    results: list[dict[str, Any]] = list(await _search_scientific_sources(question, list(sources), max_papers))
+    results: list[dict[str, Any]] = list(
+        await _search_scientific_sources(question, list(sources), max_papers)
+    )
 
     async def _search_arxiv() -> None:
         client = ArxivClient()
@@ -280,17 +327,29 @@ async def harvest_for_question(
             for item in payload.get("data", []):
                 external_ids = item.get("externalIds") or {}
                 open_access_pdf = item.get("openAccessPdf") or {}
-                results.append({
-                    "source": "semantic_scholar",
-                    "source_id": str(item.get("paperId") or item.get("corpusId") or "unknown"),
-                    "version": 1,
-                    "title": item.get("title") or "",
-                    "abstract": item.get("abstract") or "",
-                    "authors": [a.get("name", "") for a in (item.get("authors") or []) if isinstance(a, dict)],
-                    "year": item.get("year"),
-                    "doi": external_ids.get("DOI") or item.get("doi"),
-                    "pdf_url": open_access_pdf.get("url") if isinstance(open_access_pdf, dict) else None,
-                })
+                results.append(
+                    {
+                        "source": "semantic_scholar",
+                        "source_id": str(
+                            item.get("paperId") or item.get("corpusId") or "unknown"
+                        ),
+                        "version": 1,
+                        "title": item.get("title") or "",
+                        "abstract": item.get("abstract") or "",
+                        "authors": [
+                            a.get("name", "")
+                            for a in (item.get("authors") or [])
+                            if isinstance(a, dict)
+                        ],
+                        "year": item.get("year"),
+                        "doi": external_ids.get("DOI") or item.get("doi"),
+                        "pdf_url": (
+                            open_access_pdf.get("url")
+                            if isinstance(open_access_pdf, dict)
+                            else None
+                        ),
+                    }
+                )
         except Exception:
             pass
         finally:
@@ -312,12 +371,16 @@ async def harvest_for_question(
     # Preprints zuletzt — bei knappem Budget zaehlt die belastbarere Fundstelle.
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
-    for r in sorted(results, key=lambda item: TIER_RANK.get(source_tier(str(item.get("source") or "")), 1)):
+    for r in sorted(
+        results,
+        key=lambda item: TIER_RANK.get(source_tier(str(item.get("source") or "")), 1),
+    ):
         key = str(r.get("doi") or r.get("title") or "").lower().strip()
         if key and key not in seen:
             seen.add(key)
             unique.append(r)
     unique = unique[:max_papers]
+    _emit({"phase": "search_complete", "found": len(unique)})
 
     storage = FileManager(pdf_base_dir)
     inserted: list[dict[str, Any]] = []
@@ -337,26 +400,39 @@ async def harvest_for_question(
             extraction_pipeline = None
             parser_router = None
 
-    async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        headers={"User-Agent": _USER_AGENT}, timeout=30.0
+    ) as client:
         with MetadataDB(db_path) as db:
             for paper in unique:
-                canonical_id = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}")
+                canonical_id = str(
+                    paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+                )
                 title = str(paper.get("title") or canonical_id)
                 try:
                     db.insert_paper(paper)
                 except Exception:
                     continue
                 inserted.append({"id": canonical_id, "title": title})
+                paper_info = {"id": canonical_id, "title": title}
+                _emit({"phase": "ingesting", "paper": paper_info})
                 # Download the PDF (resolving an OA URL by DOI if needed), record its local
                 # path, and run Phase-3 (or synthetic) extraction — see ingest_paper_record.
-                await ingest_paper_record(
-                    paper, db, storage, client,
-                    extraction_pipeline=extraction_pipeline,
-                    parser_router=parser_router,
-                    provider=provider,
-                    model=model,
-                    extract=True,
-                )
+                try:
+                    await ingest_paper_record(
+                        paper,
+                        db,
+                        storage,
+                        client,
+                        extraction_pipeline=extraction_pipeline,
+                        parser_router=parser_router,
+                        provider=provider,
+                        model=model,
+                        extract=True,
+                    )
+                    _emit({"phase": "ingested", "paper": paper_info})
+                except Exception:
+                    _emit({"phase": "ingest_failed", "paper": paper_info})
 
     inserted_ids = [r["id"] for r in inserted]
     # Attach to the active project (creating its membership list if needed). Global mode
@@ -366,7 +442,9 @@ async def harvest_for_question(
         projects = _load_projects(proj_path)
         existing_members = list(projects.get(project_id, []))
         existing_set = set(existing_members)
-        projects[project_id] = existing_members + [pid for pid in inserted_ids if pid not in existing_set]
+        projects[project_id] = existing_members + [
+            pid for pid in inserted_ids if pid not in existing_set
+        ]
         _save_projects(projects, proj_path)
 
     return inserted
@@ -378,6 +456,7 @@ async def harvest_grey_sources_for_question(
     db_path: str = "data/metadata.duckdb",
     max_sources: int = 3,
     tiers: tuple[str, ...] | None = None,
+    progress_callback: "Callable[[dict[str, Any]], None] | None" = None,
 ) -> list[dict[str, Any]]:
     """Search the web for *question*, fetch + sanitize pages, save as grey sources.
 
@@ -386,10 +465,21 @@ async def harvest_grey_sources_for_question(
     vertrauenswuerdige Domains und erst danach den Rest des Webs heranziehen.
     ``None`` heisst: alle Stufen, wie bisher.
 
+    When ``progress_callback`` is supplied it is invoked with phase dicts
+    (``{"phase": "search_complete", "found": N}`` / ``{"phase": "fetched",
+    "source": {...}}``) so callers can stream progress. Backward compatible.
+
     Returns list of saved grey source records (each with at least id, title, url).
     """
     from research.sanitize import sanitize_web_text
     from research.search_provider import load_research_config, run_web_search
+
+    def _emit(payload: dict[str, Any]) -> None:
+        if progress_callback is not None:
+            try:
+                progress_callback(payload)
+            except Exception:
+                pass
 
     try:
         config = load_research_config()
@@ -400,15 +490,20 @@ async def harvest_grey_sources_for_question(
 
     if tiers:
         hits = [hit for hit in hits if getattr(hit, "tier", "unknown") in tiers]
+    _emit({"phase": "search_complete", "found": len(hits[:max_sources])})
 
     results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}, timeout=20.0) as client:
+    async with httpx.AsyncClient(
+        headers={"User-Agent": _USER_AGENT}, timeout=20.0
+    ) as client:
         with MetadataDB(db_path) as db:
             for hit in hits[:max_sources]:
                 if not await asyncio.to_thread(is_safe_public_url, str(hit.url)):
                     continue
                 try:
-                    resp = await client.get(str(hit.url), follow_redirects=True, timeout=15.0)
+                    resp = await client.get(
+                        str(hit.url), follow_redirects=True, timeout=15.0
+                    )
                     resp.raise_for_status()
                     full_text, _ = sanitize_web_text(resp.text)
                     record = db.add_grey_source(
@@ -424,6 +519,16 @@ async def harvest_grey_sources_for_question(
                         },
                     )
                     results.append(record)
+                    _emit(
+                        {
+                            "phase": "fetched",
+                            "source": {
+                                "id": record.get("id"),
+                                "title": record.get("title"),
+                                "url": record.get("url"),
+                            },
+                        }
+                    )
                 except Exception:
                     continue
     return results

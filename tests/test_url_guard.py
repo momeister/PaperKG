@@ -1,4 +1,5 @@
 """Tests for the SSRF guard (harvester/url_guard.py)."""
+
 from __future__ import annotations
 
 import pytest
@@ -21,17 +22,17 @@ def test_public_urls_allowed(url: str) -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "http://127.0.0.1:8000/papers",          # loopback
-        "http://localhost/admin",                # resolves to loopback
-        "http://169.254.169.254/latest/meta",    # cloud metadata (link-local)
-        "http://10.0.0.5/internal",              # private RFC1918
-        "http://192.168.1.1/router",             # private RFC1918
-        "http://172.16.0.1/",                    # private RFC1918
-        "http://[::1]/",                         # IPv6 loopback
-        "http://0.0.0.0/",                       # unspecified
-        "ftp://arxiv.org/file",                  # disallowed scheme
-        "file:///etc/passwd",                    # disallowed scheme
-        "gopher://example.com/",                 # disallowed scheme
+        "http://127.0.0.1:8000/papers",  # loopback
+        "http://localhost/admin",  # resolves to loopback
+        "http://169.254.169.254/latest/meta",  # cloud metadata (link-local)
+        "http://10.0.0.5/internal",  # private RFC1918
+        "http://192.168.1.1/router",  # private RFC1918
+        "http://172.16.0.1/",  # private RFC1918
+        "http://[::1]/",  # IPv6 loopback
+        "http://0.0.0.0/",  # unspecified
+        "ftp://arxiv.org/file",  # disallowed scheme
+        "file:///etc/passwd",  # disallowed scheme
+        "gopher://example.com/",  # disallowed scheme
         "not-a-url",
         "",
         None,

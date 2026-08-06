@@ -5,6 +5,7 @@ The deep-research feature pulls arbitrary web pages. Their content is treated as
 strips markup/scripts and control characters, caps length, and flags known
 prompt-injection patterns so the orchestrator can quarantine or down-weight them.
 """
+
 from __future__ import annotations
 
 import html
@@ -14,19 +15,56 @@ import re
 # Patterns that frequently appear in prompt-injection / jailbreak attempts embedded
 # in web pages. Matching is case-insensitive. These are flagged, not silently kept.
 _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("ignore_instructions", re.compile(r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above)\s+instructions", re.I)),
-    ("disregard_instructions", re.compile(r"disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above)", re.I)),
-    ("new_instructions", re.compile(r"\b(?:new|updated|the following)\s+instructions\b", re.I)),
-    ("system_prompt", re.compile(r"system\s*prompt|you\s+are\s+now\b|act\s+as\s+(?:a|an)\b", re.I)),
+    (
+        "ignore_instructions",
+        re.compile(
+            r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above)\s+instructions",
+            re.I,
+        ),
+    ),
+    (
+        "disregard_instructions",
+        re.compile(r"disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above)", re.I),
+    ),
+    (
+        "new_instructions",
+        re.compile(r"\b(?:new|updated|the following)\s+instructions\b", re.I),
+    ),
+    (
+        "system_prompt",
+        re.compile(r"system\s*prompt|you\s+are\s+now\b|act\s+as\s+(?:a|an)\b", re.I),
+    ),
     ("role_override", re.compile(r"\b(?:assistant|system|developer)\s*:", re.I)),
-    ("chat_template", re.compile(r"<\|?(?:im_start|im_end|system|user|assistant)\|?>", re.I)),
-    ("tool_call", re.compile(r"\b(?:tool_call|function_call|invoke\s+tool|run\s+command)\b", re.I)),
-    ("exfiltration", re.compile(r"\b(?:reveal|print|show|leak)\s+(?:your|the)\s+(?:system\s+)?(?:prompt|instructions|api\s*key|secret)", re.I)),
-    ("override", re.compile(r"\b(?:override|bypass|jailbreak|developer\s+mode)\b", re.I)),
-    ("do_not_follow", re.compile(r"do\s+not\s+follow\s+(?:the\s+)?(?:above|previous|user)", re.I)),
+    (
+        "chat_template",
+        re.compile(r"<\|?(?:im_start|im_end|system|user|assistant)\|?>", re.I),
+    ),
+    (
+        "tool_call",
+        re.compile(
+            r"\b(?:tool_call|function_call|invoke\s+tool|run\s+command)\b", re.I
+        ),
+    ),
+    (
+        "exfiltration",
+        re.compile(
+            r"\b(?:reveal|print|show|leak)\s+(?:your|the)\s+(?:system\s+)?(?:prompt|instructions|api\s*key|secret)",
+            re.I,
+        ),
+    ),
+    (
+        "override",
+        re.compile(r"\b(?:override|bypass|jailbreak|developer\s+mode)\b", re.I),
+    ),
+    (
+        "do_not_follow",
+        re.compile(r"do\s+not\s+follow\s+(?:the\s+)?(?:above|previous|user)", re.I),
+    ),
 ]
 
-_SCRIPT_STYLE = re.compile(r"<(script|style|noscript|template|svg|head)[^>]*>.*?</\1>", re.I | re.S)
+_SCRIPT_STYLE = re.compile(
+    r"<(script|style|noscript|template|svg|head)[^>]*>.*?</\1>", re.I | re.S
+)
 # Block-level tags whose boundaries should become line breaks so the extracted
 # text keeps paragraph/heading/list structure instead of collapsing to one blob.
 _BLOCK_BREAK = re.compile(
@@ -75,7 +113,9 @@ def detect_injection(text: str) -> list[str]:
     return flags
 
 
-def sanitize_web_text(raw: str, max_len: int = DEFAULT_MAX_LEN) -> tuple[str, list[str]]:
+def sanitize_web_text(
+    raw: str, max_len: int = DEFAULT_MAX_LEN
+) -> tuple[str, list[str]]:
     """Return (clean_text, injection_flags) for an untrusted web document.
 
     The returned text is plain, length-capped, and safe to embed inside a clearly

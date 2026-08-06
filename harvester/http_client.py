@@ -4,6 +4,7 @@ Die aelteren Clients (arxiv, crossref, doaj, ...) bringen ihre Throttle-Logik
 jeweils selbst mit. Fuer die neu hinzugekommenen Quellen liegt sie hier einmal,
 damit ein weiterer Client nur noch Basis-URL und Antwort-Parsing beschreibt.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,11 +33,15 @@ class ThrottledJsonClient:
 
     config: HttpSourceConfig
 
-    def __init__(self, config: HttpSourceConfig, extra_headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, config: HttpSourceConfig, extra_headers: dict[str, str] | None = None
+    ) -> None:
         self.config = config
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         headers.update(extra_headers or {})
-        self._client = httpx.AsyncClient(timeout=config.timeout_seconds, headers=headers)
+        self._client = httpx.AsyncClient(
+            timeout=config.timeout_seconds, headers=headers
+        )
         self._lock = asyncio.Lock()
         self._last_request_ts = 0.0
 

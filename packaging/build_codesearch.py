@@ -82,7 +82,9 @@ def main() -> int:
         return result.returncode
 
     if not BUILT.is_file():
-        print(f"[build_codesearch] FEHLER: {BUILT} wurde nicht erzeugt.", file=sys.stderr)
+        print(
+            f"[build_codesearch] FEHLER: {BUILT} wurde nicht erzeugt.", file=sys.stderr
+        )
         return 1
 
     DIST.mkdir(parents=True, exist_ok=True)

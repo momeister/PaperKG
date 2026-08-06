@@ -11,6 +11,7 @@ The user is the "hands" here — PaperKG never drives input in this mode. Sequen
 lives in the overlay (``useGuideFlow``); this module is one round trip per call,
 mirroring ``self_drive.plan_step``.
 """
+
 from __future__ import annotations
 
 import time
@@ -126,7 +127,9 @@ def _verify_click(
 
     ok = True
     note = ""
-    threshold = float(verify_cfg.get("pixel_diff_threshold", DEFAULT_PIXEL_DIFF_THRESHOLD))
+    threshold = float(
+        verify_cfg.get("pixel_diff_threshold", DEFAULT_PIXEL_DIFF_THRESHOLD)
+    )
     try:
         if session.last_image_thumb is not None:
             diff = screen_grounding.thumb_diff(
@@ -143,7 +146,11 @@ def _verify_click(
                 provider=session.provider,
                 model=session.model,
                 max_pixels=max_pixels,
-                max_tokens=int(verify_cfg.get("max_tokens", screen_grounding.DEFAULT_VERIFY_MAX_TOKENS)),
+                max_tokens=int(
+                    verify_cfg.get(
+                        "max_tokens", screen_grounding.DEFAULT_VERIFY_MAX_TOKENS
+                    )
+                ),
                 disable_thinking=disable_thinking,
             )
             ok, note = bool(result.get("matches")), str(result.get("note") or "")
@@ -222,7 +229,10 @@ def plan_next(
         session.pending_step = None
         session.pending_expectation = None
         session.history.append(
-            {"role": "user", "content": "Der Nutzer hat den letzten Schritt übersprungen."}
+            {
+                "role": "user",
+                "content": "Der Nutzer hat den letzten Schritt übersprungen.",
+            }
         )
     else:
         session.pending_step = None
@@ -234,10 +244,13 @@ def plan_next(
         + _no_think_suffix(router, session.provider, session.model, disable_thinking)
     )
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-    for turn in session.history[-(history_turns * 2):]:
+    for turn in session.history[-(history_turns * 2) :]:
         messages.append(turn)
     messages.append(
-        {"role": "user", "content": _user_content("Nächster Schritt?", prepared.data_url)}
+        {
+            "role": "user",
+            "content": _user_content("Nächster Schritt?", prepared.data_url),
+        }
     )
 
     overrides: dict[str, Any] = {
@@ -273,12 +286,18 @@ def plan_next(
                         float(step["x"]),
                         float(step["y"]),
                         label,
-                        crop_px=int(refine_cfg.get("crop_px", screen_grounding.DEFAULT_CROP_PX)),
-                        zoom=float(refine_cfg.get("zoom", screen_grounding.DEFAULT_ZOOM)),
+                        crop_px=int(
+                            refine_cfg.get("crop_px", screen_grounding.DEFAULT_CROP_PX)
+                        ),
+                        zoom=float(
+                            refine_cfg.get("zoom", screen_grounding.DEFAULT_ZOOM)
+                        ),
                         provider=session.provider,
                         model=session.model,
                         max_tokens=int(
-                            refine_cfg.get("max_tokens", screen_grounding.DEFAULT_REFINE_MAX_TOKENS)
+                            refine_cfg.get(
+                                "max_tokens", screen_grounding.DEFAULT_REFINE_MAX_TOKENS
+                            )
                         ),
                         disable_thinking=disable_thinking,
                     )

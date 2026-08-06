@@ -1,5 +1,6 @@
 """Tests for companion/selfdrive session persistence (DuckDB) + session endpoints
 + the /selfdrive lookup/answer loop. Offline: LLM router faked, DB on tmp_path."""
+
 from __future__ import annotations
 
 import base64
@@ -33,7 +34,9 @@ class _FakeRouter:
         self.calls: list[dict[str, Any]] = []
 
     def chat(self, messages, provider=None, overrides=None):
-        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides or {}})
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides or {}}
+        )
         if len(self.replies) > 1:
             return self.replies.pop(0)
         return self.replies[0]
@@ -52,6 +55,7 @@ class _FakeRouter:
 # CompanionMixin CRUD                                                          #
 # --------------------------------------------------------------------------- #
 
+
 def test_companion_session_crud_roundtrip(tmp_path) -> None:
     db_path = str(tmp_path / "meta.duckdb")
     with MetadataDB(db_path) as db:
@@ -63,7 +67,10 @@ def test_companion_session_crud_roundtrip(tmp_path) -> None:
 
         db.add_companion_message(sid, "user", "Wo ist der Speichern-Knopf?")
         db.add_companion_message(
-            sid, "assistant", "Oben links.", {"steps": [{"x": 10, "y": 20, "label": "Speichern"}]}
+            sid,
+            "assistant",
+            "Oben links.",
+            {"steps": [{"x": 10, "y": 20, "label": "Speichern"}]},
         )
         detail = db.get_companion_session(sid)
         assert len(detail["messages"]) == 2
@@ -97,6 +104,7 @@ def test_companion_session_kind_filter(tmp_path) -> None:
 # Session CRUD endpoints                                                       #
 # --------------------------------------------------------------------------- #
 
+
 def _client(monkeypatch, router, companion_cfg: dict | None = None) -> TestClient:
     monkeypatch.setattr(product_main, "llm_router", router)
     monkeypatch.setattr(
@@ -120,10 +128,14 @@ def test_session_endpoints_crud(monkeypatch, tmp_path) -> None:
     sid = created["id"]
     assert created["kind"] == "companion"
 
-    listed = client.get("/companion/sessions", params={"metadata_db_path": db_path}).json()
+    listed = client.get(
+        "/companion/sessions", params={"metadata_db_path": db_path}
+    ).json()
     assert [s["id"] for s in listed["sessions"]] == [sid]
 
-    detail = client.get(f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}).json()
+    detail = client.get(
+        f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}
+    ).json()
     assert detail["id"] == sid
 
     patched = client.patch(
@@ -138,14 +150,18 @@ def test_session_endpoints_crud(monkeypatch, tmp_path) -> None:
         json={"status": "stopped", "metadata_db_path": db_path},
     ).json()
     assert stopped["status"] == "stopped"
-    detail = client.get(f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}).json()
+    detail = client.get(
+        f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}
+    ).json()
     assert detail["status"] == "stopped"
 
     deleted = client.delete(
         f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}
     ).json()
     assert deleted["deleted"] is True
-    missing = client.get(f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}).json()
+    missing = client.get(
+        f"/companion/sessions/{sid}", params={"metadata_db_path": db_path}
+    ).json()
     assert "error" in missing
 
 
@@ -158,7 +174,11 @@ def test_companion_ask_persists_transcript(monkeypatch, tmp_path) -> None:
 
     res = client.post(
         "/companion/ask",
-        json={"question": "Was ist das?", "session_id": sid, "metadata_db_path": db_path},
+        json={
+            "question": "Was ist das?",
+            "session_id": sid,
+            "metadata_db_path": db_path,
+        },
     )
     assert res.json()["answer"] == "Die Antwort."
     with MetadataDB(db_path) as db:
@@ -187,7 +207,11 @@ _SD_CFG = {
 def test_selfdrive_lookup_loop_resolves_and_replans(monkeypatch, tmp_path) -> None:
     db_path = str(tmp_path / "meta.duckdb")
     lookup_reply = json.dumps(
-        {"thought": "Mir fehlt Wissen.", "action": {"type": "lookup", "query": "GIMP Ebenen öffnen"}, "done": False}
+        {
+            "thought": "Mir fehlt Wissen.",
+            "action": {"type": "lookup", "query": "GIMP Ebenen öffnen"},
+            "done": False,
+        }
     )
     click_reply = json.dumps(
         {
@@ -200,7 +224,9 @@ def test_selfdrive_lookup_loop_resolves_and_replans(monkeypatch, tmp_path) -> No
     router = _FakeRouter(lookup_reply, click_reply)
     client = _client(monkeypatch, router, _SD_CFG)
 
-    async def _fake_context(question, use_papers, use_web, use_code=False, code_project_id=None):  # noqa: ARG001
+    async def _fake_context(
+        question, use_papers, use_web, use_code=False, code_project_id=None
+    ):  # noqa: ARG001
         return ["(Web: example.org) Anleitung — Fenster > Ebenen"], [
             {"type": "web", "url": "https://example.org", "title": "Anleitung"}
         ]
@@ -212,7 +238,11 @@ def test_selfdrive_lookup_loop_resolves_and_replans(monkeypatch, tmp_path) -> No
     ).json()["id"]
     started = client.post(
         "/selfdrive/start",
-        json={"goal": "Öffne die Ebenen", "session_id": sid, "metadata_db_path": db_path},
+        json={
+            "goal": "Öffne die Ebenen",
+            "session_id": sid,
+            "metadata_db_path": db_path,
+        },
     ).json()
     assert started["autopilot"] is True
 
@@ -244,20 +274,32 @@ def test_selfdrive_lookup_loop_resolves_and_replans(monkeypatch, tmp_path) -> No
 def test_selfdrive_answer_endpoint(monkeypatch, tmp_path) -> None:
     _db_path = str(tmp_path / "meta.duckdb")
     click_reply = json.dumps(
-        {"thought": "ok", "action": {"type": "click", "x": 10, "y": 10, "label": "X"}, "done": False}
+        {
+            "thought": "ok",
+            "action": {"type": "click", "x": 10, "y": 10, "label": "X"},
+            "done": False,
+        }
     )
     client = _client(monkeypatch, _FakeRouter(click_reply), _SD_CFG)
     started = client.post("/selfdrive/start", json={"goal": "Ziel"}).json()
 
     res = client.post(
         "/selfdrive/answer",
-        json={"session_id": started["session_id"], "answer": "Nimm den zweiten Eintrag."},
+        json={
+            "session_id": started["session_id"],
+            "answer": "Nimm den zweiten Eintrag.",
+        },
     ).json()
     assert res == {"ok": True}
     session = product_main._SELF_DRIVE_STORE.get(started["session_id"])
-    assert session.history[-1]["content"] == "Antwort des Nutzers: Nimm den zweiten Eintrag."
+    assert (
+        session.history[-1]["content"]
+        == "Antwort des Nutzers: Nimm den zweiten Eintrag."
+    )
 
-    unknown = client.post("/selfdrive/answer", json={"session_id": "nope", "answer": "x"}).json()
+    unknown = client.post(
+        "/selfdrive/answer", json={"session_id": "nope", "answer": "x"}
+    ).json()
     assert "error" in unknown
 
 

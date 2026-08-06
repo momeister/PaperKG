@@ -9,6 +9,7 @@ auf: was länger als ``idle_seconds`` nicht gebraucht wurde, wird geschlossen �
 ein offener Index hält sonst Speicher und ein Dateihandle für ein Projekt, das
 die Nutzerin vor einer Stunde zugeklappt hat.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,11 +40,17 @@ class ClientPool:
         # Werte aus dem ``codesearch:``-Block, sofern nicht ausdrücklich gesetzt.
         section = load_config(config_path)
         self.idle_seconds = float(
-            idle_seconds if idle_seconds is not None else section.get("idle_seconds") or DEFAULT_IDLE_SECONDS
+            idle_seconds
+            if idle_seconds is not None
+            else section.get("idle_seconds") or DEFAULT_IDLE_SECONDS
         )
         self.max_clients = max(
             1,
-            int(max_clients if max_clients is not None else section.get("max_clients") or DEFAULT_MAX_CLIENTS),
+            int(
+                max_clients
+                if max_clients is not None
+                else section.get("max_clients") or DEFAULT_MAX_CLIENTS
+            ),
         )
         self.config_path = config_path
         self._clients: dict[str, CodeGraphClient] = {}
@@ -84,7 +91,8 @@ class ClientPool:
                 self._clients.pop(oldest).close()
 
             resolved_db = (
-                Path(db_path) if db_path is not None
+                Path(db_path)
+                if db_path is not None
                 else index_path(code_project_id, self.config_path)
             )
             client = CodeGraphClient(
@@ -111,7 +119,9 @@ class ClientPool:
 
     def _evict_idle_locked(self) -> None:
         cutoff = time.monotonic() - self.idle_seconds
-        stale = [key for key, client in self._clients.items() if client.last_used < cutoff]
+        stale = [
+            key for key, client in self._clients.items() if client.last_used < cutoff
+        ]
         for key in stale:
             self._clients.pop(key).close()
 

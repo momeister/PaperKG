@@ -8,6 +8,7 @@ selected/configured via the ``research:`` block of config.yaml. Supported provid
 - ``tavily``      — research-oriented API (key via env)
 - ``brave``       — Brave Search API (key via env)
 """
+
 from __future__ import annotations
 
 import os
@@ -31,7 +32,12 @@ class SearchHit:
     tier: str = UNKNOWN
 
     def to_dict(self) -> dict[str, str]:
-        return {"url": self.url, "title": self.title, "snippet": self.snippet, "tier": self.tier}
+        return {
+            "url": self.url,
+            "title": self.title,
+            "snippet": self.snippet,
+            "tier": self.tier,
+        }
 
 
 class SearchProviderError(RuntimeError):
@@ -64,7 +70,9 @@ def load_research_config(config_path: str = "config.yaml") -> ResearchConfig:
         raw = {}
     return ResearchConfig(
         default_provider=str(raw.get("default_provider") or "duckduckgo"),
-        providers=raw.get("providers") if isinstance(raw.get("providers"), dict) else {},
+        providers=(
+            raw.get("providers") if isinstance(raw.get("providers"), dict) else {}
+        ),
         allowed_domains=raw.get("allowed_domains") or [],
         blocked_domains=raw.get("blocked_domains") or [],
         trusted_domains=raw.get("trusted_domains") or [],
@@ -108,11 +116,15 @@ async def run_web_search(
     hits = _filter_relevant_hits(hits, query)
     hits = _apply_domain_filters(hits, config)[:max_results]
     for hit in hits:
-        hit.tier = classify_url(hit.url, config.trusted_domains, config.trusted_suffixes)
+        hit.tier = classify_url(
+            hit.url, config.trusted_domains, config.trusted_suffixes
+        )
     return hits
 
 
-def _apply_domain_filters(hits: list[SearchHit], config: ResearchConfig) -> list[SearchHit]:
+def _apply_domain_filters(
+    hits: list[SearchHit], config: ResearchConfig
+) -> list[SearchHit]:
     allowed = [d.lower() for d in (config.allowed_domains or [])]
     blocked = [d.lower() for d in (config.blocked_domains or [])]
     out: list[SearchHit] = []
@@ -131,7 +143,9 @@ async def _search_searxng(
 ) -> list[SearchHit]:
     base_url = settings.get("base_url") or os.getenv("SEARXNG_BASE_URL")
     if not base_url:
-        raise SearchProviderError("SearXNG requires base_url (set SEARXNG_BASE_URL or research.providers.searxng.base_url).")
+        raise SearchProviderError(
+            "SearXNG requires base_url (set SEARXNG_BASE_URL or research.providers.searxng.base_url)."
+        )
     response = await client.get(
         f"{base_url.rstrip('/')}/search", params={"q": query, "format": "json"}
     )
@@ -139,7 +153,13 @@ async def _search_searxng(
     payload = response.json()
     hits = []
     for item in payload.get("results", [])[:max_results]:
-        hits.append(SearchHit(url=item.get("url", ""), title=item.get("title", ""), snippet=item.get("content", "")))
+        hits.append(
+            SearchHit(
+                url=item.get("url", ""),
+                title=item.get("title", ""),
+                snippet=item.get("content", ""),
+            )
+        )
     return hits
 
 
@@ -158,6 +178,7 @@ def _filter_relevant_hits(hits: list[SearchHit], query: str) -> list[SearchHit]:
 
 async def _search_duckduckgo(query: str, max_results: int) -> list[SearchHit]:
     import asyncio
+
     try:
         from ddgs import DDGS
     except ImportError:
@@ -191,12 +212,21 @@ async def _search_tavily(
         raise SearchProviderError("Tavily requires an API key (set TAVILY_API_KEY).")
     response = await client.post(
         "https://api.tavily.com/search",
-        json={"api_key": api_key, "query": query, "max_results": max_results, "include_raw_content": False},
+        json={
+            "api_key": api_key,
+            "query": query,
+            "max_results": max_results,
+            "include_raw_content": False,
+        },
     )
     response.raise_for_status()
     payload = response.json()
     return [
-        SearchHit(url=item.get("url", ""), title=item.get("title", ""), snippet=item.get("content", ""))
+        SearchHit(
+            url=item.get("url", ""),
+            title=item.get("title", ""),
+            snippet=item.get("content", ""),
+        )
         for item in payload.get("results", [])[:max_results]
     ]
 
@@ -215,6 +245,10 @@ async def _search_brave(
     response.raise_for_status()
     payload = response.json()
     return [
-        SearchHit(url=item.get("url", ""), title=item.get("title", ""), snippet=item.get("description", ""))
+        SearchHit(
+            url=item.get("url", ""),
+            title=item.get("title", ""),
+            snippet=item.get("description", ""),
+        )
         for item in payload.get("web", {}).get("results", [])[:max_results]
     ]

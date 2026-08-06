@@ -1,6 +1,7 @@
 """Tests for incremental guided sequences (R7): guide_flow module + /companion/guide/*.
 
 Offline — the LLM router is faked; only Pillow does real work (synthetic PNGs)."""
+
 from __future__ import annotations
 
 import base64
@@ -33,7 +34,9 @@ class _FakeRouter:
         self.calls: list[dict[str, Any]] = []
 
     def chat(self, messages, provider=None, overrides=None):
-        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides or {}})
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides or {}}
+        )
         if len(self.replies) > 1:
             return self.replies.pop(0)
         return self.replies[0]
@@ -55,12 +58,19 @@ def _guide_reply(
     done: bool = False,
 ) -> str:
     return json.dumps(
-        {"instruction": instruction, "step": step, "expectation": expectation, "done": done}
+        {
+            "instruction": instruction,
+            "step": step,
+            "expectation": expectation,
+            "done": done,
+        }
     )
 
 
 def _session(**kwargs: Any) -> guide_flow.GuideSession:
-    return guide_flow.GuideSession(guide_id="g1", goal="Öffne die Einstellungen", **kwargs)
+    return guide_flow.GuideSession(
+        guide_id="g1", goal="Öffne die Einstellungen", **kwargs
+    )
 
 
 _VERIFY_CFG = {"enabled": True, "pixel_diff_threshold": 1.5, "max_tokens": 400}
@@ -69,6 +79,7 @@ _VERIFY_CFG = {"enabled": True, "pixel_diff_threshold": 1.5, "max_tokens": 400}
 # --------------------------------------------------------------------------- #
 # guide_flow module                                                            #
 # --------------------------------------------------------------------------- #
+
 
 def test_plan_next_scales_step_and_records_pending() -> None:
     reply = _guide_reply(step={"x": 500, "y": 250, "label": "Datei-Menü"})
@@ -100,14 +111,23 @@ def test_plan_next_done_finishes_session() -> None:
 
 def test_plan_next_click_verify_failure_feedback() -> None:
     plan1 = _guide_reply(step={"x": 500, "y": 250, "label": "Datei-Menü"})
-    plan2 = _guide_reply(instruction="Versuch es weiter links.", step={"x": 300, "y": 250, "label": "Datei"})
+    plan2 = _guide_reply(
+        instruction="Versuch es weiter links.",
+        step={"x": 300, "y": 250, "label": "Datei"},
+    )
     router = _FakeRouter(plan1, plan2)
     session = _session()
     image = _png_b64(600, 600)
     guide_flow.plan_next(router, session, image, verify_cfg=_VERIFY_CFG)
     # Same frame after the click → pixel-diff shortcut says "nothing changed".
     result = guide_flow.plan_next(
-        router, session, image, user_event="click", click_x=500, click_y=250, verify_cfg=_VERIFY_CFG
+        router,
+        session,
+        image,
+        user_event="click",
+        click_x=500,
+        click_y=250,
+        verify_cfg=_VERIFY_CFG,
     )
     assert result["verification"]["ok"] is False
     assert len(router.calls) == 2  # no verify VLM call, diff shortcut fired
@@ -116,7 +136,9 @@ def test_plan_next_click_verify_failure_feedback() -> None:
 
 def test_plan_next_skip_clears_pending() -> None:
     plan1 = _guide_reply(step={"x": 500, "y": 250, "label": "Menü"})
-    router = _FakeRouter(plan1, _guide_reply(instruction="Weiter.", step=None, expectation=""))
+    router = _FakeRouter(
+        plan1, _guide_reply(instruction="Weiter.", step=None, expectation="")
+    )
     session = _session()
     guide_flow.plan_next(router, session, _png_b64(400, 400), verify_cfg=_VERIFY_CFG)
     result = guide_flow.plan_next(
@@ -164,6 +186,7 @@ def test_plan_next_context_blocks_land_in_prompt() -> None:
 # /companion/guide/* endpoints                                                 #
 # --------------------------------------------------------------------------- #
 
+
 def _client(monkeypatch, router) -> TestClient:
     monkeypatch.setattr(product_main, "llm_router", router)
     monkeypatch.setattr(
@@ -183,14 +206,20 @@ def test_guide_start_step_stop_flow(monkeypatch) -> None:
     reply = _guide_reply(step={"x": 100, "y": 100, "label": "Start"})
     client = _client(monkeypatch, _FakeRouter(reply))
 
-    started = client.post("/companion/guide/start", json={"goal": "Öffne Einstellungen"}).json()
+    started = client.post(
+        "/companion/guide/start", json={"goal": "Öffne Einstellungen"}
+    ).json()
     assert started["max_steps"] == 4
     assert started["click_settle_ms"] == 500
     guide_id = started["guide_id"]
 
     step = client.post(
         "/companion/guide/step",
-        json={"guide_id": guide_id, "image_base64": _png_b64(500, 500), "event": "start"},
+        json={
+            "guide_id": guide_id,
+            "image_base64": _png_b64(500, 500),
+            "event": "start",
+        },
     ).json()
     assert step["instruction"]
     assert step["step"]["label"] == "Start"

@@ -15,6 +15,7 @@ identically in the web app and the native shell. All file access is *contained*:
 a caller-supplied relative path is resolved and rejected if it escapes the project
 root (``..`` traversal, absolute paths, drive letters, symlinks pointing outside).
 """
+
 from __future__ import annotations
 
 import os
@@ -34,9 +35,24 @@ class WorkspaceError(Exception):
 # never what the user wants to hand-edit. (``.git`` content is exposed via the
 # git endpoints instead.)
 IGNORED_DIR_NAMES = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv", "env",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".gradle",
-    "dist", "build", ".next", ".turbo", ".cache", "target", ".tox",
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    "env",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".idea",
+    ".gradle",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    ".cache",
+    "target",
+    ".tox",
 }
 # Hard cap so a pathological repo can't produce a huge tree response.
 MAX_TREE_ENTRIES = 4000
@@ -158,8 +174,15 @@ def init_managed_project(base: Path, name: str) -> Path:
         # Don't fail project creation if user has no git identity configured.
         _run_git(
             root,
-            ["-c", "user.email=werkstatt@paperkg.local", "-c", "user.name=PaperKG",
-             "commit", "-m", "Initiales Projekt (PaperKG Code-Werkstatt)"],
+            [
+                "-c",
+                "user.email=werkstatt@paperkg.local",
+                "-c",
+                "user.name=PaperKG",
+                "commit",
+                "-m",
+                "Initiales Projekt (PaperKG Code-Werkstatt)",
+            ],
         )
     return root
 
@@ -235,14 +258,29 @@ def read_file(root: Path, relpath: str) -> dict[str, Any]:
         raise WorkspaceError(f"Ist ein Verzeichnis, keine Datei: {relpath!r}")
     size = target.stat().st_size
     if size > MAX_FILE_BYTES:
-        return {"path": relpath, "content": None, "size": size,
-                "too_large": True, "binary": False}
+        return {
+            "path": relpath,
+            "content": None,
+            "size": size,
+            "too_large": True,
+            "binary": False,
+        }
     raw = target.read_bytes()
     if b"\x00" in raw:
-        return {"path": relpath, "content": None, "size": size,
-                "too_large": False, "binary": True}
-    return {"path": relpath, "content": raw.decode("utf-8", errors="replace"),
-            "size": size, "too_large": False, "binary": False}
+        return {
+            "path": relpath,
+            "content": None,
+            "size": size,
+            "too_large": False,
+            "binary": True,
+        }
+    return {
+        "path": relpath,
+        "content": raw.decode("utf-8", errors="replace"),
+        "size": size,
+        "too_large": False,
+        "binary": False,
+    }
 
 
 def write_file(root: Path, relpath: str, content: str) -> dict[str, Any]:
@@ -252,7 +290,9 @@ def write_file(root: Path, relpath: str, content: str) -> dict[str, Any]:
         raise WorkspaceError(f"Ist ein Verzeichnis, keine Datei: {relpath!r}")
     target.parent.mkdir(parents=True, exist_ok=True)
     # newline="" → no translation; store exactly what the editor sent.
-    target.write_text(content if content is not None else "", encoding="utf-8", newline="")
+    target.write_text(
+        content if content is not None else "", encoding="utf-8", newline=""
+    )
     return {"path": relpath, "size": target.stat().st_size}
 
 
@@ -324,7 +364,9 @@ def git_status(root: Path) -> dict[str, Any]:
         return {"available": False, "is_repo": False, "files": []}
     if not is_git_repo(root):
         return {"available": True, "is_repo": False, "files": []}
-    code, out, err = _run_git(root, ["status", "--porcelain=v1", "--untracked-files=all"])
+    code, out, err = _run_git(
+        root, ["status", "--porcelain=v1", "--untracked-files=all"]
+    )
     if code != 0:
         return {"available": True, "is_repo": True, "files": [], "error": err.strip()}
     files: list[dict[str, Any]] = []
@@ -332,14 +374,16 @@ def git_status(root: Path) -> dict[str, Any]:
         if len(line) < 4:
             continue
         x, y, path = line[0], line[1], line[3:]
-        files.append({
-            "x": x,
-            "y": y,
-            "path": path,
-            "staged": x not in {" ", "?"},
-            "untracked": x == "?" and y == "?",
-            "code": (x + y).strip(),
-        })
+        files.append(
+            {
+                "x": x,
+                "y": y,
+                "path": path,
+                "staged": x not in {" ", "?"},
+                "untracked": x == "?" and y == "?",
+                "code": (x + y).strip(),
+            }
+        )
     return {"available": True, "is_repo": True, "files": files}
 
 
@@ -402,7 +446,12 @@ def git_log_for_lines(
         ],
     )
     if code != 0:
-        return {"available": False, "reason": "error", "error": err.strip(), "commits": []}
+        return {
+            "available": False,
+            "reason": "error",
+            "error": err.strip(),
+            "commits": [],
+        }
 
     commits: list[dict[str, str]] = []
     for line in out.splitlines():
@@ -412,7 +461,12 @@ def git_log_for_lines(
         if len(parts) < 4:
             continue
         commits.append(
-            {"hash": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]}
+            {
+                "hash": parts[0],
+                "author": parts[1],
+                "date": parts[2],
+                "subject": parts[3],
+            }
         )
     return {"available": True, "reason": None, "commits": commits}
 

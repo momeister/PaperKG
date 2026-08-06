@@ -4,6 +4,7 @@ Die Tests, die das ``cs``-Binary brauchen, überspringen sich selbst, wenn es
 nicht gebaut ist — der Code-Graph ist ein Zusatz, und eine nicht gebaute
 Rust-Komponente darf die Python-Suite nicht rot machen.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,9 @@ FIXTURE = (
 
 
 def test_python_tracebacks_are_recognised():
-    assert Position("src/app.py", 42) in find_positions('  File "src/app.py", line 42, in handler')
+    assert Position("src/app.py", 42) in find_positions(
+        '  File "src/app.py", line 42, in handler'
+    )
 
 
 def test_compiler_and_linter_positions_are_recognised():
@@ -91,9 +94,9 @@ def indexed_workspace(tmp_path: Path):
 def test_indexing_leaves_nothing_in_the_project(indexed_workspace):
     _client, root, db_path = indexed_workspace
     assert db_path.is_file()
-    assert not (root / ".codesearch").exists(), (
-        "ein fremdes Repository darf keinen Index-Ordner abbekommen"
-    )
+    assert not (
+        root / ".codesearch"
+    ).exists(), "ein fremdes Repository darf keinen Index-Ordner abbekommen"
 
 
 @needs_binary
@@ -203,7 +206,9 @@ def api(tmp_path: Path, monkeypatch):
     (root / "src" / "pricing.py").write_text(FIXTURE, encoding="utf-8")
 
     with MetadataDB(db_path) as db:
-        project = db.add_code_project(name="Testprojekt", path=str(root), kind="external")
+        project = db.add_code_project(
+            name="Testprojekt", path=str(root), kind="external"
+        )
 
     with TestClient(pm.app) as client:
         yield client, str(project["id"]), db_path
@@ -212,7 +217,9 @@ def api(tmp_path: Path, monkeypatch):
 
 def test_status_works_without_an_index(api):
     client, project_id, db_path = api
-    response = client.get(f"/codegraph/{project_id}", params={"metadata_db_path": db_path})
+    response = client.get(
+        f"/codegraph/{project_id}", params={"metadata_db_path": db_path}
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "none"
@@ -222,7 +229,9 @@ def test_status_works_without_an_index(api):
 
 def test_an_unknown_project_is_a_clean_404(api):
     client, _project_id, db_path = api
-    response = client.get("/codegraph/cp_gibtsnicht", params={"metadata_db_path": db_path})
+    response = client.get(
+        "/codegraph/cp_gibtsnicht", params={"metadata_db_path": db_path}
+    )
     assert response.status_code == 404
     assert "nicht gefunden" in response.json()["detail"]
 
@@ -254,11 +263,15 @@ def test_indexing_over_http_streams_progress_and_then_answers(api):
 
     kinds = [event["event"] for event in events]
     assert "started" in kinds
-    assert "progress" in kinds, "ohne Zwischenmeldung wäre ein langer Lauf von einem Hänger nicht zu unterscheiden"
+    assert (
+        "progress" in kinds
+    ), "ohne Zwischenmeldung wäre ein langer Lauf von einem Hänger nicht zu unterscheiden"
     assert kinds[-1] == "done"
     assert events[-1]["stats"]["nodes"] >= 2
 
-    status = client.get(f"/codegraph/{project_id}", params={"metadata_db_path": db_path}).json()
+    status = client.get(
+        f"/codegraph/{project_id}", params={"metadata_db_path": db_path}
+    ).json()
     assert status["status"] == "ready"
     assert status["stats"]["nodes"] >= 2
 
@@ -366,7 +379,9 @@ def test_a_code_citation_lands_next_to_the_paper_citations(api, tmp_path):
     client, project_id, db_path = api
 
     with MetadataDB(db_path) as db:
-        note = db.create_note("Testprojekt", title="Werkstattnotiz", markdown="# Notiz\n")
+        note = db.create_note(
+            "Testprojekt", title="Werkstattnotiz", markdown="# Notiz\n"
+        )
 
     created = client.post(
         f"/codegraph/{project_id}/cite",
@@ -394,8 +409,14 @@ def test_a_code_citation_lands_next_to_the_paper_citations(api, tmp_path):
     assert listed["citations"][0]["stale"] is False
 
     # Jetzt ändert sich die Datei: die Zeilennummer zeigt nicht mehr dorthin.
-    project_root = Path(client.get(f"/codegraph/{project_id}", params={"metadata_db_path": db_path}).json()["path"])
-    (project_root / "src" / "pricing.py").write_text("# alles anders\n", encoding="utf-8")
+    project_root = Path(
+        client.get(
+            f"/codegraph/{project_id}", params={"metadata_db_path": db_path}
+        ).json()["path"]
+    )
+    (project_root / "src" / "pricing.py").write_text(
+        "# alles anders\n", encoding="utf-8"
+    )
 
     after = client.get(
         f"/codegraph/{project_id}/citations",
@@ -424,7 +445,8 @@ def test_citing_the_same_lines_twice_updates_instead_of_duplicating(api):
 
     # Ein anderer Zeilenbereich ist dagegen ein anderes Zitat, keine Korrektur.
     other = client.post(
-        f"/codegraph/{project_id}/cite", json={**payload, "start_line": 5, "end_line": 6}
+        f"/codegraph/{project_id}/cite",
+        json={**payload, "start_line": 5, "end_line": 6},
     ).json()
     assert other["id"] != first["id"]
 
@@ -597,9 +619,16 @@ def test_impact_walks_backwards_to_the_caller(api):
     reached_names = {entry["node"]["name"] for entry in impact["reached"]}
     assert "checkout" in reached_names, f"checkout fehlt im Radius: {reached_names}"
     # Hop-Distanz und Sicherheitsstufe sind die Aussage, nicht nur die Namensliste.
-    checkout_entry = next(e for e in impact["reached"] if e["node"]["name"] == "checkout")
+    checkout_entry = next(
+        e for e in impact["reached"] if e["node"]["name"] == "checkout"
+    )
     assert checkout_entry["hops"] == 1
-    assert checkout_entry["confidence"] in {"verified", "resolved", "guessed", "measured"}
+    assert checkout_entry["confidence"] in {
+        "verified",
+        "resolved",
+        "guessed",
+        "measured",
+    }
     # IDs bleiben Hex-Strings — die 64-Bit-Falle greift an jeder neuen Grenze.
     assert isinstance(checkout_entry["node"]["id"], str)
     assert isinstance(impact["root"], str)
@@ -618,8 +647,12 @@ def test_hotspots_carry_the_rule_that_tripped_them(api):
     empty = client.get(
         f"/codegraph/{project_id}/hotspots",
         params={
-            "loc": 0, "complexity": 0, "max_nesting": 0,
-            "fan_in": 0, "fan_out": 0, "churn": 0,
+            "loc": 0,
+            "complexity": 0,
+            "max_nesting": 0,
+            "fan_in": 0,
+            "fan_out": 0,
+            "churn": 0,
             "metadata_db_path": db_path,
         },
     ).json()
@@ -629,13 +662,17 @@ def test_hotspots_carry_the_rule_that_tripped_them(api):
     hotspots = client.get(
         f"/codegraph/{project_id}/hotspots",
         params={
-            "loc": 1, "complexity": 1, "metadata_db_path": db_path,
+            "loc": 1,
+            "complexity": 1,
+            "metadata_db_path": db_path,
         },
     ).json()
     assert hotspots, "mit niedrigen Schwellen müssen die Funktionen erscheinen"
     first = hotspots[0]
     assert first["rules"], "jede Fundstelle trägt ihre Regel und ihren Messwert"
-    assert all("rule" in r and "value" in r and "threshold" in r for r in first["rules"])
+    assert all(
+        "rule" in r and "value" in r and "threshold" in r for r in first["rules"]
+    )
     assert isinstance(first["node"]["id"], str)  # Hex-String, nicht Zahl
 
 
@@ -813,7 +850,9 @@ def cluster_api(tmp_path: Path, monkeypatch):
     (root / "storage" / "backends").mkdir(parents=True)
     (root / "api").mkdir(parents=True)
     (root / "storage" / "__init__.py").write_text(AREA_STORAGE_INIT, encoding="utf-8")
-    (root / "storage" / "backends" / "disk.py").write_text(AREA_STORAGE_DISK, encoding="utf-8")
+    (root / "storage" / "backends" / "disk.py").write_text(
+        AREA_STORAGE_DISK, encoding="utf-8"
+    )
     (root / "api" / "routes.py").write_text(AREA_API_ROUTES, encoding="utf-8")
 
     with MetadataDB(db_path) as db:
@@ -821,7 +860,9 @@ def cluster_api(tmp_path: Path, monkeypatch):
 
     with TestClient(pm.app) as client:
         project_id = str(project["id"])
-        client.post(f"/codegraph/{project_id}/index", params={"metadata_db_path": db_path})
+        client.post(
+            f"/codegraph/{project_id}/index", params={"metadata_db_path": db_path}
+        )
         yield client, project_id, db_path
     fresh.close_all()
 
@@ -863,9 +904,9 @@ def test_the_top_level_is_the_directory_tree_and_descends(cluster_api):
     assert deeper["parent"] == ""
     deeper_paths = {node["path"] for node in deeper["nodes"]}
     assert "storage/backends" in deeper_paths, deeper_paths
-    assert any(path.endswith(".py") for path in deeper_paths), (
-        "eine Datei direkt im Präfix ist ein eigener Bereich, kein namenloser Rest"
-    )
+    assert any(
+        path.endswith(".py") for path in deeper_paths
+    ), "eine Datei direkt im Präfix ist ein eigener Bereich, kein namenloser Rest"
 
 
 @needs_binary
@@ -885,14 +926,18 @@ def test_an_aggregated_edge_opens_into_real_edges_with_evidence(cluster_api):
 
         detail = client.get(
             f"/codegraph/{project_id}/clusters/edge",
-            params={"from": edge["from"], "to": edge["to"], "metadata_db_path": db_path},
+            params={
+                "from": edge["from"],
+                "to": edge["to"],
+                "metadata_db_path": db_path,
+            },
         ).json()
         assert detail, "eine aufsummierte Kante muss sich öffnen lassen"
 
         weakest = min(rank[one["confidence"]] for one in detail)
-        assert rank[edge["weakest"]] == weakest, (
-            "aufsummiert wird die schwächste Stufe, nicht die häufigste"
-        )
+        assert (
+            rank[edge["weakest"]] == weakest
+        ), "aufsummiert wird die schwächste Stufe, nicht die häufigste"
         for one in detail:
             assert one["evidence_path"]
             assert one["evidence_line"] >= 1
@@ -945,9 +990,9 @@ def test_a_stored_name_goes_stale_when_the_cluster_changes(cluster_api, tmp_path
 
     # Der Bereich bekommt ein weiteres Symbol und ist damit ein anderer.
     project_root = Path(
-        client.get(f"/codegraph/{project_id}", params={"metadata_db_path": db_path}).json()[
-            "path"
-        ]
+        client.get(
+            f"/codegraph/{project_id}", params={"metadata_db_path": db_path}
+        ).json()["path"]
     )
     (project_root / "storage" / "cache.py").write_text(
         "def drop_all():\n    return 0\n", encoding="utf-8"
@@ -1005,7 +1050,11 @@ def test_naming_a_level_writes_labels_without_touching_the_structure(cluster_api
         {
             "bereiche": [
                 {"pfad": "storage", "name": "Datenhaltung", "zweck": "Legt Zeilen ab."},
-                {"pfad": "api", "name": "Aussenkante", "zweck": "Nimmt Anfragen entgegen."},
+                {
+                    "pfad": "api",
+                    "name": "Aussenkante",
+                    "zweck": "Nimmt Anfragen entgegen.",
+                },
                 # Ein Bereich, den es nicht gibt: darf nichts anlegen.
                 {"pfad": "erfunden", "name": "Nebel", "zweck": "Gibt es nicht."},
             ]
@@ -1027,7 +1076,9 @@ def test_naming_a_level_writes_labels_without_touching_the_structure(cluster_api
     # Das Modell sieht Kennzahlen, keinen Quelltext.
     prompt = router.calls[0][-1]["content"]
     assert "save_row" in prompt, "die wichtigsten Symbolnamen gehören dazu"
-    assert "def save_row" not in prompt, "Quelltext gehört nicht in den Benennungs-Prompt"
+    assert (
+        "def save_row" not in prompt
+    ), "Quelltext gehört nicht in den Benennungs-Prompt"
 
     after = client.get(
         f"/codegraph/{project_id}/clusters", params={"metadata_db_path": db_path}
@@ -1057,9 +1108,9 @@ def test_a_model_that_returns_nothing_usable_fails_loudly(cluster_api):
             )
         )
 
-    assert events[-1]["event"] == "failed", (
-        "eine leere Benennung ist ein Fehler, keine stillschweigend leere Ebene"
-    )
+    assert (
+        events[-1]["event"] == "failed"
+    ), "eine leere Benennung ist ein Fehler, keine stillschweigend leere Ebene"
 
 
 # --- Eine einzelne Funktion ändern -------------------------------------------
@@ -1071,9 +1122,13 @@ def test_splicing_replaces_exactly_those_lines_and_nothing_else():
 
     updated = _splice_lines(FIXTURE, 5, 6, "def checkout(cart):\n    return cart.total")
 
-    assert updated.startswith("def apply_discount(total, pct):\n    return total * (1 - pct)\n\n\n")
+    assert updated.startswith(
+        "def apply_discount(total, pct):\n    return total * (1 - pct)\n\n\n"
+    )
     assert updated.endswith("def checkout(cart):\n    return cart.total\n")
-    assert updated.count("\n\n\n") == 1, "die beiden Leerzeilen davor bleiben unangetastet"
+    assert (
+        updated.count("\n\n\n") == 1
+    ), "die beiden Leerzeilen davor bleiben unangetastet"
 
 
 def test_splicing_keeps_the_line_endings_the_file_already_had():
@@ -1129,13 +1184,15 @@ def test_a_symbol_can_be_read_and_written_without_touching_the_rest(api, tmp_pat
         },
     )
     assert written.status_code == 200
-    assert written.json()["index_stale"] is True, "der Graph kennt jetzt einen alten Stand"
+    assert (
+        written.json()["index_stale"] is True
+    ), "der Graph kennt jetzt einen alten Stand"
 
     on_disk = (tmp_path / "projekt" / "src" / "pricing.py").read_text(encoding="utf-8")
     assert "# neu" in on_disk
-    assert on_disk.endswith("def checkout(cart):\n    return apply_discount(cart.total, 0.1)\n"), (
-        "was nach der Funktion stand, steht unverändert noch da"
-    )
+    assert on_disk.endswith(
+        "def checkout(cart):\n    return apply_discount(cart.total, 0.1)\n"
+    ), "was nach der Funktion stand, steht unverändert noch da"
 
 
 @needs_binary
@@ -1164,7 +1221,9 @@ def test_writing_over_someone_elses_change_is_refused(api, tmp_path):
     )
     assert response.status_code == 409
     assert "geändert" in response.json()["detail"]
-    assert (tmp_path / "projekt" / "src" / "pricing.py").read_text(encoding="utf-8") == FIXTURE
+    assert (tmp_path / "projekt" / "src" / "pricing.py").read_text(
+        encoding="utf-8"
+    ) == FIXTURE
 
     # Mit dem richtigen Hash geht derselbe Schreibvorgang durch.
     assert (
@@ -1253,7 +1312,10 @@ def test_git_history_of_lines_says_why_it_has_nothing_instead_of_throwing(tmp_pa
 
     repo = tmp_path / "mit-git"
     repo.mkdir()
-    if subprocess.run(["git", "init", "-q", str(repo)], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["git", "init", "-q", str(repo)], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("kein git auf diesem Rechner")
     (repo / "neu.py").write_text("y = 2\n", encoding="utf-8")
 
@@ -1278,7 +1340,9 @@ def test_git_history_of_lines_says_why_it_has_nothing_instead_of_throwing(tmp_pa
 
     untracked = git_log_for_lines(repo, "neu.py", 1, 1)
     assert untracked["available"] is False
-    assert untracked["reason"] == "untracked", "eine nie committete Datei ist kein Fehler"
+    assert (
+        untracked["reason"] == "untracked"
+    ), "eine nie committete Datei ist kein Fehler"
 
 
 def test_git_history_of_lines_reports_the_commits_that_touched_them(tmp_path):
@@ -1286,7 +1350,10 @@ def test_git_history_of_lines_reports_the_commits_that_touched_them(tmp_path):
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    if subprocess.run(["git", "init", "-q", str(repo)], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["git", "init", "-q", str(repo)], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("kein git auf diesem Rechner")
     env = {
         "GIT_AUTHOR_NAME": "Test",
@@ -1307,7 +1374,9 @@ def test_git_history_of_lines_reports_the_commits_that_touched_them(tmp_path):
     target = repo / "app.py"
     target.write_text("def f():\n    return 1\n", encoding="utf-8")
     commit("erste Fassung")
-    target.write_text("def f():\n    # Sonderfall: 0 ist erlaubt\n    return 1\n", encoding="utf-8")
+    target.write_text(
+        "def f():\n    # Sonderfall: 0 ist erlaubt\n    return 1\n", encoding="utf-8"
+    )
     commit("Sonderfall 0 zulassen")
 
     from workspace.manager import git_log_for_lines
@@ -1315,7 +1384,9 @@ def test_git_history_of_lines_reports_the_commits_that_touched_them(tmp_path):
     history = git_log_for_lines(repo, "app.py", 2, 2)
     assert history["available"] is True
     subjects = [entry["subject"] for entry in history["commits"]]
-    assert "Sonderfall 0 zulassen" in subjects, "der Betreff ist die eigentliche Begründung"
+    assert (
+        "Sonderfall 0 zulassen" in subjects
+    ), "der Betreff ist die eigentliche Begründung"
     assert all(entry["date"] and entry["author"] for entry in history["commits"])
 
 
@@ -1341,7 +1412,9 @@ def test_a_stored_rationale_goes_stale_when_the_file_changes(api, tmp_path):
     )
     assert saved.status_code == 200
     assert saved.json()["stale"] is False
-    assert saved.json()["rel_path"] == "src/pricing.py", "der Pfad kommt aus dem Graphen"
+    assert (
+        saved.json()["rel_path"] == "src/pricing.py"
+    ), "der Pfad kommt aus dem Graphen"
 
     fresh = client.get(
         f"/codegraph/{project_id}/why/{node_id}", params={"metadata_db_path": db_path}

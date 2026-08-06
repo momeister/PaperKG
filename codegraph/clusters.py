@@ -16,6 +16,7 @@ funktioniert vollständig.
 Deshalb gibt es hier auch keine Zitatprüfung. Es wird nichts belegt — es wird
 etwas beschriftet.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -159,7 +160,11 @@ def name_level_stream(
 
     clusters = list(payload.get("nodes") or [])
     if not clusters:
-        yield {"event": "done", "labels": [], "skipped": "keine Bereiche auf dieser Ebene"}
+        yield {
+            "event": "done",
+            "labels": [],
+            "skipped": "keine Bereiche auf dieser Ebene",
+        }
         return
 
     stored = db.get_cluster_labels(code_project_id)

@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,20 +45,25 @@ class LlmCallsMixin(_Base):
         if scan is not None:
             hints = self._hints_for_chunk(scan, text_summary, limit=24)
             candidate_json = json.dumps(hints, ensure_ascii=False)
-        prompt = (
-            self.STRUCTURAL_PROMPT
-            .replace("{candidate_json}", candidate_json)
-            .replace("{paper_text}", f"[Chunk {chunk_index}/{chunk_count}]\n\n{text_summary}")
+        prompt = self.STRUCTURAL_PROMPT.replace(
+            "{candidate_json}", candidate_json
+        ).replace(
+            "{paper_text}", f"[Chunk {chunk_index}/{chunk_count}]\n\n{text_summary}"
         )
         overrides = self._call_overrides(
             base_overrides,
-            max_tokens=max(5000, min(int(base_overrides.get("max_tokens") or 10000), 12000)),
+            max_tokens=max(
+                5000, min(int(base_overrides.get("max_tokens") or 10000), 12000)
+            ),
             temperature=0.1,
             top_p=0.85,
         )
         parsed = self._call_and_parse_json(
             [
-                {"role": "system", "content": "Return complete JSON only. Do not include markdown, prose, or hidden reasoning. /no_think"},
+                {
+                    "role": "system",
+                    "content": "Return complete JSON only. Do not include markdown, prose, or hidden reasoning. /no_think",
+                },
                 {"role": "user", "content": prompt},
             ],
             provider=provider,
@@ -69,7 +75,11 @@ class LlmCallsMixin(_Base):
                 "method_candidates": [],
             },
         )
-        if parsed.parse_quality in {"partial", "failed"} and retry_split and len(text_summary) > 9000:
+        if (
+            parsed.parse_quality in {"partial", "failed"}
+            and retry_split
+            and len(text_summary) > 9000
+        ):
             split_calls = [
                 self._run_structural_call(
                     part,
@@ -84,25 +94,46 @@ class LlmCallsMixin(_Base):
             ]
             merged = {
                 "concepts": self._merge_entity_lists(
-                    *[self._coerce_list(call.data.get("concepts")) for call in split_calls]
+                    *[
+                        self._coerce_list(call.data.get("concepts"))
+                        for call in split_calls
+                    ]
                 ),
                 "methods": self._merge_entity_lists(
-                    *[self._coerce_list(call.data.get("methods")) for call in split_calls]
+                    *[
+                        self._coerce_list(call.data.get("methods"))
+                        for call in split_calls
+                    ]
                 ),
                 "concept_candidates": self._merge_entity_lists(
-                    *[self._coerce_list(call.data.get("concept_candidates")) for call in split_calls]
+                    *[
+                        self._coerce_list(call.data.get("concept_candidates"))
+                        for call in split_calls
+                    ]
                 ),
                 "method_candidates": self._merge_entity_lists(
-                    *[self._coerce_list(call.data.get("method_candidates")) for call in split_calls]
+                    *[
+                        self._coerce_list(call.data.get("method_candidates"))
+                        for call in split_calls
+                    ]
                 ),
             }
-            split_quality = self._worst_parse_quality([call.parse_quality for call in split_calls])
-            if split_quality in {"clean", "trimmed"} or self._parsed_payload_score(merged) > self._parsed_payload_score(parsed.data):
+            split_quality = self._worst_parse_quality(
+                [call.parse_quality for call in split_calls]
+            )
+            if split_quality in {"clean", "trimmed"} or self._parsed_payload_score(
+                merged
+            ) > self._parsed_payload_score(parsed.data):
                 return ParsedLLMResponse(
                     data=merged,
                     parse_quality=split_quality,
-                    raw_text="\n\n--- SPLIT STRUCTURAL RETRY ---\n\n".join(call.raw_text for call in split_calls),
-                    tokens_used=sum(call.tokens_used or self._estimate_tokens(call.raw_text) for call in split_calls),
+                    raw_text="\n\n--- SPLIT STRUCTURAL RETRY ---\n\n".join(
+                        call.raw_text for call in split_calls
+                    ),
+                    tokens_used=sum(
+                        call.tokens_used or self._estimate_tokens(call.raw_text)
+                        for call in split_calls
+                    ),
                 )
         return parsed
 
@@ -114,8 +145,16 @@ class LlmCallsMixin(_Base):
             return [""]
         midpoint = len(cleaned) // 2
         candidates = [match.start() for match in re.finditer(r"\n\s*\n", cleaned)]
-        split_at = min(candidates, key=lambda index: abs(index - midpoint)) if candidates else midpoint
-        return [part for part in (cleaned[:split_at].strip(), cleaned[split_at:].strip()) if part]
+        split_at = (
+            min(candidates, key=lambda index: abs(index - midpoint))
+            if candidates
+            else midpoint
+        )
+        return [
+            part
+            for part in (cleaned[:split_at].strip(), cleaned[split_at:].strip())
+            if part
+        ]
 
     def _run_semantic_call(
         self,
@@ -125,21 +164,26 @@ class LlmCallsMixin(_Base):
         base_overrides: dict[str, Any],
     ) -> ParsedLLMResponse:
         """Run call 2 for claims, metadata, and cross-domain analysis."""
-        structural_json = json.dumps(self._compact_structural_context(structural_data), ensure_ascii=False)
-        prompt = (
-            self.SEMANTIC_PROMPT
-            .replace("{structural_json}", structural_json)
-            .replace("{paper_text}", text_summary)
+        structural_json = json.dumps(
+            self._compact_structural_context(structural_data), ensure_ascii=False
         )
+        prompt = self.SEMANTIC_PROMPT.replace(
+            "{structural_json}", structural_json
+        ).replace("{paper_text}", text_summary)
         overrides = self._call_overrides(
             base_overrides,
-            max_tokens=max(5000, min(int(base_overrides.get("max_tokens") or 8000), 10000)),
+            max_tokens=max(
+                5000, min(int(base_overrides.get("max_tokens") or 8000), 10000)
+            ),
             temperature=0.1,
             top_p=0.85,
         )
         return self._call_and_parse_json(
             [
-                {"role": "system", "content": "Return complete JSON only. Do not include markdown, prose, or hidden reasoning. /no_think"},
+                {
+                    "role": "system",
+                    "content": "Return complete JSON only. Do not include markdown, prose, or hidden reasoning. /no_think",
+                },
                 {"role": "user", "content": prompt},
             ],
             provider=provider,
@@ -165,7 +209,9 @@ class LlmCallsMixin(_Base):
         prompt = CLAIMS_EXTRACTION_PROMPT.replace("{paper_text}", paper_text or "")
         overrides = self._call_overrides(
             base_overrides,
-            max_tokens=max(4000, min(int(base_overrides.get("max_tokens") or 8000), 10000)),
+            max_tokens=max(
+                4000, min(int(base_overrides.get("max_tokens") or 8000), 10000)
+            ),
             temperature=0.1,
             top_p=0.85,
             json_object=False,
@@ -242,12 +288,12 @@ class LlmCallsMixin(_Base):
         scan: DeterministicScanResult,
     ) -> ParsedLLMResponse:
         """Retry concept extraction with a smaller array-only prompt."""
-        candidate_json = json.dumps((scan.concepts + scan.methods)[:32], ensure_ascii=False)
-        prompt = (
-            self.CONCEPTS_ONLY_PROMPT
-            .replace("{candidate_json}", candidate_json)
-            .replace("{paper_text}", paper_text or "")
+        candidate_json = json.dumps(
+            (scan.concepts + scan.methods)[:32], ensure_ascii=False
         )
+        prompt = self.CONCEPTS_ONLY_PROMPT.replace(
+            "{candidate_json}", candidate_json
+        ).replace("{paper_text}", paper_text or "")
         overrides = self._call_overrides(
             base_overrides,
             max_tokens=10000,
@@ -267,7 +313,11 @@ class LlmCallsMixin(_Base):
                 provider=provider,
                 overrides=overrides,
             )
-            raw_text = str(raw_response.get("content") or raw_response) if isinstance(raw_response, dict) else str(raw_response or "")
+            raw_text = (
+                str(raw_response.get("content") or raw_response)
+                if isinstance(raw_response, dict)
+                else str(raw_response or "")
+            )
         except Exception as exc:
             logger.exception("Concepts-only retry failed")
             return ParsedLLMResponse(
@@ -300,21 +350,32 @@ class LlmCallsMixin(_Base):
         base_overrides: dict[str, Any],
     ) -> ParsedLLMResponse:
         """Retry semantic list extraction when Call 2 partial recovery loses claims."""
-        prompt = self.SEMANTIC_LISTS_RETRY_PROMPT.replace("{paper_text}", paper_text or "")
+        prompt = self.SEMANTIC_LISTS_RETRY_PROMPT.replace(
+            "{paper_text}", paper_text or ""
+        )
         overrides = self._call_overrides(
             base_overrides,
-            max_tokens=max(3000, min(int(base_overrides.get("max_tokens") or 6000), 8000)),
+            max_tokens=max(
+                3000, min(int(base_overrides.get("max_tokens") or 6000), 8000)
+            ),
             temperature=0.1,
             top_p=0.85,
         )
         return self._call_and_parse_json(
             [
-                {"role": "system", "content": "Return complete JSON only. Do not include markdown, prose, or hidden reasoning. /no_think"},
+                {
+                    "role": "system",
+                    "content": "Return complete JSON only. Do not include markdown, prose, or hidden reasoning. /no_think",
+                },
                 {"role": "user", "content": prompt},
             ],
             provider=provider,
             overrides=overrides,
-            default={"claims": [], "cross_domain_hints": [], "terminology_conflicts": []},
+            default={
+                "claims": [],
+                "cross_domain_hints": [],
+                "terminology_conflicts": [],
+            },
         )
 
     @classmethod
@@ -327,7 +388,9 @@ class LlmCallsMixin(_Base):
         """Return true when the main structural prompt produced no concepts."""
         if concepts:
             return False
-        structural_quality = cls._worst_parse_quality([call.parse_quality for call in structural_calls])
+        structural_quality = cls._worst_parse_quality(
+            [call.parse_quality for call in structural_calls]
+        )
         if structural_quality not in {"partial", "failed"}:
             return False
         return bool(structural_calls or scan.concepts or scan.methods)
@@ -343,7 +406,9 @@ class LlmCallsMixin(_Base):
         """Return true when partial Call 1 likely lost method extraction."""
         if methods:
             return False
-        if cls._worst_parse_quality([call.parse_quality for call in structural_calls]) not in {"partial", "failed"}:
+        if cls._worst_parse_quality(
+            [call.parse_quality for call in structural_calls]
+        ) not in {"partial", "failed"}:
             return False
         if not (concepts or scan.concepts or scan.methods):
             return False
@@ -369,10 +434,14 @@ class LlmCallsMixin(_Base):
             return True
         if semantic.parse_quality == "failed":
             return False
-        if len(claims) < 3 and len(paper_text or "") >= 12000 and re.search(
-            r"\b(we|this paper|this article|this survey|our|results?|findings?|show|shows|provide|provides|propose|presents?|demonstrate|suggest|challenge|taxonomy|framework)\b",
-            paper_text or "",
-            flags=re.IGNORECASE,
+        if (
+            len(claims) < 3
+            and len(paper_text or "") >= 12000
+            and re.search(
+                r"\b(we|this paper|this article|this survey|our|results?|findings?|show|shows|provide|provides|propose|presents?|demonstrate|suggest|challenge|taxonomy|framework)\b",
+                paper_text or "",
+                flags=re.IGNORECASE,
+            )
         ):
             return True
         return False
@@ -400,7 +469,9 @@ class LlmCallsMixin(_Base):
     ) -> ParsedLLMResponse:
         """Call the model and parse JSON without aborting the pipeline."""
         try:
-            raw_response = self.llm.chat(messages, provider=provider, overrides=overrides)
+            raw_response = self.llm.chat(
+                messages, provider=provider, overrides=overrides
+            )
             if isinstance(raw_response, dict):
                 raw_text = str(raw_response.get("content") or raw_response)
             else:
@@ -417,7 +488,12 @@ class LlmCallsMixin(_Base):
         parsed = self._parse_json_robust(raw_text, default=default)
         if parsed.parse_quality == "partial":
             retry = self._retry_strict_json(messages, provider, overrides, default)
-            if retry.parse_quality in {"clean", "trimmed"} or self._parsed_payload_score(retry.data) > self._parsed_payload_score(parsed.data):
+            if retry.parse_quality in {
+                "clean",
+                "trimmed",
+            } or self._parsed_payload_score(retry.data) > self._parsed_payload_score(
+                parsed.data
+            ):
                 return retry
         return ParsedLLMResponse(
             data=parsed.data,
@@ -437,7 +513,9 @@ class LlmCallsMixin(_Base):
         retry_overrides = dict(overrides)
         retry_overrides["temperature"] = 0.05
         retry_overrides["top_p"] = min(float(retry_overrides.get("top_p") or 0.85), 0.8)
-        retry_overrides["max_tokens"] = min(16000, max(int(retry_overrides.get("max_tokens") or 8000), 10000))
+        retry_overrides["max_tokens"] = min(
+            16000, max(int(retry_overrides.get("max_tokens") or 8000), 10000)
+        )
         retry_messages = [
             {
                 "role": "system",
@@ -449,8 +527,14 @@ class LlmCallsMixin(_Base):
             *messages,
         ]
         try:
-            raw_response = self.llm.chat(retry_messages, provider=provider, overrides=retry_overrides)
-            raw_text = str(raw_response.get("content") or raw_response) if isinstance(raw_response, dict) else str(raw_response or "")
+            raw_response = self.llm.chat(
+                retry_messages, provider=provider, overrides=retry_overrides
+            )
+            raw_text = (
+                str(raw_response.get("content") or raw_response)
+                if isinstance(raw_response, dict)
+                else str(raw_response or "")
+            )
         except Exception as exc:
             logger.exception("Strict JSON retry failed")
             return ParsedLLMResponse(

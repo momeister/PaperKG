@@ -59,7 +59,9 @@ def create_celery_app(config: dict[str, Any] | None = None):
     try:
         from celery import Celery
     except ImportError as exc:
-        raise RuntimeError("Install celery and redis extras to use scheduled jobs.") from exc
+        raise RuntimeError(
+            "Install celery and redis extras to use scheduled jobs."
+        ) from exc
 
     cfg = config or {}
     broker_url = cfg.get("broker_url", "redis://localhost:6379/0")

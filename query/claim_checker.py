@@ -13,6 +13,7 @@ prüft auf Wunsch eine KONKRETE Aussage gegen die zitierte lokale Quelle:
 Der Quelltext wird ausschließlich als klar abgegrenzter Datenblock eingebettet
 (Anweisungen im PDF-Text werden nicht befolgt) und ist längenbegrenzt.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,12 @@ from typing import Any
 
 from query import source_verifier
 
-VERDICTS = ("supported", "partially_supported", "not_supported", "insufficient_evidence")
+VERDICTS = (
+    "supported",
+    "partially_supported",
+    "not_supported",
+    "insufficient_evidence",
+)
 # Wie sicher ist ein Urteil? Höher = stärker gestützt. Für das Zusammenführen von
 # Auszug- und Ganzes-Paper-Durchgang.
 _VERDICT_RANK = {
@@ -77,7 +83,9 @@ def _gather_source_text(
             if grey:
                 full_text = str(grey.get("full_text") or "")
                 if full_text:
-                    excerpts = source_verifier.best_excerpts(full_text, statement, max_excerpts=4)
+                    excerpts = source_verifier.best_excerpts(
+                        full_text, statement, max_excerpts=4
+                    )
                     origin = "grey"
                 if not excerpts:
                     pool = [str(q) for q in (grey.get("evidence") or []) if q]
@@ -89,14 +97,18 @@ def _gather_source_text(
         except Exception:
             pass
     else:
-        pdf_path = source_verifier.find_pdf_path(paper_id, title, pdf_base_dir=pdf_base_dir)
+        pdf_path = source_verifier.find_pdf_path(
+            paper_id, title, pdf_base_dir=pdf_base_dir
+        )
         if pdf_path:
             try:
                 pdf_text = source_verifier.parse_pdf_text(pdf_path, paper_id)
             except Exception:
                 pdf_text = ""
             if pdf_text:
-                excerpts = source_verifier.best_excerpts(pdf_text, statement, max_excerpts=4)
+                excerpts = source_verifier.best_excerpts(
+                    pdf_text, statement, max_excerpts=4
+                )
                 origin = "pdf"
         if not excerpts:
             try:
@@ -189,7 +201,9 @@ def _parse_verdict_json(response: str) -> dict[str, Any] | None:
     verdict = str(data.get("verdict") or "").strip()
     if verdict not in VERDICTS:
         return None
-    quotes = [str(q).strip() for q in (data.get("supporting_quotes") or []) if str(q).strip()]
+    quotes = [
+        str(q).strip() for q in (data.get("supporting_quotes") or []) if str(q).strip()
+    ]
     return {
         "verdict": verdict,
         "explanation": _clip(str(data.get("explanation") or ""), 800),
@@ -214,7 +228,8 @@ def _judge_excerpts(
     budget = max_source_chars // max(1, len(excerpts))
     fence = "=" * 12
     blocks = "\n\n".join(
-        f"EXCERPT {index + 1}:\n{_clip(text, budget)}" for index, text in enumerate(excerpts)
+        f"EXCERPT {index + 1}:\n{_clip(text, budget)}"
+        for index, text in enumerate(excerpts)
     )
     user_prompt = (
         f"CLAIM (from an assistant answer, cited as [{paper_id}]):\n{_clip(statement, 1200)}\n\n"
@@ -245,7 +260,8 @@ def _judge_excerpts(
     # Nur wörtlich in den Excerpts vorkommende Zitate durchlassen (Halluzinationsschutz).
     joined = " ".join(re.sub(r"\s+", " ", e) for e in excerpts).lower()
     verified_quotes = [
-        quote for quote in parsed["supporting_quotes"]
+        quote
+        for quote in parsed["supporting_quotes"]
         if re.sub(r"\s+", " ", quote).lower() in joined
     ]
     parsed["supporting_quotes"] = verified_quotes
@@ -295,7 +311,9 @@ def _escalate_whole_paper(
         )
         if parsed is None:
             continue
-        if best is None or _VERDICT_RANK.get(parsed["verdict"], 0) > _VERDICT_RANK.get(best["verdict"], 0):
+        if best is None or _VERDICT_RANK.get(parsed["verdict"], 0) > _VERDICT_RANK.get(
+            best["verdict"], 0
+        ):
             best = parsed
         # Sobald ein Fenster die Aussage wörtlich belegt, ist der Fall entschieden.
         if parsed["verdict"] == "supported" and parsed["supporting_quotes"]:
@@ -369,18 +387,32 @@ def check_claim(
         model=model,
     )
     if parsed is None:
-        result["explanation"] = error or "LLM-Antwort nicht auswertbar — bitte erneut prüfen."
+        result["explanation"] = (
+            error or "LLM-Antwort nicht auswertbar — bitte erneut prüfen."
+        )
         return result
-    result.update({k: v for k, v in parsed.items() if k in ("verdict", "explanation", "supporting_quotes")})
+    result.update(
+        {
+            k: v
+            for k, v in parsed.items()
+            if k in ("verdict", "explanation", "supporting_quotes")
+        }
+    )
 
     # Unsicheres Urteil? Das ganze Paper durchgehen, ob die Aussage doch belegt wird.
     if escalate_whole_paper and result["verdict"] != "supported":
         full_text = _whole_paper_text(
-            paper_id, title=title, pdf_base_dir=pdf_base_dir, metadata_db_path=metadata_db_path
+            paper_id,
+            title=title,
+            pdf_base_dir=pdf_base_dir,
+            metadata_db_path=metadata_db_path,
         )
         # Nur eskalieren, wenn mehr Text als die bereits geprüften Auszüge vorliegt.
         joined_excerpts = " ".join(re.sub(r"\s+", " ", e) for e in excerpts)
-        if full_text and len(re.sub(r"\s+", " ", full_text)) > len(joined_excerpts) + 400:
+        if (
+            full_text
+            and len(re.sub(r"\s+", " ", full_text)) > len(joined_excerpts) + 400
+        ):
             whole = _escalate_whole_paper(
                 router,
                 statement=statement_clean,
@@ -392,12 +424,19 @@ def check_claim(
             if whole is not None:
                 result["checked_scope"] = "whole_paper"
                 # Das Ganzes-Paper-Urteil gewinnt, wenn es die Aussage stärker (be)stätigt.
-                if _VERDICT_RANK.get(whole["verdict"], 0) > _VERDICT_RANK.get(result["verdict"], 0):
+                if _VERDICT_RANK.get(whole["verdict"], 0) > _VERDICT_RANK.get(
+                    result["verdict"], 0
+                ):
                     result["verdict"] = whole["verdict"]
                     result["explanation"] = whole["explanation"]
                     result["supporting_quotes"] = whole["supporting_quotes"]
-                elif whole["verdict"] == "not_supported" and result["verdict"] == "insufficient_evidence":
+                elif (
+                    whole["verdict"] == "not_supported"
+                    and result["verdict"] == "insufficient_evidence"
+                ):
                     # Ganzes Paper gesichtet, nirgends belegt → belastbares "nicht gestützt".
                     result["verdict"] = "not_supported"
-                    result["explanation"] = whole["explanation"] or result["explanation"]
+                    result["explanation"] = (
+                        whole["explanation"] or result["explanation"]
+                    )
     return result

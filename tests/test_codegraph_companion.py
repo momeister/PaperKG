@@ -7,6 +7,7 @@ Zeilennummer sieht in einer Antwort völlig unauffällig aus.
 
 Die Tests, die das ``cs``-Binary brauchen, überspringen sich selbst.
 """
+
 from __future__ import annotations
 
 import json
@@ -23,26 +24,29 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 def _extract_rust_system_prompt() -> str:
-	"""Lies die Rust-Konstante aus ``cs-llm/src/lib.rs`` als Rohtext.
+    """Lies die Rust-Konstante aus ``cs-llm/src/lib.rs`` als Rohtext.
 
-	Der Systemprompt existiert zweimal wortgleich (Python + Rust). Ohne diesen
-	Test driften sie still auseinander, und CLI und App verhalten sich
-	unterschiedlich — der Kopfhinweis in ``companion.py`` verpflichtet dazu,
-	 beide zu ändern.
-	"""
-	import re
+    Der Systemprompt existiert zweimal wortgleich (Python + Rust). Ohne diesen
+    Test driften sie still auseinander, und CLI und App verhalten sich
+    unterschiedlich — der Kopfhinweis in ``companion.py`` verpflichtet dazu,
+     beide zu ändern.
+    """
+    import re
 
-	root = Path(__file__).resolve().parent.parent
-	lib_rs = root / "codesearch" / "crates" / "cs-llm" / "src" / "lib.rs"
-	text = lib_rs.read_text(encoding="utf-8")
-	match = re.search(r'const SYSTEM_PROMPT:\s*&str\s*=\s*r#"(?P<body>.*?)"#;', text, re.DOTALL)
-	assert match is not None, "SYSTEM_PROMPT in cs-llm/src/lib.rs nicht gefunden"
-	return match.group("body")
+    root = Path(__file__).resolve().parent.parent
+    lib_rs = root / "codesearch" / "crates" / "cs-llm" / "src" / "lib.rs"
+    text = lib_rs.read_text(encoding="utf-8")
+    match = re.search(
+        r'const SYSTEM_PROMPT:\s*&str\s*=\s*r#"(?P<body>.*?)"#;', text, re.DOTALL
+    )
+    assert match is not None, "SYSTEM_PROMPT in cs-llm/src/lib.rs nicht gefunden"
+    return match.group("body")
 
 
 def test_system_prompt_is_identical_in_rust_and_python() -> None:
-	"""Der Prompt darf nicht driftent — siehe Kopfhinweis in companion.py."""
-	assert companion.SYSTEM_PROMPT == _extract_rust_system_prompt()
+    """Der Prompt darf nicht driftent — siehe Kopfhinweis in companion.py."""
+    assert companion.SYSTEM_PROMPT == _extract_rust_system_prompt()
+
 
 needs_binary = pytest.mark.skipif(
     not binary.binary_available(),
@@ -99,7 +103,12 @@ def project(tmp_path: Path):
     original_index_dir = binary.index_dir
     binary.index_dir = lambda *_a, **_k: tmp_path / "codegraph"  # type: ignore[assignment]
 
-    record = {"id": "cp_test", "name": "Testprojekt", "path": str(root), "kind": "external"}
+    record = {
+        "id": "cp_test",
+        "name": "Testprojekt",
+        "path": str(root),
+        "kind": "external",
+    }
     client = service.client_for(record)
     client.index()
     try:
@@ -110,8 +119,12 @@ def project(tmp_path: Path):
         fresh.close_all()
 
 
-def _answer(project_record, router, question="Wie wird der Rabatt gerechnet?", **kwargs):
-    events = list(companion.ask_stream(project_record, question, router=router, **kwargs))
+def _answer(
+    project_record, router, question="Wie wird der Rabatt gerechnet?", **kwargs
+):
+    events = list(
+        companion.ask_stream(project_record, question, router=router, **kwargs)
+    )
     assert events[-1]["event"] == "done", events[-1]
     return events[-1]["answer"], events
 
@@ -148,7 +161,9 @@ def test_a_step_without_a_usable_position_is_dropped_not_guessed():
 
 def test_a_bare_numeric_citation_is_counted_as_the_error_it_is():
     """``[1]`` ist laut CLAUDE.md ein Qualitätsfehler und darf nicht durchrutschen."""
-    assert companion._bare_numeric_citations("Wie in [1] gezeigt und in [12] auch.") == 2
+    assert (
+        companion._bare_numeric_citations("Wie in [1] gezeigt und in [12] auch.") == 2
+    )
     assert companion._bare_numeric_citations("Siehe [arxiv:2401.01234].") == 0
 
 
@@ -160,7 +175,9 @@ def test_citation_offsets_are_converted_for_javascript():
     """
     text = "Grün und schön: src/a.py:12"
     byte_start = text.encode("utf-8").index(b"src/a.py")
-    start, end = companion._utf16_offsets(text, byte_start, byte_start + len("src/a.py:12"))
+    start, end = companion._utf16_offsets(
+        text, byte_start, byte_start + len("src/a.py:12")
+    )
     assert text[start:end] == "src/a.py:12"
 
 
@@ -294,7 +311,8 @@ def test_a_new_question_starts_with_an_empty_licence_to_quote(project):
     # Eine zweite Datei, die zur Frage nach ``apply_discount`` nicht mit
     # hervorgeholt wird — nur so lässt sich die alte von der neuen Lizenz trennen.
     (root / "src" / "legacy.py").write_text(
-        "def unrelated_legacy_routine():\n" + "".join(f"    step_{n} = {n}\n" for n in range(1, 40)),
+        "def unrelated_legacy_routine():\n"
+        + "".join(f"    step_{n} = {n}\n" for n in range(1, 40)),
         encoding="utf-8",
     )
     service.query(record, "index", {})
@@ -309,12 +327,16 @@ def test_a_new_question_starts_with_an_empty_licence_to_quote(project):
         },
     )
     warm = service.query(
-        record, "verify_citations", {"session": "s1", "text": "Siehe src/legacy.py:30-34."}
+        record,
+        "verify_citations",
+        {"session": "s1", "text": "Siehe src/legacy.py:30-34."},
     )
     assert warm["citations"][0]["status"] == "verified", "der Aufbau des Tests selbst"
 
     router = FakeRouter([("Siehe src/legacy.py:30-34.", [])])
-    answer, _events = _answer(record, router, question="Was macht apply_discount?", session="s1")
+    answer, _events = _answer(
+        record, router, question="Was macht apply_discount?", session="s1"
+    )
     assert answer["citations"][0]["status"] == "not_retrieved"
 
 
@@ -358,7 +380,12 @@ def test_papers_change_the_rules_and_are_tracked_separately(project, monkeypatch
     )
 
     router = FakeRouter(
-        [("Wie in [arxiv:1706.03762] beschrieben, siehe src/pricing.py:1-2. Ferner [1].", [])]
+        [
+            (
+                "Wie in [arxiv:1706.03762] beschrieben, siehe src/pricing.py:1-2. Ferner [1].",
+                [],
+            )
+        ]
     )
     answer, _events = _answer(
         record, router, question="Was macht apply_discount?", use_papers=True
@@ -382,7 +409,9 @@ def test_an_invented_paper_id_is_not_counted_as_a_citation(project, monkeypatch)
     monkeypatch.setattr(
         companion,
         "_paper_evidence",
-        lambda *_a, **_k: [companion.PaperEvidence(paper_id="arxiv:1706.03762", title="T")],
+        lambda *_a, **_k: [
+            companion.PaperEvidence(paper_id="arxiv:1706.03762", title="T")
+        ],
     )
     router = FakeRouter([("Steht in [arxiv:9999.99999].", [])])
     answer, _events = _answer(record, router, use_papers=True)
@@ -420,7 +449,9 @@ def test_asking_over_http_streams_activity_and_stores_the_answer(tmp_path, monke
     (root / "src" / "pricing.py").write_text(FIXTURE, encoding="utf-8")
 
     with MetadataDB(db_path) as db:
-        record = db.add_code_project(name="Testprojekt", path=str(root), kind="external")
+        record = db.add_code_project(
+            name="Testprojekt", path=str(root), kind="external"
+        )
     project_id = str(record["id"])
 
     router = FakeRouter([("apply_discount rechnet in src/pricing.py:1-2.", [])])
@@ -429,7 +460,9 @@ def test_asking_over_http_streams_activity_and_stores_the_answer(tmp_path, monke
     )
 
     with TestClient(pm.app) as client:
-        client.post(f"/codegraph/{project_id}/index", params={"metadata_db_path": db_path})
+        client.post(
+            f"/codegraph/{project_id}/index", params={"metadata_db_path": db_path}
+        )
 
         with client.stream(
             "POST",
@@ -580,7 +613,14 @@ def test_a_tool_lookup_lands_in_the_hit_list_as_looked_up(project):
 
     router = FakeRouter(
         [
-            (None, [ToolCall(id="t1", name="get_node", arguments=f'{{"id": "{node_id}"}}')]),
+            (
+                None,
+                [
+                    ToolCall(
+                        id="t1", name="get_node", arguments=f'{{"id": "{node_id}"}}'
+                    )
+                ],
+            ),
             ("checkout ruft apply_discount auf.", []),
         ]
     )
@@ -599,8 +639,13 @@ def test_a_follow_up_may_still_quote_what_the_first_turn_looked_up(project):
     claim = "Der Rabatt steht in src/pricing.py:1-2."
 
     first = FakeRouter([(claim, [])])
-    answer_one, _ = _answer(record, first, question="Wie wird der Rabatt gerechnet?",
-                            session="chat_x", broad=True)
+    answer_one, _ = _answer(
+        record,
+        first,
+        question="Wie wird der Rabatt gerechnet?",
+        session="chat_x",
+        broad=True,
+    )
     assert answer_one["citations"][0]["status"] == "verified"
 
     # Rückfrage: anderes Thema, aber dasselbe Gespräch.
@@ -624,9 +669,9 @@ def test_a_follow_up_may_still_quote_what_the_first_turn_looked_up(project):
         message["role"] == "assistant" and claim in (message.get("content") or "")
         for message in messages
     ), "die vorherige Antwort gehört in den Prompt"
-    assert not any(message["role"] == "tool" for message in messages), (
-        "Werkzeugergebnisse früherer Züge würden bei jeder Runde neu verarbeitet"
-    )
+    assert not any(
+        message["role"] == "tool" for message in messages
+    ), "Werkzeugergebnisse früherer Züge würden bei jeder Runde neu verarbeitet"
 
 
 @needs_binary
@@ -649,7 +694,9 @@ def test_a_chat_thread_is_persisted_with_its_turns_in_order(tmp_path, monkeypatc
     (root / "src" / "pricing.py").write_text(FIXTURE, encoding="utf-8")
 
     with MetadataDB(db_path) as db:
-        record = db.add_code_project(name="Testprojekt", path=str(root), kind="external")
+        record = db.add_code_project(
+            name="Testprojekt", path=str(root), kind="external"
+        )
     project_id = str(record["id"])
 
     router = FakeRouter(
@@ -663,7 +710,9 @@ def test_a_chat_thread_is_persisted_with_its_turns_in_order(tmp_path, monkeypatc
     )
 
     with TestClient(pm.app) as client:
-        client.post(f"/codegraph/{project_id}/index", params={"metadata_db_path": db_path})
+        client.post(
+            f"/codegraph/{project_id}/index", params={"metadata_db_path": db_path}
+        )
 
         chat = client.post(
             f"/codegraph/{project_id}/chats", json={"metadata_db_path": db_path}
@@ -686,21 +735,27 @@ def test_a_chat_thread_is_persisted_with_its_turns_in_order(tmp_path, monkeypatc
             assert events[-1]["event"] == "done", events[-1]
 
         body = client.get(
-            f"/codegraph/{project_id}/chats/{chat_id}", params={"metadata_db_path": db_path}
+            f"/codegraph/{project_id}/chats/{chat_id}",
+            params={"metadata_db_path": db_path},
         ).json()
         turns = body["turns"]
-        assert [turn["ordinal"] for turn in turns] == [0, 1], "Reihenfolge kommt aus der DB"
+        assert [turn["ordinal"] for turn in turns] == [
+            0,
+            1,
+        ], "Reihenfolge kommt aus der DB"
         assert turns[0]["question"] == "Was macht apply_discount?"
         assert turns[0]["focus_nodes"], "die Trefferliste wird mitgespeichert"
-        assert body["chat"]["title"] == "Was macht apply_discount?", (
-            "der erste Zug benennt das Gespräch, sonst hiessen alle gleich"
-        )
+        assert (
+            body["chat"]["title"] == "Was macht apply_discount?"
+        ), "der erste Zug benennt das Gespräch, sonst hiessen alle gleich"
 
         # Die flache Antwortliste bleibt unberührt — sie hat andere Leser.
         answers = client.get(
             f"/codegraph/{project_id}/answers", params={"metadata_db_path": db_path}
         ).json()
-        assert answers["answers"] == [], "der Chat schreibt nicht doppelt nach code_answers"
+        assert (
+            answers["answers"] == []
+        ), "der Chat schreibt nicht doppelt nach code_answers"
 
         deleted = client.request(
             "DELETE",

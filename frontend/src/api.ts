@@ -73,6 +73,8 @@ import type {
   RewriteResponse,
   ReviewEntity,
   Task,
+  TaskDeepSearchEvent,
+  TaskDeepSearchRequest,
   TaskGreySourceResponse,
   TaskImplementationPlan,
   TaskResearchDirection,
@@ -1193,6 +1195,54 @@ export const api = {
         method: "POST",
         body: JSON.stringify({}),
       }),
+    /** Stream POST /tasks/{id}/deep-search: per-research-direction Tiefensuche (SSE).
+     * Erntet viele Paper + Web-Quellen und synthetisiert ein geerdetes
+     * Möglichkeitsprinzip (Machbarkeit/Ansätze/Risiken/Fazit). Selbe SSE-Reader-
+     * Bauweise wie streamResearchTree — fetch POST + getReader() + TextDecoder
+     * + split auf "\n" + parse "data:"-Zeilen. */
+    streamDeepSearch: async (
+      taskId: string,
+      payload: TaskDeepSearchRequest,
+      onEvent: (event: TaskDeepSearchEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const target = new URL(`/tasks/${encodeURIComponent(taskId)}/deep-search`, API_BASE_URL);
+      let response: Response;
+      try {
+        response = await fetch(target.toString(), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+          signal,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "";
+        throw new ApiError(0, `API nicht erreichbar (${API_BASE_URL}). ${reason}`);
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ApiError(response.status, text || `Backend error ${response.status}`);
+      }
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              onEvent(JSON.parse(line.slice(6)) as TaskDeepSearchEvent);
+            } catch {
+              // malformed SSE line – skip
+            }
+          }
+        }
+      }
+    },
   },
 
   // --- Kaggle-Login (Credentials in .env, gitignored) ---

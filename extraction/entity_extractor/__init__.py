@@ -5,6 +5,7 @@ ParsedLLMResponse, CLAIMS_EXTRACTION_PROMPT, extraction_failure_reason,
 filter_concepts, safe_llm_extract, deduplicate_methods, enrich_method_domains.
 extraction_failure_reason bleibt Modul-Attribut (String-Pfad-Monkeypatch in Tests).
 """
+
 from __future__ import annotations
 
 from query.llm_router import LLMRouter  # noqa: F401  # Typ der Konstruktor-Signatur

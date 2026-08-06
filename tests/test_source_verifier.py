@@ -47,7 +47,9 @@ def test_verify_answer_sources_maps_sources_evidence_and_citations(tmp_path) -> 
                 "kind": "claim",
                 "field": "claims",
                 "text": "Clinicians with AI Consult made 16% fewer diagnostic errors.",
-                "metadata": {"statement": "Clinicians with AI Consult made 16% fewer diagnostic errors."},
+                "metadata": {
+                    "statement": "Clinicians with AI Consult made 16% fewer diagnostic errors."
+                },
             }
         ],
     }
@@ -58,7 +60,9 @@ def test_verify_answer_sources_maps_sources_evidence_and_citations(tmp_path) -> 
     assert payload["cited_paper_ids"] == ["arxiv:0000.00000", "arxiv:2507.16947"]
     assert payload["missing_source_ids"] == ["arxiv:0000.00000"]
     assert payload["sources"][0]["pdf_available"] is True
-    assert payload["sources"][0]["evidence"][0]["reference_text"].startswith("Clinicians with AI Consult")
+    assert payload["sources"][0]["evidence"][0]["reference_text"].startswith(
+        "Clinicians with AI Consult"
+    )
     assert payload["sources"][0]["evidence"][0]["evidence_id"] == "ev-clinical-16"
     assert payload["sources"][0]["evidence"][0]["source_evidence_index"] == 0
     assert payload["sources"][0]["evidence"][0]["fragment_index"] == 0
@@ -120,7 +124,12 @@ def test_reference_fragments_split_long_evidence_into_short_sentence_anchors() -
 def test_verify_answer_sources_returns_multiple_short_locations_per_evidence() -> None:
     answer = {
         "answer": "AI Consult changed clinical workflows [arxiv:2507.16947].",
-        "sources": [{"paper_id": "arxiv:2507.16947", "title": "AI-based Clinical Decision Support"}],
+        "sources": [
+            {
+                "paper_id": "arxiv:2507.16947",
+                "title": "AI-based Clinical Decision Support",
+            }
+        ],
         "evidence": [
             {
                 "paper_id": "arxiv:2507.16947",
@@ -178,7 +187,9 @@ def test_paper_reference_fragments_drop_title_prefix_before_abstract() -> None:
         max_fragments=2,
     )
 
-    assert fragments == ["Theoretical work emphasizes that clinical AI lacks a formal account of the world."]
+    assert fragments == [
+        "Theoretical work emphasizes that clinical AI lacks a formal account of the world."
+    ]
     assert "Grounding Clinical AI Competency" not in fragments[0]
 
 
@@ -200,11 +211,15 @@ def test_paper_reference_fragments_prefer_precise_evidence_span_over_abstract() 
         max_fragments=2,
     )
 
-    assert fragments == ["Clinicians with access to AI Consult made 16% fewer diagnostic errors."]
+    assert fragments == [
+        "Clinicians with access to AI Consult made 16% fewer diagnostic errors."
+    ]
     assert "broad abstract" not in fragments[0].lower()
 
 
-def test_best_excerpt_stays_sentence_near_match_without_cross_page_title_context() -> None:
+def test_best_excerpt_stays_sentence_near_match_without_cross_page_title_context() -> (
+    None
+):
     pdf_text = (
         "Grounding Clinical AI Competency in Human Cognition Through the Clinical World Model "
         "Seyed Amir Ahmadi Safavi-Naini. BREAK--- 47 Supplementary Information. "
@@ -250,7 +265,9 @@ def test_best_excerpt_keeps_quantitative_claim_tokens_when_matching_pdf_text() -
     assert "demonstrate potential" not in excerpt
 
 
-def test_best_excerpt_matches_german_decimal_comma_numbers_against_english_pdf_text() -> None:
+def test_best_excerpt_matches_german_decimal_comma_numbers_against_english_pdf_text() -> (
+    None
+):
     # German claim text writes decimals with a comma ("10,6"); the PDF (English, NEJM-style)
     # writes them with a period ("10.6"). Without normalizing the comma to a period first,
     # _quantitative_tokens splits "10,6" into separate integer tokens {10, 6}, the anchor
@@ -274,7 +291,9 @@ def test_best_excerpt_matches_german_decimal_comma_numbers_against_english_pdf_t
     assert "Baseline characteristics" not in excerpt
 
 
-def test_best_excerpt_strict_mode_rejects_weak_generic_overlap_but_keeps_concrete_anchors() -> None:
+def test_best_excerpt_strict_mode_rejects_weak_generic_overlap_but_keeps_concrete_anchors() -> (
+    None
+):
     # `strict=True` is for callers that anchor a SPECIFIC claim's citation (the
     # "PDF-Assistent" claim-evidence path): a window that only shares ubiquitous,
     # recurring terms (drug/disease names appearing throughout the whole paper) with
@@ -300,11 +319,15 @@ def test_best_excerpt_strict_mode_rejects_weak_generic_overlap_but_keeps_concret
     assert best_excerpt(pdf_text, weak_reference, strict=False) != ""
 
     exact_phrase_reference = "No clinically meaningful differences in baseline quality of life and performance status were observed with bevacizumab"
-    strict_excerpt = best_excerpt(pdf_text, exact_phrase_reference, window_chars=160, strict=True)
+    strict_excerpt = best_excerpt(
+        pdf_text, exact_phrase_reference, window_chars=160, strict=True
+    )
     assert "baseline quality of life" in strict_excerpt
 
     number_anchor_reference = "Median overall survival reached 16.8 months with bevacizumab versus 12.3 months with placebo."
-    strict_number_excerpt = best_excerpt(pdf_text, number_anchor_reference, window_chars=160, strict=True)
+    strict_number_excerpt = best_excerpt(
+        pdf_text, number_anchor_reference, window_chars=160, strict=True
+    )
     assert "16.8 months" in strict_number_excerpt
     assert "12.3 months" in strict_number_excerpt
 
@@ -334,7 +357,9 @@ def test_verify_claim_excerpt_evidence_passes_through_located_excerpt() -> None:
         },
     }
 
-    locations = locate_evidence_fragments(evidence, pdf_text, max_fragments=3, source_evidence_index=0)
+    locations = locate_evidence_fragments(
+        evidence, pdf_text, max_fragments=3, source_evidence_index=0
+    )
 
     assert len(locations) == 1
     location = locations[0]
@@ -382,7 +407,10 @@ def test_best_excerpts_merges_adjacent_clause_matches_into_one_longer_excerpt() 
 
 
 def test_best_excerpts_keeps_scattered_facts_as_separate_excerpts() -> None:
-    filler = "Entirely unrelated methodological discussion continues here at considerable length. " * 8
+    filler = (
+        "Entirely unrelated methodological discussion continues here at considerable length. "
+        * 8
+    )
     pdf_text = (
         "Median overall survival reached 16.8 months in the treatment group during follow-up. "
         + filler
@@ -482,7 +510,9 @@ def test_best_excerpt_with_method_reports_anchor_kind() -> None:
     )
 
     verbatim_reference = "reported reduced anxiety symptoms and improved sleep quality across the intervention"
-    excerpt, method = best_excerpt_with_method(pdf_text, verbatim_reference, strict=True)
+    excerpt, method = best_excerpt_with_method(
+        pdf_text, verbatim_reference, strict=True
+    )
     assert excerpt
     assert method == "verbatim"
 
@@ -528,7 +558,9 @@ def test_find_normalized_tolerates_spurious_inner_spaces() -> None:
     broken_pdf = "The framework provides tools for ass essing model quality in clinical settings."
     assert verbatim_excerpt(broken_pdf, "for assessing model quality") != ""
 
-    clean_pdf = "The framework provides tools for assessing model quality in clinical settings."
+    clean_pdf = (
+        "The framework provides tools for assessing model quality in clinical settings."
+    )
     assert verbatim_excerpt(clean_pdf, "for ass essing model quality") != ""
 
     # Guard: tiny squashed needles stay unmatched (too many accidental hits).
@@ -547,7 +579,9 @@ def test_verbatim_excerpt_locates_quote_whitespace_insensitively() -> None:
 
     assert "16.8 months" in excerpt
     assert "11.2 months" in excerpt  # expanded to the full sentence
-    assert verbatim_excerpt(pdf_text, "this quote does not occur in the text at all") == ""
+    assert (
+        verbatim_excerpt(pdf_text, "this quote does not occur in the text at all") == ""
+    )
 
 
 def test_verify_answer_sources_keeps_fragmenting_non_claim_evidence() -> None:
@@ -598,7 +632,9 @@ def test_best_excerpt_matches_despite_unicode_dash_and_ligature_variants() -> No
         "profile remained favourable throughout the study period and was confirmed in "
         "sensitivity analyses. Further unrelated discussion follows here."
     )
-    reference = "The risk-benefit profile remained favourable throughout the study period"
+    reference = (
+        "The risk-benefit profile remained favourable throughout the study period"
+    )
 
     excerpt = best_excerpt(pdf_text, reference, strict=True)
 

@@ -5,6 +5,7 @@ Embeddings mit — auf einen anderen Rechner oder als Sicherung. Der Kuzu-Graph 
 bewusst *nicht* mitexportiert: er ist ein Cache und wird nach dem Import mit
 ``POST /jobs/graph-rebuild`` neu erzeugt.
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,7 +50,9 @@ class BundleImportRequest(BaseModel):
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
 
 
-def _project_members(project_id: str, projects_path: str | None) -> tuple[dict[str, list[str]], list[str]]:
+def _project_members(
+    project_id: str, projects_path: str | None
+) -> tuple[dict[str, list[str]], list[str]]:
     projects = _load_projects(_projects_path(projects_path))
     if _is_reserved_project_id(project_id):
         # "Alle Papers" ist kein echtes Projekt: die Vereinigung aller Mitglieder.
@@ -105,11 +108,15 @@ async def _store_upload(request: Request) -> Path:
             total += len(chunk)
             if total > MAX_UPLOAD_BYTES:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-                raise HTTPException(status_code=413, detail="Bundle ist groesser als 4 GB.")
+                raise HTTPException(
+                    status_code=413, detail="Bundle ist groesser als 4 GB."
+                )
             sink.write(chunk)
     if not total:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail="Leerer Upload — bitte eine ZIP-Datei senden.")
+        raise HTTPException(
+            status_code=400, detail="Leerer Upload — bitte eine ZIP-Datei senden."
+        )
     return target
 
 
@@ -144,9 +151,14 @@ async def import_bundle_upload(
     projects_path: str | None = None,
 ) -> dict[str, Any]:
     if mode not in {"merge", "replace"}:
-        raise HTTPException(status_code=400, detail="mode muss 'merge' oder 'replace' sein.")
+        raise HTTPException(
+            status_code=400, detail="mode muss 'merge' oder 'replace' sein."
+        )
     if target_project and _is_reserved_project_id(target_project):
-        raise HTTPException(status_code=400, detail="„Alle Papers“ ist kein echtes Projekt und kann kein Ziel sein.")
+        raise HTTPException(
+            status_code=400,
+            detail="„Alle Papers“ ist kein echtes Projekt und kann kein Ziel sein.",
+        )
 
     bundle = await _store_upload(request)
     path = _projects_path(projects_path)

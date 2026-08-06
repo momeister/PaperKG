@@ -26,7 +26,9 @@ class UnpaywallClient:
         await self._client.aclose()
 
     async def get_doi_record(self, doi: str) -> dict[str, Any]:
-        response = await self._client.get(f"{UNPAYWALL_BASE}/{doi}", params={"email": self.config.email})
+        response = await self._client.get(
+            f"{UNPAYWALL_BASE}/{doi}", params={"email": self.config.email}
+        )
         response.raise_for_status()
         return response.json()
 

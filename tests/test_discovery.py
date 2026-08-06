@@ -1,4 +1,5 @@
 """Tests for the discovery analysis normalizer (pure, no network/LLM)."""
+
 from __future__ import annotations
 
 from query.discovery import normalize_analysis
@@ -17,7 +18,10 @@ def test_normalize_analysis_full_payload():
     )
     assert out["topic_summary"] == "Attention models"
     assert out["methods"] == ["transformers", "self-attention"]
-    assert out["queries"][0] == {"query": "transformer attention", "reason": "core method"}
+    assert out["queries"][0] == {
+        "query": "transformer attention",
+        "reason": "core method",
+    }
     assert out["queries"][1] == {"query": "bert pretraining", "reason": ""}
 
 
@@ -28,7 +32,12 @@ def test_normalize_analysis_accepts_json_string():
 
 def test_normalize_analysis_handles_garbage():
     out = normalize_analysis("not json")
-    assert out == {"topic_summary": "", "methods": [], "queries": [], "related_topics": []}
+    assert out == {
+        "topic_summary": "",
+        "methods": [],
+        "queries": [],
+        "related_topics": [],
+    }
 
 
 def test_normalize_analysis_caps_queries_at_eight():

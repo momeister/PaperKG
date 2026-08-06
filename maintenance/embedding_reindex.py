@@ -79,12 +79,20 @@ def collect_entity_labels(
                 continue
             for field in ENTITY_FIELDS:
                 for item in _iter_entity_items(extraction.get(field)):
-                    add(item.get("canonical_label") or item.get("suggested_canonical") or item.get("label"))
+                    add(
+                        item.get("canonical_label")
+                        or item.get("suggested_canonical")
+                        or item.get("label")
+                    )
                     add(item.get("label"))
 
         if include_review_queue:
             for item in db.list_entity_review_queue(status=None, limit=limit):
-                add(item.get("suggested_canonical") or item.get("canonical_id") or item.get("label"))
+                add(
+                    item.get("suggested_canonical")
+                    or item.get("canonical_id")
+                    or item.get("label")
+                )
                 add(item.get("label"))
 
     return labels
@@ -97,7 +105,9 @@ def _iter_entity_items(value: Any) -> Iterable[dict[str, Any]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Rebuild local entity embeddings from extraction history.")
+    parser = argparse.ArgumentParser(
+        description="Rebuild local entity embeddings from extraction history."
+    )
     parser.add_argument("--metadata-db", default="data/metadata.duckdb")
     parser.add_argument("--no-review-queue", action="store_true")
     parser.add_argument("--limit", type=int, default=50000)

@@ -68,7 +68,9 @@ def test_metadata_db_resolves_pdf_storage_id_to_arxiv_metadata() -> None:
             }
         )
 
-        resolved = db.resolve_paper("arxiv__a-very-real-paper-title-with-punctuation__2509.08759")
+        resolved = db.resolve_paper(
+            "arxiv__a-very-real-paper-title-with-punctuation__2509.08759"
+        )
 
         assert resolved is not None
         assert resolved["id"] == "arxiv:2509.08759"
@@ -93,7 +95,9 @@ def test_metadata_db_resolves_legacy_arxiv_storage_id() -> None:
             }
         )
 
-        resolved = db.resolve_paper("arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009")
+        resolved = db.resolve_paper(
+            "arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009"
+        )
         canonical = db.ensure_paper_record(
             "arxiv__the-neurobiology-of-thinking-identity-and-geniality__q-bio_0612009",
             title="The Neurobiology Of Thinking, Identity, And Geniality",
@@ -111,12 +115,14 @@ def test_metadata_db_resolves_legacy_arxiv_storage_id() -> None:
 
 def test_clear_extraction_results_keeps_papers(tmp_path) -> None:
     db = MetadataDB(str(tmp_path / "metadata.duckdb"))
-    db.insert_paper({
-        "id": "paper_001",
-        "source": "arxiv",
-        "source_id": "1234.5678",
-        "title": "A Paper",
-    })
+    db.insert_paper(
+        {
+            "id": "paper_001",
+            "source": "arxiv",
+            "source_id": "1234.5678",
+            "title": "A Paper",
+        }
+    )
     db.save_extraction_result(
         paper_id="paper_001",
         llm_provider="fake",
@@ -135,7 +141,12 @@ def test_delete_extractions_for_papers_keeps_others(tmp_path) -> None:
     db = MetadataDB(str(tmp_path / "metadata.duckdb"))
     for pid in ("paper_a", "paper_b"):
         db.insert_paper({"id": pid, "source": "arxiv", "source_id": pid, "title": pid})
-        db.save_extraction_result(paper_id=pid, llm_provider="fake", llm_model="fake", concepts=[{"label": "c"}])
+        db.save_extraction_result(
+            paper_id=pid,
+            llm_provider="fake",
+            llm_model="fake",
+            concepts=[{"label": "c"}],
+        )
 
     deleted = db.delete_extractions_for_papers(["paper_a"])
 
@@ -212,7 +223,9 @@ def test_metadata_db_persists_extended_extraction_metadata(tmp_path) -> None:
     db.close()
 
 
-def test_save_extraction_result_infers_failed_status_from_fatal_payload(tmp_path) -> None:
+def test_save_extraction_result_infers_failed_status_from_fatal_payload(
+    tmp_path,
+) -> None:
     db = MetadataDB(str(tmp_path / "metadata.duckdb"))
 
     result_id = db.save_extraction_result(
@@ -307,12 +320,14 @@ def test_metadata_db_persists_extraction_quality(tmp_path) -> None:
 
 def test_clear_all_removes_mutable_metadata(tmp_path) -> None:
     db = MetadataDB(str(tmp_path / "metadata.duckdb"))
-    db.insert_paper({
-        "id": "paper_001",
-        "source": "arxiv",
-        "source_id": "1234.5678",
-        "title": "A Paper",
-    })
+    db.insert_paper(
+        {
+            "id": "paper_001",
+            "source": "arxiv",
+            "source_id": "1234.5678",
+            "title": "A Paper",
+        }
+    )
     db.save_extraction_result(
         paper_id="paper_001",
         llm_provider="fake",
@@ -336,7 +351,9 @@ def test_metadata_db_persists_batch_jobs_and_items(tmp_path) -> None:
         request_payload={"paper_ids": ["p1", "p2"]},
     )
     db.upsert_batch_job_item("job_001", "p1", "/tmp/p1.pdf", "completed", attempts=1)
-    db.upsert_batch_job_item("job_001", "p2", "/tmp/p2.pdf", "failed", attempts=2, error_message="parse")
+    db.upsert_batch_job_item(
+        "job_001", "p2", "/tmp/p2.pdf", "failed", attempts=2, error_message="parse"
+    )
 
     job = db.get_batch_job("job_001")
     assert job is not None

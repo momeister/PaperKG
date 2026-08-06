@@ -3,6 +3,7 @@
 Split out of api/product_main.py. Behaviour unchanged. llm_router laeuft ueber
 pm.llm_router (Test-Patch-Surface).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -72,13 +73,17 @@ def _strip_cot_preamble(text: str) -> str:
         if not match:
             # Whole remaining text is one COT sentence — nothing salvageable.
             return ""
-        text = text[match.end():].strip()
+        text = text[match.end() :].strip()
     return text
 
 
 class RewriteRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
-    instruction: str = Field(default="Schreibe den Text klarer und wissenschaftlich um.", min_length=1, max_length=500)
+    instruction: str = Field(
+        default="Schreibe den Text klarer und wissenschaftlich um.",
+        min_length=1,
+        max_length=500,
+    )
     provider: str | None = None
     model: str | None = None
 
@@ -134,7 +139,8 @@ def rewrite_text(request: RewriteRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Rewrite failed: {exc}") from exc
     return {
         "text": _strip_cot_preamble(text),
-        "model": overrides.get("model") or pm.llm_router.provider_default_model(request.provider),
+        "model": overrides.get("model")
+        or pm.llm_router.provider_default_model(request.provider),
     }
 
 

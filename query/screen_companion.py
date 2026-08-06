@@ -14,6 +14,7 @@ their own vision budget, so a model's pixel coordinates would be in that unknown
 frame (the old wrong-pointer bug, docs/NATIVE_APP.md R5.3). :func:`smart_resize_to_budget`
 is a 1:1 port of the fix in ``bridge/uitars/server.mjs``.
 """
+
 from __future__ import annotations
 
 import base64
@@ -91,7 +92,9 @@ def _strip_data_url(image_base64: str) -> str:
     return image_base64
 
 
-def prepare_image(image_base64: str, max_pixels: int = DEFAULT_MAX_PIXELS) -> PreparedImage:
+def prepare_image(
+    image_base64: str, max_pixels: int = DEFAULT_MAX_PIXELS
+) -> PreparedImage:
     """Decode a (data-URL or bare) base64 image, smart-resize into the pixel budget and
     re-encode as a PNG data URL. Raises ``ValueError`` on undecodable input."""
     from PIL import Image
@@ -104,7 +107,9 @@ def prepare_image(image_base64: str, max_pixels: int = DEFAULT_MAX_PIXELS) -> Pr
         raise ValueError(f"Bild konnte nicht dekodiert werden: {exc}") from exc
 
     width, height = image.size
-    sent_width, sent_height = smart_resize_to_budget(width, height, max_pixels=max_pixels)
+    sent_width, sent_height = smart_resize_to_budget(
+        width, height, max_pixels=max_pixels
+    )
     if (sent_width, sent_height) != (width, height):
         image = image.resize((sent_width, sent_height), Image.Resampling.LANCZOS)
     if image.mode not in ("RGB", "RGBA"):
@@ -145,7 +150,9 @@ _SOURCES_HINT = (
 def _context_suffix(context_blocks: list[str] | None) -> str:
     """Optional grounding blocks (local paper hits, web snippets) appended to the
     system prompt with the citation + untrusted-data rules from `_SOURCES_HINT`."""
-    blocks = [str(block).strip() for block in (context_blocks or []) if str(block).strip()]
+    blocks = [
+        str(block).strip() for block in (context_blocks or []) if str(block).strip()
+    ]
     if not blocks:
         return ""
     return "\n" + _SOURCES_HINT + "\n" + "\n---\n".join(blocks)
@@ -182,7 +189,9 @@ def _guide_system(sent_width: int, sent_height: int) -> str:
     )
 
 
-def _no_think_suffix(router: Any, provider: str | None, model: str | None, disable_thinking: bool) -> str:
+def _no_think_suffix(
+    router: Any, provider: str | None, model: str | None, disable_thinking: bool
+) -> str:
     """Qwen3's soft switch: a trailing ``/no_think`` in the system prompt disables
     thinking for the turn. Only appended for Qwen models — other models would just
     see a stray token in their instructions."""
@@ -214,7 +223,7 @@ def _history_messages(history: Any, limit_turns: int) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     if not isinstance(history, list):
         return messages
-    for item in history[-(limit_turns * 2):]:
+    for item in history[-(limit_turns * 2) :]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "")
@@ -256,12 +265,21 @@ def ask(
         + _context_suffix(context_blocks)
         + _no_think_suffix(router, provider, model, disable_thinking)
     )
-    data_url = prepare_image(image_base64, max_pixels=max_pixels).data_url if image_base64 else None
+    data_url = (
+        prepare_image(image_base64, max_pixels=max_pixels).data_url
+        if image_base64
+        else None
+    )
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history, history_turns))
-    messages.append({"role": "user", "content": _user_content(f"Frage: {question}", data_url)})
+    messages.append(
+        {"role": "user", "content": _user_content(f"Frage: {question}", data_url)}
+    )
 
-    overrides: dict[str, Any] = {"temperature": 0.3, "max_tokens": max_tokens or DEFAULT_MAX_TOKENS_ASK}
+    overrides: dict[str, Any] = {
+        "temperature": 0.3,
+        "max_tokens": max_tokens or DEFAULT_MAX_TOKENS_ASK,
+    }
     if model:
         overrides["model"] = model
     answer = router.chat(messages, provider=provider, overrides=overrides).strip()
@@ -299,7 +317,12 @@ def guide(
     )
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history, history_turns))
-    messages.append({"role": "user", "content": _user_content(f"Frage: {question}", prepared.data_url)})
+    messages.append(
+        {
+            "role": "user",
+            "content": _user_content(f"Frage: {question}", prepared.data_url),
+        }
+    )
 
     overrides: dict[str, Any] = {
         "temperature": 0.1,
@@ -343,7 +366,9 @@ def _write_debug_capture(
         from PIL import Image, ImageDraw
 
         os.makedirs(debug_dir, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        stamp = (
+            time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        )
         image = Image.open(
             io.BytesIO(base64.b64decode(_strip_data_url(prepared.data_url)))
         ).convert("RGB")
@@ -358,7 +383,11 @@ def _write_debug_capture(
                 outline=(255, 60, 60),
                 width=3,
             )
-            draw.text((sx + radius + 3, sy - radius), f"{index} {step['label']}"[:48], fill=(255, 60, 60))
+            draw.text(
+                (sx + radius + 3, sy - radius),
+                f"{index} {step['label']}"[:48],
+                fill=(255, 60, 60),
+            )
         image.save(os.path.join(debug_dir, f"{stamp}.png"))
         record = {
             "question": question,
@@ -371,7 +400,9 @@ def _write_debug_capture(
                 "sent_height": prepared.sent_height,
             },
         }
-        with open(os.path.join(debug_dir, f"{stamp}.json"), "w", encoding="utf-8") as fh:
+        with open(
+            os.path.join(debug_dir, f"{stamp}.json"), "w", encoding="utf-8"
+        ) as fh:
             json.dump(record, fh, ensure_ascii=False, indent=2)
     except Exception:  # noqa: BLE001 - diagnostics must never break the answer
         pass
@@ -392,7 +423,9 @@ def _scale_steps(raw_steps: Any, prepared: PreparedImage) -> list[dict[str, Any]
         if not isinstance(item, dict):
             continue
         raw_x, raw_y = item.get("x"), item.get("y")
-        if not isinstance(raw_x, (int, float, str)) or not isinstance(raw_y, (int, float, str)):
+        if not isinstance(raw_x, (int, float, str)) or not isinstance(
+            raw_y, (int, float, str)
+        ):
             continue
         try:
             x, y = float(raw_x), float(raw_y)

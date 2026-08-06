@@ -10,6 +10,7 @@ Bewusst ohne reguläre Ausdrücke, wie das Original. Eine Regex, die
 ``Verhältnis 3:1``; die Ablehnungen sind hier der eigentliche Inhalt und stehen
 darum als Bedingungen da, wo man sie liest.
 """
+
 from __future__ import annotations
 
 from typing import NamedTuple

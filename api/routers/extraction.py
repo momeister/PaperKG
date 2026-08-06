@@ -5,6 +5,7 @@ Split out of api/product_main.py. Behaviour unchanged. Patchbare Singletons
 laufen ueber pm.<name>: llm_router, parser_router, extraction_pipeline,
 embedding_engine (geteilte Instanz), _slug (bleibt in product_main).
 """
+
 from __future__ import annotations
 
 import json
@@ -103,7 +104,6 @@ class VocabularyEntryRequest(BaseModel):
     vocabulary_path: str = DEFAULT_VOCABULARY_PATH
 
 
-
 @router.get("/extraction/library")
 def extraction_library(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
@@ -126,11 +126,14 @@ def extraction_library(
     degraded: str | None = None
     try:
         with MetadataDB(metadata_db_path) as _db:
-            grey_list = _db.list_grey_sources(None if is_global else project_id, limit=50000)
+            grey_list = _db.list_grey_sources(
+                None if is_global else project_id, limit=50000
+            )
             latest_by_paper = _latest_extraction_statuses(_db)
             found_ids = {str(row.get("paper_id") or "") for row in rows}
             nopdf_papers = [
-                p for p in _db.list_papers(limit=50000)
+                p
+                for p in _db.list_papers(limit=50000)
                 if str(p.get("id") or "") not in found_ids
                 and (member_ids is None or str(p.get("id") or "") in member_ids)
             ]
@@ -140,35 +143,43 @@ def extraction_library(
             full_text = (grey.get("full_text") or "").strip()
             if not full_text:
                 continue
-            rows.append({
-                "paper_id": f"grey::{grey['id']}",
-                "title": grey.get("title") or grey.get("url") or grey["id"],
-                "filename": "",
-                "pdf_path": "",
-                "pdf_available": True,
-                "source_type": "grey",
-                "text": full_text[:200000],
-                "size_bytes": len(full_text.encode("utf-8")),
-                "modified_timestamp": grey.get("created_timestamp"),
-                "latest_extraction_status": None,
-                "known_paper": False,
-            })
+            rows.append(
+                {
+                    "paper_id": f"grey::{grey['id']}",
+                    "title": grey.get("title") or grey.get("url") or grey["id"],
+                    "filename": "",
+                    "pdf_path": "",
+                    "pdf_available": True,
+                    "source_type": "grey",
+                    "text": full_text[:200000],
+                    "size_bytes": len(full_text.encode("utf-8")),
+                    "modified_timestamp": grey.get("created_timestamp"),
+                    "latest_extraction_status": None,
+                    "known_paper": False,
+                }
+            )
         for paper in nopdf_papers:
             pid = str(paper.get("id") or "")
-            rows.append({
-                "paper_id": pid,
-                "title": paper.get("title") or pid,
-                "filename": "",
-                "pdf_path": "",
-                "pdf_available": False,
-                "abstract_available": bool(str(paper.get("abstract") or "").strip()),
-                "source_type": "pdf",
-                "size_bytes": None,
-                "modified_timestamp": None,
-                "latest_extraction_status": latest_by_paper.get(pid),
-                "known_paper": True,
-            })
-    except Exception as error:  # noqa: BLE001 - der Datei-Scan bleibt auch ohne DB nutzbar
+            rows.append(
+                {
+                    "paper_id": pid,
+                    "title": paper.get("title") or pid,
+                    "filename": "",
+                    "pdf_path": "",
+                    "pdf_available": False,
+                    "abstract_available": bool(
+                        str(paper.get("abstract") or "").strip()
+                    ),
+                    "source_type": "pdf",
+                    "size_bytes": None,
+                    "modified_timestamp": None,
+                    "latest_extraction_status": latest_by_paper.get(pid),
+                    "known_paper": True,
+                }
+            )
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - der Datei-Scan bleibt auch ohne DB nutzbar
         # Frueher ein stilles `pass`: bei gesperrter DB verschwanden dadurch saemtliche
         # Grauquellen und alle nur-Abstract-Paper aus der Liste, ohne jeden Hinweis.
         # Jetzt wird die Teilansicht als `degraded` markiert und die UI warnt.
@@ -177,7 +188,8 @@ def extraction_library(
     if query:
         query_lower = query.lower()
         rows = [
-            row for row in rows
+            row
+            for row in rows
             if query_lower in str(row.get("paper_id") or "").lower()
             or query_lower in str(row.get("title") or "").lower()
             or query_lower in str(row.get("filename") or "").lower()
@@ -209,7 +221,9 @@ def parse_extraction_pdf(request: ExtractionParseRequest) -> dict[str, Any]:
         "pdf_path": str(pdf_path),
         "text": parsed.text,
         "page_count": parsed.page_count,
-        "parser": str(parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser),
+        "parser": str(
+            parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser
+        ),
         "metadata": _parsed_document_metadata(parsed),
         "excerpt": parsed.text[:4000],
     }
@@ -225,7 +239,9 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
         with MetadataDB(request.metadata_db_path) as db:
             grey = db.get_grey_source(grey_id)
         if not grey or not (grey.get("full_text") or "").strip():
-            raise HTTPException(status_code=404, detail=f"Grey source has no text: {grey_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Grey source has no text: {grey_id}"
+            )
         text = grey["full_text"].strip()
     elif not text:
         try:
@@ -239,7 +255,9 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
             # Kein lokales PDF: Abstract-only-Extraktion. Viele Paper haben zwar keinen
             # PDF-Download, aber Titel + Abstract in der papers-Tabelle — die reichen
             # für eine (dünnere) Aufnahme in den Knowledge Graph.
-            abstract_text = _abstract_only_extraction_text(request.paper_id, request.metadata_db_path)
+            abstract_text = _abstract_only_extraction_text(
+                request.paper_id, request.metadata_db_path
+            )
             if not abstract_text:
                 raise pdf_error
             text = abstract_text
@@ -251,12 +269,18 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
                 "excerpt": text[:4000],
             }
         else:
-            parsed = _parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
+            parsed = _parse_pdf_for_extraction(
+                pdf_path, request.paper_id, request.parser
+            )
             text = parsed.text
             parse_payload = {
                 "pdf_path": str(pdf_path),
                 "page_count": parsed.page_count,
-                "parser": str(parsed.parser.value if hasattr(parsed.parser, "value") else parsed.parser),
+                "parser": str(
+                    parsed.parser.value
+                    if hasattr(parsed.parser, "value")
+                    else parsed.parser
+                ),
                 "metadata": _parsed_document_metadata(parsed),
                 "excerpt": parsed.text[:4000],
             }
@@ -267,7 +291,9 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
                 metadata_db_path=request.metadata_db_path,
             )
     if not text:
-        raise HTTPException(status_code=400, detail="No paper text or parseable PDF text provided.")
+        raise HTTPException(
+            status_code=400, detail="No paper text or parseable PDF text provided."
+        )
 
     overrides = _extraction_overrides(request)
     start = time.monotonic()
@@ -293,12 +319,15 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
                     )
                 db.save_extraction_result(
                     paper_id=canonical_id,
-                    llm_provider=request.provider or getattr(pm.llm_router, "default_provider", "default"),
+                    llm_provider=request.provider
+                    or getattr(pm.llm_router, "default_provider", "default"),
                     llm_model=_selected_model(request.provider, request.model),
                     error_message=str(exc),
                     duration_seconds=time.monotonic() - start,
                 )
-        raise HTTPException(status_code=500, detail=f"Extraction failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Extraction failed: {exc}"
+        ) from exc
 
     duration = time.monotonic() - start
     failure_reason = extraction_failure_reason(result)
@@ -317,7 +346,8 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
                 )
             result_id = db.save_extraction_result(
                 paper_id=canonical_id,
-                llm_provider=request.provider or getattr(pm.llm_router, "default_provider", "default"),
+                llm_provider=request.provider
+                or getattr(pm.llm_router, "default_provider", "default"),
                 llm_model=_selected_model(request.provider, request.model),
                 paper_type=result.paper_type,
                 concepts=result.concepts,
@@ -366,7 +396,9 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
                     )
         except Exception:
             # Reine Sichtbarkeits-Optimierung: process_papers legt die Zeile ohnehin an.
-            logger.debug("Vorab-Registrierung des Batch-Jobs fehlgeschlagen", exc_info=True)
+            logger.debug(
+                "Vorab-Registrierung des Batch-Jobs fehlgeschlagen", exc_info=True
+            )
     pdf_paths: dict[str, str] = {}
     abstract_texts: dict[str, str] = {}
     for item in request.items:
@@ -384,7 +416,9 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
                 raise
             # Kein lokales PDF: Abstract-only wie bei /extraction/extract. Fehlt auch der
             # Abstract, läuft der Batch weiter und nur dieses Item schlägt fehl.
-            abstract_text = _abstract_only_extraction_text(item.paper_id, request.metadata_db_path)
+            abstract_text = _abstract_only_extraction_text(
+                item.paper_id, request.metadata_db_path
+            )
             if abstract_text:
                 abstract_texts[item.paper_id] = abstract_text
     processor = BatchProcessor(
@@ -427,7 +461,9 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
 
 
 @router.get("/extraction/batch/{job_id}/items")
-def get_extraction_batch_items(job_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def get_extraction_batch_items(
+    job_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         job = db.get_batch_job(job_id)
         if not job:
@@ -437,7 +473,9 @@ def get_extraction_batch_items(job_id: str, metadata_db_path: str = DEFAULT_META
 
 
 @router.post("/extraction/batch/{job_id}/cancel")
-def cancel_extraction_batch(job_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH) -> dict[str, Any]:
+def cancel_extraction_batch(
+    job_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         job = db.get_batch_job(job_id)
         if not job:
@@ -465,10 +503,14 @@ def delete_extraction_results(request: ExtractionDeleteRequest) -> dict[str, Any
         is_global = _is_reserved_project_id(request.project_id)
         if is_global:
             with MetadataDB(request.metadata_db_path) as db:
-                paper_ids = [str(p.get("id") or "") for p in db.list_papers(limit=50000)]
+                paper_ids = [
+                    str(p.get("id") or "") for p in db.list_papers(limit=50000)
+                ]
         else:
             projects = _load_projects(_projects_path(request.projects_path))
-            paper_ids = list({str(pid) for pid in projects.get(request.project_id or "", [])})
+            paper_ids = list(
+                {str(pid) for pid in projects.get(request.project_id or "", [])}
+            )
     if not paper_ids:
         return {"deleted": 0, "paper_ids": []}
     with MetadataDB(request.metadata_db_path) as db:
@@ -483,7 +525,11 @@ def extraction_history(
     limit: int = Query(default=50, ge=1, le=500),
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
-        items = db.get_paper_extractions(paper_id, limit=limit) if paper_id.strip() else db.list_extraction_results(limit=limit)
+        items = (
+            db.get_paper_extractions(paper_id, limit=limit)
+            if paper_id.strip()
+            else db.list_extraction_results(limit=limit)
+        )
     return {"items": items, "total": len(items)}
 
 
@@ -541,7 +587,9 @@ def extraction_compare(
 
 
 @router.get("/extraction/vocabulary")
-def extraction_vocabulary(vocabulary_path: str = DEFAULT_VOCABULARY_PATH) -> dict[str, Any]:
+def extraction_vocabulary(
+    vocabulary_path: str = DEFAULT_VOCABULARY_PATH,
+) -> dict[str, Any]:
     vocabulary = _load_vocabulary(vocabulary_path)
     entries = [
         {
@@ -570,8 +618,9 @@ def add_extraction_vocabulary_entry(request: VocabularyEntryRequest) -> dict[str
     return extraction_vocabulary(request.vocabulary_path)
 
 
-
-def _latest_successful_extractions(extractions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _latest_successful_extractions(
+    extractions: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for extraction in extractions:
         pid = str(extraction.get("paper_id") or "")
@@ -581,7 +630,9 @@ def _latest_successful_extractions(extractions: list[dict[str, Any]]) -> dict[st
     return latest
 
 
-def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[str, Any]]:
+def _local_pdf_library(
+    metadata_db_path: str, pdf_base_dir: str
+) -> list[dict[str, Any]]:
     """Alle Paper mit lokal aufloesbarem PDF, plus verwaiste PDFs auf der Platte.
 
     Schluessel ist die ``paper_id``, **nicht** der PDF-Pfad: teilen sich zwei Paper
@@ -602,11 +653,15 @@ def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[st
             if not pdf_path:
                 continue
             path = Path(str(pdf_path))
-            pid = str(view.get("id") or view.get("paper_id") or "") or _default_paper_id_from_pdf(path.name)
+            pid = str(
+                view.get("id") or view.get("paper_id") or ""
+            ) or _default_paper_id_from_pdf(path.name)
             seen_paths.add(str(path.resolve()) if path.exists() else str(path))
             rows_by_id[pid] = {
                 "paper_id": pid,
-                "title": view.get("display_title") or view.get("title") or _clean_pdf_title(path.name),
+                "title": view.get("display_title")
+                or view.get("title")
+                or _clean_pdf_title(path.name),
                 "filename": path.name,
                 "pdf_path": str(path),
                 "pdf_available": True,
@@ -614,7 +669,11 @@ def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[st
                 # ob der Abstract-Fallback greift, falls das PDF nicht parsebar ist.
                 "abstract_available": bool(str(paper.get("abstract") or "").strip()),
                 "size_bytes": path.stat().st_size if path.exists() else None,
-                "modified_timestamp": datetime.fromtimestamp(path.stat().st_mtime).isoformat() if path.exists() else None,
+                "modified_timestamp": (
+                    datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+                    if path.exists()
+                    else None
+                ),
                 "latest_extraction_status": latest_by_paper.get(pid),
                 "known_paper": True,
             }
@@ -634,7 +693,9 @@ def _local_pdf_library(metadata_db_path: str, pdf_base_dir: str) -> list[dict[st
             "pdf_available": True,
             "abstract_available": False,
             "size_bytes": path.stat().st_size,
-            "modified_timestamp": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+            "modified_timestamp": datetime.fromtimestamp(
+                path.stat().st_mtime
+            ).isoformat(),
             "latest_extraction_status": latest_by_paper.get(paper_id_value),
             "known_paper": False,
         }
@@ -694,7 +755,9 @@ def _resolve_extraction_pdf_path(
     if not candidate:
         candidate = find_pdf_path(paper_id_value, "", pdf_base_dir)
     if not candidate:
-        raise HTTPException(status_code=404, detail=f"PDF not found for {paper_id_value}")
+        raise HTTPException(
+            status_code=404, detail=f"PDF not found for {paper_id_value}"
+        )
 
     path = Path(candidate)
     if not path.is_absolute():
@@ -704,13 +767,18 @@ def _resolve_extraction_pdf_path(
     resolved = path.resolve()
     base = Path(pdf_base_dir).resolve()
     if base not in [resolved, *resolved.parents]:
-        raise HTTPException(status_code=400, detail="PDF path must be inside the configured PDF library.")
+        raise HTTPException(
+            status_code=400,
+            detail="PDF path must be inside the configured PDF library.",
+        )
     if not resolved.exists() or resolved.suffix.lower() != ".pdf":
         raise HTTPException(status_code=404, detail=f"PDF file not found: {path}")
     return resolved
 
 
-def _parse_pdf_for_extraction(pdf_path: Path, paper_id_value: str, parser_name: str | None):
+def _parse_pdf_for_extraction(
+    pdf_path: Path, paper_id_value: str, parser_name: str | None
+):
     requested_parser = parser_name or "auto"
     forced_parser: ParserType | None = None
     if parser_name:
@@ -727,7 +795,9 @@ def _parse_pdf_for_extraction(pdf_path: Path, paper_id_value: str, parser_name: 
                 },
             ) from exc
     try:
-        return pm.parser_router.parse(str(pdf_path), paper_id_value, force_parser=forced_parser)
+        return pm.parser_router.parse(
+            str(pdf_path), paper_id_value, force_parser=forced_parser
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -805,7 +875,11 @@ def _extraction_result_payload(result: Any) -> dict[str, Any]:
         "blocking_errors": getattr(result, "blocking_errors", []) or [],
         "candidate_count": getattr(result, "candidate_count", 0) or 0,
         "extraction_diagnostics": diagnostics,
-        "context_diagnostics": diagnostics.get("context_diagnostics") if isinstance(diagnostics, dict) else {},
+        "context_diagnostics": (
+            diagnostics.get("context_diagnostics")
+            if isinstance(diagnostics, dict)
+            else {}
+        ),
         "raw_response": getattr(result, "raw_response", None),
     }
 
@@ -824,5 +898,6 @@ def _load_vocabulary(vocabulary_path: str) -> VocabularyManager:
 def _save_vocabulary(vocabulary: VocabularyManager, vocabulary_path: str) -> None:
     path = Path(vocabulary_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(vocabulary.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-
+    path.write_text(
+        json.dumps(vocabulary.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+    )

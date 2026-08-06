@@ -12,6 +12,7 @@ Kein Sandbox — wie beim Werkstatt-Terminal und der Analyse-Werkstatt läuft da
 Kind mit den Rechten des Backends. Es liest den Projektordner und schreibt genau
 eine Datei: seinen Index.
 """
+
 from __future__ import annotations
 
 import json
@@ -205,7 +206,9 @@ class CodeGraphClient:
             request = {"id": method, "method": method, "params": params or {}}
             try:
                 assert self._process.stdin is not None
-                self._process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+                self._process.stdin.write(
+                    json.dumps(request, ensure_ascii=False) + "\n"
+                )
                 self._process.stdin.flush()
             except (OSError, ValueError, AssertionError) as error:
                 raise CodeGraphError(f"CodeSearch nicht erreichbar: {error}") from error

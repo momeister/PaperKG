@@ -3,8 +3,8 @@
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 Tests referenzieren z.B. EntityExtractor.METHODS_ONLY_PROMPT ueber die MRO.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 
 class PromptsMixin:
@@ -137,7 +137,10 @@ Paper text: {paper_text}"""
         ("SARSA", r"\bSARSA\b"),
         ("TD(lambda)", r"\bTD\s*\(?\s*(?:lambda|\\lambda|λ)\s*\)?|\bTD\s*\(\s*λ\s*\)"),
         ("Reinforcement Learning", r"\breinforcement learning\b"),
-        ("TD learning", r"\btemporal difference\s*\(?\s*TD\s*\)?\s+learning\b|\bTD learning\b"),
+        (
+            "TD learning",
+            r"\btemporal difference\s*\(?\s*TD\s*\)?\s+learning\b|\bTD learning\b",
+        ),
         ("Temporal difference error", r"\btemporal difference error\b|\bTD error\b"),
         ("Markov Decision Process", r"\bMarkov Decision Process\b"),
         ("MDP", r"\bMDP\b"),
@@ -159,7 +162,10 @@ Paper text: {paper_text}"""
         ("Average reward", r"\baverage reward\b"),
         ("Categorical emotion", r"\bcategorical emotions?\b"),
         ("Dimensional emotion", r"\bdimensional emotions?\b"),
-        ("Model-based RL", r"\bmodel[- ]based\s+RL\b|\bmodel[- ]based reinforcement learning\b"),
+        (
+            "Model-based RL",
+            r"\bmodel[- ]based\s+RL\b|\bmodel[- ]based reinforcement learning\b",
+        ),
         ("POMDP", r"\bPOMDP\b|\bPartially Observable Markov Decision Process\b"),
         ("Well-being", r"\bwell[- ]being\b"),
         ("Model uncertainty", r"\bmodel uncertainty\b"),
@@ -178,7 +184,10 @@ Paper text: {paper_text}"""
         ("Acetylcholine", r"\bacetylcholine\b"),
         ("Learning rate", r"\blearning rate\b"),
         ("Discount factor", r"\bdiscount factor\b"),
-        ("Boltzmann action selection temperature", r"\bBoltzmann action selection temperature\b"),
+        (
+            "Boltzmann action selection temperature",
+            r"\bBoltzmann action selection temperature\b",
+        ),
         ("Fuzzy logic", r"\bfuzzy logic\b"),
         ("Transition model", r"\btransition models?\b"),
         ("Forward simulation", r"\bforward simulation\b"),
@@ -190,18 +199,27 @@ Paper text: {paper_text}"""
         ("Human-robot interaction", r"\bhuman[- ]robot interaction\b"),
         ("Affective modelling", r"\baffective modelling\b|\baffective modeling\b"),
         ("Affective Computing", r"\baffective computing\b"),
-        ("Emotion modelling", r"\bemotion(?:al)? model(?:l)?ing\b|\bcomputational emotion models?\b"),
+        (
+            "Emotion modelling",
+            r"\bemotion(?:al)? model(?:l)?ing\b|\bcomputational emotion models?\b",
+        ),
         ("Emotional agents", r"\bemotional agents?\b|\bagents? with emotions?\b"),
         ("Reward shaping", r"\breward shaping\b|\bshap(?:e|ed|ing)\s+rewards?\b"),
         ("Policy gradient", r"\bpolicy gradient(?:s)?\b"),
         ("Value iteration", r"\bvalue iteration\b"),
-        ("Multi-agent reinforcement learning", r"\bmulti[- ]agent reinforcement learning\b|\bMARL\b"),
+        (
+            "Multi-agent reinforcement learning",
+            r"\bmulti[- ]agent reinforcement learning\b|\bMARL\b",
+        ),
         ("Intrinsic reward", r"\bintrinsic rewards?\b"),
         ("Extrinsic reward", r"\bextrinsic rewards?\b"),
         ("Cognitive appraisal", r"\bcognitive appraisal\b"),
         ("Appraisal dimensions", r"\bappraisal dimensions?\b|\bappraisal variables?\b"),
         ("Human feedback", r"\bhuman feedback\b|\bsocial feedback\b"),
-        ("Homeostatic reinforcement learning", r"\bhomeostatic reinforcement learning\b"),
+        (
+            "Homeostatic reinforcement learning",
+            r"\bhomeostatic reinforcement learning\b",
+        ),
         ("KL-divergence", r"\bKL[- ]divergence\b"),
         ("L1 norm", r"\bL1 norm\b"),
         ("Euclidean distance", r"\bEuclidean distance\b"),
@@ -215,9 +233,15 @@ Paper text: {paper_text}"""
         ("DistilBERT", r"\bDistilBERT\b"),
         ("ELECTRA", r"\bELECTRA\b"),
         ("ELMo", r"\bELMo\b"),
-        ("Bi-LSTM", r"\bBi[-\s]?LSTM\b|\bBidirectional LSTM\b|\bBidirectional Long Short[-\s]?Term Memory\b"),
+        (
+            "Bi-LSTM",
+            r"\bBi[-\s]?LSTM\b|\bBidirectional LSTM\b|\bBidirectional Long Short[-\s]?Term Memory\b",
+        ),
         ("C-LSTM", r"\bC[-\s]?LSTM\b|\bConvolutional LSTM\b"),
-        ("Conv-HAN", r"\bConv[-\s]?HAN\b|\bConvolutional Hierarchical Attention Network\b"),
+        (
+            "Conv-HAN",
+            r"\bConv[-\s]?HAN\b|\bConvolutional Hierarchical Attention Network\b",
+        ),
         ("HAN", r"\bHAN\b|\bHierarchical Attention Network\b"),
         ("LSTM", r"\bLSTM\b"),
         ("CNN", r"\bCNN\b|\bConvolutional Neural Network(?:s)?\b"),
@@ -230,8 +254,14 @@ Paper text: {paper_text}"""
         ("Official Statistics", r"\bofficial statistics\b"),
         ("Data Science", r"\bdata science\b"),
         ("Machine Learning", r"\bmachine learning\b"),
-        ("Data Source Changes", r"\bchang(?:e|es|ing)\s+(?:in\s+)?data sources?\b|\bdata sources?\s+chang(?:e|es|ing)\b"),
-        ("External Data Sources", r"\bexternal data sources?\b|\balternative data sources?\b"),
+        (
+            "Data Source Changes",
+            r"\bchang(?:e|es|ing)\s+(?:in\s+)?data sources?\b|\bdata sources?\s+chang(?:e|es|ing)\b",
+        ),
+        (
+            "External Data Sources",
+            r"\bexternal data sources?\b|\balternative data sources?\b",
+        ),
         ("Concept Drift", r"\bconcept drift\b"),
         ("Bias", r"\bbias(?:es|ed)?\b"),
         ("Data Availability", r"\bdata availability\b|\bavailability\b"),
@@ -254,22 +284,49 @@ Paper text: {paper_text}"""
         ("Data Frequency", r"\bdata frequency\b"),
         ("Data Source Discontinuation", r"\bdiscontinuation\b|\bdiscontinued\b"),
         ("Quantum Machine Learning", r"\bquantum machine learning\b|\bQML\b"),
-        ("Photonic Quantum Machine Learning", r"\bphotonic (?:and hybrid )?quantum machine learning\b|\bphotonic QML\b"),
+        (
+            "Photonic Quantum Machine Learning",
+            r"\bphotonic (?:and hybrid )?quantum machine learning\b|\bphotonic QML\b",
+        ),
         ("MerLin", r"\bMerLin\b"),
         ("Fock space", r"\bFock[-\s]?space\b|\bFock space\b"),
         ("Linear-optical circuits", r"\blinear[-\s]?optical circuits?\b"),
         ("QuantumLayer", r"\bQuantumLayer\b|\bQuantum Layer\b"),
         ("Angle encoding", r"\bangle encoding\b|\bphase encoding\b"),
         ("Amplitude encoding", r"\bamplitude encoding\b|\bamplitude embedding\b"),
-        ("Quantum memristor", r"\bquantum memristors?\b|\bphotonic quantum memristors?\b"),
-        ("Fidelity Kernel", r"\bfidelity[-\s]?based kernel\b|\bfidelity kernel\b|\bquantum fidelity kernel\b"),
+        (
+            "Quantum memristor",
+            r"\bquantum memristors?\b|\bphotonic quantum memristors?\b",
+        ),
+        (
+            "Fidelity Kernel",
+            r"\bfidelity[-\s]?based kernel\b|\bfidelity kernel\b|\bquantum fidelity kernel\b",
+        ),
         ("Adaptive state injection", r"\badaptive state injection\b"),
-        ("Quantum Convolutional Neural Network", r"\bQCNNs?\b|\bquantum convolutional neural networks?\b"),
-        ("Quantum Generative Adversarial Network", r"\bQGANs?\b|\bquantum generative adversarial networks?\b"),
-        ("Quantum Long Short-Term Memory", r"\bQLSTM\b|\bQuantum LSTM\b|\bQuantum Long Short[-\s]?Term Memory\b"),
-        ("Quantum Relational Knowledge Distillation", r"\bQRKD\b|\bQuantum Relational Knowledge Distillation\b"),
-        ("Strong Linear Optical Simulation", r"\bSLOS\b|\bStrong Linear Optical Simulation\b"),
-        ("Quantum Reservoir Computing", r"\bquantum reservoir computing\b|\bquantum optical reservoir computing\b"),
+        (
+            "Quantum Convolutional Neural Network",
+            r"\bQCNNs?\b|\bquantum convolutional neural networks?\b",
+        ),
+        (
+            "Quantum Generative Adversarial Network",
+            r"\bQGANs?\b|\bquantum generative adversarial networks?\b",
+        ),
+        (
+            "Quantum Long Short-Term Memory",
+            r"\bQLSTM\b|\bQuantum LSTM\b|\bQuantum Long Short[-\s]?Term Memory\b",
+        ),
+        (
+            "Quantum Relational Knowledge Distillation",
+            r"\bQRKD\b|\bQuantum Relational Knowledge Distillation\b",
+        ),
+        (
+            "Strong Linear Optical Simulation",
+            r"\bSLOS\b|\bStrong Linear Optical Simulation\b",
+        ),
+        (
+            "Quantum Reservoir Computing",
+            r"\bquantum reservoir computing\b|\bquantum optical reservoir computing\b",
+        ),
         ("QLOQ", r"\bQLOQ\b"),
         ("MNIST", r"\bMNIST\b"),
         ("CIFAR-10", r"\bCIFAR[-\s]?10\b|\bCIFAR10\b"),
@@ -277,13 +334,25 @@ Paper text: {paper_text}"""
         ("Temporal entanglement", r"\btemporal entanglement\b"),
         ("Pointer states", r"\bpointer states?\b"),
         ("Synesthesia", r"\bsyn(?:a)?esthesia\b"),
-        ("Cross-domain mapping", r"\bcross[-\s]?domain mappings?\b|\bcross[-\s]?modal mappings?\b"),
-        ("Unruptured Intracranial Aneurysm", r"\bUIAs?\b|\bunruptured intracranial aneurysms?\b"),
-        ("TOF-MRA", r"\bTOF[-\s]?MRA\b|\btime[-\s]?of[-\s]?flight magnetic resonance angiography\b"),
+        (
+            "Cross-domain mapping",
+            r"\bcross[-\s]?domain mappings?\b|\bcross[-\s]?modal mappings?\b",
+        ),
+        (
+            "Unruptured Intracranial Aneurysm",
+            r"\bUIAs?\b|\bunruptured intracranial aneurysms?\b",
+        ),
+        (
+            "TOF-MRA",
+            r"\bTOF[-\s]?MRA\b|\btime[-\s]?of[-\s]?flight magnetic resonance angiography\b",
+        ),
         ("ADAM dataset", r"\bAneurysm Detection And segMentation\b|\bADAM dataset\b"),
         ("ADAM challenge", r"\bADAM challenge\b"),
         ("PHASES score", r"\bPHASES score\b"),
-        ("Computer-aided detection", r"\bcomputer[-\s]?aided detection\b|\bCAD system\b|\bCAD tool\b"),
+        (
+            "Computer-aided detection",
+            r"\bcomputer[-\s]?aided detection\b|\bCAD system\b|\bCAD tool\b",
+        ),
         ("3D U-Net", r"\b3D[-\s]?U[-\s]?Net\b|\b3D UNET\b"),
         ("Satisfaction of Search", r"\bsatisfaction[-\s]?of[-\s]?search(?: effect)?\b"),
         ("McNemar's test", r"\bMcNemar[’']?s test\b"),
@@ -459,9 +528,18 @@ Paper text: {paper_text}"""
         ("theorem", r"\btheorem\b|\bproof\b"),
         ("table", r"\bTable\s+\d+\b"),
         ("reward_function", r"\breward function\b|\bR\s*\(\s*s\s*,\s*a"),
-        ("value_function", r"\bvalue function\b|\bV\s*\(\s*s\s*\)|\bQ\s*\(\s*s\s*,\s*a\s*\)"),
-        ("optimization_objective", r"\bloss function\b|\bobjective function\b|\barg\s*max\b|\barg\s*min\b"),
-        ("probabilistic_model", r"\bBayesian\b|\bprobabilistic\b|\bp\s*\(\s*[^)]+\s*\)"),
+        (
+            "value_function",
+            r"\bvalue function\b|\bV\s*\(\s*s\s*\)|\bQ\s*\(\s*s\s*,\s*a\s*\)",
+        ),
+        (
+            "optimization_objective",
+            r"\bloss function\b|\bobjective function\b|\barg\s*max\b|\barg\s*min\b",
+        ),
+        (
+            "probabilistic_model",
+            r"\bBayesian\b|\bprobabilistic\b|\bp\s*\(\s*[^)]+\s*\)",
+        ),
     )
 
     LEGACY_ARXIV_CATEGORY_RE = (

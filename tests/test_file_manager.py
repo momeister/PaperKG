@@ -36,5 +36,8 @@ def test_file_manager_can_save_readable_harvest_name(tmp_path) -> None:
         source="arxiv",
     )
 
-    assert path.name == "arxiv__a-very-real-paper-title-with-punctuation__2509.08759_v3.pdf"
+    assert (
+        path.name
+        == "arxiv__a-very-real-paper-title-with-punctuation__2509.08759_v3.pdf"
+    )
     assert "arxiv__a-very-real-paper-title-with-punctuation__2509.08759" in str(path)

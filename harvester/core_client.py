@@ -30,10 +30,15 @@ class CoreClient:
 
     def __init__(self, config: CoreConfig | None = None) -> None:
         self.config = config or CoreConfig()
-        headers = {"User-Agent": "ScienceKG/Phase5 (local-development)", "Accept": "application/json"}
+        headers = {
+            "User-Agent": "ScienceKG/Phase5 (local-development)",
+            "Accept": "application/json",
+        }
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
-        self._client = httpx.AsyncClient(timeout=self.config.timeout_seconds, headers=headers)
+        self._client = httpx.AsyncClient(
+            timeout=self.config.timeout_seconds, headers=headers
+        )
         self._lock = asyncio.Lock()
         self._last_request_ts = 0.0
 
@@ -56,7 +61,9 @@ class CoreClient:
             )
         await self._throttle()
         params = {"q": query, "limit": min(max(limit, 1), 100)}
-        response = await self._client.get(f"{self.config.base_url}/search/works", params=params)
+        response = await self._client.get(
+            f"{self.config.base_url}/search/works", params=params
+        )
         response.raise_for_status()
         payload = response.json()
         return list(payload.get("results", []))

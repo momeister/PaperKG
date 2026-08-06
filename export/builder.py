@@ -4,6 +4,7 @@ Takes the synthesis Markdown plus the research-tree nodes and aggregated sources
 renders the optional figures/tables/ComfyUI images, assembles a LaTeX project, and
 either compiles it to PDF (MiKTeX/latexmk) or ships the sources as a ZIP fallback.
 """
+
 from __future__ import annotations
 
 import io
@@ -21,7 +22,12 @@ from export.latex_builder import (
     build_latex_document,
     markdown_to_latex_body,
 )
-from export.pdf_render import compile_to_pdf, engine_is_unicode, find_engine, latex_error_excerpt
+from export.pdf_render import (
+    compile_to_pdf,
+    engine_is_unicode,
+    find_engine,
+    latex_error_excerpt,
+)
 
 
 @dataclass
@@ -52,7 +58,7 @@ class ExportResult:
 
 def _safe_stem(text: str, fallback: str = "tiefenanalyse") -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", str(text or "").strip()).strip("_").lower()
-    return (stem[:60] or fallback)
+    return stem[:60] or fallback
 
 
 def aggregate_sources(
@@ -75,7 +81,7 @@ def aggregate_sources(
             if value and not cur.get(key):
                 cur[key] = value
 
-    for src in (explicit or []):
+    for src in explicit or []:
         add(src)
     for n in nodes:
         for src in (n.get("answer") or {}).get("sources") or []:
@@ -83,7 +89,9 @@ def aggregate_sources(
     return list(merged.values())
 
 
-def _image_prompt(llm_router: Any, root_question: str, provider: str | None, model: str | None) -> str:
+def _image_prompt(
+    llm_router: Any, root_question: str, provider: str | None, model: str | None
+) -> str:
     base = f"clean professional scientific illustration about: {root_question}"
     if llm_router is None:
         return base
@@ -93,16 +101,22 @@ def _image_prompt(llm_router: Any, root_question: str, provider: str | None, mod
             overrides["model"] = model
         text = llm_router.chat(
             messages=[
-                {"role": "system", "content": "You write concise English text-to-image prompts."},
-                {"role": "user", "content": (
-                    "Write a single vivid, clean, professional cover-illustration prompt "
-                    f"(max 40 words, no quotes) for a scientific report about: {root_question}"
-                )},
+                {
+                    "role": "system",
+                    "content": "You write concise English text-to-image prompts.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Write a single vivid, clean, professional cover-illustration prompt "
+                        f"(max 40 words, no quotes) for a scientific report about: {root_question}"
+                    ),
+                },
             ],
             provider=provider,
             overrides=overrides,
         )
-        return (str(text or "").strip() or base)
+        return str(text or "").strip() or base
     except Exception:
         return base
 
@@ -162,23 +176,33 @@ def build_export(
             appendix.append(figures.charts_latex(charts))
             image_files.extend(fname for _, fname in charts)
         else:
-            warnings.append("Keine Statistik-Diagramme erzeugt (keine auswertbaren Daten).")
+            warnings.append(
+                "Keine Statistik-Diagramme erzeugt (keine auswertbaren Daten)."
+            )
 
     if opts.comfyui_images:
         if comfyui_client.is_available():
             prompt = _image_prompt(llm_router, root_question, provider, model)
             png = comfyui_client.generate_image(prompt, work_dir / "comfyui_cover.png")
             if png is not None:
-                appendix.append("\n".join([
-                    r"\begin{figure}[H]", r"\centering",
-                    r"\includegraphics[width=0.8\textwidth]{comfyui_cover.png}",
-                    r"\caption{KI-generierte Illustration (ComfyUI).}", r"\end{figure}",
-                ]))
+                appendix.append(
+                    "\n".join(
+                        [
+                            r"\begin{figure}[H]",
+                            r"\centering",
+                            r"\includegraphics[width=0.8\textwidth]{comfyui_cover.png}",
+                            r"\caption{KI-generierte Illustration (ComfyUI).}",
+                            r"\end{figure}",
+                        ]
+                    )
+                )
                 image_files.append("comfyui_cover.png")
             else:
                 warnings.append("ComfyUI-Bild konnte nicht erzeugt werden.")
         else:
-            warnings.append("ComfyUI ist nicht erreichbar (Port 8188) – KI-Bilder übersprungen.")
+            warnings.append(
+                "ComfyUI ist nicht erreichbar (Port 8188) – KI-Bilder übersprungen."
+            )
 
     if opts.tables:
         overview = figures.overview_table_latex(nodes)
@@ -209,13 +233,17 @@ def build_export(
     stem = _safe_stem(root_question)
 
     if export_format == "tex":
-        return ExportResult(tex.encode("utf-8"), "application/x-tex", f"{stem}.tex", warnings)
+        return ExportResult(
+            tex.encode("utf-8"), "application/x-tex", f"{stem}.tex", warnings
+        )
 
     if export_format == "pdf":
         result = compile_to_pdf(work_dir, engine=engine)
         if result.pdf_bytes is not None:
             (work_dir / "main.pdf").write_bytes(result.pdf_bytes)
-            return ExportResult(result.pdf_bytes, "application/pdf", f"{stem}.pdf", warnings)
+            return ExportResult(
+                result.pdf_bytes, "application/pdf", f"{stem}.pdf", warnings
+            )
         (work_dir / "compile.log").write_text(result.log, encoding="utf-8")
         if result.engine is None:
             warnings.append(

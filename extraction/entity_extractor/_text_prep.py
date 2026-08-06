@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -76,7 +77,8 @@ class TextPrepMixin(_Base):
         return "\n\n---\n\n".join(item for item in excerpts if item)[:max_chars]
 
     @classmethod
-    def _build_extraction_chunks(cls, 
+    def _build_extraction_chunks(
+        cls,
         paper_text: str,
         context_size: int = 32768,
         max_chunk_chars: int | None = None,
@@ -98,7 +100,10 @@ class TextPrepMixin(_Base):
         if len(text) <= budget:
             return [text]
 
-        raw_units = re.split(r"\n\s*(?:---PAGE BREAK---|\f)\s*\n|\n(?=\d+(?:\.\d+)*\s+[A-Z][^\n]{3,100}\n)", text)
+        raw_units = re.split(
+            r"\n\s*(?:---PAGE BREAK---|\f)\s*\n|\n(?=\d+(?:\.\d+)*\s+[A-Z][^\n]{3,100}\n)",
+            text,
+        )
         units = [unit.strip() for unit in raw_units if unit and unit.strip()]
         if not units:
             units = [text]
@@ -154,7 +159,9 @@ class TextPrepMixin(_Base):
         prompt_overhead_tokens = 5200
         usable_prompt_tokens = max(1200, ctx - prompt_overhead_tokens)
         estimated_chars_per_token = 1.25
-        return max(6000, min(18000, int(usable_prompt_tokens * estimated_chars_per_token)))
+        return max(
+            6000, min(18000, int(usable_prompt_tokens * estimated_chars_per_token))
+        )
 
     @staticmethod
     def _clean_extraction_source_text(paper_text: str) -> str:

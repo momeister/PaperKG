@@ -17,6 +17,7 @@ Everything degrades instead of raising: parse failures return the coarse point /
 an inconclusive verdict. Only LLM/transport errors propagate (same contract as
 ``screen_companion.guide``); callers in the planning loop wrap those.
 """
+
 from __future__ import annotations
 
 import base64
@@ -70,7 +71,9 @@ def crop_around(image: Any, x: float, y: float, crop_px: int) -> tuple[Any, int,
 
 
 def _refine_system(target_label: str) -> str:
-    label = " ".join(str(target_label or "").split()).strip()[:120] or "das Ziel-Element"
+    label = (
+        " ".join(str(target_label or "").split()).strip()[:120] or "das Ziel-Element"
+    )
     return (
         "Du siehst einen vergrößerten Ausschnitt eines Bildschirms. "
         f"Wo genau liegt die Mitte von: {label}?\n"
@@ -115,9 +118,13 @@ def refine_point(
         zoomed = zoomed.convert("RGB")
     buffer = io.BytesIO()
     zoomed.save(buffer, format="PNG")
-    data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(
+        "ascii"
+    )
 
-    system = _refine_system(target_label) + _no_think_suffix(router, provider, model, disable_thinking)
+    system = _refine_system(target_label) + _no_think_suffix(
+        router, provider, model, disable_thinking
+    )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
         {"role": "user", "content": _user_content("Wo genau?", data_url)},
@@ -213,7 +220,10 @@ def verify_expectation(
     )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
-        {"role": "user", "content": _user_content("Wurde die Erwartung erfüllt?", prepared.data_url)},
+        {
+            "role": "user",
+            "content": _user_content("Wurde die Erwartung erfüllt?", prepared.data_url),
+        },
     ]
     overrides: dict[str, Any] = {
         "temperature": 0.0,
@@ -232,5 +242,7 @@ def verify_expectation(
     if "erfuellt" not in data:
         return {"matches": True, "note": ""}
     matches = bool(data.get("erfuellt"))
-    note = " ".join(str(data.get("hinweis") or data.get("beobachtung") or "").split()).strip()[:300]
+    note = " ".join(
+        str(data.get("hinweis") or data.get("beobachtung") or "").split()
+    ).strip()[:300]
     return {"matches": matches, "note": note}

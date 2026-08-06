@@ -11,6 +11,7 @@ Fehlt das ``cs``-Binary, sind das hier keine 500er: Der Code-Graph ist ein
 Zusatz. Der Statusaufruf sagt dann, wie man ihn baut, und alles andere im
 Programm läuft weiter.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -102,7 +103,9 @@ def _kind_list(raw: str | None, allowed: tuple[str, ...], label: str) -> list[st
 
 def _direction(value: str) -> str:
     if value not in DIRECTIONS:
-        raise HTTPException(status_code=400, detail="direction muss 'in', 'out' oder 'both' sein")
+        raise HTTPException(
+            status_code=400, detail="direction muss 'in', 'out' oder 'both' sein"
+        )
     return value
 
 
@@ -188,7 +191,9 @@ class SymbolSourceRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
 
-def _splice_lines(original: str, start_line: int, end_line: int, replacement: str) -> str:
+def _splice_lines(
+    original: str, start_line: int, end_line: int, replacement: str
+) -> str:
     """Genau die Zeilen ``start_line..end_line`` ersetzen, den Rest byte-gleich lassen.
 
     Drei Dinge, die eine naive Umsetzung kaputt macht:
@@ -204,7 +209,9 @@ def _splice_lines(original: str, start_line: int, end_line: int, replacement: st
     """
     lines = original.splitlines(keepends=True)
     if start_line < 1 or start_line > len(lines):
-        raise HTTPException(status_code=409, detail="Der Zeilenbereich liegt nicht in der Datei.")
+        raise HTTPException(
+            status_code=409, detail="Der Zeilenbereich liegt nicht in der Datei."
+        )
     end = min(max(end_line, start_line), len(lines))
 
     block = lines[start_line - 1 : end]
@@ -322,7 +329,9 @@ def _sse(make_events: Callable[[], Iterator[dict[str, Any]]]) -> StreamingRespon
     )
 
 
-def _query(code_project_id: str, metadata_db_path: str, method: str, params: dict[str, Any]) -> Any:
+def _query(
+    code_project_id: str, metadata_db_path: str, method: str, params: dict[str, Any]
+) -> Any:
     """Abfrage durchreichen und Fehler der Rust-Seite auf HTTP abbilden.
 
     ``CodeSearchMissingError`` ist 503 und nicht 500: es ist kein Defekt, sondern
@@ -722,7 +731,9 @@ def codegraph_diagram(
     gezeichnete Tatsache.
     """
     if kind not in {"class", "sequence"}:
-        raise HTTPException(status_code=400, detail="kind muss 'class' oder 'sequence' sein")
+        raise HTTPException(
+            status_code=400, detail="kind muss 'class' oder 'sequence' sein"
+        )
     method = "class_diagram" if kind == "class" else "sequence_diagram"
     params: dict[str, Any] = {"id": node_id}
     if kind == "sequence":
@@ -742,7 +753,9 @@ def codegraph_source(
     return _query(code_project_id, metadata_db_path, "source", {"path": path})
 
 
-def _symbol_source(code_project_id: str, node_id: str, metadata_db_path: str) -> dict[str, Any]:
+def _symbol_source(
+    code_project_id: str, node_id: str, metadata_db_path: str
+) -> dict[str, Any]:
     """Zeilenbereich, Text und Zustand einer einzelnen Funktion.
 
     Gelesen wird über ``source``, nicht direkt von der Platte: nur dieser Weg
@@ -825,7 +838,9 @@ def codegraph_write_symbol_source(
 
     path = workspace_manager.resolve_within(root, body["path"], must_exist=True)
     original = path.read_text(encoding="utf-8", errors="replace")
-    updated = _splice_lines(original, body["start_line"], body["end_line"], request.text)
+    updated = _splice_lines(
+        original, body["start_line"], body["end_line"], request.text
+    )
     # Vor dem Schreiben sichern — fail-soft, blockiert niemals. Ohne git gibt es
     # eben keinen RÜckweg; das steht in der Antwort, nicht im Kleingedruckten.
     with MetadataDB(request.metadata_db_path) as db:
@@ -944,7 +959,12 @@ def codegraph_recorded_rationale(
     # als überholt, statt weiter als Aussage über Code zu stehen, den sie nie
     # gesehen hat.
     notes = [
-        {**note, "stale": bool(note.get("content_hash") and note["content_hash"] != current_hash)}
+        {
+            **note,
+            "stale": bool(
+                note.get("content_hash") and note["content_hash"] != current_hash
+            ),
+        }
         for note in facts["notes"]
     ]
     return {
@@ -1016,7 +1036,9 @@ def codegraph_list_rationale(
 
 
 @router.post("/codegraph/{code_project_id}/rationale")
-def codegraph_add_rationale(code_project_id: str, request: RationaleRequest) -> dict[str, Any]:
+def codegraph_add_rationale(
+    code_project_id: str, request: RationaleRequest
+) -> dict[str, Any]:
     """Eine eigene Begründung festhalten.
 
     Das ist der Teil, der das Problem langfristig löst: der Prompt einer
@@ -1059,7 +1081,9 @@ def codegraph_add_rationale(code_project_id: str, request: RationaleRequest) -> 
 
 @router.delete("/codegraph/{code_project_id}/rationale/{rationale_id}")
 def codegraph_delete_rationale(
-    code_project_id: str, rationale_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    code_project_id: str,
+    rationale_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         _require_code_project(db, code_project_id)
@@ -1145,13 +1169,17 @@ def codegraph_create_chat(
             code_project_id, project_id=request.project_id, title=request.title
         )
     if chat is None:
-        raise HTTPException(status_code=500, detail="Gespräch konnte nicht angelegt werden")
+        raise HTTPException(
+            status_code=500, detail="Gespräch konnte nicht angelegt werden"
+        )
     return chat
 
 
 @router.get("/codegraph/{code_project_id}/chats")
 def codegraph_list_chats(
-    code_project_id: str, limit: int = 50, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    code_project_id: str,
+    limit: int = 50,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         _require_code_project(db, code_project_id)
@@ -1259,18 +1287,24 @@ async def codegraph_chat_ask(
 
 @router.get("/codegraph/{code_project_id}/answers")
 def codegraph_answers(
-    code_project_id: str, limit: int = 30, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    code_project_id: str,
+    limit: int = 30,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     """Bisherige Fragen und ihre geprüften Antworten, neueste zuerst."""
     with MetadataDB(metadata_db_path) as db:
         _require_code_project(db, code_project_id)
-        answers = db.list_code_answers(code_project_id, limit=max(1, min(int(limit), 200)))
+        answers = db.list_code_answers(
+            code_project_id, limit=max(1, min(int(limit), 200))
+        )
     return {"code_project_id": code_project_id, "answers": answers}
 
 
 @router.delete("/codegraph/{code_project_id}/answers/{answer_id}")
 def codegraph_delete_answer(
-    code_project_id: str, answer_id: str, metadata_db_path: str = DEFAULT_METADATA_DB_PATH
+    code_project_id: str,
+    answer_id: str,
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
         _require_code_project(db, code_project_id)
@@ -1318,7 +1352,11 @@ def codegraph_cite(code_project_id: str, request: CiteRequest) -> dict[str, Any]
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         excerpt = "\n".join(lines[request.start_line - 1 : end_line])
 
-    span = f"{request.start_line}" if end_line == request.start_line else f"{request.start_line}-{end_line}"
+    span = (
+        f"{request.start_line}"
+        if end_line == request.start_line
+        else f"{request.start_line}-{end_line}"
+    )
     citation = {
         "source_kind": "code",
         "paper_id": f"code:{code_project_id}:{request.rel_path}:{span}",
@@ -1373,7 +1411,11 @@ def codegraph_citations(
             # Datei weg: das Zitat gilt erst recht nicht mehr, ist aber kein Fehler.
             stale, missing = True, True
         citations.append({**row, "stale": stale, "missing": missing})
-    return {"code_project_id": code_project_id, "note_id": note_id, "citations": citations}
+    return {
+        "code_project_id": code_project_id,
+        "note_id": note_id,
+        "citations": citations,
+    }
 
 
 # --- Paper ↔ Code ------------------------------------------------------------
@@ -1483,12 +1525,17 @@ def codegraph_cycles(
     Ring zur Vermutung. Ohne LLM voll nutzbar.
     """
     if level not in ("file", "symbol"):
-        raise HTTPException(status_code=400, detail="level muss 'file' oder 'symbol' sein")
+        raise HTTPException(
+            status_code=400, detail="level muss 'file' oder 'symbol' sein"
+        )
     cycles = _query(
         code_project_id,
         metadata_db_path,
         "cycles",
-        {"level": level, "edge_kinds": _kind_list(edges, ALL_EDGE_KINDS, "Kantenarten")},
+        {
+            "level": level,
+            "edge_kinds": _kind_list(edges, ALL_EDGE_KINDS, "Kantenarten"),
+        },
     )
     return {"code_project_id": code_project_id, "level": level, "cycles": cycles}
 
@@ -1594,22 +1641,33 @@ async def codegraph_refactor_try(
                     status="creating",
                     test_command=request.test_command,
                 )
-            created = workspace_sandbox.create_worktree(root, checkpoint["commit_sha"], record["id"])
+            created = workspace_sandbox.create_worktree(
+                root, checkpoint["commit_sha"], record["id"]
+            )
             with MetadataDB(request.metadata_db_path) as db:
                 if created.get("created"):
-                    db.update_code_sandbox(record["id"], status="created", test_command=request.test_command)
+                    db.update_code_sandbox(
+                        record["id"],
+                        status="created",
+                        test_command=request.test_command,
+                    )
                     sandbox = db.get_code_sandbox(record["id"]) or record
                     sandbox["path"] = created["path"]
                 else:
                     db.update_code_sandbox(record["id"], status="failed")
                     yield {
                         "event": "failed",
-                        "error": created.get("error") or created.get("reason") or "Sandbox nicht anlegbar",
+                        "error": created.get("error")
+                        or created.get("reason")
+                        or "Sandbox nicht anlegbar",
                     }
                     return
         worktree = Path(sandbox["path"])
         if not worktree.is_dir():
-            yield {"event": "failed", "error": "Sandbox-Verzeichnis nicht mehr vorhanden"}
+            yield {
+                "event": "failed",
+                "error": "Sandbox-Verzeichnis nicht mehr vorhanden",
+            }
             return
 
         yield {"event": "activity", "text": "schreibe den Vorschlag in die Sandbox"}

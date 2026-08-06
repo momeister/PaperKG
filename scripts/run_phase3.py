@@ -35,7 +35,9 @@ import httpx
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _configured_ollama_models(config_path: Path = PROJECT_ROOT / "config.yaml") -> set[str]:
+def _configured_ollama_models(
+    config_path: Path = PROJECT_ROOT / "config.yaml",
+) -> set[str]:
     """Return Ollama model names configured for this project."""
     try:
         import yaml
@@ -194,7 +196,9 @@ def _start(args: argparse.Namespace) -> None:
             if args.run_demo and not args.skip_demo:
                 _trigger_extraction_demo(api_url)
             else:
-                print("   Demo extraction disabled; use --run-demo to run it explicitly.")
+                print(
+                    "   Demo extraction disabled; use --run-demo to run it explicitly."
+                )
 
         # Start UI if requested
         if not args.api_only:

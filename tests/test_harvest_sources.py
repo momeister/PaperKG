@@ -1,4 +1,5 @@
 """Unit tests for the harvest-source registry and normalizers (pure, no network)."""
+
 from __future__ import annotations
 
 import httpx
@@ -22,7 +23,12 @@ from api.routers.harvest import (
     _run_harvest_search,
     harvest_sources,
 )
-from harvester.source_registry import DEFAULT_SOURCES, HARVEST_GROUPS, HARVEST_SOURCES, source_tier
+from harvester.source_registry import (
+    DEFAULT_SOURCES,
+    HARVEST_GROUPS,
+    HARVEST_SOURCES,
+    source_tier,
+)
 
 
 def test_normalize_crossref_work_extracts_core_fields():
@@ -69,7 +75,9 @@ def test_normalize_europepmc_result_handles_open_access():
 
 
 def test_normalize_europepmc_result_source_override_for_biorxiv():
-    out = _normalize_europepmc_result({"id": "1", "title": "Preprint"}, source="biorxiv")
+    out = _normalize_europepmc_result(
+        {"id": "1", "title": "Preprint"}, source="biorxiv"
+    )
     assert out["source"] == "biorxiv"
 
 
@@ -99,7 +107,9 @@ def test_normalize_doaj_article_extracts_fulltext_and_doi():
             "year": "2018",
             "author": [{"name": "L M"}],
             "identifier": [{"type": "doi", "id": "10.3/econ"}],
-            "link": [{"type": "fulltext", "content_type": "PDF", "url": "https://doaj/x.pdf"}],
+            "link": [
+                {"type": "fulltext", "content_type": "PDF", "url": "https://doaj/x.pdf"}
+            ],
         },
     }
     out = _normalize_doaj_article(article)
@@ -174,7 +184,12 @@ def test_openalex_abstract_is_rebuilt_from_inverted_index():
     work = {
         "id": "https://openalex.org/W1",
         "title": "T",
-        "abstract_inverted_index": {"Machine": [0], "learning": [1], "works": [2, 4], "well": [3]},
+        "abstract_inverted_index": {
+            "Machine": [0],
+            "learning": [1],
+            "works": [2, 4],
+            "well": [3],
+        },
         "authorships": [],
     }
     assert _openalex_abstract(work) == "Machine learning works well works"
@@ -189,10 +204,19 @@ def test_openalex_abstract_handles_missing_or_direct_field():
 
 
 def test_external_paper_url_prefers_landing_then_doi_then_pdf():
-    assert _external_paper_url("https://example.org/p", "10.1/2", None) == "https://example.org/p"
+    assert (
+        _external_paper_url("https://example.org/p", "10.1/2", None)
+        == "https://example.org/p"
+    )
     assert _external_paper_url(None, "10.1/2", None) == "https://doi.org/10.1/2"
-    assert _external_paper_url(None, "https://doi.org/10.1/2", None) == "https://doi.org/10.1/2"
-    assert _external_paper_url(None, None, "https://cdn.example/a.pdf") == "https://cdn.example/a.pdf"
+    assert (
+        _external_paper_url(None, "https://doi.org/10.1/2", None)
+        == "https://doi.org/10.1/2"
+    )
+    assert (
+        _external_paper_url(None, None, "https://cdn.example/a.pdf")
+        == "https://cdn.example/a.pdf"
+    )
     # Ein lokaler Pfad ist kein Link zum Original.
     assert _external_paper_url(None, None, "data/pdfs/x.pdf") is None
     assert _external_paper_url(None, None, None) is None
@@ -202,14 +226,16 @@ def test_external_paper_url_prefers_landing_then_doi_then_pdf():
 
 
 def test_normalize_dblp_publication_keeps_doi_link():
-    out = _normalize_dblp_publication({
-        "key": "conf/x/Y23",
-        "title": "Knowledge Graphs.",
-        "authors": {"author": [{"text": "A B"}, {"text": "C D"}]},
-        "year": "2023",
-        "doi": "10.5/kg",
-        "ee": "https://doi.org/10.5/kg",
-    })
+    out = _normalize_dblp_publication(
+        {
+            "key": "conf/x/Y23",
+            "title": "Knowledge Graphs.",
+            "authors": {"author": [{"text": "A B"}, {"text": "C D"}]},
+            "year": "2023",
+            "doi": "10.5/kg",
+            "ee": "https://doi.org/10.5/kg",
+        }
+    )
     assert out["source"] == "dblp"
     assert out["title"] == "Knowledge Graphs"
     assert out["authors"] == ["A B", "C D"]
@@ -218,20 +244,24 @@ def test_normalize_dblp_publication_keeps_doi_link():
 
 
 def test_normalize_dblp_publication_accepts_single_author_object():
-    out = _normalize_dblp_publication({"key": "k", "title": "T", "authors": {"author": {"text": "Solo"}}})
+    out = _normalize_dblp_publication(
+        {"key": "k", "title": "T", "authors": {"author": {"text": "Solo"}}}
+    )
     assert out["authors"] == ["Solo"]
 
 
 def test_normalize_openaire_product_reads_doi_and_description():
-    out = _normalize_openaire_product({
-        "id": "oa::1",
-        "mainTitle": "EU Study",
-        "descriptions": ["Zusammenfassung"],
-        "publicationDate": "2022-03-01",
-        "pids": [{"scheme": "doi", "value": "10.7/eu"}],
-        "authors": [{"fullName": "E F"}],
-        "instances": [{"urls": ["https://repo/eu.pdf"]}],
-    })
+    out = _normalize_openaire_product(
+        {
+            "id": "oa::1",
+            "mainTitle": "EU Study",
+            "descriptions": ["Zusammenfassung"],
+            "publicationDate": "2022-03-01",
+            "pids": [{"scheme": "doi", "value": "10.7/eu"}],
+            "authors": [{"fullName": "E F"}],
+            "instances": [{"urls": ["https://repo/eu.pdf"]}],
+        }
+    )
     assert out["source"] == "openaire"
     assert out["year"] == 2022
     assert out["doi"] == "10.7/eu"
@@ -240,14 +270,16 @@ def test_normalize_openaire_product_reads_doi_and_description():
 
 
 def test_normalize_eric_record_builds_fulltext_and_landing_url():
-    out = _normalize_eric_record({
-        "id": "EJ123",
-        "title": "Reading",
-        "description": "abs",
-        "author": ["G H"],
-        "publicationdateyear": 2021,
-        "e_fulltextauth": True,
-    })
+    out = _normalize_eric_record(
+        {
+            "id": "EJ123",
+            "title": "Reading",
+            "description": "abs",
+            "author": ["G H"],
+            "publicationdateyear": 2021,
+            "e_fulltextauth": True,
+        }
+    )
     assert out["pdf_url"] == "https://files.eric.ed.gov/fulltext/EJ123.pdf"
     assert out["landing_page_url"] == "https://eric.ed.gov/?id=EJ123"
     assert out["has_full_text"] is True
@@ -260,18 +292,23 @@ def test_normalize_eric_record_without_fulltext_keeps_landing_url():
 
 
 def test_normalize_doab_book_reads_dublin_core():
-    out = _normalize_doab_book({
-        "uuid": "u1",
-        "name": "Fallback",
-        "handle": "20.500/1",
-        "metadata": [
-            {"key": "dc.title", "value": "Copyright"},
-            {"key": "dc.contributor.author", "value": "I J"},
-            {"key": "dc.description.abstract", "value": "abs"},
-            {"key": "dc.date.issued", "value": "2020-01-01"},
-            {"key": "dc.identifier.uri", "value": "https://doabooks/handle/20.500/1"},
-        ],
-    })
+    out = _normalize_doab_book(
+        {
+            "uuid": "u1",
+            "name": "Fallback",
+            "handle": "20.500/1",
+            "metadata": [
+                {"key": "dc.title", "value": "Copyright"},
+                {"key": "dc.contributor.author", "value": "I J"},
+                {"key": "dc.description.abstract", "value": "abs"},
+                {"key": "dc.date.issued", "value": "2020-01-01"},
+                {
+                    "key": "dc.identifier.uri",
+                    "value": "https://doabooks/handle/20.500/1",
+                },
+            ],
+        }
+    )
     assert out["source"] == "doab"
     assert out["title"] == "Copyright"
     assert out["authors"] == ["I J"]
@@ -280,16 +317,18 @@ def test_normalize_doab_book_reads_dublin_core():
 
 
 def test_normalize_hal_document_unwraps_solr_lists():
-    out = _normalize_hal_document({
-        "docid": "42",
-        "title_s": ["Droit d'auteur"],
-        "abstract_s": ["résumé"],
-        "authFullName_s": ["K L"],
-        "producedDateY_i": 2019,
-        "doiId_s": "10.9/hal",
-        "uri_s": "https://hal.science/hal-42",
-        "fileMain_s": "https://hal.science/hal-42/document",
-    })
+    out = _normalize_hal_document(
+        {
+            "docid": "42",
+            "title_s": ["Droit d'auteur"],
+            "abstract_s": ["résumé"],
+            "authFullName_s": ["K L"],
+            "producedDateY_i": 2019,
+            "doiId_s": "10.9/hal",
+            "uri_s": "https://hal.science/hal-42",
+            "fileMain_s": "https://hal.science/hal-42/document",
+        }
+    )
     assert out["source"] == "hal"
     assert out["title"] == "Droit d'auteur"
     assert out["abstract"] == "résumé"

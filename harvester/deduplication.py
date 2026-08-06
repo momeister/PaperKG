@@ -38,7 +38,9 @@ class DedupDecision:
     reason: str
 
 
-def deduplicate_papers(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[DedupDecision]]:
+def deduplicate_papers(
+    records: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[DedupDecision]]:
     """
     Deduplicate by DOI first, then normalized title.
 
@@ -48,7 +50,9 @@ def deduplicate_papers(records: list[dict[str, Any]]) -> tuple[list[dict[str, An
     by_title: dict[str, dict[str, Any]] = {}
     decisions: list[DedupDecision] = []
 
-    def pick_better(existing: dict[str, Any], candidate: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def pick_better(
+        existing: dict[str, Any], candidate: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         existing_version = int(existing.get("version") or 1)
         candidate_version = int(candidate.get("version") or 1)
         if candidate_version > existing_version:
@@ -80,7 +84,9 @@ def deduplicate_papers(records: list[dict[str, Any]]) -> tuple[list[dict[str, An
             continue
 
         keep, dropped = pick_better(duplicate_of, record)
-        decisions.append(DedupDecision(keep=keep, dropped=[dropped], reason=duplicate_reason))
+        decisions.append(
+            DedupDecision(keep=keep, dropped=[dropped], reason=duplicate_reason)
+        )
 
         if keep is record:
             unique.remove(duplicate_of)

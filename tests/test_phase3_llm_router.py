@@ -5,6 +5,7 @@ from typing import Any
 from query.llm_router import LLMRouter, ProviderConfig, GenerationSettings
 from query.nim_container import NIMContainerConfig, NIMContainerManager
 
+
 class TestLLMRouter:
     """Test LLM router configuration helpers."""
 
@@ -53,7 +54,9 @@ llm:
         assert router.provider_config("nvidia").api_key == "nvapi-test"
         assert router.provider_default_model("nvidia") == "moonshotai/kimi-k2.6"
 
-    def test_from_config_file_uses_ngc_key_fallback_for_nvidia(self, tmp_path, monkeypatch):
+    def test_from_config_file_uses_ngc_key_fallback_for_nvidia(
+        self, tmp_path, monkeypatch
+    ):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             """
@@ -75,7 +78,9 @@ llm:
 
         assert router.provider_config("nvidia").api_key == "nvapi-ngc-test"
 
-    def test_from_config_file_keeps_ngc_key_out_of_self_hosted_nvidia(self, tmp_path, monkeypatch):
+    def test_from_config_file_keeps_ngc_key_out_of_self_hosted_nvidia(
+        self, tmp_path, monkeypatch
+    ):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             """
@@ -123,7 +128,9 @@ llm:
 
     def test_discover_provider_models_from_ollama(self):
         response = MagicMock()
-        response.json.return_value = {"models": [{"name": "qwen3.6-35b"}, {"name": "llama3.1:8b"}]}
+        response.json.return_value = {
+            "models": [{"name": "qwen3.6-35b"}, {"name": "llama3.1:8b"}]
+        }
         response.raise_for_status.return_value = None
         client = MagicMock()
         client.get.return_value = response
@@ -140,7 +147,10 @@ llm:
             client=client,
         )
 
-        assert router.discover_provider_models("ollama") == ["qwen3.6-35b", "llama3.1:8b"]
+        assert router.discover_provider_models("ollama") == [
+            "qwen3.6-35b",
+            "llama3.1:8b",
+        ]
 
     def test_recommended_settings_reads_ollama_parameters(self):
         tags_response = MagicMock()
@@ -176,7 +186,9 @@ llm:
 
     def test_discover_provider_models_from_openai_compatible(self):
         response = MagicMock()
-        response.json.return_value = {"data": [{"id": "gpt-4o"}, {"id": "gpt-4.1-mini"}]}
+        response.json.return_value = {
+            "data": [{"id": "gpt-4o"}, {"id": "gpt-4.1-mini"}]
+        }
         response.raise_for_status.return_value = None
         client = MagicMock()
         client.get.return_value = response
@@ -193,7 +205,10 @@ llm:
             client=client,
         )
 
-        assert router.discover_provider_models("lm_studio") == ["gpt-4o", "gpt-4.1-mini"]
+        assert router.discover_provider_models("lm_studio") == [
+            "gpt-4o",
+            "gpt-4.1-mini",
+        ]
 
     def test_merged_settings_keeps_none_repeat_penalty(self):
         base = GenerationSettings(model="gpt-4o", repeat_penalty=None)
@@ -246,7 +261,9 @@ llm:
     def test_lm_studio_json_mode_does_not_force_response_format(self):
         response = MagicMock()
         response.json.return_value = {
-            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "choices": [
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}
+            ],
             "usage": {"completion_tokens": 4},
         }
         response.raise_for_status.return_value = None
@@ -277,10 +294,14 @@ llm:
 
     def test_lm_studio_response_format_falls_back_when_server_rejects_it(self):
         request = httpx.Request("POST", "http://localhost:1234/v1/chat/completions")
-        rejected_response = httpx.Response(400, request=request, json={"error": "unsupported"})
+        rejected_response = httpx.Response(
+            400, request=request, json={"error": "unsupported"}
+        )
         accepted = MagicMock()
         accepted.json.return_value = {
-            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "choices": [
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}
+            ],
             "usage": {"completion_tokens": 4},
         }
         accepted.raise_for_status.return_value = None
@@ -316,7 +337,9 @@ llm:
     def test_openai_endpoint_json_mode_uses_response_format(self):
         response = MagicMock()
         response.json.return_value = {
-            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "choices": [
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}
+            ],
             "usage": {"completion_tokens": 4},
         }
         response.raise_for_status.return_value = None
@@ -345,7 +368,9 @@ llm:
     def test_gemini_endpoint_uses_openai_compat_without_extra_body(self):
         response = MagicMock()
         response.json.return_value = {
-            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "choices": [
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}
+            ],
             "usage": {"completion_tokens": 4},
         }
         response.raise_for_status.return_value = None
@@ -360,7 +385,11 @@ llm:
                     settings=GenerationSettings(
                         model="gemini-3.1-flash-lite",
                         repeat_penalty=None,
-                        extra={"json_mode": True, "force_response_format": True, "omit_extra_body": True},
+                        extra={
+                            "json_mode": True,
+                            "force_response_format": True,
+                            "omit_extra_body": True,
+                        },
                     ),
                 )
             },
@@ -373,7 +402,10 @@ llm:
         call = client.post.call_args
         payload = call.kwargs["json"]
         headers = call.kwargs["headers"]
-        assert call.args[0] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        assert (
+            call.args[0]
+            == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        )
         assert text == '{"ok": true}'
         assert headers["Authorization"] == "Bearer gemini-test-key"
         assert payload["model"] == "gemini-3.1-flash-lite"
@@ -383,7 +415,9 @@ llm:
     def test_nvidia_endpoint_omits_extra_body_and_uses_bearer_key(self):
         response = MagicMock()
         response.json.return_value = {
-            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+            "choices": [
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}
+            ],
             "usage": {"completion_tokens": 4},
         }
         response.raise_for_status.return_value = None
@@ -402,7 +436,10 @@ llm:
                             "json_mode": True,
                             "include_reasoning": False,
                             "response_format": {"type": "json_object"},
-                            "chat_template_kwargs": {"thinking": False, "enable_thinking": False},
+                            "chat_template_kwargs": {
+                                "thinking": False,
+                                "enable_thinking": False,
+                            },
                         },
                     ),
                 )
@@ -425,11 +462,17 @@ llm:
         assert payload["chat_template_kwargs"] == {"thinking": False}
 
     def test_provider_auth_check_surfaces_forbidden_response_body(self):
-        request = httpx.Request("POST", "https://integrate.api.nvidia.com/v1/chat/completions")
+        request = httpx.Request(
+            "POST", "https://integrate.api.nvidia.com/v1/chat/completions"
+        )
         response = httpx.Response(
             403,
             request=request,
-            json={"status": 403, "title": "Forbidden", "detail": "Authorization failed"},
+            json={
+                "status": 403,
+                "title": "Forbidden",
+                "detail": "Authorization failed",
+            },
         )
         client = MagicMock()
         client.post.return_value = response
@@ -439,7 +482,9 @@ llm:
                     provider_type="nvidia",
                     base_url="https://integrate.api.nvidia.com/v1",
                     api_key="nvapi-test",
-                    settings=GenerationSettings(model="moonshotai/kimi-k2.6", repeat_penalty=None),
+                    settings=GenerationSettings(
+                        model="moonshotai/kimi-k2.6", repeat_penalty=None
+                    ),
                 )
             },
             default_provider="nvidia",
@@ -454,7 +499,9 @@ llm:
         assert "Authorization failed" in error
 
     def test_provider_auth_error_classification_distinguishes_timeouts(self):
-        assert LLMRouter.is_auth_error("403 Forbidden; response_body={\"detail\":\"Authorization failed\"}")
+        assert LLMRouter.is_auth_error(
+            '403 Forbidden; response_body={"detail":"Authorization failed"}'
+        )
         assert not LLMRouter.is_auth_error("The read operation timed out")
 
 
@@ -479,7 +526,9 @@ llm:
         assert config.image == "nvcr.io/nim/moonshotai/kimi-k2.6:1.7.0-variant"
         assert config.base_url == "http://localhost:9090/v1"
 
-    def test_config_reads_nvidia_key_without_exposing_it_in_command(self, tmp_path, monkeypatch):
+    def test_config_reads_nvidia_key_without_exposing_it_in_command(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.delenv("NGC_API_KEY", raising=False)
         monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-secret-value")
         config = NIMContainerConfig(cache_dir=str(tmp_path / "nim-cache"))
@@ -490,7 +539,9 @@ llm:
         assert "NGC_API_KEY" in command
         assert "nvapi-secret-value" not in " ".join(command)
 
-    def test_start_container_passes_key_by_environment_only(self, tmp_path, monkeypatch):
+    def test_start_container_passes_key_by_environment_only(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("NGC_API_KEY", "nvapi-secret-value")
         calls: list[tuple[list[str], dict[str, Any]]] = []
 
@@ -515,5 +566,3 @@ llm:
         assert "nvapi-secret-value" not in " ".join(run_args)
         assert run_kwargs["env"]["NGC_API_KEY"] == "nvapi-secret-value"
         assert (tmp_path / "nim-cache").exists()
-
-

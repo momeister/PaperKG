@@ -14,6 +14,7 @@ Fehlt es überall, ist das **kein Absturz**: der Code-Graph ist ein Zusatz, und
 der Rest des Programms funktioniert ohne ihn weiter. Der Fehler sagt stattdessen,
 mit welchem Befehl man ihn baut.
 """
+
 from __future__ import annotations
 
 import os
@@ -123,5 +124,7 @@ def index_path(code_project_id: str, config_path: str = "config.yaml") -> Path:
     dessen Daten. Ein ``.codesearch/`` in einem fremden Checkout wäre Müll, den
     wir dort hinterlassen — und in `data/` wird er ohnehin schon ignoriert.
     """
-    safe = "".join(char if char.isalnum() or char in "-_" else "_" for char in code_project_id)
+    safe = "".join(
+        char if char.isalnum() or char in "-_" else "_" for char in code_project_id
+    )
     return index_dir(config_path) / (safe or "unbenannt") / "index.csdb"

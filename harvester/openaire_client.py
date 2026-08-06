@@ -24,9 +24,15 @@ class OpenAireClient(ThrottledJsonClient):
     def __init__(self, config: OpenAireConfig | None = None) -> None:
         super().__init__(config or OpenAireConfig())
 
-    async def search_publications(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    async def search_publications(
+        self, query: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
         payload = await self.get_json(
             "/researchProducts",
-            {"search": query, "pageSize": min(max(limit, 1), 100), "type": "publication"},
+            {
+                "search": query,
+                "pageSize": min(max(limit, 1), 100),
+                "type": "publication",
+            },
         )
         return list((payload or {}).get("results") or [])

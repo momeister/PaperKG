@@ -3,6 +3,7 @@
 Split out of the former single-file ``extraction/entity_linker.py``. The public
 API is unchanged: import the same names from ``extraction.entity_linker``.
 """
+
 from __future__ import annotations
 
 from extraction.entity_linker.strategies import (

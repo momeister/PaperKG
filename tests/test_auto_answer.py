@@ -4,6 +4,7 @@ The heavy dependencies (grounded responder, related-topic LLM call, paper/grey h
 are replaced with light fakes so the test exercises the *control flow*: when does it
 harvest, what events are emitted, and do the freshly harvested IDs flow into the re-answer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -32,7 +33,9 @@ class _ScriptedResponder:
         return _FakeAnswer(self._scripts[idx])
 
 
-def _patch_common(monkeypatch, responder: _ScriptedResponder, *, related: list[str]) -> dict[str, list]:
+def _patch_common(
+    monkeypatch, responder: _ScriptedResponder, *, related: list[str]
+) -> dict[str, list]:
     """Wire fakes into query.auto_answer and return a dict capturing harvest calls."""
     captured: dict[str, list] = {"papers_for": [], "grey_for": [], "grey_tiers": []}
 
@@ -42,12 +45,16 @@ def _patch_common(monkeypatch, responder: _ScriptedResponder, *, related: list[s
         auto_answer, "analyze_topic", lambda *a, **k: {"related_topics": list(related)}
     )
 
-    async def _fake_harvest_papers(*, question: str, **kwargs: Any) -> list[dict[str, str]]:
+    async def _fake_harvest_papers(
+        *, question: str, **kwargs: Any
+    ) -> list[dict[str, str]]:
         captured["papers_for"].append(question)
         # Unique id per harvested topic so the merge/dedupe can be asserted.
         return [{"id": f"arxiv:{question}", "title": f"Paper for {question}"}]
 
-    async def _fake_harvest_grey(*, question: str, **kwargs: Any) -> list[dict[str, str]]:
+    async def _fake_harvest_grey(
+        *, question: str, **kwargs: Any
+    ) -> list[dict[str, str]]:
         tier = (kwargs.get("tiers") or ("unknown",))[0]
         captured["grey_for"].append(question)
         captured["grey_tiers"].append(tier)
@@ -61,7 +68,9 @@ def _patch_common(monkeypatch, responder: _ScriptedResponder, *, related: list[s
         ]
 
     monkeypatch.setattr(auto_answer, "harvest_for_question", _fake_harvest_papers)
-    monkeypatch.setattr(auto_answer, "harvest_grey_sources_for_question", _fake_harvest_grey)
+    monkeypatch.setattr(
+        auto_answer, "harvest_grey_sources_for_question", _fake_harvest_grey
+    )
     return captured
 
 
@@ -71,7 +80,9 @@ async def _collect(gen) -> list[dict[str, Any]]:
 
 async def test_strong_answer_skips_harvest(monkeypatch) -> None:
     # An answer that already cites a local paper is "strong" → no harvest.
-    responder = _ScriptedResponder([{"answer": "See [arxiv:1234] for details.", "no_answer": False}])
+    responder = _ScriptedResponder(
+        [{"answer": "See [arxiv:1234] for details.", "no_answer": False}]
+    )
     captured = _patch_common(monkeypatch, responder, related=["t1", "t2"])
 
     events = await _collect(
@@ -133,7 +144,9 @@ async def test_weak_answer_harvests_related_topics_and_reanswers(monkeypatch) ->
 async def test_escalates_to_trusted_web_then_unverified(monkeypatch) -> None:
     # Every answer stays weak → the ladder walks all three stages, and the web stages
     # ask for their tier explicitly: trusted before unknown.
-    responder = _ScriptedResponder([{"answer": "Nothing conclusive.", "no_answer": True}])
+    responder = _ScriptedResponder(
+        [{"answer": "Nothing conclusive.", "no_answer": True}]
+    )
     captured = _patch_common(monkeypatch, responder, related=[])
 
     events = await _collect(
@@ -141,11 +154,20 @@ async def test_escalates_to_trusted_web_then_unverified(monkeypatch) -> None:
     )
 
     summary = events[-1]["harvest_summary"]
-    assert [stage["stage"] for stage in summary["stages"]] == ["scientific", "trusted", "unverified"]
+    assert [stage["stage"] for stage in summary["stages"]] == [
+        "scientific",
+        "trusted",
+        "unverified",
+    ]
     assert all(stage["sufficient"] is False for stage in summary["stages"])
     assert captured["grey_tiers"] == ["trusted", "unknown"]
-    assert [source["trust_tier"] for source in summary["grey"]] == ["trusted", "unknown"]
-    assert {event.get("stage") for event in events if event["status"] == "harvesting"} == {
+    assert [source["trust_tier"] for source in summary["grey"]] == [
+        "trusted",
+        "unknown",
+    ]
+    assert {
+        event.get("stage") for event in events if event["status"] == "harvesting"
+    } == {
         "scientific",
         "trusted",
         "unverified",
@@ -221,14 +243,20 @@ async def test_cited_but_insufficient_answer_triggers_harvest(monkeypatch) -> No
 
 
 async def test_force_harvests_even_for_strong_answer(monkeypatch) -> None:
-    responder = _ScriptedResponder([{"answer": "Strong [arxiv:1].", "no_answer": False}])
+    responder = _ScriptedResponder(
+        [{"answer": "Strong [arxiv:1].", "no_answer": False}]
+    )
     captured = _patch_common(monkeypatch, responder, related=[])
 
     events = await _collect(
-        auto_answer.auto_research_answer(question="What is X?", llm_router=object(), force=True)
+        auto_answer.auto_research_answer(
+            question="What is X?", llm_router=object(), force=True
+        )
     )
 
     statuses = [e["status"] for e in events]
     assert "harvesting" in statuses  # forced despite a strong first answer
-    assert captured["papers_for"] == ["What is X?"]  # no related topics → only the main one
+    assert captured["papers_for"] == [
+        "What is X?"
+    ]  # no related topics → only the main one
     assert events[-1]["harvest_summary"]["harvested"] is True

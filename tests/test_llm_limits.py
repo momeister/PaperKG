@@ -4,6 +4,7 @@ Vorher war ein HTTP 429 am Ende nicht mehr von einem Parser-Fehler zu
 unterscheiden, und der Batch feuerte stur weiter — bei 480 ausgewaehlten Papern
 also 480 Absagen gegen dasselbe erschoepfte Kontingent.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +13,12 @@ from typing import Any
 import pytest
 
 from extraction.batch_processor import BatchProcessor
-from query.llm_errors import classify_llm_error, is_provider_limit, parse_tagged_error, tag_error
+from query.llm_errors import (
+    classify_llm_error,
+    is_provider_limit,
+    parse_tagged_error,
+    tag_error,
+)
 from storage.metadata_db import MetadataDB
 
 
@@ -24,7 +30,10 @@ from storage.metadata_db import MetadataDB
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("HTTP 429; Client error '429 Too Many Requests'; retry_after=30s", "rate_limit"),
+        (
+            "HTTP 429; Client error '429 Too Many Requests'; retry_after=30s",
+            "rate_limit",
+        ),
         ("Rate limit reached for gpt-4", "rate_limit"),
         ("HTTP 429; insufficient_quota: You exceeded your current quota", "quota"),
         ("RESOURCE_EXHAUSTED: billing account has no credit", "quota"),
@@ -55,7 +64,10 @@ def test_tag_and_parse_roundtrip() -> None:
     tagged = tag_error("quota", "Kontingent aufgebraucht.")
     assert parse_tagged_error(tagged) == ("quota", "Kontingent aufgebraucht.")
     # Untagged bleibt untagged — alte Meldungen in der DB brechen nicht.
-    assert parse_tagged_error("irgendein alter Fehler") == (None, "irgendein alter Fehler")
+    assert parse_tagged_error("irgendein alter Fehler") == (
+        None,
+        "irgendein alter Fehler",
+    )
     assert parse_tagged_error(None) == (None, "")
 
 
@@ -66,7 +78,9 @@ def test_router_error_carries_status_and_retry_after() -> None:
     from query.llm_router import LLMRouter
 
     request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-    response = httpx.Response(429, headers={"retry-after": "30"}, text="Too Many Requests", request=request)
+    response = httpx.Response(
+        429, headers={"retry-after": "30"}, text="Too Many Requests", request=request
+    )
     error = LLMRouter._http_status_runtime_error(
         httpx.HTTPStatusError("429 error", request=request, response=response)
     )
@@ -92,13 +106,17 @@ class _QuotaPipeline:
         raise RuntimeError(tag_error("quota", "LLM-Kontingent aufgebraucht."))
 
 
-def _processor(tmp_path: Path, pipeline: Any, *, max_retries: int = 1) -> BatchProcessor:
+def _processor(
+    tmp_path: Path, pipeline: Any, *, max_retries: int = 1
+) -> BatchProcessor:
     processor = BatchProcessor.__new__(BatchProcessor)
     processor.llm_router = None
     processor.parser_router = None
     processor.embedding_engine = None
     processor.metadata_db = None
-    processor.metadata_db_factory = lambda: MetadataDB(str(tmp_path / "metadata.duckdb"))
+    processor.metadata_db_factory = lambda: MetadataDB(
+        str(tmp_path / "metadata.duckdb")
+    )
     processor.link_concepts = False
     processor.embed_concepts = False
     processor.max_retries = max_retries
@@ -142,7 +160,9 @@ def test_quota_error_is_not_retried(tmp_path: Path) -> None:
     """Ein aufgebrauchtes Kontingent erholt sich nicht in 20 Sekunden."""
     pipeline = _QuotaPipeline()
     processor = _processor(tmp_path, pipeline, max_retries=3)
-    processor.process_papers(["p1"], pdf_paths={}, texts={"p1": "Text"}, job_id="job-noretry")
+    processor.process_papers(
+        ["p1"], pdf_paths={}, texts={"p1": "Text"}, job_id="job-noretry"
+    )
     assert pipeline.calls == 1
 
 
@@ -178,7 +198,9 @@ class _FlakyPipeline:
 def test_rate_limit_is_retried_once_before_giving_up(tmp_path: Path) -> None:
     pipeline = _FlakyPipeline()
     processor = _processor(tmp_path, pipeline, max_retries=1)
-    status = processor.process_papers(["p1"], pdf_paths={}, texts={"p1": "Text"}, job_id="job-flaky")
+    status = processor.process_papers(
+        ["p1"], pdf_paths={}, texts={"p1": "Text"}, job_id="job-flaky"
+    )
     assert pipeline.calls == 2
     assert status.papers_processed == 1
     assert status.papers_failed == 0

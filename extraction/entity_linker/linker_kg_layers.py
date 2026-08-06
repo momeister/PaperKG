@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_linker/linker.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -63,16 +64,32 @@ class LinkerKgLayersMixin(_Base):
                 or key in cls.THEORETICAL_CORE_KEYS
                 or key in cls.MEDICAL_IMAGING_CORE_KEYS
             )
-            if source_type in {"background", "generic_field"} and salience != "central" and not is_core_key:
+            if (
+                source_type in {"background", "generic_field"}
+                and salience != "central"
+                and not is_core_key
+            ):
                 eligible = False
                 block_reason = "background_detail"
-            elif evidence_role in {"background", "generic_field", "possible_concept"} and salience not in {"central"} and not is_core_key:
+            elif (
+                evidence_role in {"background", "generic_field", "possible_concept"}
+                and salience not in {"central"}
+                and not is_core_key
+            ):
                 eligible = False
                 block_reason = "review_detail"
-            elif entity_type == "System" and source_type == "reviewed_method" and salience != "central" and paper_type == "survey":
+            elif (
+                entity_type == "System"
+                and source_type == "reviewed_method"
+                and salience != "central"
+                and paper_type == "survey"
+            ):
                 eligible = False
                 block_reason = "reviewed_system_detail"
-            elif acceptance_reason == "ontology_relation_endpoint_rescue" and not is_core_key:
+            elif (
+                acceptance_reason == "ontology_relation_endpoint_rescue"
+                and not is_core_key
+            ):
                 eligible = False
                 block_reason = "relation_endpoint_detail"
 
@@ -115,13 +132,14 @@ class LinkerKgLayersMixin(_Base):
             item = dict(relation)
             subject_id = str(item.get("subject_id") or "")
             object_id = str(item.get("object_id") or "")
-            if (
-                str(item.get("review_status") or "").lower() == "approved"
-                and (subject_id not in kg_entity_ids or object_id not in kg_entity_ids)
+            if str(item.get("review_status") or "").lower() == "approved" and (
+                subject_id not in kg_entity_ids or object_id not in kg_entity_ids
             ):
                 item["review_status"] = "pending"
                 item["source"] = "candidate_relation"
                 item["kg_block_reason"] = "relation_endpoint_not_kg_writeable"
-                item["confidence"] = min(_coerce_float(item.get("confidence"), 0.65), 0.65)
+                item["confidence"] = min(
+                    _coerce_float(item.get("confidence"), 0.65), 0.65
+                )
             output.append(item)
         return output

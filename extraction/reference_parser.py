@@ -5,6 +5,7 @@ This is the counterpart to ``EntityExtractor._text_before_references``: instead 
 the body before the references, it returns the references themselves so they can be
 matched against Crossref to discover and (on consent) download the cited papers.
 """
+
 from __future__ import annotations
 
 import re
@@ -14,7 +15,9 @@ _REFERENCE_HEADING = re.compile(
     r"(?im)^\s*(?:#+\s*)?(?:\d+\.?\s*)?(?:references|bibliography|works cited|literature cited|"
     r"reference list)\s*:?\s*$"
 )
-_REFERENCE_HEADING_INLINE = re.compile(r"\n\s*(?:references|bibliography)\s*\n", re.IGNORECASE)
+_REFERENCE_HEADING_INLINE = re.compile(
+    r"\n\s*(?:references|bibliography)\s*\n", re.IGNORECASE
+)
 
 # A trailing section that sometimes follows references and should be cut off.
 _TRAILING_HEADING = re.compile(
@@ -32,12 +35,12 @@ def extract_reference_section(text: str) -> str:
     raw = text or ""
     match = _REFERENCE_HEADING.search(raw)
     if match:
-        section = raw[match.end():]
+        section = raw[match.end() :]
     else:
         match = _REFERENCE_HEADING_INLINE.search(raw)
         if not match:
             return ""
-        section = raw[match.end():]
+        section = raw[match.end() :]
 
     trailing = _TRAILING_HEADING.search(section)
     if trailing:

@@ -1,4 +1,5 @@
 """Shared fake LLM routers for phase-3 tests."""
+
 import json
 from typing import Any
 
@@ -9,7 +10,9 @@ class FakeLLMRouter:
     def __init__(self, response_json: dict[str, Any] | None = None):
         self.response_json = response_json or {
             "paper_type": "research",
-            "concepts": [{"label": "test", "context": "test context", "confidence": 0.9}],
+            "concepts": [
+                {"label": "test", "context": "test context", "confidence": 0.9}
+            ],
             "methods": [],
             "claims": [],
             "cross_domain_hints": [],
@@ -46,8 +49,9 @@ class SequenceLLMRouter:
         self.last_response_metadata = {}
 
     def chat(self, messages, provider=None, overrides=None):
-        self.calls.append({"messages": messages, "provider": provider, "overrides": overrides})
+        self.calls.append(
+            {"messages": messages, "provider": provider, "overrides": overrides}
+        )
         if not self.responses:
             raise AssertionError("No fake LLM responses left")
         return self.responses.pop(0)
-

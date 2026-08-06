@@ -6,6 +6,7 @@ auch von extraction/grey-sources genutzt und von dort importiert.
 Patchbare Namen (Tests patchen sie auf product_main) laufen ueber pm.<name>:
 extraction_pipeline, httpx.AsyncClient, _infer_pdf_title_from_bytes.
 """
+
 from __future__ import annotations
 
 import io
@@ -75,7 +76,10 @@ def list_papers(
         pid = str(paper.get("id") or "")
         if selected_ids is not None and pid not in selected_ids:
             continue
-        if has_full_text is not None and bool(paper.get("has_full_text")) != has_full_text:
+        if (
+            has_full_text is not None
+            and bool(paper.get("has_full_text")) != has_full_text
+        ):
             continue
         latest_status = latest_by_paper.get(pid)
         if extraction_status and latest_status != extraction_status:
@@ -100,12 +104,24 @@ def _paper_list_view(
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR,
     pdf_index: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
-    paper_id_value = _clean_display_text(paper.get("id") or paper.get("paper_id") or paper.get("source_id"))
+    paper_id_value = _clean_display_text(
+        paper.get("id") or paper.get("paper_id") or paper.get("source_id")
+    )
     source_id = _clean_display_text(paper.get("source_id"))
     title = _clean_display_text(paper.get("title"))
     local_pdf_path = _paper_local_pdf_path(paper, pdf_base_dir, pdf_index=pdf_index)
-    pdf_filename = Path(local_pdf_path).name if local_pdf_path else _paper_filename_from_value(paper.get("pdf_url"))
-    display_title = title or _clean_pdf_title(pdf_filename) or paper_id_value or source_id or "Unbenanntes PDF"
+    pdf_filename = (
+        Path(local_pdf_path).name
+        if local_pdf_path
+        else _paper_filename_from_value(paper.get("pdf_url"))
+    )
+    display_title = (
+        title
+        or _clean_pdf_title(pdf_filename)
+        or paper_id_value
+        or source_id
+        or "Unbenanntes PDF"
+    )
     return {
         **paper,
         "display_title": display_title,
@@ -128,9 +144,15 @@ def _paper_local_pdf_path(
                 return str(path)
         except OSError:
             pass
-    paper_id_value = _clean_display_text(paper.get("id") or paper.get("paper_id") or paper.get("source_id"))
+    paper_id_value = _clean_display_text(
+        paper.get("id") or paper.get("paper_id") or paper.get("source_id")
+    )
     title = _clean_display_text(paper.get("title"))
-    return find_pdf_path(paper_id_value, title, pdf_base_dir, index=pdf_index) if paper_id_value else None
+    return (
+        find_pdf_path(paper_id_value, title, pdf_base_dir, index=pdf_index)
+        if paper_id_value
+        else None
+    )
 
 
 @router.get("/paper/meta")
@@ -149,7 +171,9 @@ def paper_meta(
     doi = _clean_display_text(paper.get("doi"))
     landing = _clean_display_text(paper.get("landing_page_url"))
     pdf_url = _clean_display_text(paper.get("pdf_url"))
-    remote_pdf = pdf_url if re.match(r"^https?://", pdf_url, flags=re.IGNORECASE) else ""
+    remote_pdf = (
+        pdf_url if re.match(r"^https?://", pdf_url, flags=re.IGNORECASE) else ""
+    )
     external_url = landing or (f"https://doi.org/{doi}" if doi else "") or remote_pdf
     return {
         "paper_id": _clean_display_text(paper.get("id")) or paper_id,
@@ -186,14 +210,22 @@ def _ingest_extract_background(
                 existing = None
             if existing is None:
                 _extract_pdf_into_db(
-                    db, pm.extraction_pipeline, parser_router, paper_id, pdf_path, provider, model
+                    db,
+                    pm.extraction_pipeline,
+                    parser_router,
+                    paper_id,
+                    pdf_path,
+                    provider,
+                    model,
                 )
     except Exception:
         pass
 
 
 @router.post("/paper/ingest")
-async def paper_ingest(request: PaperIngestRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+async def paper_ingest(
+    request: PaperIngestRequest, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
     """On-demand download + extract for a cited paper that has no local PDF yet.
 
     Lets a citation click resolve to a real, project-local PDF instead of the "no PDF" limbo:
@@ -206,15 +238,23 @@ async def paper_ingest(request: PaperIngestRequest, background_tasks: Background
         clean_id = _strip_citation_fragment(request.paper_id)
         paper = db.resolve_paper(clean_id) or db.get_paper(clean_id)
     if not paper:
-        raise HTTPException(status_code=404, detail=f"Paper not found: {request.paper_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Paper not found: {request.paper_id}"
+        )
 
     storage = FileManager(request.pdf_base_dir)
     headers = {"User-Agent": "ScienceKG/ingest (local-development)"}
-    async with pm.httpx.AsyncClient(timeout=60.0, follow_redirects=True, headers=headers) as client:
+    async with pm.httpx.AsyncClient(
+        timeout=60.0, follow_redirects=True, headers=headers
+    ) as client:
         with MetadataDB(request.metadata_db_path) as db:
             result = await ingest_paper_record(
-                paper, db, storage, client,
-                provider=request.provider, model=request.model,
+                paper,
+                db,
+                storage,
+                client,
+                provider=request.provider,
+                model=request.model,
                 extract=False,  # extraction is scheduled as a background task below
             )
 
@@ -224,19 +264,30 @@ async def paper_ingest(request: PaperIngestRequest, background_tasks: Background
 
     attached = False
     if has_pdf:
-        attached = bool(_attach_papers_to_project(request.project_id, [canonical_id], request.projects_path))
+        attached = bool(
+            _attach_papers_to_project(
+                request.project_id, [canonical_id], request.projects_path
+            )
+        )
         if pdf_path:
             background_tasks.add_task(
                 _ingest_extract_background,
-                canonical_id, str(pdf_path), request.metadata_db_path,
-                request.provider, request.model,
+                canonical_id,
+                str(pdf_path),
+                request.metadata_db_path,
+                request.provider,
+                request.model,
             )
 
     # Pre-download metadata still holds the remote/landing URL for the grey fallback.
     doi = _clean_display_text(paper.get("doi"))
     landing = _clean_display_text(paper.get("landing_page_url"))
     remote_pdf_raw = _clean_display_text(paper.get("pdf_url"))
-    remote_pdf = remote_pdf_raw if re.match(r"^https?://", remote_pdf_raw, flags=re.IGNORECASE) else ""
+    remote_pdf = (
+        remote_pdf_raw
+        if re.match(r"^https?://", remote_pdf_raw, flags=re.IGNORECASE)
+        else ""
+    )
     external_url = landing or (f"https://doi.org/{doi}" if doi else "") or remote_pdf
     return {
         "paper_id": canonical_id,
@@ -277,17 +328,48 @@ def _clean_pdf_title(value: Any) -> str:
     filename = _paper_filename_from_value(value)
     if not filename:
         return ""
-    return _clean_display_text(re.sub(r"\.pdf$", "", filename, flags=re.IGNORECASE).replace("_", " ").replace("-", " "))
+    return _clean_display_text(
+        re.sub(r"\.pdf$", "", filename, flags=re.IGNORECASE)
+        .replace("_", " ")
+        .replace("-", " ")
+    )
 
 
 _TITLE_LINE_BLOCKLIST = (
-    "arxiv:", "doi:", "abstract", "introduction", "keywords", "page ",
-    "©", "http://", "https://", "preprint", "submitted", "draft",
-    "running head", "downloaded from", "issn", "isbn", "vol.", "volume",
+    "arxiv:",
+    "doi:",
+    "abstract",
+    "introduction",
+    "keywords",
+    "page ",
+    "©",
+    "http://",
+    "https://",
+    "preprint",
+    "submitted",
+    "draft",
+    "running head",
+    "downloaded from",
+    "issn",
+    "isbn",
+    "vol.",
+    "volume",
 )
 
 _GENERIC_TITLE_STEMS = frozenset(
-    {"file", "document", "upload", "pdf", "paper", "doc", "untitled", "new", "temp", "tmp", "download"}
+    {
+        "file",
+        "document",
+        "upload",
+        "pdf",
+        "paper",
+        "doc",
+        "untitled",
+        "new",
+        "temp",
+        "tmp",
+        "download",
+    }
 )
 
 # Below this ratio of word-like tokens (>= 3 letters) to whitespace-split tokens, parsed
@@ -305,10 +387,13 @@ def _text_looks_garbled(text: str) -> bool:
     return (len(word_like) / len(tokens)) < _GARBLED_TEXT_WORD_RATIO_THRESHOLD
 
 
-def _maybe_fix_garbled_pdf_title(*, paper_id: str, text: str, pdf_path: Path, metadata_db_path: str) -> None:
+def _maybe_fix_garbled_pdf_title(
+    *, paper_id: str, text: str, pdf_path: Path, metadata_db_path: str
+) -> None:
     """When extraction text looks garbled and the stored title is generic/filename-derived,
     overwrite it with a title inferred from the PDF itself (metadata or heading line) — that
-    inference is far more likely correct than anything derived from broken extracted text."""
+    inference is far more likely correct than anything derived from broken extracted text.
+    """
     if not _text_looks_garbled(text):
         return
     with MetadataDB(metadata_db_path) as db:
@@ -318,7 +403,9 @@ def _maybe_fix_garbled_pdf_title(*, paper_id: str, text: str, pdf_path: Path, me
         current_title = (paper.get("title") or "").strip()
         current_stem = current_title.lower().strip()
         filename_stem = pdf_path.stem.lower().strip()
-        looks_generic = current_stem in _GENERIC_TITLE_STEMS or current_stem == filename_stem
+        looks_generic = (
+            current_stem in _GENERIC_TITLE_STEMS or current_stem == filename_stem
+        )
         if not looks_generic:
             return
         try:
@@ -371,10 +458,16 @@ def _infer_pdf_title_from_bytes(content: bytes) -> str:
         return ""
 
     try:
-        meta_title = _clean_display_text(getattr(reader.metadata, "title", None) if reader.metadata else "")
+        meta_title = _clean_display_text(
+            getattr(reader.metadata, "title", None) if reader.metadata else ""
+        )
     except Exception:
         meta_title = ""
-    if meta_title and meta_title.lower() not in {"untitled", "untitled document"} and _looks_like_title_line(meta_title):
+    if (
+        meta_title
+        and meta_title.lower() not in {"untitled", "untitled document"}
+        and _looks_like_title_line(meta_title)
+    ):
         return meta_title
 
     try:
@@ -403,10 +496,18 @@ async def upload_paper_pdf(
     if not content:
         raise HTTPException(status_code=400, detail="Upload body is empty.")
 
-    filename = request.headers.get("x-filename") or title or paper_id or "uploaded-paper.pdf"
+    filename = (
+        request.headers.get("x-filename") or title or paper_id or "uploaded-paper.pdf"
+    )
     stem = Path(filename).stem.lower().strip()
-    inferred_id = paper_id or (f"upload-{__import__('uuid').uuid4().hex[:8]}" if stem in _GENERIC_TITLE_STEMS else Path(filename).stem)
-    resolved_title = title or pm._infer_pdf_title_from_bytes(content) or Path(filename).stem
+    inferred_id = paper_id or (
+        f"upload-{__import__('uuid').uuid4().hex[:8]}"
+        if stem in _GENERIC_TITLE_STEMS
+        else Path(filename).stem
+    )
+    resolved_title = (
+        title or pm._infer_pdf_title_from_bytes(content) or Path(filename).stem
+    )
     storage = FileManager(pdf_base_dir)
     saved_path = storage.save_pdf(
         inferred_id,
@@ -423,7 +524,9 @@ async def upload_paper_pdf(
             source_id=inferred_id,
         )
         paper = db.get_paper(canonical_id)
-    project_paper_ids = _attach_papers_to_project(project_id, [canonical_id], projects_path)
+    project_paper_ids = _attach_papers_to_project(
+        project_id, [canonical_id], projects_path
+    )
     return {
         "paper": paper,
         "pdf_path": str(saved_path),

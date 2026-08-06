@@ -5,6 +5,7 @@ from parsing.parser_router import ParserRouter
 
 from tests.llm_fakes import FakeLLMRouter
 
+
 class TestBatchProcessor:
     """Test batch processing of papers."""
 
@@ -72,13 +73,19 @@ class TestBatchProcessor:
 
         db_path = tmp_path / "metadata.duckdb"
         db = MetadataDB(str(db_path))
-        db.upsert_batch_job("resume_job", "processing", papers_total=1, papers_processed=1)
-        db.upsert_batch_job_item("resume_job", "paper_001", str(tmp_path / "paper.pdf"), "completed")
+        db.upsert_batch_job(
+            "resume_job", "processing", papers_total=1, papers_processed=1
+        )
+        db.upsert_batch_job_item(
+            "resume_job", "paper_001", str(tmp_path / "paper.pdf"), "completed"
+        )
         db.close()
 
         mock_llm = FakeLLMRouter()
         parser_router = ParserRouter()
-        parser_router.parse = MagicMock(side_effect=AssertionError("should not reparse"))
+        parser_router.parse = MagicMock(
+            side_effect=AssertionError("should not reparse")
+        )
         processor = BatchProcessor(
             mock_llm,
             parser_router,
@@ -131,5 +138,3 @@ class TestBatchProcessor:
         assert status.papers_processed == 1
         assert status.papers_failed == 0
         assert parser_router.parse.call_count == 2
-
-

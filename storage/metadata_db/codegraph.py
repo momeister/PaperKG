@@ -71,7 +71,14 @@ class CodeGraphMixin(_Base):
             "error_message": error_message,
             "updated_timestamp": now,
         }
-        for key in ("files", "parsed_files", "nodes", "edges", "guessed_edges", "dynamic_gaps"):
+        for key in (
+            "files",
+            "parsed_files",
+            "nodes",
+            "edges",
+            "guessed_edges",
+            "dynamic_gaps",
+        ):
             if key in stats:
                 fields[key] = int(stats[key] or 0)
         if "duration_ms" in report:
@@ -79,7 +86,9 @@ class CodeGraphMixin(_Base):
         if "commits_walked" in report:
             fields["commits_walked"] = int(report.get("commits_walked") or 0)
         if "skipped" in report:
-            fields["skipped_json"] = json.dumps(report.get("skipped") or {}, ensure_ascii=False)
+            fields["skipped_json"] = json.dumps(
+                report.get("skipped") or {}, ensure_ascii=False
+            )
         if status == "ready":
             fields["last_indexed_timestamp"] = now
 
@@ -166,7 +175,8 @@ class CodeGraphMixin(_Base):
             params.append(str(project_id))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._execute(
-            f"SELECT * FROM code_paper_links {where} ORDER BY created_timestamp DESC", params
+            f"SELECT * FROM code_paper_links {where} ORDER BY created_timestamp DESC",
+            params,
         ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         return [dict(zip(cols, row)) for row in rows]
@@ -262,10 +272,14 @@ class CodeGraphMixin(_Base):
         return self.get_code_chat(chat_id)
 
     def get_code_chat(self, chat_id: str) -> dict[str, Any] | None:
-        row = self._execute("SELECT * FROM code_chats WHERE id = ?", [str(chat_id)]).fetchone()
+        row = self._execute(
+            "SELECT * FROM code_chats WHERE id = ?", [str(chat_id)]
+        ).fetchone()
         return self._codegraph_row(row)
 
-    def list_code_chats(self, code_project_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def list_code_chats(
+        self, code_project_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT * FROM code_chats WHERE code_project_id = ?
@@ -283,7 +297,9 @@ class CodeGraphMixin(_Base):
         self._execute("DELETE FROM code_chats WHERE id = ?", [str(chat_id)])
         return True
 
-    def add_code_chat_turn(self, chat_id: str, turn: dict[str, Any]) -> dict[str, Any] | None:
+    def add_code_chat_turn(
+        self, chat_id: str, turn: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Einen Zug anhängen. Die Reihenfolge wird hier vergeben, nicht vom Aufrufer."""
         row = self._execute(
             "SELECT coalesce(max(ordinal), -1) FROM code_chat_turns WHERE chat_id = ?",
@@ -453,7 +469,9 @@ class CodeGraphMixin(_Base):
                 datetime.now(),
             ],
         )
-        row = self._execute("SELECT * FROM code_rationale WHERE id = ?", [rationale_id]).fetchone()
+        row = self._execute(
+            "SELECT * FROM code_rationale WHERE id = ?", [rationale_id]
+        ).fetchone()
         return self._codegraph_row(row)
 
     def list_code_rationale(
@@ -509,7 +527,9 @@ class CodeGraphMixin(_Base):
             "label": row[6],
             "reason": row[7],
             "file_count": row[8],
-            "created_timestamp": self._to_iso(row[9]) if hasattr(self, "_to_iso") else row[9],
+            "created_timestamp": (
+                self._to_iso(row[9]) if hasattr(self, "_to_iso") else row[9]
+            ),
         }
 
     def add_code_checkpoint(
@@ -630,9 +650,20 @@ class CodeGraphMixin(_Base):
                 (id, code_project_id, checkpoint_id, base_sha, path, status, test_command)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            [sandbox_id, str(code_project_id), checkpoint_id, base_sha, path, status, test_command],
+            [
+                sandbox_id,
+                str(code_project_id),
+                checkpoint_id,
+                base_sha,
+                path,
+                status,
+                test_command,
+            ],
         )
-        return self.get_code_sandbox(sandbox_id) or {"id": sandbox_id, "code_project_id": code_project_id}
+        return self.get_code_sandbox(sandbox_id) or {
+            "id": sandbox_id,
+            "code_project_id": code_project_id,
+        }
 
     def get_code_sandbox(self, sandbox_id: str) -> dict[str, Any] | None:
         row = self._execute(

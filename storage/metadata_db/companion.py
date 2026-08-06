@@ -39,13 +39,26 @@ class CompanionMixin(_Base):
     ) -> dict[str, Any]:
         now = datetime.now()
         sid = session_id or f"cs_{uuid.uuid4().hex}"
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO companion_sessions
             (id, kind, title, goal, status, provider, model, monitor,
              created_timestamp, updated_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [sid, str(kind or "companion"), str(title or ""), str(goal or ""), "active",
-              provider, model, int(monitor) if monitor is not None else None, now, now])
+        """,
+            [
+                sid,
+                str(kind or "companion"),
+                str(title or ""),
+                str(goal or ""),
+                "active",
+                provider,
+                model,
+                int(monitor) if monitor is not None else None,
+                now,
+                now,
+            ],
+        )
         return self.get_companion_session(sid) or {"id": sid, "messages": []}
 
     def get_companion_session(self, session_id: str) -> dict[str, Any] | None:
@@ -79,13 +92,16 @@ class CompanionMixin(_Base):
         for row in rows:
             rec = dict(zip(cols, row))
             count = self._execute(
-                "SELECT COUNT(*) FROM companion_messages WHERE session_id = ?", [rec["id"]]
+                "SELECT COUNT(*) FROM companion_messages WHERE session_id = ?",
+                [rec["id"]],
             ).fetchone()
             rec["message_count"] = int(count[0]) if count else 0
             out.append(rec)
         return out
 
-    def update_companion_session(self, session_id: str, **fields: Any) -> dict[str, Any] | None:
+    def update_companion_session(
+        self, session_id: str, **fields: Any
+    ) -> dict[str, Any] | None:
         current = self.get_companion_session(session_id)
         if current is None:
             return None
@@ -95,13 +111,17 @@ class CompanionMixin(_Base):
             return current
         set_clause = ", ".join(f"{k} = ?" for k in updates) + ", updated_timestamp = ?"
         params = list(updates.values()) + [datetime.now(), str(session_id)]
-        self._execute(f"UPDATE companion_sessions SET {set_clause} WHERE id = ?", params)
+        self._execute(
+            f"UPDATE companion_sessions SET {set_clause} WHERE id = ?", params
+        )
         return self.get_companion_session(session_id)
 
     def delete_companion_session(self, session_id: str) -> bool:
         if self.get_companion_session(session_id) is None:
             return False
-        self._execute("DELETE FROM companion_messages WHERE session_id = ?", [str(session_id)])
+        self._execute(
+            "DELETE FROM companion_messages WHERE session_id = ?", [str(session_id)]
+        )
         self._execute("DELETE FROM companion_sessions WHERE id = ?", [str(session_id)])
         return True
 
@@ -115,14 +135,25 @@ class CompanionMixin(_Base):
     ) -> dict[str, Any]:
         now = datetime.now()
         mid = message_id or f"cm_{uuid.uuid4().hex}"
-        self._execute("""
+        self._execute(
+            """
             INSERT INTO companion_messages
             (id, session_id, role, content, payload, created_timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, [mid, str(session_id), str(role or "user"), str(content or ""),
-              json.dumps(payload) if payload is not None else None, now])
+        """,
+            [
+                mid,
+                str(session_id),
+                str(role or "user"),
+                str(content or ""),
+                json.dumps(payload) if payload is not None else None,
+                now,
+            ],
+        )
         self._touch_companion_session(session_id)
-        row = self._execute("SELECT * FROM companion_messages WHERE id = ?", [mid]).fetchone()
+        row = self._execute(
+            "SELECT * FROM companion_messages WHERE id = ?", [mid]
+        ).fetchone()
         cols = [desc[0] for desc in self.conn.description]
         rec = dict(zip(cols, row))
         rec["payload"] = self._decode_json(rec.get("payload"), None)

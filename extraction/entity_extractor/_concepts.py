@@ -2,6 +2,7 @@
 
 Split out of extraction/entity_extractor.py. Behaviour unchanged.
 """
+
 from __future__ import annotations
 
 import logging
@@ -54,7 +55,9 @@ class ConceptsMixin(_Base):
                 rows.append(
                     {
                         "label": item.get("label"),
-                        "context": str(item.get("context") or item.get("description") or "")[:160],
+                        "context": str(
+                            item.get("context") or item.get("description") or ""
+                        )[:160],
                     }
                 )
             return rows
@@ -137,9 +140,14 @@ class ConceptsMixin(_Base):
             if not label:
                 continue
             current = cls._coerce_float(item.get("confidence"), 0.0)
-            is_fallback = bool(item.get("auto_detected")) or item.get("candidate_source") == "deterministic_scan"
+            is_fallback = (
+                bool(item.get("auto_detected"))
+                or item.get("candidate_source") == "deterministic_scan"
+            )
             if is_fallback or current in {0.74, 0.70, 0.68, 0.64, 0.62, 0.60}:
-                item["confidence"] = cls._confidence_from_text_evidence(label, body_text)
+                item["confidence"] = cls._confidence_from_text_evidence(
+                    label, body_text
+                )
                 item["confidence_source"] = "text_evidence"
             output.append(item)
         return output
@@ -148,10 +156,14 @@ class ConceptsMixin(_Base):
     def _confidence_from_text_evidence(cls, label: str, text: str) -> float:
         escaped = re.escape(label)
         label_pattern = escaped.replace(r"\ ", r"[\s-]+")
-        matches = list(re.finditer(rf"\b{label_pattern}\b", text or "", flags=re.IGNORECASE))
+        matches = list(
+            re.finditer(rf"\b{label_pattern}\b", text or "", flags=re.IGNORECASE)
+        )
         count = len(matches)
         if count == 0 and " " in label:
-            initials = "".join(word[0] for word in re.findall(r"[A-Za-z]+", label)).upper()
+            initials = "".join(
+                word[0] for word in re.findall(r"[A-Za-z]+", label)
+            ).upper()
             if 2 <= len(initials) <= 8:
                 count = len(re.findall(rf"\b{re.escape(initials)}\b", text or ""))
 
@@ -168,18 +180,35 @@ class ConceptsMixin(_Base):
         header = (text or "")[:5000]
         if re.search(rf"\b{label_pattern}\b", header, flags=re.IGNORECASE):
             score += 0.04
-        if re.search(rf"\b{label_pattern}\b\s*\([A-Z0-9-]{{2,8}}\)", text or "", flags=re.IGNORECASE):
+        if re.search(
+            rf"\b{label_pattern}\b\s*\([A-Z0-9-]{{2,8}}\)",
+            text or "",
+            flags=re.IGNORECASE,
+        ):
             score += 0.05
         return round(min(score, 0.93), 2)
 
     @classmethod
-    def _fallback_cross_domain_hints(cls, concepts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        labels = {cls._normalize_label(str(concept.get("label") or "")) for concept in concepts if isinstance(concept, dict)}
+    def _fallback_cross_domain_hints(
+        cls, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        labels = {
+            cls._normalize_label(str(concept.get("label") or ""))
+            for concept in concepts
+            if isinstance(concept, dict)
+        }
         hints: list[dict[str, Any]] = []
         has_rl = cls._normalize_label("Reinforcement Learning") in labels
         has_emotion = any(
             cls._normalize_label(term) in labels
-            for term in ("OCC Model", "Somatic Marker Hypothesis", "Affective Computing", "Valence", "Arousal", "Appraisal theory")
+            for term in (
+                "OCC Model",
+                "Somatic Marker Hypothesis",
+                "Affective Computing",
+                "Valence",
+                "Arousal",
+                "Appraisal theory",
+            )
         )
         if has_rl and has_emotion:
             hints.extend(
@@ -196,7 +225,10 @@ class ConceptsMixin(_Base):
                     },
                 ]
             )
-        if cls._normalize_label("Machine Learning") in labels and cls._normalize_label("Official Statistics") in labels:
+        if (
+            cls._normalize_label("Machine Learning") in labels
+            and cls._normalize_label("Official Statistics") in labels
+        ):
             hints.append(
                 {
                     "field": "data governance",
@@ -207,16 +239,46 @@ class ConceptsMixin(_Base):
         return hints
 
     @classmethod
-    def _fallback_terminology_conflicts(cls, concepts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        labels = {cls._normalize_label(str(concept.get("label") or "")) for concept in concepts if isinstance(concept, dict)}
+    def _fallback_terminology_conflicts(
+        cls, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        labels = {
+            cls._normalize_label(str(concept.get("label") or ""))
+            for concept in concepts
+            if isinstance(concept, dict)
+        }
         conflicts: list[dict[str, Any]] = []
         templates = {
-            "Reward function": ("reward", "reinforcement signal or objective term", "psychology/economics - subjective or extrinsic incentive"),
-            "Value function": ("value", "expected return estimate", "ethics/statistics - normative worth or measured quantity"),
-            "Drive": ("drive", "internal motivational variable in an RL/control loop", "psychology/physiology - homeostatic need state or drive reduction construct"),
-            "Valence": ("valence", "affective polarity", "chemistry/linguistics - bonding capacity or argument structure"),
-            "Policy": ("policy", "action-selection rule", "governance - institutional rule or regulation"),
-            "Bias": ("bias", "statistical or model distortion", "social science - systematic unfairness or prejudice"),
+            "Reward function": (
+                "reward",
+                "reinforcement signal or objective term",
+                "psychology/economics - subjective or extrinsic incentive",
+            ),
+            "Value function": (
+                "value",
+                "expected return estimate",
+                "ethics/statistics - normative worth or measured quantity",
+            ),
+            "Drive": (
+                "drive",
+                "internal motivational variable in an RL/control loop",
+                "psychology/physiology - homeostatic need state or drive reduction construct",
+            ),
+            "Valence": (
+                "valence",
+                "affective polarity",
+                "chemistry/linguistics - bonding capacity or argument structure",
+            ),
+            "Policy": (
+                "policy",
+                "action-selection rule",
+                "governance - institutional rule or regulation",
+            ),
+            "Bias": (
+                "bias",
+                "statistical or model distortion",
+                "social science - systematic unfairness or prejudice",
+            ),
         }
         for label, (term, this_field, other_field) in templates.items():
             if cls._normalize_label(label) in labels:
@@ -300,12 +362,25 @@ class ConceptsMixin(_Base):
 
     @classmethod
     def _has_overloaded_terms(cls, concepts: list[dict[str, Any]]) -> bool:
-        overloaded = {"rewardfunction", "valuefunction", "drive", "valence", "policy", "bias"}
-        labels = {cls._normalize_label(str(concept.get("label") or "")) for concept in concepts if isinstance(concept, dict)}
+        overloaded = {
+            "rewardfunction",
+            "valuefunction",
+            "drive",
+            "valence",
+            "policy",
+            "bias",
+        }
+        labels = {
+            cls._normalize_label(str(concept.get("label") or ""))
+            for concept in concepts
+            if isinstance(concept, dict)
+        }
         return bool(labels & overloaded)
 
     @classmethod
-    def _post_process_concepts(cls, concepts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _post_process_concepts(
+        cls, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Resolve abbreviation nodes and drop noisy compound concepts."""
         concepts = cls._filter_and_repair_concepts(concepts)
         abbreviation_map = cls._abbreviation_map_from_contexts(concepts)
@@ -327,7 +402,9 @@ class ConceptsMixin(_Base):
                 continue
             normalized = cls._normalize_label(label)
             if normalized in abbreviation_keys:
-                full_label = abbreviation_map.get(label) or abbreviation_map.get(label.upper())
+                full_label = abbreviation_map.get(label) or abbreviation_map.get(
+                    label.upper()
+                )
                 if not full_label:
                     for abbr, candidate_full in abbreviation_map.items():
                         if cls._normalize_label(abbr) == normalized:
@@ -352,7 +429,9 @@ class ConceptsMixin(_Base):
         return cls._drop_compound_concepts(resolved, abbreviation_map)
 
     @classmethod
-    def _filter_and_repair_concepts(cls, concepts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _filter_and_repair_concepts(
+        cls, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         repaired: list[dict[str, Any]] = []
         for concept in concepts:
             if not isinstance(concept, dict):
@@ -369,15 +448,21 @@ class ConceptsMixin(_Base):
         return repaired
 
     @classmethod
-    def _abbreviation_map_from_contexts(cls, concepts: list[dict[str, Any]]) -> dict[str, str]:
+    def _abbreviation_map_from_contexts(
+        cls, concepts: list[dict[str, Any]]
+    ) -> dict[str, str]:
         abbreviation_map: dict[str, str] = {}
-        pattern = re.compile(r"\b([A-Z][A-Za-z]+(?:[\s-]+[A-Z]?[A-Za-z]+){1,8})\s*\(([A-Z]{2,6})\)")
+        pattern = re.compile(
+            r"\b([A-Z][A-Za-z]+(?:[\s-]+[A-Z]?[A-Za-z]+){1,8})\s*\(([A-Z]{2,6})\)"
+        )
         for concept in concepts:
             if not isinstance(concept, dict):
                 continue
             context = str(concept.get("context") or concept.get("description") or "")
             for match in pattern.finditer(context):
-                full_name = cls._trim_acronym_long_form(match.group(1).strip(), match.group(2).strip())
+                full_name = cls._trim_acronym_long_form(
+                    match.group(1).strip(), match.group(2).strip()
+                )
                 abbr = match.group(2).strip()
                 if cls._is_good_acronym_pair(full_name, abbr):
                     abbreviation_map[abbr] = full_name
@@ -404,12 +489,21 @@ class ConceptsMixin(_Base):
             if " and " not in label.lower():
                 output.append(concept)
                 continue
-            parts = [part.strip(" .,:;()[]{}") for part in re.split(r"\s+and\s+", label, flags=re.IGNORECASE)]
+            parts = [
+                part.strip(" .,:;()[]{}")
+                for part in re.split(r"\s+and\s+", label, flags=re.IGNORECASE)
+            ]
             if len(parts) < 2:
                 output.append(concept)
                 continue
-            resolved_parts = [abbreviation_map.get(part) or abbreviation_map.get(part.upper()) or part for part in parts]
-            if all(cls._normalize_label(part) in standalone_labels for part in resolved_parts):
+            resolved_parts = [
+                abbreviation_map.get(part) or abbreviation_map.get(part.upper()) or part
+                for part in parts
+            ]
+            if all(
+                cls._normalize_label(part) in standalone_labels
+                for part in resolved_parts
+            ):
                 continue
             output.append(concept)
         return output

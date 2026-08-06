@@ -3,6 +3,7 @@
 Focus: the sanitizer neutralizes prompt-injection payloads, and grey sources are
 stored separately and never leak into the papers table / knowledge graph.
 """
+
 from __future__ import annotations
 
 from research.sanitize import detect_injection, sanitize_web_text, wrap_as_untrusted
@@ -38,7 +39,10 @@ def test_wrap_as_untrusted_marks_content_as_data():
 
 
 def test_detect_injection_on_clean_text_is_empty():
-    assert detect_injection("A normal sentence about photosynthesis and chlorophyll.") == []
+    assert (
+        detect_injection("A normal sentence about photosynthesis and chlorophyll.")
+        == []
+    )
 
 
 def test_domain_filters_block_and_allow():

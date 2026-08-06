@@ -18,6 +18,7 @@ from extraction.entity_linker import (
 
 from tests.llm_fakes import FakeLLMRouter, SequenceLLMRouter
 
+
 class TestEntityExtractor:
     """Test entity extraction with configurable LLM providers."""
 
@@ -26,7 +27,9 @@ class TestEntityExtractor:
         mock_router = FakeLLMRouter()
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
-        result = extractor.extract("paper_001", "Sample paper text about neural networks")
+        result = extractor.extract(
+            "paper_001", "Sample paper text about neural networks"
+        )
 
         assert result.paper_id == "paper_001"
         assert isinstance(result.concepts, list)
@@ -49,7 +52,10 @@ class TestEntityExtractor:
 
         assert node["node_type"] == "Paper"
         assert node["paper_id"] == "arxiv:1705.05172"
-        assert node["title"] == "Emotion in Reinforcement Learning Agents and Robots: A Survey"
+        assert (
+            node["title"]
+            == "Emotion in Reinforcement Learning Agents and Robots: A Survey"
+        )
         assert node["paper_type"] == "survey"
         assert node["paper_year"] == 2017
 
@@ -81,10 +87,16 @@ class TestEntityExtractor:
 
         assert node["title"].startswith("Assessing workflow impact")
         assert node["detected_title"].startswith("Assessing workflow impact")
-        assert node["llm_paper_title"] == "AI-based Clinical Decision Support for Primary Care: A Real-World Study"
+        assert (
+            node["llm_paper_title"]
+            == "AI-based Clinical Decision Support for Primary Care: A Real-World Study"
+        )
         assert any("title conflicts" in warning for warning in warnings)
         assert validation["metadata_status"] == "invalid"
-        assert any(error.startswith("paper_title_mismatch") for error in validation["blocking_errors"])
+        assert any(
+            error.startswith("paper_title_mismatch")
+            for error in validation["blocking_errors"]
+        )
 
     def test_build_paper_node_prefers_arxiv_year_over_reference_year(self):
         node = EntityExtractor._build_paper_node(
@@ -150,12 +162,18 @@ class TestEntityExtractor:
 
         assert node["detected_source_id"] == "arxiv:1705.05172"
         assert any("implies year 2025" in warning for warning in warnings)
-        assert any("text contains arxiv:1705.05172" in warning.lower() for warning in warnings)
+        assert any(
+            "text contains arxiv:1705.05172" in warning.lower() for warning in warnings
+        )
         assert validation["metadata_status"] == "invalid"
-        assert "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:1705.05172" in validation[
-            "blocking_errors"
-        ]
-        assert any(error.startswith("paper_id_year_mismatch") for error in validation["blocking_errors"])
+        assert (
+            "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:1705.05172"
+            in validation["blocking_errors"]
+        )
+        assert any(
+            error.startswith("paper_id_year_mismatch")
+            for error in validation["blocking_errors"]
+        )
 
     def test_front_matter_arxiv_identifier_detects_late_explicit_id(self):
         paper_text = (
@@ -181,9 +199,10 @@ class TestEntityExtractor:
 
         assert node["detected_source_id"] == "arxiv:2602.11092"
         assert validation["metadata_status"] == "invalid"
-        assert "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:2602.11092" in validation[
-            "blocking_errors"
-        ]
+        assert (
+            "paper_id_mismatch: supplied arxiv:2509.08759, extracted arxiv:2602.11092"
+            in validation["blocking_errors"]
+        )
 
     def test_legacy_arxiv_identifier_normalizes_from_storage_filename(self):
         node = EntityExtractor._build_paper_node(
@@ -214,8 +233,16 @@ class TestEntityExtractor:
         )
 
         assert EntityExtractor._detect_paper_type(text) == "benchmark"
-        assert EntityExtractor._resolve_paper_type("survey", "benchmark", text) == "benchmark"
-        assert EntityExtractor._resolve_paper_type("research", "survey", "This survey reviews RL.") == "survey"
+        assert (
+            EntityExtractor._resolve_paper_type("survey", "benchmark", text)
+            == "benchmark"
+        )
+        assert (
+            EntityExtractor._resolve_paper_type(
+                "research", "survey", "This survey reviews RL."
+            )
+            == "survey"
+        )
 
     def test_extract_preserves_extended_scientific_metadata(self):
         """Test extraction keeps paper type, attribution, and formula metadata."""
@@ -223,7 +250,11 @@ class TestEntityExtractor:
             response_json={
                 "paper_type": "survey",
                 "concepts": [
-                    {"label": "Q-learning", "context": "reviewed RL method", "confidence": 0.82}
+                    {
+                        "label": "Q-learning",
+                        "context": "reviewed RL method",
+                        "confidence": 0.82,
+                    }
                 ],
                 "methods": [
                     {
@@ -254,7 +285,10 @@ class TestEntityExtractor:
                         "other_field": "chemistry - electron affinity",
                     }
                 ],
-                "temporal_coverage": {"paper_year": 2024, "reviewed_period": "2007-2023"},
+                "temporal_coverage": {
+                    "paper_year": 2024,
+                    "reviewed_period": "2007-2023",
+                },
                 "mathematical_content": {
                     "has_formulas": True,
                     "formula_types": ["reward_function", "value_function"],
@@ -271,16 +305,17 @@ class TestEntityExtractor:
         assert result.claims[0]["attributed_to"] == "this_paper"
         assert result.terminology_conflicts[0]["term"] == "valence"
         assert result.temporal_coverage["reviewed_period"] == "2007-2023"
-        assert result.mathematical_content["formula_types"] == ["reward_function", "value_function"]
+        assert result.mathematical_content["formula_types"] == [
+            "reward_function",
+            "value_function",
+        ]
 
     def test_extract_with_provider_override(self):
         """Test extraction with specific LLM provider override."""
         mock_router = FakeLLMRouter()
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
-        extractor.extract(
-            "paper_001", "Sample text", provider="openai"
-        )
+        extractor.extract("paper_001", "Sample text", provider="openai")
 
         assert mock_router.last_provider == "openai"
 
@@ -290,9 +325,7 @@ class TestEntityExtractor:
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
         overrides = {"model": "qwen3.6:35b", "context_size": 32768}
-        extractor.extract(
-            "paper_001", "Sample text", overrides=overrides
-        )
+        extractor.extract("paper_001", "Sample text", overrides=overrides)
 
         assert mock_router.last_overrides["model"] == "qwen3.6:35b"
         assert mock_router.last_overrides["context_size"] == 32768
@@ -303,20 +336,28 @@ class TestEntityExtractor:
 
     def test_failed_structural_calls_trigger_small_retries(self):
         scan = type("Scan", (), {"concepts": [{"label": "MerLin"}], "methods": []})()
-        failed_call = ParsedLLMResponse(data={}, parse_quality="failed", raw_text="LLM call failed: 422 bad request")
+        failed_call = ParsedLLMResponse(
+            data={}, parse_quality="failed", raw_text="LLM call failed: 422 bad request"
+        )
 
         assert EntityExtractor._should_retry_concepts([], [failed_call], scan)
-        assert EntityExtractor._should_retry_methods([], [failed_call], [{"label": "MerLin"}], scan)
+        assert EntityExtractor._should_retry_methods(
+            [], [failed_call], [{"label": "MerLin"}], scan
+        )
 
     def test_call_diagnostics_include_failed_excerpt(self):
         failed_call = ParsedLLMResponse(
             data={"concepts": [], "methods": []},
             parse_quality="failed",
-            raw_text="LLM call failed: 422 bad request response_body={\"detail\":\"unknown field\"}",
+            raw_text='LLM call failed: 422 bad request response_body={"detail":"unknown field"}',
         )
-        semantic = ParsedLLMResponse(data={}, parse_quality="failed", raw_text="empty response")
+        semantic = ParsedLLMResponse(
+            data={}, parse_quality="failed", raw_text="empty response"
+        )
 
-        diagnostics = EntityExtractor._call_diagnostics([failed_call], semantic, claims_pass=None)
+        diagnostics = EntityExtractor._call_diagnostics(
+            [failed_call], semantic, claims_pass=None
+        )
 
         assert diagnostics[0]["raw_excerpt"].startswith("LLM call failed")
         assert diagnostics[-1]["raw_excerpt"] == "empty response"
@@ -389,8 +430,12 @@ class TestEntityExtractor:
 
     def test_chunked_parse_quality_treats_mixed_chunk_failure_as_partial(self):
         calls = [
-            ParsedLLMResponse(data={"concepts": []}, parse_quality="clean", raw_text="{}"),
-            ParsedLLMResponse(data={}, parse_quality="failed", raw_text="LLM call failed"),
+            ParsedLLMResponse(
+                data={"concepts": []}, parse_quality="clean", raw_text="{}"
+            ),
+            ParsedLLMResponse(
+                data={}, parse_quality="failed", raw_text="LLM call failed"
+            ),
         ]
 
         assert EntityExtractor._chunked_parse_quality(calls) == "partial"
@@ -461,9 +506,24 @@ class TestEntityExtractor:
             {
                 "paper_type": "research",
                 "claims": [
-                    {"statement": "Claim A", "evidence_type": "theoretical", "negated": False, "attributed_to": "this_paper"},
-                    {"statement": "Claim B", "evidence_type": "theoretical", "negated": False, "attributed_to": "this_paper"},
-                    {"statement": "Claim C", "evidence_type": "theoretical", "negated": False, "attributed_to": "this_paper"},
+                    {
+                        "statement": "Claim A",
+                        "evidence_type": "theoretical",
+                        "negated": False,
+                        "attributed_to": "this_paper",
+                    },
+                    {
+                        "statement": "Claim B",
+                        "evidence_type": "theoretical",
+                        "negated": False,
+                        "attributed_to": "this_paper",
+                    },
+                    {
+                        "statement": "Claim C",
+                        "evidence_type": "theoretical",
+                        "negated": False,
+                        "attributed_to": "this_paper",
+                    },
                 ],
                 "cross_domain_hints": [],
                 "terminology_conflicts": [],
@@ -475,10 +535,16 @@ class TestEntityExtractor:
         mock_router = SequenceLLMRouter([structural, semantic])
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
-        result = extractor.extract("paper_001", "This paper studies reinforcement learning.")
+        result = extractor.extract(
+            "paper_001", "This paper studies reinforcement learning."
+        )
 
         assert len(mock_router.calls) == 2
-        assert [claim["statement"] for claim in result.claims] == ["Claim A", "Claim B", "Claim C"]
+        assert [claim["statement"] for claim in result.claims] == [
+            "Claim A",
+            "Claim B",
+            "Claim C",
+        ]
 
     def test_extraction_chunks_fit_16k_local_context(self):
         """Test local LM Studio-sized contexts produce smaller extraction chunks."""
@@ -487,7 +553,9 @@ class TestEntityExtractor:
         chunks = EntityExtractor._build_extraction_chunks(long_text, context_size=16384)
 
         assert len(chunks) > 1
-        assert max(len(chunk) for chunk in chunks) <= EntityExtractor._chunk_char_budget(16384)
+        assert max(
+            len(chunk) for chunk in chunks
+        ) <= EntityExtractor._chunk_char_budget(16384)
         assert EntityExtractor._chunk_char_budget(32768) <= 18000
         assert EntityExtractor._chunk_char_budget(16384) < 30000
 
@@ -523,7 +591,11 @@ class TestEntityExtractor:
         labels = {concept["label"] for concept in result.concept_candidates}
         assert "TD(lambda)" in labels
         assert "Markov Decision Process" in labels
-        mdp_concept = next(concept for concept in result.concept_candidates if concept["label"] == "Markov Decision Process")
+        mdp_concept = next(
+            concept
+            for concept in result.concept_candidates
+            if concept["label"] == "Markov Decision Process"
+        )
         assert "MDP" in mdp_concept.get("aliases", [])
         assert "ICACC" not in labels
         assert "Advanced Computer Control" not in labels
@@ -541,7 +613,10 @@ class TestEntityExtractor:
                 "claims": [],
                 "cross_domain_hints": [],
                 "terminology_conflicts": [],
-                "temporal_coverage": {"paper_year": 2017, "reviewed_period": "1997-2017"},
+                "temporal_coverage": {
+                    "paper_year": 2017,
+                    "reviewed_period": "1997-2017",
+                },
                 "mathematical_content": {"has_formulas": False, "formula_types": []},
                 "language_detected": "en",
             }
@@ -556,7 +631,9 @@ class TestEntityExtractor:
 
         labels = {concept["label"] for concept in result.concept_candidates}
         assert {"Q-learning", "SARSA", "Actor-Critic architecture"}.issubset(labels)
-        assert any(concept.get("auto_detected") for concept in result.concept_candidates)
+        assert any(
+            concept.get("auto_detected") for concept in result.concept_candidates
+        )
         assert not result.concepts
         assert result.mathematical_content["has_formulas"] is True
         assert "value_function" in result.mathematical_content["formula_types"]
@@ -589,21 +666,53 @@ class TestEntityExtractor:
         result = extractor.extract("paper_001", text)
 
         labels = {concept["label"] for concept in result.concept_candidates}
-        assert {"Reward shaping", "Policy gradient", "Value iteration", "Affective Computing", "Emotion modelling"}.issubset(labels)
-        confidences = {concept["confidence"] for concept in result.concept_candidates if concept.get("candidate_source") == "deterministic_scan"}
+        assert {
+            "Reward shaping",
+            "Policy gradient",
+            "Value iteration",
+            "Affective Computing",
+            "Emotion modelling",
+        }.issubset(labels)
+        confidences = {
+            concept["confidence"]
+            for concept in result.concept_candidates
+            if concept.get("candidate_source") == "deterministic_scan"
+        }
         assert len(confidences) > 2
         assert confidences != {0.74}
         method_labels = {method["label"] for method in result.method_candidates}
-        assert {"Reward shaping", "Policy gradient", "Value iteration"}.issubset(method_labels)
+        assert {"Reward shaping", "Policy gradient", "Value iteration"}.issubset(
+            method_labels
+        )
 
     def test_page_break_artifacts_are_cleaned_before_concept_post_processing(self):
         concepts = EntityExtractor._post_process_concepts(
             [
-                {"label": "Reward Modi", "context": "Reward Modi ---PAGE BREAK--- Cation", "confidence": 0.7},
-                {"label": "Reward Modi Cation", "context": "Reward Modi ---PAGE BREAK--- Cation", "confidence": 0.7},
-                {"label": "Break--- Emotion", "context": "---PAGE BREAK--- Emotion", "confidence": 0.7},
-                {"label": "---Page Break--- Emotion Reinforcement", "context": "---PAGE BREAK--- Emotion Reinforcement", "confidence": 0.7},
-                {"label": "Reward Shaping", "context": "Reward shaping is used.", "confidence": 0.8},
+                {
+                    "label": "Reward Modi",
+                    "context": "Reward Modi ---PAGE BREAK--- Cation",
+                    "confidence": 0.7,
+                },
+                {
+                    "label": "Reward Modi Cation",
+                    "context": "Reward Modi ---PAGE BREAK--- Cation",
+                    "confidence": 0.7,
+                },
+                {
+                    "label": "Break--- Emotion",
+                    "context": "---PAGE BREAK--- Emotion",
+                    "confidence": 0.7,
+                },
+                {
+                    "label": "---Page Break--- Emotion Reinforcement",
+                    "context": "---PAGE BREAK--- Emotion Reinforcement",
+                    "confidence": 0.7,
+                },
+                {
+                    "label": "Reward Shaping",
+                    "context": "Reward shaping is used.",
+                    "confidence": 0.8,
+                },
             ]
         )
 
@@ -617,12 +726,32 @@ class TestEntityExtractor:
     def test_filter_concepts_removes_deterministic_artifacts_preserves_llm(self):
         concepts = filter_concepts(
             [
-                {"label": "Learning Agents And Robots", "confidence": 0.8, "candidate_source": "deterministic_scan"},
-                {"label": "Reward Modi", "confidence": 0.8, "candidate_source": "deterministic_scan"},
-                {"label": "Questionnaire", "confidence": 0.8, "candidate_source": "deterministic_scan"},
-                {"label": "Low Signal Concept", "confidence": 0.5, "candidate_source": "deterministic_scan"},
+                {
+                    "label": "Learning Agents And Robots",
+                    "confidence": 0.8,
+                    "candidate_source": "deterministic_scan",
+                },
+                {
+                    "label": "Reward Modi",
+                    "confidence": 0.8,
+                    "candidate_source": "deterministic_scan",
+                },
+                {
+                    "label": "Questionnaire",
+                    "confidence": 0.8,
+                    "candidate_source": "deterministic_scan",
+                },
+                {
+                    "label": "Low Signal Concept",
+                    "confidence": 0.5,
+                    "candidate_source": "deterministic_scan",
+                },
                 {"label": "Questionnaire", "confidence": 0.9},
-                {"label": "Reward Shaping", "confidence": 0.72, "candidate_source": "deterministic_scan"},
+                {
+                    "label": "Reward Shaping",
+                    "confidence": 0.72,
+                    "candidate_source": "deterministic_scan",
+                },
                 {
                     "label": "Data Sources",
                     "context": "Repeated phrase in parsed paper text (53 mentions).",
@@ -848,7 +977,10 @@ class TestEntityExtractor:
 
         labels = [method["label"] for method in deduped]
         assert "Homeostasis-based emotion elicitation" in labels
-        assert len([label for label in labels if label.lower().startswith("homeostasis")]) == 1
+        assert (
+            len([label for label in labels if label.lower().startswith("homeostasis")])
+            == 1
+        )
         assert "Survey taxonomy of RL" in labels
         assert "Survey taxonomy of emotion RL" in labels
         assert "Merged duplicate method" in caplog.text
@@ -879,7 +1011,9 @@ class TestEntityExtractor:
         assert methods[2]["domain"] == "Interdisciplinary"
 
     def test_safe_llm_extract_recovers_fenced_json_and_empty_retry(self):
-        responses = iter(["```json\n[]\n```", "prefix [{\"statement\":\"Concrete claim\"}] suffix"])
+        responses = iter(
+            ["```json\n[]\n```", 'prefix [{"statement":"Concrete claim"}] suffix']
+        )
 
         values = safe_llm_extract(
             "Extract claims",
@@ -973,7 +1107,9 @@ class TestEntityExtractor:
         assert "PAGE BREAK" not in text
         assert "---" not in text
 
-    def test_official_statistics_paper_gets_domain_entities_when_llm_under_extracts(self):
+    def test_official_statistics_paper_gets_domain_entities_when_llm_under_extracts(
+        self,
+    ):
         """Regression for changing data sources paper: deterministic layer prevents empty KG payloads."""
         mock_router = FakeLLMRouter(
             response_json={
@@ -1048,7 +1184,9 @@ class TestEntityExtractor:
                 "language_detected": "en",
             }
         )
-        mock_router = SequenceLLMRouter([structural_partial, structural_partial, methods_retry, semantic])
+        mock_router = SequenceLLMRouter(
+            [structural_partial, structural_partial, methods_retry, semantic]
+        )
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
         with caplog.at_level("WARNING"):
@@ -1058,7 +1196,10 @@ class TestEntityExtractor:
             )
 
         assert [method["label"] for method in result.methods] == ["Q-learning"]
-        assert "Methods lost in partial recovery — running methods-only retry" in caplog.text
+        assert (
+            "Methods lost in partial recovery — running methods-only retry"
+            in caplog.text
+        )
         assert mock_router.calls[2]["overrides"]["max_tokens"] == 12000
         assert mock_router.calls[2]["overrides"]["temperature"] == 0.1
         assert mock_router.calls[2]["messages"] == [
@@ -1099,10 +1240,14 @@ class TestEntityExtractor:
                 "language_detected": "en",
             }
         )
-        mock_router = SequenceLLMRouter([structural_partial, structural_partial, methods_retry, semantic])
+        mock_router = SequenceLLMRouter(
+            [structural_partial, structural_partial, methods_retry, semantic]
+        )
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
-        result = extractor.extract("paper_001", "A survey of Reinforcement Learning (RL) and SARSA.")
+        result = extractor.extract(
+            "paper_001", "A survey of Reinforcement Learning (RL) and SARSA."
+        )
 
         assert [method["label"] for method in result.methods] == ["SARSA"]
         assert result.extraction_diagnostics["methods_retry_parse_quality"] == "clean"
@@ -1162,7 +1307,9 @@ class TestEntityExtractor:
             + "\n\n"
             + ("Appraisal dimensions include novelty, valence, and control. " * 95)
         )
-        mock_router = SequenceLLMRouter([structural_partial, structural_partial, split_one, split_two, semantic])
+        mock_router = SequenceLLMRouter(
+            [structural_partial, structural_partial, split_one, split_two, semantic]
+        )
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
         result = extractor.extract("paper_001", long_text)
@@ -1170,13 +1317,22 @@ class TestEntityExtractor:
         labels = {concept["label"] for concept in result.concepts}
         assert {"Homeostasis", "Appraisal dimensions"}.issubset(labels)
         assert result.extraction_diagnostics["call_1_parse_quality"] == "clean"
-        assert result.extraction_diagnostics["calls"][0]["recovery_strategy"] == "split_retry"
+        assert (
+            result.extraction_diagnostics["calls"][0]["recovery_strategy"]
+            == "split_retry"
+        )
 
     def test_partial_semantic_recovery_retries_claims(self, caplog):
         """Regression: partial Call 2 recovery must not silently lose claims."""
         structural = json.dumps(
             {
-                "concepts": [{"label": "Reinforcement Learning", "context": "RL survey", "confidence": 0.9}],
+                "concepts": [
+                    {
+                        "label": "Reinforcement Learning",
+                        "context": "RL survey",
+                        "confidence": 0.9,
+                    }
+                ],
                 "methods": [
                     {
                         "label": "Q-learning",
@@ -1214,7 +1370,10 @@ class TestEntityExtractor:
         extractor = EntityExtractor(mock_router, quality_db_path=None)
 
         with caplog.at_level("WARNING"):
-            result = extractor.extract("paper_001", "This survey analyzes Reinforcement Learning and emotion models.")
+            result = extractor.extract(
+                "paper_001",
+                "This survey analyzes Reinforcement Learning and emotion models.",
+            )
 
         assert result.claims[0]["statement"].startswith("A unified framework")
         assert result.cross_domain_hints[0]["field"] == "human-robot interaction"
@@ -1231,25 +1390,41 @@ class TestEntityExtractor:
                         "context": "Reinforcement Learning (RL) is used.",
                         "confidence": 0.94,
                     },
-                    {"label": "RL", "context": "Reinforcement Learning (RL) is used.", "confidence": 0.65},
+                    {
+                        "label": "RL",
+                        "context": "Reinforcement Learning (RL) is used.",
+                        "confidence": 0.65,
+                    },
                     {
                         "label": "Machine Learning",
                         "context": "Machine Learning (ML) supports automation.",
                         "confidence": 0.92,
                     },
-                    {"label": "ML", "context": "Machine Learning (ML) supports automation.", "confidence": 0.64},
+                    {
+                        "label": "ML",
+                        "context": "Machine Learning (ML) supports automation.",
+                        "confidence": 0.64,
+                    },
                     {
                         "label": "Human-Robot Interaction",
                         "context": "Human-Robot Interaction (HRI) is evaluated.",
                         "confidence": 0.9,
                     },
-                    {"label": "HRI", "context": "Human-Robot Interaction (HRI) is evaluated.", "confidence": 0.63},
+                    {
+                        "label": "HRI",
+                        "context": "Human-Robot Interaction (HRI) is evaluated.",
+                        "confidence": 0.63,
+                    },
                     {
                         "label": "Dynamic Programming",
                         "context": "Dynamic Programming (DP) is a baseline.",
                         "confidence": 0.88,
                     },
-                    {"label": "DP", "context": "Dynamic Programming (DP) is a baseline.", "confidence": 0.62},
+                    {
+                        "label": "DP",
+                        "context": "Dynamic Programming (DP) is a baseline.",
+                        "confidence": 0.62,
+                    },
                     {
                         "label": "ML and human-robot interaction",
                         "context": "ML and human-robot interaction are related.",
@@ -1280,12 +1455,21 @@ class TestEntityExtractor:
         )
 
         labels = {concept["label"] for concept in result.concepts}
-        assert {"Reinforcement Learning", "Human-Robot Interaction", "Dynamic Programming"}.issubset(labels)
+        assert {
+            "Reinforcement Learning",
+            "Human-Robot Interaction",
+            "Dynamic Programming",
+        }.issubset(labels)
         assert "Machine Learning" not in labels
         candidate_labels = {concept["label"] for concept in result.concept_candidates}
         assert "Machine Learning" in candidate_labels
-        assert {"RL", "ML", "HRI", "DP", "ML and human-robot interaction"}.isdisjoint(labels)
-        aliases_by_label = {concept["label"]: set(concept.get("aliases", [])) for concept in result.concepts}
+        assert {"RL", "ML", "HRI", "DP", "ML and human-robot interaction"}.isdisjoint(
+            labels
+        )
+        aliases_by_label = {
+            concept["label"]: set(concept.get("aliases", []))
+            for concept in result.concepts
+        }
         assert "RL" in aliases_by_label["Reinforcement Learning"]
         assert "HRI" in aliases_by_label["Human-Robot Interaction"]
         assert "DP" in aliases_by_label["Dynamic Programming"]
@@ -1343,7 +1527,12 @@ def test_entity_extractor_auto_policy_uses_whole_context_when_it_fits():
     result = extractor.extract(
         "paper-context-auto",
         "Title: Adaptive Control\n\nAdaptive Control improves robotics systems.",
-        overrides={"context_policy": "auto", "context_size": 20000, "max_tokens": 1000, "extraction_mode": "quick"},
+        overrides={
+            "context_policy": "auto",
+            "context_size": 20000,
+            "max_tokens": 1000,
+            "extraction_mode": "quick",
+        },
     )
 
     diagnostics = result.extraction_diagnostics["context_diagnostics"]
@@ -1355,17 +1544,27 @@ def test_entity_extractor_auto_policy_uses_whole_context_when_it_fits():
 def test_entity_extractor_whole_policy_fails_clearly_without_fallback():
     llm = FakeLLMRouter()
     extractor = EntityExtractor(llm, quality_db_path=None)
-    text = "Title: Large Paper\n\n" + ("Adaptive Control is discussed in detail. " * 1500)
+    text = "Title: Large Paper\n\n" + (
+        "Adaptive Control is discussed in detail. " * 1500
+    )
 
     result = extractor.extract(
         "paper-context-too-small",
         text,
-        overrides={"context_policy": "whole", "context_size": 9000, "max_tokens": 1000, "extraction_mode": "quick"},
+        overrides={
+            "context_policy": "whole",
+            "context_size": 9000,
+            "max_tokens": 1000,
+            "extraction_mode": "quick",
+        },
     )
 
     diagnostics = result.extraction_diagnostics["context_diagnostics"]
     assert result.extraction_diagnostics["fatal_llm_error"] is True
-    assert "Whole-paper context does not fit" in result.extraction_diagnostics["failure_reason"]
+    assert (
+        "Whole-paper context does not fit"
+        in result.extraction_diagnostics["failure_reason"]
+    )
     assert diagnostics["context_policy"] == "whole"
     assert diagnostics["whole_context_used"] is False
     assert diagnostics["fallback_reason"] == "context_budget_exceeded"

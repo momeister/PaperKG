@@ -70,7 +70,9 @@ class SemanticScholarClient:
     async def _throttle(self) -> None:
         async with self._lock:
             now = time.monotonic()
-            requests_per_second = max(float(self.config.requests_per_second or 1.0), 0.01)
+            requests_per_second = max(
+                float(self.config.requests_per_second or 1.0), 0.01
+            )
             min_interval = 1.0 / requests_per_second
             elapsed = now - self._last_request_ts
             if elapsed < min_interval:
@@ -108,7 +110,9 @@ class SemanticScholarClient:
         for attempt in range(max_retries + 1):
             await self._throttle()
             try:
-                response = await self._client.request(method, url, params=params, json=json_payload)
+                response = await self._client.request(
+                    method, url, params=params, json=json_payload
+                )
             except httpx.TimeoutException:
                 if attempt >= max_retries:
                     raise
@@ -117,7 +121,9 @@ class SemanticScholarClient:
                 continue
 
             if response.status_code == 429:
-                retry_after = self._retry_after_seconds(response.headers.get("Retry-After"))
+                retry_after = self._retry_after_seconds(
+                    response.headers.get("Retry-After")
+                )
                 last_retry_after = retry_after
                 if attempt >= max_retries:
                     raise SemanticScholarRateLimitError(retry_after)
@@ -126,7 +132,9 @@ class SemanticScholarClient:
                 continue
 
             if response.status_code in {500, 502, 503, 504} and attempt < max_retries:
-                retry_after = self._retry_after_seconds(response.headers.get("Retry-After"))
+                retry_after = self._retry_after_seconds(
+                    response.headers.get("Retry-After")
+                )
                 await asyncio.sleep(max(retry_after or 0.0, retry_delay))
                 retry_delay = min(retry_delay * 2, 60.0)
                 continue
@@ -136,10 +144,14 @@ class SemanticScholarClient:
 
         raise SemanticScholarRateLimitError(last_retry_after)
 
-    async def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _get(
+        self, url: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return await self._request("GET", url, params=params)
 
-    async def _post(self, url: str, payload: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _post(
+        self, url: str, payload: dict[str, Any], params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return await self._request("POST", url, params=params, json_payload=payload)
 
     async def search_papers(
@@ -151,7 +163,11 @@ class SemanticScholarClient:
         year: str | None = None,
         open_access_pdf: bool = False,
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {"query": query, "limit": min(limit, 100), "offset": offset}
+        params: dict[str, Any] = {
+            "query": query,
+            "limit": min(limit, 100),
+            "offset": offset,
+        }
         if fields:
             params["fields"] = fields
         if year:
@@ -160,7 +176,9 @@ class SemanticScholarClient:
             params["openAccessPdf"] = ""
         return await self._get(f"{S2_GRAPH_BASE}/paper/search", params=params)
 
-    async def get_paper(self, paper_id: str, fields: str | None = None) -> dict[str, Any]:
+    async def get_paper(
+        self, paper_id: str, fields: str | None = None
+    ) -> dict[str, Any]:
         params = {"fields": fields} if fields else None
         return await self._get(f"{S2_GRAPH_BASE}/paper/{paper_id}", params=params)
 
@@ -174,7 +192,9 @@ class SemanticScholarClient:
         params: dict[str, Any] = {"limit": min(limit, 500), "from": from_pool}
         if fields:
             params["fields"] = fields
-        return await self._get(f"{S2_RECOMMEND_BASE}/papers/forpaper/{paper_id}", params=params)
+        return await self._get(
+            f"{S2_RECOMMEND_BASE}/papers/forpaper/{paper_id}", params=params
+        )
 
     async def get_recommendations(
         self,
@@ -190,4 +210,6 @@ class SemanticScholarClient:
             "positivePaperIds": positive_paper_ids,
             "negativePaperIds": negative_paper_ids or [],
         }
-        return await self._post(f"{S2_RECOMMEND_BASE}/papers", payload=payload, params=params)
+        return await self._post(
+            f"{S2_RECOMMEND_BASE}/papers", payload=payload, params=params
+        )

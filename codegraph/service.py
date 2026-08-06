@@ -8,6 +8,7 @@ Frage, *was* man damit tut — inklusive der Buchführung in DuckDB, damit die
 Oberfläche „ist dieses Projekt indiziert?" beantworten kann, ohne dafür einen
 Prozess zu starten.
 """
+
 from __future__ import annotations
 
 import queue
@@ -24,7 +25,9 @@ from storage.metadata_db import MetadataDB
 from workspace import manager as workspace_manager
 
 
-def status(db: MetadataDB, project: dict[str, Any], config_path: str = "config.yaml") -> dict[str, Any]:
+def status(
+    db: MetadataDB, project: dict[str, Any], config_path: str = "config.yaml"
+) -> dict[str, Any]:
     """Indexzustand eines Code-Projekts, ohne den Index anzufassen.
 
     Bewusst billig: das ist der Aufruf, den die Werkstatt bei jedem Projektwechsel
@@ -57,7 +60,14 @@ def _stats_of(record: dict[str, Any] | None) -> dict[str, int]:
     record = record or {}
     return {
         key: int(record.get(key) or 0)
-        for key in ("files", "parsed_files", "nodes", "edges", "guessed_edges", "dynamic_gaps")
+        for key in (
+            "files",
+            "parsed_files",
+            "nodes",
+            "edges",
+            "guessed_edges",
+            "dynamic_gaps",
+        )
     }
 
 
@@ -92,11 +102,15 @@ def index(
     try:
         client = client_for(project, config_path)
     except Exception as error:  # noqa: BLE001 — jeder Fehler muss als Ereignis ankommen
-        db.upsert_code_index(code_project_id, str(db_path), status="failed", error_message=str(error))
+        db.upsert_code_index(
+            code_project_id, str(db_path), status="failed", error_message=str(error)
+        )
         yield {"event": "failed", "error": str(error)}
         return
 
-    db.upsert_code_index(code_project_id, str(db_path), status="indexing", error_message=None)
+    db.upsert_code_index(
+        code_project_id, str(db_path), status="indexing", error_message=None
+    )
     yield {"event": "started", "code_project_id": code_project_id}
 
     # Der eigentliche Lauf blockiert, bis er fertig ist. Damit die Oberfläche in
@@ -109,8 +123,12 @@ def index(
 
     def run() -> None:
         try:
-            result["report"] = client.index(on_progress=progress.put, timeout=index_timeout)
-        except Exception as error:  # noqa: BLE001 — jeder Fehler muss den Strom erreichen
+            result["report"] = client.index(
+                on_progress=progress.put, timeout=index_timeout
+            )
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 — jeder Fehler muss den Strom erreichen
             result["error"] = str(error)
         finally:
             progress.put(None)
@@ -127,7 +145,10 @@ def index(
 
     if "error" in result:
         db.upsert_code_index(
-            code_project_id, str(db_path), status="failed", error_message=result["error"]
+            code_project_id,
+            str(db_path),
+            status="failed",
+            error_message=result["error"],
         )
         yield {"event": "failed", "error": result["error"]}
         return
@@ -136,7 +157,9 @@ def index(
     try:
         stats = client.stats()
     except CodeGraphError as error:
-        db.upsert_code_index(code_project_id, str(db_path), status="failed", error_message=str(error))
+        db.upsert_code_index(
+            code_project_id, str(db_path), status="failed", error_message=str(error)
+        )
         yield {"event": "failed", "error": str(error)}
         return
 
@@ -146,7 +169,9 @@ def index(
     yield {"event": "done", "report": report, "stats": stats, "index": record}
 
 
-def drop_index(db: MetadataDB, code_project_id: str, config_path: str = "config.yaml") -> bool:
+def drop_index(
+    db: MetadataDB, code_project_id: str, config_path: str = "config.yaml"
+) -> bool:
     """Index löschen: erst den Prozess, der ihn offen hält, dann die Dateien."""
     POOL.drop(str(code_project_id))
     db.delete_code_index(str(code_project_id))
@@ -200,7 +225,12 @@ def resolve_positions(
         return []
     payload = [{"path": position.path, "line": position.line} for position in found]
     try:
-        return query(project, "resolve_positions", {"positions": payload}, config_path=config_path)
+        return query(
+            project,
+            "resolve_positions",
+            {"positions": payload},
+            config_path=config_path,
+        )
     except (CodeGraphError, binary.CodeSearchMissingError):
         # Ohne Index gibt es keine Symbole, aber die Sprungmarke selbst steht.
         return [{**item, "node_id": None, "qualified": None} for item in payload]

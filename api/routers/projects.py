@@ -4,6 +4,7 @@ Split out of api/product_main.py. Behaviour unchanged. Die Projekt-Helfer
 (_load_projects, _attach_papers_to_project, ...) sind die gemeinsame Basis
 fuer papers/harvest/extraction und werden von dort importiert.
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,11 +69,16 @@ def list_projects(
     degraded: str | None = None
     try:
         with MetadataDB(metadata_db_path) as db:
-            papers = {str(paper.get("id")): paper for paper in db.list_papers(limit=50000)}
+            papers = {
+                str(paper.get("id")): paper for paper in db.list_papers(limit=50000)
+            }
     except Exception as error:  # noqa: BLE001 - Projektliste darf daran nicht scheitern
         logger.warning("Projektliste ohne Metadaten-DB ausgeliefert: %s", error)
         degraded = str(error)
-    views = [_project_view(project_id, paper_ids, papers) for project_id, paper_ids in sorted(projects.items())]
+    views = [
+        _project_view(project_id, paper_ids, papers)
+        for project_id, paper_ids in sorted(projects.items())
+    ]
     # Angeheftete Projekte zuerst, sonst alphabetisch (die Liste ist bereits sortiert).
     views.sort(key=lambda view: not view["pinned"])
     payload: dict[str, Any] = {"projects": views}
@@ -82,14 +88,20 @@ def list_projects(
 
 
 @router.post("/projects")
-def create_project(payload: ProjectPayload, projects_path: str | None = None) -> dict[str, Any]:
+def create_project(
+    payload: ProjectPayload, projects_path: str | None = None
+) -> dict[str, Any]:
     path = _projects_path(projects_path)
     projects = _load_projects(path)
     project_id = payload.name.strip()
     if _is_reserved_project_id(project_id):
-        raise HTTPException(status_code=400, detail=f"Reserved project name: {project_id}")
+        raise HTTPException(
+            status_code=400, detail=f"Reserved project name: {project_id}"
+        )
     if project_id in projects:
-        raise HTTPException(status_code=409, detail=f"Project already exists: {project_id}")
+        raise HTTPException(
+            status_code=409, detail=f"Project already exists: {project_id}"
+        )
     projects[project_id] = _unique_strings(payload.paper_ids)
     _save_projects(projects, path)
     return {"project": _project_view(project_id, projects[project_id], {})}
@@ -107,15 +119,26 @@ def patch_project(
     if project_id not in projects:
         raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
     if _is_reserved_project_id(project_id):
-        raise HTTPException(status_code=400, detail="Alle Papers is the global library mode and cannot be renamed.")
+        raise HTTPException(
+            status_code=400,
+            detail="Alle Papers is the global library mode and cannot be renamed.",
+        )
 
     target_id = payload.name.strip() if payload.name else project_id
     if _is_reserved_project_id(target_id):
-        raise HTTPException(status_code=400, detail=f"Reserved project name: {target_id}")
+        raise HTTPException(
+            status_code=400, detail=f"Reserved project name: {target_id}"
+        )
     if target_id != project_id and target_id in projects:
-        raise HTTPException(status_code=409, detail=f"Project already exists: {target_id}")
+        raise HTTPException(
+            status_code=409, detail=f"Project already exists: {target_id}"
+        )
 
-    paper_ids = _unique_strings(payload.paper_ids) if payload.paper_ids is not None else projects[project_id]
+    paper_ids = (
+        _unique_strings(payload.paper_ids)
+        if payload.paper_ids is not None
+        else projects[project_id]
+    )
 
     if target_id != project_id:
         # Die Projekt-ID ist der Name: ohne diese Migration verlieren Notizen, Web-Quellen,
@@ -149,7 +172,10 @@ def patch_project(
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, projects_path: str | None = None) -> dict[str, Any]:
     if _is_reserved_project_id(project_id):
-        raise HTTPException(status_code=400, detail="Alle Papers is the global library mode and cannot be deleted.")
+        raise HTTPException(
+            status_code=400,
+            detail="Alle Papers is the global library mode and cannot be deleted.",
+        )
     path = _projects_path(projects_path)
     projects = _load_projects(path)
     if project_id not in projects:
@@ -197,11 +223,16 @@ def remove_project_paper(
     if primaries.get(project_id) == paper_id:
         primaries.pop(project_id, None)
         _save_primary_papers(primaries)
-    return {"project": _project_view(project_id, projects[project_id], {}), "removed": paper_id}
+    return {
+        "project": _project_view(project_id, projects[project_id], {}),
+        "removed": paper_id,
+    }
 
 
 @router.put("/projects/{project_id}/primary-paper")
-def set_project_primary_paper(project_id: str, payload: PrimaryPaperPayload) -> dict[str, Any]:
+def set_project_primary_paper(
+    project_id: str, payload: PrimaryPaperPayload
+) -> dict[str, Any]:
     """Mark (or clear) the project's main source. Answers will prioritize it."""
     mapping = _load_primary_papers()
     if payload.paper_id:
@@ -227,14 +258,34 @@ def project_dashboard(
     paper_ids = set(projects[project_id])
     health = build_health_report(metadata_db_path, graph_db_path, pdf_base_dir)
     with MetadataDB(metadata_db_path) as db:
-        papers = [paper for paper in db.list_papers(limit=50000) if str(paper.get("id")) in paper_ids]
-        extractions = [item for item in db.list_extraction_results(limit=50000) if str(item.get("paper_id")) in paper_ids]
+        papers = [
+            paper
+            for paper in db.list_papers(limit=50000)
+            if str(paper.get("id")) in paper_ids
+        ]
+        extractions = [
+            item
+            for item in db.list_extraction_results(limit=50000)
+            if str(item.get("paper_id")) in paper_ids
+        ]
         latest_jobs = db.list_batch_jobs(limit=5)
-        review_items = [item for item in db.list_entity_review_queue(status="pending", limit=10000) if str(item.get("paper_id")) in paper_ids]
+        review_items = [
+            item
+            for item in db.list_entity_review_queue(status="pending", limit=10000)
+            if str(item.get("paper_id")) in paper_ids
+        ]
 
-    successful_papers = {str(item.get("paper_id")) for item in extractions if item.get("extraction_status") == "success"}
+    successful_papers = {
+        str(item.get("paper_id"))
+        for item in extractions
+        if item.get("extraction_status") == "success"
+    }
     return {
-        "project": _project_view(project_id, list(paper_ids), {str(paper.get("id")): paper for paper in papers}),
+        "project": _project_view(
+            project_id,
+            list(paper_ids),
+            {str(paper.get("id")): paper for paper in papers},
+        ),
         "metrics": {
             "papers": len(papers),
             "pdfs": sum(1 for paper in papers if paper.get("has_full_text")),
@@ -260,7 +311,9 @@ def _load_projects(path: Path = PROJECTS_PATH) -> dict[str, list[str]]:
     # ueberschreiben und die Projekte tatsaechlich vernichten.
     data = read_json_dict(path)
     return {
-        str(project_id): _unique_strings(paper_ids if isinstance(paper_ids, list) else [])
+        str(project_id): _unique_strings(
+            paper_ids if isinstance(paper_ids, list) else []
+        )
         for project_id, paper_ids in data.items()
     }
 
@@ -283,10 +336,14 @@ def _save_primary_papers(mapping: dict[str, str], path: Path | None = None) -> N
 def _load_project_meta(path: Path | None = None) -> dict[str, dict[str, Any]]:
     """Per-Projekt-UI-Metadaten (aktuell nur ``pinned``) neben projects.json."""
     data = read_json_dict(path or PROJECT_META_PATH)
-    return {str(pid): dict(value) for pid, value in data.items() if isinstance(value, dict)}
+    return {
+        str(pid): dict(value) for pid, value in data.items() if isinstance(value, dict)
+    }
 
 
-def _save_project_meta(meta: dict[str, dict[str, Any]], path: Path | None = None) -> None:
+def _save_project_meta(
+    meta: dict[str, dict[str, Any]], path: Path | None = None
+) -> None:
     write_json_atomic(path or PROJECT_META_PATH, meta)
 
 
@@ -302,11 +359,21 @@ def _migrate_project_sidecars(old_project_id: str, new_project_id: str) -> None:
         _save_project_meta(meta)
 
 
-def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    years = [int(papers[pid]["year"]) for pid in paper_ids if pid in papers and papers[pid].get("year")]
+def _project_view(
+    project_id: str, paper_ids: list[str], papers: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    years = [
+        int(papers[pid]["year"])
+        for pid in paper_ids
+        if pid in papers and papers[pid].get("year")
+    ]
     meta_entry = _load_project_meta().get(project_id) or {}
     raw_creativity = meta_entry.get("creativity_level")
-    creativity_level = int(raw_creativity) if isinstance(raw_creativity, (int, float)) and 1 <= int(raw_creativity) <= 5 else 3
+    creativity_level = (
+        int(raw_creativity)
+        if isinstance(raw_creativity, (int, float)) and 1 <= int(raw_creativity) <= 5
+        else 3
+    )
     return {
         "id": project_id,
         "name": project_id,
@@ -369,8 +436,13 @@ def _unique_strings(values: list[Any]) -> list[str]:
 
 
 def _paper_matches_query(paper: dict[str, Any], query: str) -> bool:
-    haystack = " ".join(str(paper.get(key) or "") for key in ["id", "source_id", "title", "abstract", "doi"]).lower()
-    return all(token in haystack for token in re.findall(r"[a-z0-9._:-]+", query.lower()))
+    haystack = " ".join(
+        str(paper.get(key) or "")
+        for key in ["id", "source_id", "title", "abstract", "doi"]
+    ).lower()
+    return all(
+        token in haystack for token in re.findall(r"[a-z0-9._:-]+", query.lower())
+    )
 
 
 def _ratio(numerator: int, denominator: int) -> float:

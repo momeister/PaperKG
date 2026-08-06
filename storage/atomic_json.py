@@ -18,6 +18,7 @@ Dieses Modul dreht beides um:
   die defekte Datei als ``<name>.corrupt-<ts>`` beiseite, statt sie zu verschweigen.
   Ein sichtbarer Fehler ist immer besser als eine still geleerte Bibliothek.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,11 @@ class CorruptJsonError(RuntimeError):
         self.path = path
         self.quarantined = quarantined
         self.reason = reason
-        hint = f" Die defekte Datei liegt jetzt unter {quarantined.name}." if quarantined else ""
+        hint = (
+            f" Die defekte Datei liegt jetzt unter {quarantined.name}."
+            if quarantined
+            else ""
+        )
         super().__init__(
             f"{path.name} ist beschaedigt und konnte nicht gelesen werden ({reason})."
             f"{hint} Stelle sie aus einem Backup wieder her, bevor du weiterarbeitest — "
@@ -45,7 +50,9 @@ class CorruptJsonError(RuntimeError):
         )
 
 
-def write_json_atomic(path: Path, data: Any, *, indent: int = 2, sort_keys: bool = True) -> None:
+def write_json_atomic(
+    path: Path, data: Any, *, indent: int = 2, sort_keys: bool = True
+) -> None:
     """Schreibe ``data`` als JSON nach ``path`` — ganz oder gar nicht."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +60,9 @@ def write_json_atomic(path: Path, data: Any, *, indent: int = 2, sort_keys: bool
 
     # Temp-Datei muss im selben Verzeichnis liegen: os.replace ist nur innerhalb
     # eines Dateisystems atomar, und data/ kann ein eigener Mount sein (Docker).
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -106,7 +115,13 @@ def read_json_dict(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise CorruptJsonError(path, quarantine_file(path), f"ungueltiges JSON: {error}") from error
+        raise CorruptJsonError(
+            path, quarantine_file(path), f"ungueltiges JSON: {error}"
+        ) from error
     if not isinstance(data, dict):
-        raise CorruptJsonError(path, quarantine_file(path), f"erwartet wurde ein Objekt, gefunden {type(data).__name__}")
+        raise CorruptJsonError(
+            path,
+            quarantine_file(path),
+            f"erwartet wurde ein Objekt, gefunden {type(data).__name__}",
+        )
     return data
