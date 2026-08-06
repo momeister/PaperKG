@@ -5,6 +5,7 @@ verschiebt eine Umbenennung die Zugehoerigkeit *aller* projektgebundenen Daten.
 Ohne diese Migration wuerden Notizen, Web-Quellen, Sessions und Analysen nach
 einer Umbenennung verwaisen.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -27,6 +28,8 @@ PROJECT_SCOPED_TABLES: tuple[str, ...] = (
     # ``code_chat_turns`` steht bewusst nicht hier: die Züge hängen am Gespräch,
     # nicht am Projekt.
     "code_chats",
+    # Task-Focused Mode: strukturierter Task-Spec (Kaggle/Hackathon), projektgebunden.
+    "tasks",
 )
 
 
@@ -35,7 +38,9 @@ class ProjectScopeMixin:
 
     _execute: Any
 
-    def rename_project(self, old_project_id: str, new_project_id: str) -> dict[str, int]:
+    def rename_project(
+        self, old_project_id: str, new_project_id: str
+    ) -> dict[str, int]:
         """Schreibe ``project_id`` in allen betroffenen Tabellen um.
 
         ``workspace_sessions.project_id`` ist PRIMARY KEY: existiert bereits eine
@@ -59,7 +64,10 @@ class ProjectScopeMixin:
                 if not count:
                     continue
                 if table == "workspace_sessions":
-                    self._execute("DELETE FROM workspace_sessions WHERE project_id = ?", [new_project_id])
+                    self._execute(
+                        "DELETE FROM workspace_sessions WHERE project_id = ?",
+                        [new_project_id],
+                    )
                 self._execute(
                     f"UPDATE {table} SET project_id = ? WHERE project_id = ?",  # noqa: S608 - fixed table list
                     [new_project_id, old_project_id],

@@ -120,6 +120,9 @@ app.include_router(_agent_router.router)
 from api.routers import grey_sources as _grey_sources_router  # noqa: E402
 
 app.include_router(_grey_sources_router.router)
+from api.routers import tasks as _tasks_router  # noqa: E402
+
+app.include_router(_tasks_router.router)
 from api.routers import extraction as _extraction_router  # noqa: E402
 
 app.include_router(_extraction_router.router)

@@ -5,6 +5,7 @@ Split out of api/product_main.py. Behaviour unchanged. Patchbare Namen laufen
 ueber pm.<name>: llm_router, auto_research_answer, ResearchTreeRunner,
 _run_harvest_search, _resolve_extraction_pdf_path/_parse_pdf_for_extraction.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,6 +67,7 @@ class DeepResearchRequest(BaseModel):
 
 class AutoAnswerRequest(BaseModel):
     """Answer a workspace question, auto-harvesting papers + web sources if it is weak."""
+
     question: str = Field(min_length=1, max_length=4000)
     # Clean question for paper/web search + related-topic analysis (the answered question
     # may carry an answer-style hint like a verbosity instruction). Falls back to question.
@@ -104,6 +106,11 @@ class ResearchTreeRequest(BaseModel):
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
     initial_nodes: list[dict[str, Any]] = Field(default_factory=list)
     session_id: str | None = None
+    # Task-Focused Mode: injiziert den Task-Spec als Kontext und (optional) als
+    # zitierbare Grey-Source ``grey_task_{id}``. ``task_mode='auto_download'``
+    # schaltet auto_harvest implizit an, damit zitierte Quellen ins Projekt fließen.
+    task_id: str | None = None
+    task_mode: str | None = None  # None | 'auto_download'
 
 
 class ResearchSessionUpsertRequest(BaseModel):
@@ -111,12 +118,12 @@ class ResearchSessionUpsertRequest(BaseModel):
 
     Sent on completion so the server copy carries the verification-enriched nodes the
     client computed (the streaming persistence only has the bare answers)."""
+
     project_id: str | None = None
     question: str = ""
     status: str = "done"
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
-
 
 
 class ResearchTreeExportOptions(BaseModel):
@@ -132,18 +139,22 @@ class ResearchTreeExportRequest(BaseModel):
     The tree ``nodes`` and aggregated ``sources`` are sent straight from the frontend
     state — no DB round-trip — and ``document`` is the synthesis Markdown.
     """
+
     root_question: str = Field(min_length=1, max_length=2000)
     document: str = Field(min_length=1)
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     sources: list[dict[str, Any]] = Field(default_factory=list)
     format: str = Field(default="pdf", pattern="^(pdf|zip|tex)$")
-    options: ResearchTreeExportOptions = Field(default_factory=ResearchTreeExportOptions)
+    options: ResearchTreeExportOptions = Field(
+        default_factory=ResearchTreeExportOptions
+    )
     provider: str | None = None
     model: str | None = None
 
 
 class ResearchTreeAsSourceRequest(BaseModel):
     """Store a finished Tiefenanalyse as a citable project source."""
+
     project_id: str = Field(min_length=1, max_length=200)
     root_question: str = Field(min_length=1, max_length=2000)
     document: str = Field(min_length=1)
@@ -157,11 +168,60 @@ class ResearchClarifyRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     provider: str | None = None
     model: str | None = None
+    # Task-Focused Mode: wenn gesetzt, werden die Richtungen aus dem Task-Spec
+    # vorgeschlagen (statt nur aus der freien Frage).
+    task_id: str | None = None
+    metadata_db_path: str = DEFAULT_METADATA_DB_PATH
 
+
+def _load_task_context(task_id: str, metadata_db_path: str) -> dict[str, Any] | None:
+    """Load a task-spec for context injection. Returns None if absent."""
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            return db.get_task(task_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _task_context_prefix(task: dict[str, Any]) -> str:
+    """Build a compact context block prepended to the research question."""
+    spec = task.get("task_json") or {}
+    if not isinstance(spec, dict):
+        spec = {}
+    parts: list[str] = []
+    title = str(task.get("title") or spec.get("title") or "Aufgabe")
+    parts.append(f"[TASK-KONTEXT] Aufgabe: {title}")
+    objective = str(spec.get("objective") or "")
+    if objective:
+        parts.append(f"Ziel: {objective}")
+    eval_text = str(spec.get("evaluation") or "")
+    if eval_text:
+        parts.append(f"Bewertung: {eval_text}")
+    rules = spec.get("rules") or []
+    if isinstance(rules, list) and rules:
+        parts.append("Regeln: " + "; ".join(str(r) for r in rules[:5]))
+    constraints = spec.get("constraints") or []
+    if isinstance(constraints, list) and constraints:
+        parts.append("Constraints: " + "; ".join(str(c) for c in constraints[:5]))
+    directions = spec.get("suggested_directions") or []
+    if isinstance(directions, list) and directions:
+        labels = [
+            str(d.get("label") or "").strip()
+            for d in directions
+            if isinstance(d, dict) and d.get("label")
+        ]
+        labels = [lbl for lbl in labels if lbl]
+        if labels:
+            parts.append("Vorgeschlagene Richtungen: " + "; ".join(labels[:6]))
+    parts.append("[/TASK-KONTEXT]")
+    return "\n".join(parts)
 
 
 async def _run_discovery_queries(
-    analysis: dict[str, Any], sources: list[str], max_per_query: int, metadata_db_path: str
+    analysis: dict[str, Any],
+    sources: list[str],
+    max_per_query: int,
+    metadata_db_path: str,
 ) -> list[dict[str, Any]]:
     """Run each suggested query through the harvest sources and aggregate novel papers."""
     existing = _existing_library_keys(metadata_db_path)
@@ -174,8 +234,12 @@ async def _run_discovery_queries(
         results, _ = await pm._run_harvest_search(query, sources, max_per_query)
         for paper in results:
             doi_key = str(paper.get("doi") or "").lower()
-            id_key = str(paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}").lower()
-            title_key = re.sub(r"\s+", " ", str(paper.get("title") or "").lower()).strip()
+            id_key = str(
+                paper.get("id") or f"{paper.get('source')}:{paper.get('source_id')}"
+            ).lower()
+            title_key = re.sub(
+                r"\s+", " ", str(paper.get("title") or "").lower()
+            ).strip()
             if doi_key and doi_key in existing:
                 continue
             if title_key and title_key in existing:
@@ -193,7 +257,9 @@ async def _run_discovery_queries(
 @router.post("/discovery/from-topic")
 async def discovery_from_topic(request: DiscoveryTopicRequest) -> dict[str, Any]:
     """AI suggests topic-near papers to download for more context (suggest only)."""
-    analysis = await asyncio.to_thread(analyze_topic, pm.llm_router, request.topic, request.provider)
+    analysis = await asyncio.to_thread(
+        analyze_topic, pm.llm_router, request.topic, request.provider
+    )
     candidates = await _run_discovery_queries(
         analysis, request.sources, request.max_per_query, request.metadata_db_path
     )
@@ -204,10 +270,15 @@ async def discovery_from_topic(request: DiscoveryTopicRequest) -> dict[str, Any]
 async def discovery_from_paper(request: DiscoveryPaperRequest) -> dict[str, Any]:
     """AI analyzes an uploaded paper (topic + methods) and suggests related papers."""
     pdf_path = pm._resolve_extraction_pdf_path(
-        request.paper_id, request.pdf_path, request.metadata_db_path, request.pdf_base_dir
+        request.paper_id,
+        request.pdf_path,
+        request.metadata_db_path,
+        request.pdf_base_dir,
     )
     parsed = pm._parse_pdf_for_extraction(pdf_path, request.paper_id, request.parser)
-    analysis = await asyncio.to_thread(analyze_paper, pm.llm_router, parsed.text, request.provider)
+    analysis = await asyncio.to_thread(
+        analyze_paper, pm.llm_router, parsed.text, request.provider
+    )
     candidates = await _run_discovery_queries(
         analysis, request.sources, request.max_per_query, request.metadata_db_path
     )
@@ -286,7 +357,7 @@ def _parse_sse_node(event: str) -> dict[str, Any] | None:
     if not line.startswith("data:"):
         return None
     try:
-        node = json.loads(line[len("data:"):].strip())
+        node = json.loads(line[len("data:") :].strip())
     except (ValueError, TypeError):
         return None
     return node if isinstance(node, dict) and node.get("id") else None
@@ -308,6 +379,23 @@ async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
     session_id = request.session_id or uuid.uuid4().hex
     db_path = request.metadata_db_path
 
+    # Task-Focused Mode: Task-Spec als Kontext präfixen + als zitierbare Grey-Source
+    # hinzufügen. ``task_mode='auto_download'`` aktiviert auto_harvest, damit zitierte
+    # Quellen automatisch ins Projekt fließen.
+    task_question = request.question
+    task_grey_ids = list(request.grey_source_ids or [])
+    task_auto_harvest = request.auto_harvest
+    if request.task_id:
+        task = _load_task_context(request.task_id, request.metadata_db_path)
+        if task is not None:
+            prefix = _task_context_prefix(task)
+            task_question = f"{prefix}\n\nFrage: {request.question}"
+            grey_id = f"grey_{request.task_id}"
+            if grey_id not in task_grey_ids:
+                task_grey_ids.append(grey_id)
+            if request.task_mode == "auto_download":
+                task_auto_harvest = True
+
     async def persist_stream() -> AsyncIterator[str]:
         nodes_by_id: dict[str, dict[str, Any]] = {}
         order: list[str] = []
@@ -322,7 +410,10 @@ async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
             try:
                 with MetadataDB(db_path) as db:
                     db.upsert_research_session(
-                        session_id, request.project_id, request.question, status,
+                        session_id,
+                        request.project_id,
+                        request.question,
+                        status,
                         [nodes_by_id[i] for i in order],
                     )
             except Exception:
@@ -332,16 +423,16 @@ async def research_tree(request: ResearchTreeRequest) -> StreamingResponse:
         last_save = time.monotonic()
         try:
             async for event in runner.stream_events(
-                question=request.question,
+                question=task_question,
                 depth=request.depth,
                 branches=request.branches,
                 provider=request.provider,
                 model=request.model,
                 paper_ids=request.paper_ids or None,
                 project_id=request.project_id,
-                grey_source_ids=request.grey_source_ids or None,
+                grey_source_ids=task_grey_ids or None,
                 include_project_grey=request.include_project_grey,
-                auto_harvest=request.auto_harvest,
+                auto_harvest=task_auto_harvest,
                 metadata_db_path=request.metadata_db_path,
                 pdf_base_dir=request.pdf_base_dir,
                 max_nodes=request.max_nodes,
@@ -401,7 +492,11 @@ def upsert_research_session(
     """Authoritative overwrite of a session (verification-enriched copy from the client)."""
     with MetadataDB(request.metadata_db_path) as db:
         session = db.upsert_research_session(
-            session_id, request.project_id, request.question, request.status, request.nodes
+            session_id,
+            request.project_id,
+            request.question,
+            request.status,
+            request.nodes,
         )
     return {"session": session}
 
@@ -471,22 +566,27 @@ def research_tree_as_source(request: ResearchTreeAsSourceRequest) -> dict[str, A
     """
     document = request.document.strip()
     if not document:
-        raise HTTPException(status_code=400, detail="Keine Gesamtantwort zum Speichern vorhanden.")
+        raise HTTPException(
+            status_code=400, detail="Keine Gesamtantwort zum Speichern vorhanden."
+        )
     used = aggregate_sources(request.nodes, request.sources)
     paper_ids = [str(src.get("paper_id")) for src in used if src.get("paper_id")]
     source_id = f"grey_analysis_{re.sub(r'[^A-Za-z0-9_-]+', '', request.session_id or uuid.uuid4().hex)[:60]}"
     with MetadataDB(request.metadata_db_path) as db:
-        saved = db.add_grey_source(request.project_id, {
-            "id": source_id,
-            "url": "",
-            "title": f"Tiefenanalyse: {request.root_question.strip()[:160]}",
-            "summary": _plain_summary(document),
-            "full_text": document[:FULL_TEXT_MAX_LEN],
-            "query": request.root_question.strip()[:400],
-            "source_kind": "analysis",
-            "origin_id": request.session_id or "",
-            "source_paper_ids": paper_ids,
-        })
+        saved = db.add_grey_source(
+            request.project_id,
+            {
+                "id": source_id,
+                "url": "",
+                "title": f"Tiefenanalyse: {request.root_question.strip()[:160]}",
+                "summary": _plain_summary(document),
+                "full_text": document[:FULL_TEXT_MAX_LEN],
+                "query": request.root_question.strip()[:400],
+                "source_kind": "analysis",
+                "origin_id": request.session_id or "",
+                "source_paper_ids": paper_ids,
+            },
+        )
     return {"saved": saved, "paper_count": len(paper_ids)}
 
 
@@ -519,7 +619,38 @@ _CLARIFY_USER = (
 
 @router.post("/research/clarify")
 async def research_clarify(request: ResearchClarifyRequest) -> dict[str, Any]:
-    """Suggest 4-6 thematic focus directions to steer a deep analysis."""
+    """Suggest 4-6 thematic focus directions to steer a deep analysis.
+
+    Im Task-Focused Mode (``task_id`` gesetzt) stammen die Richtungen aus dem
+    Task-Spec + KG-Kontext und sind angereichert (label, rationale, keywords,
+    novelty). Ohne ``task_id`` bleibt das alte Verhalten (bare String-Richtungen).
+    """
+    # Task-Focused Mode: structured directions from task-spec + KG.
+    if request.task_id:
+        from query.task_research_suggester import suggest_research_directions
+
+        task = _load_task_context(request.task_id, request.metadata_db_path)
+        if task is not None:
+            result = await asyncio.to_thread(
+                suggest_research_directions,
+                pm.llm_router,
+                task.get("task_json") or {},
+                task.get("project_id"),
+                request.metadata_db_path,
+                request.provider,
+                request.model,
+                3,  # creativity_level default Mitte
+            )
+            return {
+                "directions": [
+                    d.get("label") or ""
+                    for d in result.get("directions", [])
+                    if d.get("label")
+                ],
+                "directions_structured": result.get("directions", []),
+                "task_id": request.task_id,
+            }
+
     overrides: dict[str, Any] = {"max_tokens": 400, "temperature": 0.5}
     if request.model:
         overrides["model"] = request.model
@@ -529,7 +660,10 @@ async def research_clarify(request: ResearchClarifyRequest) -> dict[str, Any]:
             pm.llm_router.chat,
             messages=[
                 {"role": "system", "content": _CLARIFY_SYSTEM},
-                {"role": "user", "content": _CLARIFY_USER.format(question=request.question)},
+                {
+                    "role": "user",
+                    "content": _CLARIFY_USER.format(question=request.question),
+                },
             ],
             provider=request.provider,
             overrides=overrides,

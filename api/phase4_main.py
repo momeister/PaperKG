@@ -59,6 +59,10 @@ class AnswerRequest(Phase4Request):
     # "kritisch" aktiviert den skeptischen Antwortmodus (Limitationen, Gegenbelege,
     # Kritische Einordnung) — vom Frontend per /kritisch-Kommando gesetzt.
     answer_style: str = Field(default="standard", pattern="^(standard|kritisch)$")
+    # Task-Focused Mode: wenn gesetzt, wird der Task-Spec als Inline-Kontext
+    # injiziert und (sofern als Grey-Source vorhanden) unter grey_source_ids
+    # ergänzt, so dass die Antwort die Aufgabenstellung berücksichtigt.
+    task_id: str | None = None
 
 
 class HypothesisRequest(Phase4Request):
@@ -121,6 +125,18 @@ def query_search(request: SearchRequest) -> dict[str, Any]:
 def query_answer(request: AnswerRequest) -> dict[str, Any]:
     retriever = _hybrid_retriever(request.metadata_db_path, request.graph_db_path)
     responder = GroundedResponder(retriever=retriever, llm_router=llm_router)
+
+    # Task-Focused Mode: Task-Spec als Inline-Kontext injizieren + Grey-Source ergänzen.
+    inline_context_texts = list(request.inline_context_texts or [])
+    grey_source_ids = list(request.grey_source_ids or [])
+    if request.task_id:
+        task_ctx = _load_task_inline_context(request.task_id, request.metadata_db_path)
+        if task_ctx:
+            inline_context_texts.append(task_ctx)
+        grey_id = f"grey_{request.task_id}"
+        if grey_id not in grey_source_ids:
+            grey_source_ids.append(grey_id)
+
     answer = responder.answer(
         request.question,
         limit=request.limit,
@@ -132,14 +148,48 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         priority_paper_ids=request.priority_paper_ids or None,
         answer_context_mode=request.answer_context_mode,
         pdf_base_dir=request.pdf_base_dir,
-        inline_context_texts=request.inline_context_texts or None,
+        inline_context_texts=inline_context_texts or None,
         project_id=request.project_id,
         metadata_db_path=request.metadata_db_path,
-        grey_source_ids=request.grey_source_ids or None,
+        grey_source_ids=grey_source_ids or None,
         include_project_grey=request.include_project_grey,
         critical=request.answer_style == "kritisch",
     )
     return answer.to_dict()
+
+
+def _load_task_inline_context(task_id: str, metadata_db_path: str) -> str | None:
+    """Load a task-spec and render it as an inline-context text block.
+
+    Returns None if the task is absent or empty — keeps the answer path untouched
+    for non-task projects.
+    """
+    try:
+        with MetadataDB(metadata_db_path) as db:
+            task = db.get_task(task_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if task is None:
+        return None
+    spec = task.get("task_json") or {}
+    if not isinstance(spec, dict):
+        spec = {}
+    parts: list[str] = [f"[TASK-KONTEXT] {task.get('title') or 'Aufgabe'}"]
+    objective = str(spec.get("objective") or "")
+    if objective:
+        parts.append(f"Ziel: {objective}")
+    eval_text = str(spec.get("evaluation") or "")
+    if eval_text:
+        parts.append(f"Bewertung: {eval_text}")
+    rules = spec.get("rules") or []
+    if isinstance(rules, list) and rules:
+        parts.append("Regeln: " + "; ".join(str(r) for r in rules[:6]))
+    constraints = spec.get("constraints") or []
+    if isinstance(constraints, list) and constraints:
+        parts.append("Constraints: " + "; ".join(str(c) for c in constraints[:6]))
+    parts.append("[/TASK-KONTEXT]")
+    text = "\n".join(parts)
+    return text if len(parts) > 2 else None
 
 
 _LLM_OVERRIDE_BOUNDS: dict[str, tuple[float, float]] = {
@@ -250,7 +300,9 @@ def paper_pdf(
                     return FileResponse(
                         path=str(candidate),
                         media_type="application/pdf",
-                        headers={"Content-Disposition": f'inline; filename="{candidate.name}"'},
+                        headers={
+                            "Content-Disposition": f'inline; filename="{candidate.name}"'
+                        },
                     )
     except Exception:
         pass
@@ -261,11 +313,16 @@ def paper_pdf(
         title = str((detail or {}).get("source", {}).get("title") or "")
     pdf_path = find_pdf_path(paper_id, title, pdf_base_dir)
     if pdf_path is None:
-        raise HTTPException(status_code=404, detail=f"Local PDF not found for: {paper_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Local PDF not found for: {paper_id}"
+        )
 
     resolved_pdf = Path(pdf_path).resolve()
     if resolved_base not in [resolved_pdf, *resolved_pdf.parents]:
-        raise HTTPException(status_code=400, detail="Resolved PDF path is outside the configured PDF directory.")
+        raise HTTPException(
+            status_code=400,
+            detail="Resolved PDF path is outside the configured PDF directory.",
+        )
     return FileResponse(
         path=str(resolved_pdf),
         media_type="application/pdf",
@@ -321,7 +378,9 @@ def quality_benchmark_suite(request: BenchmarkSuiteRequest) -> dict[str, Any]:
 
 
 @app.get("/quality/benchmark-suite/latest")
-def quality_benchmark_suite_latest(output_dir: str = "data/eval/benchmarks") -> dict[str, Any]:
+def quality_benchmark_suite_latest(
+    output_dir: str = "data/eval/benchmarks",
+) -> dict[str, Any]:
     report = latest_suite_report(Path(output_dir))
     return {"status": "ok" if report else "empty", "report": report}
 

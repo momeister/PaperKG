@@ -44,18 +44,25 @@ Status: **in progress**
 
 - [x] Safety-Commit `c0f5a80`
 - [x] Plan nach `docs/TASK_FOCUSED_MODE_PLAN.md` schreiben
-- [ ] `tasks`-Tabelle + `storage/metadata_db/tasks.py` + schema + project_scope
-- [ ] `api/routers/tasks.py` + Include in `product_main.py`
-- [ ] `query/task_extractor.py` (LLM-Extraction URL/PDF/Text → Spec)
-- [ ] `query/task_research_suggester.py` (4-6 Richtungen aus Spec + KG)
-- [ ] `query/task_implementation_planner.py` (Synthese Plan aus KG + Spec)
-- [ ] `discovery.py`: `/research/tree` + `/research/clarify` akzeptieren
-      `task_id`/`task_mode`; tree lädt zitierte Papers auto-herunter
-- [ ] `grey_sources.py`: Support `source_kind='task'` (Task-Spec zitierbar als
-      `grey::task_{id}`)
-- [ ] `phase4_main.py`: `AnswerRequest.task_id` (optional, injiziert Task-Spec
-      in Antwort-Kontext)
-- [ ] Tests + commit
+- [x] `tasks`-Tabelle + `storage/metadata_db/tasks.py` + schema + project_scope
+- [x] `api/routers/tasks.py` + Include in `product_main.py`
+- [x] `query/task_extractor.py` (LLM-Extraction URL/PDF/Text → Spec)
+- [x] `query/task_research_suggester.py` (4-6 Richtungen aus Spec + KG)
+- [x] `query/task_implementation_planner.py` (Synthese Plan aus KG + Spec)
+- [x] `discovery.py`: `/research/tree` + `/research/clarify` akzeptieren
+      `task_id`/`task_mode`; tree injiziert Task-Kontext + aktiviert auto_harvest
+      bei `task_mode='auto_download'` (auto-Download ziterter Quellen via bestehendem
+      `auto_harvest`-Pfad des Runners)
+- [x] `grey_sources.py`: Support `source_kind='task'` (Task-Spec zitierbar als
+      `grey::task_{id}` via `POST /tasks/{id}/as-grey-source`)
+- [x] `phase4_main.py`: `AnswerRequest.task_id` (optional, injiziert Task-Spec
+      als Inline-Kontext + ergänzt `grey_task_{id}` in den Antwort-Kontext)
+- [x] Tests + commit
+
+Session 1 abgeschlossen: 871 Tests grün, ruff clean, black-formatiert.
+Auto-Download ziterter Papers läuft über den bestehenden `auto_harvest`-Pfad
+des `ResearchTreeRunner` (Session 1 keeps it minimal; tiefere Integration folgt
+in Session 3 mit dem Parallelmodus).
 
 **Dateien Session 1:**
 
@@ -218,5 +225,7 @@ ALTER TABLE parallel_variants ADD COLUMN IF NOT EXISTS user_steps JSON;
 Nach jeder Session: Update dieses Files (`- [x]` setzen, Status-Zeile oben
 ändern). Commit-message-Format: `task-focused: session N — <thema>`.
 
-Letzter Stand: **Session 1 in progress** (Safety-Commit + Plan done,
-Backend-Kern noch ausstehend).
+Letzter Stand: **Session 1 abgeschlossen** — Backend Kern steht (tasks-Tabelle,
+tasks-Router, Task-Extractor/Suggester/Planner, discovery + phase4
+Task-Integration, grey source_kind='task'). 871 Tests grün. Nächste Session:
+Session 2 (Dataset-Quellen + Kaggle-Login).

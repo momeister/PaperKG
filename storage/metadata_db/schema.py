@@ -20,7 +20,8 @@ class SchemaMixin(_Base):
         """
         self._execute("CREATE SEQUENCE IF NOT EXISTS seq_dedup_id")
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS papers (
                 id VARCHAR PRIMARY KEY,
                 source VARCHAR NOT NULL,
@@ -49,10 +50,12 @@ class SchemaMixin(_Base):
                 added_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._migrate_schema()
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS paper_sources (
                 paper_id VARCHAR NOT NULL,
                 source VARCHAR NOT NULL,
@@ -61,7 +64,8 @@ class SchemaMixin(_Base):
                 added_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (paper_id, source)
             )
-        """)
+        """
+        )
 
     def _migrate_schema(self) -> None:
         """
@@ -83,7 +87,8 @@ class SchemaMixin(_Base):
         }
         self._add_missing_columns("papers", columns, quoted_names={"references"})
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS dedup_log (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_dedup_id'),
                 kept_id VARCHAR NOT NULL,
@@ -91,9 +96,11 @@ class SchemaMixin(_Base):
                 reason VARCHAR,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS extraction_results (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_dedup_id'),
                 paper_id VARCHAR NOT NULL,
@@ -113,7 +120,8 @@ class SchemaMixin(_Base):
                 error_message VARCHAR,
                 extraction_duration_seconds FLOAT
             )
-        """)
+        """
+        )
         extraction_columns = {
             "paper_type": "VARCHAR",
             "concept_candidates": "JSON",
@@ -125,7 +133,8 @@ class SchemaMixin(_Base):
         }
         self._add_missing_columns("extraction_results", extraction_columns)
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS batch_jobs (
                 job_id VARCHAR PRIMARY KEY,
                 status VARCHAR NOT NULL,
@@ -139,9 +148,11 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS batch_job_items (
                 job_id VARCHAR NOT NULL,
                 paper_id VARCHAR NOT NULL,
@@ -154,9 +165,11 @@ class SchemaMixin(_Base):
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (job_id, paper_id)
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS entity_embeddings (
                 label_norm VARCHAR NOT NULL,
                 label VARCHAR NOT NULL,
@@ -168,9 +181,11 @@ class SchemaMixin(_Base):
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (label_norm, model, embedding_version)
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS extraction_quality (
                 paper_id TEXT NOT NULL,
                 concept_count INTEGER NOT NULL,
@@ -185,7 +200,8 @@ class SchemaMixin(_Base):
                 model TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._add_missing_columns(
             "extraction_quality",
             {
@@ -199,7 +215,8 @@ class SchemaMixin(_Base):
             },
         )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS entity_review_queue (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_dedup_id'),
                 paper_id VARCHAR NOT NULL,
@@ -214,9 +231,11 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS notes (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR NOT NULL,
@@ -225,9 +244,11 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS note_citations (
                 id VARCHAR PRIMARY KEY,
                 note_id VARCHAR NOT NULL,
@@ -240,7 +261,8 @@ class SchemaMixin(_Base):
                 evidence_index INTEGER DEFAULT 0,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Zitate zeigen seit dem Code-Graph nicht mehr nur auf Paper, sondern auch
         # auf Codestellen. Statt einer zweiten Tabelle bekommt diese die paar
         # Spalten dazu: ``source_kind`` unterscheidet, alles andere ist nur bei
@@ -264,7 +286,8 @@ class SchemaMixin(_Base):
             },
         )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS note_assets (
                 id VARCHAR PRIMARY KEY,
                 note_id VARCHAR NOT NULL,
@@ -273,9 +296,11 @@ class SchemaMixin(_Base):
                 asset_path VARCHAR NOT NULL,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS note_ai_threads (
                 id VARCHAR PRIMARY KEY,
                 note_id VARCHAR NOT NULL,
@@ -291,7 +316,8 @@ class SchemaMixin(_Base):
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._add_missing_columns(
             "note_ai_threads",
             {
@@ -303,7 +329,8 @@ class SchemaMixin(_Base):
             },
         )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS note_ai_messages (
                 id VARCHAR PRIMARY KEY,
                 thread_id VARCHAR NOT NULL,
@@ -312,9 +339,11 @@ class SchemaMixin(_Base):
                 content TEXT NOT NULL,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS note_versions (
                 id VARCHAR PRIMARY KEY,
                 note_id VARCHAR NOT NULL,
@@ -322,11 +351,13 @@ class SchemaMixin(_Base):
                 reason VARCHAR,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Grey (web) sources from deep research. Deliberately kept OUT of the
         # knowledge graph: project-scoped supplementary context only.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS grey_sources (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR NOT NULL,
@@ -344,7 +375,8 @@ class SchemaMixin(_Base):
                 source_paper_ids JSON,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Migrate older grey_sources tables that predate full-article capture, and the
         # later "internal sources" kinds: notes and deep-analysis syntheses are stored in
         # the same table so they are citable as ``grey::…`` without a second pipeline.
@@ -363,9 +395,12 @@ class SchemaMixin(_Base):
                 "trust_tier": "VARCHAR",
             },
         )
-        self._execute("CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)")
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_grey_sources_project ON grey_sources(project_id)"
+        )
 
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS benchmark_runs (
                 id VARCHAR PRIMARY KEY,
                 kind VARCHAR NOT NULL,
@@ -376,37 +411,43 @@ class SchemaMixin(_Base):
                 duration_ms INTEGER,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Workspace assistant sessions (chat history incl. verification payloads).
         # Persisted server-side because the payloads routinely exceed the browser's
         # localStorage quota, which silently dropped sessions on reload.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS workspace_sessions (
                 project_id VARCHAR PRIMARY KEY,
                 payload JSON,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Rollierende Sicherungen der Workspace-Sessions. `workspace_sessions` hat genau
         # eine Zeile pro Projekt und wurde bedingungslos ueberschrieben — ein Client, der
         # (z. B. nach einem fehlgeschlagenen GET beim Start) eine leere History schickte,
         # loeschte die Unterhaltung unwiederbringlich. Jeder Schreibvorgang legt jetzt
         # vorher den bisherigen Stand hier ab; die letzten Staende bleiben erhalten.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS workspace_session_backups (
                 project_id VARCHAR,
                 saved_at TIMESTAMP,
                 payload JSON,
                 turn_count INTEGER
             )
-        """)
+        """
+        )
 
         # Deep-research (Tiefensuche) trees, persisted server-side *during* the run so the
         # KI-Session is never empty on reload. The streaming endpoint upserts the full node
         # list (incl. answers/verification) as the tree grows; the frontend hydrates from here.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS research_sessions (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR,
@@ -416,13 +457,15 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Parallel-Research mode: the AI proposes (and the user adds) several "Varianten"
         # for a question; the user feeds back results per variant, the AI comments, and a
         # final synthesis ranks them. Durable, sub-divided, editable — own tables per the
         # "new feature ⇒ new table" convention.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS parallel_sessions (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR,
@@ -435,13 +478,15 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Older DBs predate the upfront "overview" (task explanation + how-to) — backfill.
         self._add_missing_columns(
             "parallel_sessions",
             {"overview_markdown": "VARCHAR", "overview_payload": "JSON"},
         )
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS parallel_variants (
                 id VARCHAR PRIMARY KEY,
                 session_id VARCHAR,
@@ -455,11 +500,13 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Etappen: ein Forschungsvorhaben (= Session) gliedert sich in sequentielle
         # Stages; Varianten hängen an einer Stage. review_* trägt den Professor-
         # Etappen-Review (strukturierte Kritik über alle Ergebnisse der Etappe).
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS parallel_stages (
                 id VARCHAR PRIMARY KEY,
                 session_id VARCHAR,
@@ -472,11 +519,13 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Older DBs predate stages — add the FK column and adopt orphan variants below.
         self._add_missing_columns("parallel_variants", {"stage_id": "VARCHAR"})
         self._backfill_parallel_stages()
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS parallel_entries (
                 id VARCHAR PRIMARY KEY,
                 variant_id VARCHAR,
@@ -486,10 +535,12 @@ class SchemaMixin(_Base):
                 answer_payload JSON,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Follow-up questions asked while a parallel session is open: a grounded chat thread
         # shown under the overview (own table — they're session-scoped, not variant-scoped).
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS parallel_followups (
                 id VARCHAR PRIMARY KEY,
                 session_id VARCHAR,
@@ -497,12 +548,14 @@ class SchemaMixin(_Base):
                 answer_payload JSON,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Desktop-Companion / Selbst-Steuerung (R7): durable chat + step log so the
         # overlay can list, reopen and continue sessions across app restarts. ``kind``
         # discriminates the two modes; the in-flight planner state (history, pending
         # expectation) stays in the in-memory stores — only the transcript persists.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS companion_sessions (
                 id VARCHAR PRIMARY KEY,
                 kind VARCHAR NOT NULL,
@@ -515,8 +568,10 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        self._execute("""
+        """
+        )
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS companion_messages (
                 id VARCHAR PRIMARY KEY,
                 session_id VARCHAR NOT NULL,
@@ -525,12 +580,14 @@ class SchemaMixin(_Base):
                 payload JSON,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         # Code-Werkstatt: registered coding-project folders on disk. ``kind`` is
         # 'managed' (created + git-init'd by us under the workspaces base dir) or
         # 'external' (an existing folder the user opened). Only the *registration*
         # lives here; the files stay on disk so other editors can open them too.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_projects (
                 id VARCHAR PRIMARY KEY,
                 name VARCHAR NOT NULL,
@@ -539,12 +596,14 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Analyse-Werkstatt (WP1): ein Lauf = ein Provenance-Ordner auf der Platte
         # (script.py/inputs/outputs/run.json). Hier liegt nur die Registrierung +
         # Metadaten; die Dateien bleiben im verwalteten Werkstatt-Projekt (git).
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS analysis_runs (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR,
@@ -567,8 +626,10 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        self._execute("""
+        """
+        )
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS analysis_artifacts (
                 id VARCHAR PRIMARY KEY,
                 run_id VARCHAR NOT NULL,
@@ -580,14 +641,16 @@ class SchemaMixin(_Base):
                 sha256 VARCHAR,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Code-Graph: Buchführung über die CodeSearch-Indizes. Der Index selbst ist
         # eine eigene SQLite-Datei unter data/codegraph/<id>/index.csdb — bewusst
         # NICHT hier drin: DuckDB verträgt genau einen Schreiber, und der Index wird
         # von einem Kindprozess (cs serve) geschrieben. Hier steht nur, dass es ihn
         # gibt und wie er ausgefallen ist.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_indexes (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -607,12 +670,14 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Paper ↔ Code: die Brücke zwischen Methode und Implementierung. Ein Eintrag
         # sagt „dieses Repo (oder dieses Symbol) gehört zu diesem Paper" und macht
         # damit Antworten möglich, die beides gleichzeitig belegen.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_paper_links (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -626,12 +691,14 @@ class SchemaMixin(_Base):
                 note TEXT,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Geprüfte Code-Antworten. Das Urteil (sound/uncited/broken) und die
         # Belegliste werden mitgespeichert, weil eine Antwort ohne ihre Prüfung
         # nur eine Behauptung ist.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_answers (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -646,7 +713,8 @@ class SchemaMixin(_Base):
                 model VARCHAR,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # Gespräche über den Code. Getrennt von ``code_answers``, weil das dort
         # eine flache Antwortliste *ist*: ``GET …/answers`` liest sie, der
@@ -658,7 +726,8 @@ class SchemaMixin(_Base):
         # ``session_key`` ist die Sitzung auf der Rust-Seite: **ein Gespräch =
         # eine Lizenz zum Zitieren**. Sie wächst mit dem Gespräch und endet mit
         # ihm, nicht mit der einzelnen Frage.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_chats (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -668,7 +737,8 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._execute(
             "CREATE INDEX IF NOT EXISTS idx_code_chats_project ON code_chats(code_project_id)"
         )
@@ -677,7 +747,8 @@ class SchemaMixin(_Base):
         # Symbole, die zu der Frage gehören, jeweils mit ihrer Herkunft: ob sie
         # zitiert, nachgeschlagen oder nur vorab gesucht wurden. Ohne die
         # Herkunft wäre die Liste eine unbegründete Behauptung.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_chat_turns (
                 id VARCHAR PRIMARY KEY,
                 chat_id VARCHAR NOT NULL,
@@ -696,7 +767,8 @@ class SchemaMixin(_Base):
                 remote_model BOOLEAN DEFAULT FALSE,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._execute(
             "CREATE INDEX IF NOT EXISTS idx_code_chat_turns_chat ON code_chat_turns(chat_id)"
         )
@@ -711,7 +783,8 @@ class SchemaMixin(_Base):
         # der Name als überholt und die Karte zeigt wieder den Ordnernamen.
         # Absichtlich nicht der Dateiinhalt: sonst verlöre ein Bereich seinen
         # Namen, sobald jemand irgendwo eine Zeile ändert.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_cluster_labels (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -724,7 +797,8 @@ class SchemaMixin(_Base):
                 model VARCHAR,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._execute(
             "CREATE INDEX IF NOT EXISTS idx_code_cluster_labels_project "
             "ON code_cluster_labels(code_project_id)"
@@ -743,7 +817,8 @@ class SchemaMixin(_Base):
         # ``content_hash`` wie bei ``note_citations``: ändert sich die Datei,
         # gilt die Begründung als **veraltet**, statt weiter als Tatsache über
         # Code behauptet zu werden, den sie nie gesehen hat.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_rationale (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -756,7 +831,8 @@ class SchemaMixin(_Base):
                 author VARCHAR,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._execute(
             "CREATE INDEX IF NOT EXISTS idx_code_rationale_project "
             "ON code_rationale(code_project_id)"
@@ -769,7 +845,8 @@ class SchemaMixin(_Base):
         # werden ueber die Ref vor ``git gc`` geschuetzt. Haengt an
         # ``code_project_id`` (nicht an einem Forschungs-``project_id``) → *nicht*
         # in ``PROJECT_SCOPED_TABLES``.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_checkpoints (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -782,7 +859,8 @@ class SchemaMixin(_Base):
                 file_count INTEGER DEFAULT 0,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._execute(
             "CREATE INDEX IF NOT EXISTS idx_code_checkpoints_project "
             "ON code_checkpoints(code_project_id)"
@@ -794,7 +872,8 @@ class SchemaMixin(_Base):
         # (Befehl, letzter Exit-Code, Basis-Checkpoint); der Worktree selbst
         # liegt im Repo des Nutzers (.git/worktrees) + unter data/. Haengt an
         # ``code_project_id`` → nicht in ``PROJECT_SCOPED_TABLES``.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS code_sandboxes (
                 id VARCHAR PRIMARY KEY,
                 code_project_id VARCHAR NOT NULL,
@@ -807,7 +886,8 @@ class SchemaMixin(_Base):
                 last_run_timestamp TIMESTAMP,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
         self._execute(
             "CREATE INDEX IF NOT EXISTS idx_code_sandboxes_project "
             "ON code_sandboxes(code_project_id)"
@@ -816,7 +896,8 @@ class SchemaMixin(_Base):
         # Datensätze (WP2): mit Papern gesammelte Forschungs-Datensätze (Metadaten +
         # Link/DOI/Lizenz). Große Daten werden NICHT auto-heruntergeladen (Privacy) —
         # nur die nachvollziehbare Referenz. Nutzbar als Eingabe für die Analyse-Werkstatt.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS datasets (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR,
@@ -833,12 +914,33 @@ class SchemaMixin(_Base):
                 metadata JSON,
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
+
+        # Task-Focused Mode: strukturierter Task-Spec aus URL/PDF/Freitext
+        # (Kaggle-Competition, Hackathon-Ticket, eigene Anweisung). Projekt-scoped
+        # (siehe PROJECT_SCOPED_TABLES), als Grey-Source zitierbar (``grey::task_{id}``).
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                source_kind VARCHAR,
+                source_url VARCHAR,
+                source_pdf_path VARCHAR,
+                task_json JSON,
+                created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        )
 
         # PDF-Notizen: pro Paper an einer Textstelle (Highlight) oder einem Punkt verankerte
         # kleine Notiz. Rects sind auf 0..1 relativ zur Seiten-Oberfläche normalisiert (zoom-
         # unabhängig); quote = markierter Text (späterer Re-Anchor-Fallback), body = Notiztext.
-        self._execute("""
+        self._execute(
+            """
             CREATE TABLE IF NOT EXISTS pdf_annotations (
                 id VARCHAR PRIMARY KEY,
                 paper_id VARCHAR NOT NULL,
@@ -851,60 +953,126 @@ class SchemaMixin(_Base):
                 created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
-        self._execute("CREATE INDEX IF NOT EXISTS idx_benchmark_runs_kind ON benchmark_runs(kind)")
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_benchmark_runs_kind ON benchmark_runs(kind)"
+        )
 
-        self._execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_batch_items_status ON batch_job_items(job_id, status)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_embeddings_label ON entity_embeddings(label_norm)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_extraction_quality_paper ON extraction_quality(paper_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_entity_review_status ON entity_review_queue(review_status)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_note_citations_note ON note_citations(note_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_note_ai_threads_note ON note_ai_threads(note_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_note_ai_messages_thread ON note_ai_messages(thread_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_research_sessions_project ON research_sessions(project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_sessions_project ON parallel_sessions(project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_variants_session ON parallel_variants(session_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_stages_session ON parallel_stages(session_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_entries_variant ON parallel_entries(variant_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_entries_session ON parallel_entries(session_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_parallel_followups_session ON parallel_followups(session_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_code_projects_path ON code_projects(path)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_runs_project ON analysis_runs(project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_analysis_artifacts_run ON analysis_artifacts(run_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_code_indexes_project ON code_indexes(code_project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_code_paper_links_code ON code_paper_links(code_project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_code_paper_links_paper ON code_paper_links(paper_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_code_answers_code ON code_answers(code_project_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_pdf_annotations_paper ON pdf_annotations(paper_id)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_companion_sessions_kind ON companion_sessions(kind)")
-        self._execute("CREATE INDEX IF NOT EXISTS idx_companion_messages_session ON companion_messages(session_id)")
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_batch_items_status ON batch_job_items(job_id, status)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_embeddings_label ON entity_embeddings(label_norm)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_extraction_quality_paper ON extraction_quality(paper_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_entity_review_status ON entity_review_queue(review_status)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_citations_note ON note_citations(note_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_ai_threads_note ON note_ai_threads(note_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_ai_messages_thread ON note_ai_messages(thread_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_research_sessions_project ON research_sessions(project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_parallel_sessions_project ON parallel_sessions(project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_parallel_variants_session ON parallel_variants(session_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_parallel_stages_session ON parallel_stages(session_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_parallel_entries_variant ON parallel_entries(variant_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_parallel_entries_session ON parallel_entries(session_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_parallel_followups_session ON parallel_followups(session_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_projects_path ON code_projects(path)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_runs_project ON analysis_runs(project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_artifacts_run ON analysis_artifacts(run_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_indexes_project ON code_indexes(code_project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_paper_links_code ON code_paper_links(code_project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_paper_links_paper ON code_paper_links(paper_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_code_answers_code ON code_answers(code_project_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_annotations_paper ON pdf_annotations(paper_id)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_companion_sessions_kind ON companion_sessions(kind)"
+        )
+        self._execute(
+            "CREATE INDEX IF NOT EXISTS idx_companion_messages_session ON companion_messages(session_id)"
+        )
 
     def _backfill_parallel_stages(self) -> None:
         """Adopt pre-stage variants: every session with stage-less variants and no stage
         yet gets a default "Etappe 1" (aktiv) that its variants are attached to. Runs on
         every open; a no-op after the first migration."""
-        rows = self._execute("""
+        rows = self._execute(
+            """
             SELECT DISTINCT v.session_id FROM parallel_variants v
             WHERE v.stage_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM parallel_stages s WHERE s.session_id = v.session_id)
-        """).fetchall()
+        """
+        ).fetchall()
         for (session_id,) in rows:
             stage_id = f"stg_{uuid.uuid4().hex}"
-            self._execute("""
+            self._execute(
+                """
                 INSERT INTO parallel_stages (id, session_id, name, goal, status, position)
                 VALUES (?, ?, 'Etappe 1', '', 'aktiv', 0)
-            """, [stage_id, str(session_id)])
+            """,
+                [stage_id, str(session_id)],
+            )
             self._execute(
                 "UPDATE parallel_variants SET stage_id = ? WHERE session_id = ? AND stage_id IS NULL",
                 [stage_id, str(session_id)],
             )
         # Sessions that gained stages later can still hold stragglers: attach any
         # remaining stage-less variant to its session's first stage.
-        self._execute("""
+        self._execute(
+            """
             UPDATE parallel_variants v SET stage_id = (
                 SELECT s.id FROM parallel_stages s
                 WHERE s.session_id = v.session_id
@@ -912,7 +1080,8 @@ class SchemaMixin(_Base):
             )
             WHERE v.stage_id IS NULL
               AND EXISTS (SELECT 1 FROM parallel_stages s WHERE s.session_id = v.session_id)
-        """)
+        """
+        )
 
     def _add_missing_columns(
         self,
@@ -928,4 +1097,6 @@ class SchemaMixin(_Base):
         for name, column_type in columns.items():
             if name not in existing:
                 column_name = f'"{name}"' if name in quoted_names else name
-                self._execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+                self._execute(
+                    f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                )
