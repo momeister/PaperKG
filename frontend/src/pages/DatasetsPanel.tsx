@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Database, Download, PanelRightClose, Search, Plus, Trash2, ExternalLink, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Database, Download, PanelRightClose, Search, Plus, Trash2, ExternalLink, RefreshCw, Lock } from "lucide-react";
 
 import { api } from "../api";
-import type { Dataset, DatasetDetails, DatasetHit, DatasetSource } from "../types";
+import type { Dataset, DatasetDetails, DatasetHit, DatasetSource, DatasetSourceStatus } from "../types";
 
 /**
  * Datensatz-Panel (WP2).
@@ -21,6 +21,13 @@ type Props = {
 
 function sourceLabel(sources: DatasetSource[], id: string): string {
   return sources.find((s) => s.id === id)?.label ?? id;
+}
+
+/** Quellen, deren Datei-Download über den Backend-Endpoint läuft (nicht über
+ *  direkten Download-Link im Browser). Kaggle braucht Auth, HF profitiert vom
+ *  HF_TOKEN. */
+function needsBackendDownload(sourceId: string): boolean {
+  return sourceId === "kaggle_competition" || sourceId === "kaggle_dataset" || sourceId === "huggingface";
 }
 
 /**
@@ -96,23 +103,34 @@ function DatasetDetailsBlock({ source, externalId }: { source: string; externalI
 export function DatasetsPanel({ projectId, onCollapse }: Props) {
   const [sources, setSources] = useState<DatasetSource[]>([]);
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [sourceStatuses, setSourceStatuses] = useState<DatasetSourceStatus[]>([]);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<DatasetHit[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [saved, setSaved] = useState<Dataset[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
 
   const scopedProjectId = projectId || undefined;
+
+  const sourceStatusById = new Map(sourceStatuses.map((s) => [s.id, s] as const));
 
   useEffect(() => {
     api.datasets
       .sources()
       .then((res) => {
         setSources(res.sources);
-        setSelectedSources(res.default);
+        // Alle Quellen per Default aktiv —needs_key-Quellen zeigen nur Treffer,
+        // der Download schlägt ohne Login sauber fehl (mit Hinweis).
+        setSelectedSources(res.sources.map((s) => s.id));
       })
       .catch(() => setError("Quellen konnten nicht geladen werden."));
+    api.datasets
+      .sourcesStatus()
+      .then((res) => setSourceStatuses(res.sources))
+      .catch(() => { /* Status ist optional — Suche läuft trotzdem */ });
   }, []);
 
   const refreshSaved = useCallback(async () => {
@@ -169,6 +187,33 @@ export function DatasetsPanel({ projectId, onCollapse }: Props) {
     [refreshSaved]
   );
 
+  /** Download einer einzelnen Datei eines Datensatzes (Kaggle auth-pflichtig). */
+  const downloadOne = useCallback(
+    async (hit: DatasetHit, fileName?: string) => {
+      const key = `${hit.source}:${hit.external_id}:${fileName ?? "*"}`;
+      if (downloadingId === key) return;
+      setDownloadingId(key);
+      setDownloadMsg(null);
+      try {
+        const res = await api.datasets.download({
+          source: hit.source,
+          external_id: hit.external_id,
+          file_name: fileName,
+        });
+        setDownloadMsg(`${res.file_name} heruntergeladen (${Math.max(1, Math.round(res.bytes / 1024))} KB).`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Download fehlgeschlagen.";
+        setDownloadMsg(msg.includes("Kaggle") || msg.includes("kaggle") || msg.includes("auth")
+          ? `${msg} Kaggle-Login in den Einstellungen hinterlegen.`
+          : msg);
+      } finally {
+        setDownloadingId(null);
+        window.setTimeout(() => setDownloadMsg(null), 4000);
+      }
+    },
+    [downloadingId]
+  );
+
   const toggleSource = (id: string) =>
     setSelectedSources((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
 
@@ -206,12 +251,26 @@ export function DatasetsPanel({ projectId, onCollapse }: Props) {
             </button>
           </div>
           <div className="dataset-sources">
-            {sources.map((s) => (
-              <label key={s.id} className="dataset-source-chip" title={s.domain}>
-                <input type="checkbox" checked={selectedSources.includes(s.id)} onChange={() => toggleSource(s.id)} />
-                {s.label}
-              </label>
-            ))}
+            {sources.map((s) => {
+              const status = sourceStatusById.get(s.id);
+              const needsLogin = s.needs_key === true;
+              const locked = needsLogin && !(status?.authenticated ?? false);
+              return (
+                <label
+                  key={s.id}
+                  className={`dataset-source-chip${locked ? " dataset-source-chip--locked" : ""}`}
+                  title={locked ? (s.hint ?? status?.hint ?? "Login in den Einstellungen nötig") : s.domain}
+                >
+                  <input type="checkbox" checked={selectedSources.includes(s.id)} onChange={() => toggleSource(s.id)} />
+                  {s.label}
+                  {needsLogin ? (
+                    <span className="dataset-source-chip__badge" title={locked ? "Login nötig" : "angemeldet"}>
+                      <Lock size={11} />
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
           </div>
           <p className="analysis-hint">
             Nur Metadaten + Link/DOI/Lizenz werden gespeichert (keine Massendaten-Downloads).
@@ -223,6 +282,7 @@ export function DatasetsPanel({ projectId, onCollapse }: Props) {
         {warnings.length ? (
           <p className="analysis-hint">Nicht erreichbar: {warnings.join(", ")}</p>
         ) : null}
+        {downloadMsg ? <p className="analysis-hint">{downloadMsg}</p> : null}
 
         {hits.length ? (
           <div className="dataset-list">
@@ -246,15 +306,28 @@ export function DatasetsPanel({ projectId, onCollapse }: Props) {
                     ) : null}
                     <DatasetDetailsBlock source={hit.source} externalId={hit.external_id} />
                   </div>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    title={already ? "bereits gespeichert" : "Ins Projekt übernehmen"}
-                    onClick={() => void importOne(hit)}
-                    disabled={already}
-                  >
-                    <Plus size={16} />
-                  </button>
+                  <div className="dataset-card-actions">
+                    {needsBackendDownload(hit.source) ? (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="Datei lokal herunterladen (via Backend)"
+                        onClick={() => void downloadOne(hit)}
+                        disabled={downloadingId === `${hit.source}:${hit.external_id}:*`}
+                      >
+                        {downloadingId === `${hit.source}:${hit.external_id}:*` ? <RefreshCw size={15} className="spin" /> : <Download size={15} />}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={already ? "bereits gespeichert" : "Ins Projekt übernehmen"}
+                      onClick={() => void importOne(hit)}
+                      disabled={already}
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
                 </article>
               );
             })}

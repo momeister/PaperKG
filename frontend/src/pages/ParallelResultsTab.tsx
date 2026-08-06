@@ -33,6 +33,7 @@ import { formatAnswerForNote, verificationSourcesFor } from "./assistantHelpers"
 import { CitedInline, useParallelPool } from "./ParallelResearchPanel";
 import { groupVariantsByStage, STAGE_STATUS_LABEL, stageGroupLabel } from "./parallelHelpers";
 import { ProfessorReviewCard } from "./ProfessorReviewCard";
+import { VariantSteps } from "./VariantSteps";
 
 const STATUS_LABEL: Record<string, string> = {
   vorgeschlagen: "Vorgeschlagen",
@@ -97,6 +98,9 @@ export function ParallelResultsTab({
   const [briefCopiedId, setBriefCopiedId] = useState<string | null>(null);
   const [dispatchLog, setDispatchLog] = useState<Record<string, AgentDispatchEvent[]>>({});
   const [dispatching, setDispatching] = useState<string | null>(null);
+  // Implementationsplan (Summe der akzeptierten Steps über alle Varianten).
+  const [implementPlan, setImplementPlan] = useState<{ plan_markdown: string; steps: { text: string; rationale: string; citation: string }[] } | null>(null);
+  const [implementBusy, setImplementBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -118,6 +122,18 @@ export function ParallelResultsTab({
   async function refresh() {
     const res = await api.getParallelSession(session.id);
     onChange(res.session);
+  }
+
+  async function loadImplementPlan() {
+    setImplementBusy(true);
+    try {
+      const res = await api.getParallelImplementationPlan(session.id);
+      setImplementPlan(res);
+    } catch {
+      setImplementPlan({ plan_markdown: "Plan konnte nicht geladen werden.", steps: [] });
+    } finally {
+      setImplementBusy(false);
+    }
   }
 
   async function submit(variantId: string) {
@@ -582,6 +598,15 @@ export function ParallelResultsTab({
                 </>
               )}
             </div>
+
+            {expanded ? (
+              <VariantSteps
+                variant={variant}
+                session={session}
+                onChange={onChange}
+                scope={scope}
+              />
+            ) : null}
           </>
         )}
 
@@ -673,7 +698,41 @@ export function ParallelResultsTab({
           <Plus size={13} />
           <span>Eigene Variante</span>
         </button>
+        <button
+          type="button"
+          className="button button-compact"
+          onClick={() => void loadImplementPlan()}
+          disabled={implementBusy}
+          title="Implementationsplan: Summe der akzeptierten Schritte über alle Varianten"
+        >
+          {implementBusy ? <Loader2 size={13} className="spin" /> : <CheckCircle2 size={13} />}
+          <span>Implementationsplan</span>
+        </button>
       </div>
+
+      {implementPlan ? (
+        <div className="parallel-implement-plan">
+          <div className="parallel-implement-plan__head">
+            <CheckCircle2 size={14} />
+            <strong>Implementationsplan</strong>
+            <span className="muted">· {implementPlan.steps.length} Schritte</span>
+          </div>
+          {implementPlan.plan_markdown.trim() ? (
+            <pre className="parallel-implement-plan__markdown">{implementPlan.plan_markdown}</pre>
+          ) : null}
+          {implementPlan.steps.length ? (
+            <ol className="task-implementation-plan__steps">
+              {implementPlan.steps.map((step, i) => (
+                <li key={i}>
+                  <strong>{step.text}</strong>
+                  {step.rationale ? <p className="muted">{step.rationale}</p> : null}
+                  {step.citation ? <p className="muted task-implementation-plan__citation">Quelle: {step.citation}</p> : null}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      ) : null}
 
       {stageError ? <div className="muted-row parallel-stage-error">{stageError}</div> : null}
 

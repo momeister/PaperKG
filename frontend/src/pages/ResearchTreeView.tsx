@@ -56,6 +56,7 @@ import {
   Square,
   Star,
   Trash2,
+  Target,
   Upload,
   X,
   XCircle
@@ -70,7 +71,7 @@ import { GreySourceView } from "../components/GreySourceView";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
 import { noteProjectId, projectScopeLabel } from "../projectScope";
-import { useAppState } from "../state";
+import { useOptionalAppState } from "../state";
 import type {
   Answer,
   CitationLink,
@@ -172,6 +173,7 @@ export function ResearchTreeView({
   onDrillDeeper,
   onSaveToNotes,
   onSaveAsSource,
+  taskMode,
 }: {
   nodes: ResearchNode[];
   loading: boolean;
@@ -186,6 +188,9 @@ export function ResearchTreeView({
   onSaveToNotes: () => void;
   /** Speichert die Gesamtantwort als zitierbare Projektquelle (inkl. ihrer Quell-Paper). */
   onSaveAsSource?: () => Promise<{ paper_count: number }>;
+  /** Task-Focused Mode aktiv — zeigt einen Badge, dass die Tiefenanalyse durch
+   *  eine Aufgabe angestoßen wurde. */
+  taskMode?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"tree" | "synthesis">("tree");
@@ -200,6 +205,12 @@ export function ResearchTreeView({
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<{ kind: "error" | "warn" | "ok"; text: string } | null>(null);
   const [sourceState, setSourceState] = useState<{ status: "idle" | "saving" | "ok" | "error"; text: string }>({ status: "idle", text: "" });
+  const [autoToast, setAutoToast] = useState<string | null>(null);
+
+  // Task-Mode kann von außen via Prop kommen oder aus dem AppState gelesen werden
+  // (Props haben Vorrang — falls der Aufrufer den Mode überschreibt).
+  const appState = useOptionalAppState?.();
+  const effectiveTaskMode = taskMode ?? (appState?.workspaceMode === "task");
 
   const treeNodes = nodes.filter((n) => n.status !== "synthesis");
   const synthesisNode = nodes.find((n) => n.status === "synthesis");
@@ -208,6 +219,16 @@ export function ResearchTreeView({
   useEffect(() => {
     if (synthesisNode?.document) setActiveTab("synthesis");
   }, [synthesisNode?.document]);
+
+  // Task-Mode: wenn eine Tiefenanalyse durch eine Aufgabe angestoßen wurde und
+  // ein fertiger Synthese-Dokument vorliegt, schlagen wir einen automatischen
+  // PDF-Download vor (statt den Nutzer das Export-Menü suchen zu lassen).
+  useEffect(() => {
+    if (!effectiveTaskMode || !synthesisNode?.document) return;
+    setAutoToast("Synthese fertig — PDF/LaTeX-Export oben verfügbar.");
+    const t = window.setTimeout(() => setAutoToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [effectiveTaskMode, synthesisNode?.document]);
 
   async function handleExport() {
     if (!synthesisNode?.document || exporting) return;
@@ -525,6 +546,12 @@ export function ResearchTreeView({
       <div className="research-tree-header">
         <GitBranch size={15} />
         <strong>Tiefenanalyse</strong>
+        {effectiveTaskMode ? (
+          <span className="research-tree-task-badge" title="Diese Tiefenanalyse wurde durch eine Aufgabe angestoßen (Task-Focused Mode)">
+            <Target size={11} />
+            Aufgabe
+          </span>
+        ) : null}
         <div className="segmented research-tree-tabs" style={{ marginLeft: "8px" }}>
           <button
             type="button"
@@ -703,6 +730,9 @@ export function ResearchTreeView({
           </div>
         )
       )}
+      {autoToast ? (
+        <div className="research-tree-toast" role="status">{autoToast}</div>
+      ) : null}
     </div>
   );
 }

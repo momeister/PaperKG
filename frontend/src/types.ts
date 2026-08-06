@@ -7,7 +7,28 @@ export type Project = {
   year_max?: number | null;
   primary_paper_id?: string | null;
   pinned?: boolean;
+  /** Task-Focused Mode: Kreativitätsstufe 1–5 (Default 3, aus project_meta.json). */
+  creativity_level?: CreativityLevel;
 };
+
+/**
+ * Workspace-Modus pro Projekt.
+ * - "research": klassische Forschungsansicht (Bibliothek, Notes, Assistant)
+ * - "task": Task-Focused Mode (Hackathon/Kaggle/Anweisung) — Spec + Richtungen +
+ *   parallele Varianten mit "Wie umsetzen"-Steps.
+ * Persistiert per-projekt in localStorage `sciencekg.workspace.mode.{projectId}`.
+ */
+export type WorkspaceMode = "research" | "task";
+
+/**
+ * Kreativitätsstufe 1–5 für LLM-Vorschläge (Richtungen, Varianten, Steps).
+ * - 1 = konservativ/mainstream
+ * - 3 = ausgewogen (Default)
+ * - 5 = aggressiv/querverweisend
+ * Persistiert per-projekt in `project_meta.json` (nicht in localStorage, da
+ * projektgebundene Konfiguration).
+ */
+export type CreativityLevel = 1 | 2 | 3 | 4 | 5;
 
 export type HarvestSource = {
   id: string;
@@ -611,6 +632,34 @@ export type ParallelEntry = {
   created_timestamp?: string | null;
 };
 
+/**
+ * Ein "Wie umsetzen"-Step einer Variante. Status-Übergänge:
+ * - "vorgeschlagen" → AI hat den Step vorgeschlagen, wartet auf Nutzerentscheid
+ * - "in_progress"  → Nutzer: "Das probiere ich"
+ * - "done"          → Nutzer: "Ergebnis zeigen" (result + professor-review)
+ * - "rejected"     → Nutzer: "Weg nichts für mich"
+ */
+export type ParallelStepStatus =
+  | "vorgeschlagen"
+  | "in_progress"
+  | "done"
+  | "rejected";
+
+export type ParallelStep = {
+  id: string;
+  variant_id: string;
+  text: string;
+  rationale?: string;
+  citation?: string;
+  status: ParallelStepStatus;
+  origin: "user" | "ai";
+  result?: string | null;
+  /** Verweis auf ein ProfessorReview / parallel_entry nach "Ergebnis zeigen". */
+  result_entry_id?: string | null;
+  created_timestamp?: string | null;
+  updated_timestamp?: string | null;
+};
+
 export type ParallelVariant = {
   id: string;
   session_id: string;
@@ -623,6 +672,10 @@ export type ParallelVariant = {
   position: number;
   stage_id?: string | null;
   entries: ParallelEntry[];
+  /** "Wie umsetzen"-Steps — interaktive Umsetzung pro Variante. */
+  user_steps?: ParallelStep[];
+  /** Optional: Begründung einer "Weg nichts"-Ablehnung. */
+  rejection_reason?: string | null;
   created_timestamp?: string | null;
   updated_timestamp?: string | null;
 };
@@ -684,6 +737,81 @@ export type TaskBrief = {
   success_criteria: string[];
   artifacts: string[];
   raw_prompt: string;
+};
+
+// ---------------------------------------------------------------------------
+// Task-Focused Mode — Task-Spec + Forschungsrichtungen
+// ---------------------------------------------------------------------------
+
+/** Dataset-Referenz in einem Task-Spec (Name + optionale Install-URL/Metadaten). */
+export type TaskDataset = {
+  name: string;
+  install_url?: string | null;
+  size?: string | null;
+  license?: string | null;
+};
+
+/** Zeitrahmen eines Task-Specs. */
+export type TaskTimeline = { start: string; end: string };
+
+/**
+ * Task-Spec: strukturierte Aufgabenstellung (Kaggle/Hackathon/Anweisung).
+ * Backend-Quelle: ``query/task_extractor.normalize_task_spec``.
+ */
+export type TaskSpec = {
+  title: string;
+  objective: string;
+  evaluation: string;
+  datasets: TaskDataset[];
+  timeline: TaskTimeline;
+  rules: string[];
+  constraints: string[];
+  suggested_directions: TaskResearchDirection[];
+};
+
+/**
+ * Vom LLM vorgeschlagene Forschungsrichtung für einen Task-Spec.
+ * Generiert via ``POST /tasks/{task_id}/suggest-directions``.
+ */
+export type TaskResearchDirection = {
+  label: string;
+  rationale: string;
+  keywords: string[];
+};
+
+/** Gespeicherter Task (DB-Zeile, projektgebunden). */
+export type Task = {
+  id: string;
+  project_id?: string | null;
+  title: string;
+  task_json: TaskSpec;
+  source_kind: string; // "url" | "pdf" | "text"
+  source_url?: string | null;
+  source_pdf_path?: string | null;
+  created_timestamp?: string | null;
+  updated_timestamp?: string | null;
+};
+
+/** LLM-Antwort von ``POST /tasks/{task_id}/suggest-directions``. */
+export type TaskSuggestDirectionsResponse = {
+  directions: TaskResearchDirection[];
+  creativity_level: number;
+  provider?: string;
+  model?: string;
+};
+
+/** LLM-Antwort von ``POST /tasks/{task_id}/plan``. */
+export type TaskImplementationPlan = {
+  plan_markdown: string;
+  steps: { text: string; rationale: string; citation: string }[];
+  creativity_level: number;
+};
+
+/** LLM-Antwort von ``POST /tasks/{task_id}/as-grey-source``. */
+export type TaskGreySourceResponse = {
+  task_id: string;
+  grey_source: GreySource;
+  citation: string; // "grey::task_{id}"
 };
 
 export type AgentHandoffResponse = {
@@ -1202,7 +1330,61 @@ export type AnalysisArtifact = {
 };
 
 // --- Datensätze (freie Forschungs-Registries) ---
-export type DatasetSource = { id: string; label: string; domain: string };
+export type DatasetSource = {
+  id: string;
+  label: string;
+  domain: string;
+  /** Quelle benötigt Authentifizierung (z.B. Kaggle). */
+  needs_key?: boolean;
+  /** Hinweistext bei fehlendem Login (z.B. "Kaggle-Token in Einstellungen hinterlegen"). */
+  hint?: string | null;
+};
+
+/** Status einer Datenquelle (Login-Badge) via ``GET /datasets/sources/status``. */
+export type DatasetSourceStatus = {
+  id: string;
+  authenticated: boolean;
+  username?: string | null;
+  hint?: string | null;
+};
+
+/** Anfrage für ``POST /datasets/download`` (Kaggle auth-pflichtig). */
+export type DatasetDownloadRequest = {
+  source: string;
+  external_id: string;
+  file_name?: string;
+  dest_dir?: string;
+};
+
+/** Resultat eines Downloads (Pfad im lokalen Dateisystem). */
+export type DatasetDownloadResponse = {
+  source: string;
+  external_id: string;
+  file_name: string;
+  local_path: string;
+  bytes: number;
+};
+
+/** Login-Status eines Drittsystems (Kaggle/HuggingFace) via ``GET /settings/{system}``. */
+export type KaggleStatus = {
+  authenticated: boolean;
+  username?: string | null;
+  hint?: string | null;
+};
+
+/** Payload für ``POST /settings/kaggle`` (username+key ODER kaggle_json Inhalt). */
+export type KaggleLoginRequest = {
+  username?: string;
+  key?: string;
+  kaggle_json?: string;
+};
+
+/** Antwort von ``POST /settings/kaggle``. */
+export type KaggleLoginResponse = {
+  ok: boolean;
+  username: string;
+  hint: string;
+};
 
 export type DatasetHit = {
   source: string;

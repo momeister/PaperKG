@@ -41,6 +41,9 @@ class ProjectPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     paper_ids: list[str] | None = None
     pinned: bool | None = None
+    """Task-Focused Mode: Kreativitätsstufe 1–5 (Default 3). Persistiert in
+    ``project_meta.json``; ``None`` lässt den vorhandenen Wert unangetastet."""
+    creativity_level: int | None = Field(default=None, ge=1, le=5)
 
 
 class ProjectPaperPayload(BaseModel):
@@ -130,10 +133,13 @@ def patch_project(
     projects[target_id] = paper_ids
     _save_projects(projects, path)
 
-    if payload.pinned is not None:
+    if payload.pinned is not None or payload.creativity_level is not None:
         meta = _load_project_meta()
         entry = dict(meta.get(target_id) or {})
-        entry["pinned"] = bool(payload.pinned)
+        if payload.pinned is not None:
+            entry["pinned"] = bool(payload.pinned)
+        if payload.creativity_level is not None:
+            entry["creativity_level"] = int(payload.creativity_level)
         meta[target_id] = entry
         _save_project_meta(meta)
 
@@ -298,6 +304,9 @@ def _migrate_project_sidecars(old_project_id: str, new_project_id: str) -> None:
 
 def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[str, Any]]) -> dict[str, Any]:
     years = [int(papers[pid]["year"]) for pid in paper_ids if pid in papers and papers[pid].get("year")]
+    meta_entry = _load_project_meta().get(project_id) or {}
+    raw_creativity = meta_entry.get("creativity_level")
+    creativity_level = int(raw_creativity) if isinstance(raw_creativity, (int, float)) and 1 <= int(raw_creativity) <= 5 else 3
     return {
         "id": project_id,
         "name": project_id,
@@ -306,7 +315,8 @@ def _project_view(project_id: str, paper_ids: list[str], papers: dict[str, dict[
         "year_min": min(years) if years else None,
         "year_max": max(years) if years else None,
         "primary_paper_id": _load_primary_papers().get(project_id),
-        "pinned": bool((_load_project_meta().get(project_id) or {}).get("pinned")),
+        "pinned": bool(meta_entry.get("pinned")),
+        "creativity_level": creativity_level,
     }
 
 

@@ -20,8 +20,18 @@ import {
 
 import { api, API_BASE_URL } from "./api";
 import { MotionProvider } from "./motion";
-import { AppStateContext, clampFontScale, FONT_SCALE_STEP, normalizeTheme, THEME_META } from "./state";
+import {
+  AppStateContext,
+  clampCreativityLevel,
+  clampFontScale,
+  FONT_SCALE_STEP,
+  loadWorkspaceMode,
+  normalizeTheme,
+  persistWorkspaceMode,
+  THEME_META
+} from "./state";
 import type { LlmParams, Theme } from "./state";
+import type { CreativityLevel, WorkspaceMode } from "./types";
 import { ConstellationMark } from "./components/ConstellationMark";
 import { LlmPicker } from "./components/LlmPicker";
 import { Status } from "./components/Status";
@@ -106,6 +116,12 @@ export default function App() {
   const [paramsOpen, setParamsOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadStoredTheme);
   const [fontScale, setFontScaleState] = useState<number>(loadStoredFontScale);
+  // Task-Focused Mode: Workspace-Modus und Kreativitätsstufe sind projektgebunden.
+  // Der Modus lebt in localStorage (UI-only), die Kreativitätsstufe in project_meta.json
+  // (Backend-of-Record) — wir halten hier den geladenen Wert vor und patchen ihn
+  // beim Setzen via ``PATCH /projects/{id}``.
+  const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => loadWorkspaceMode(activeProject));
+  const [creativityLevel, setCreativityLevelState] = useState<CreativityLevel>(3);
 
   // The AI-Cursor overlay (R1) and the "AI has control" border both load the same app
   // in a separate Tauri window; each renders only its own compact view and skips the
@@ -183,13 +199,50 @@ export default function App() {
     localStorage.setItem("sciencekg.fontScale", String(fontScale));
   }, [fontScale]);
 
+  // Task-Focused Mode: beim Projektwechsel Workspace-Modus neu laden. Der Modus
+  // gilt pro Projekt, nicht global.
+  useEffect(() => {
+    setWorkspaceModeState(loadWorkspaceMode(activeProject));
+  }, [activeProject]);
+
+  // Task-Focused Mode: Kreativitätsstufe aus der Projektliste übernehmen (Backend
+  // liefert ``creativity_level`` via ``project_meta.json``, Default 3).
+  useEffect(() => {
+    if (!activeProject || !projectsQuery.data?.projects) {
+      setCreativityLevelState(3);
+      return;
+    }
+    const project = projectsQuery.data.projects.find((p) => p.id === activeProject);
+    setCreativityLevelState(clampCreativityLevel(project?.creativity_level));
+  }, [activeProject, projectsQuery.data?.projects]);
+
+  const setWorkspaceMode = (mode: WorkspaceMode) => {
+    setWorkspaceModeState(mode);
+    persistWorkspaceMode(activeProject, mode);
+  };
+
+  const setCreativityLevel = (level: CreativityLevel) => {
+    const clamped = clampCreativityLevel(level);
+    setCreativityLevelState(clamped);
+    if (activeProject) {
+      // Best-Effort-Persistenz; das Backend schreibt den Wert in project_meta.json.
+      // Re-query der Projektliste würde Race-Conditions beim Tippen am Slider erzeugen,
+      // deshalb opt-in: die Liste wird nur aktualisiert, wenn der Slider losgelassen
+      // wird (aufrufende Komponente entscheidet via onBlur/onChange-Final).
+      api.patchProject(activeProject, { creativity_level: clamped }).catch(() => {
+        // Stumm — die UI zeigt schon den optimistischen Wert; schlägt das Patch fehl
+        // (z.B. Backend gesperrt), bleibt der Wert session-lokal.
+      });
+    }
+  };
+
   const toggleTheme = () => setTheme((current) => THEME_META[current].counterpart);
   const setFontScale = (scale: number) => setFontScaleState(clampFontScale(scale));
   const adjustFontScale = (delta: number) => setFontScaleState((current) => clampFontScale(current + delta));
 
   const state = useMemo(
-    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, setTheme, toggleTheme, fontScale, setFontScale }),
-    [activeProject, provider, model, llmParams, theme, fontScale]
+    () => ({ activeProject, setActiveProject, provider, setProvider, model, setModel, llmParams, setLlmParams, theme, setTheme, toggleTheme, fontScale, setFontScale, workspaceMode, setWorkspaceMode, creativityLevel, setCreativityLevel }),
+    [activeProject, provider, model, llmParams, theme, fontScale, workspaceMode, creativityLevel]
   );
 
   function updateLlmParam(key: keyof LlmParams, rawValue: string) {

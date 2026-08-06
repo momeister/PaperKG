@@ -14,7 +14,9 @@ import {
 
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
-import type { Answer, ParallelSession, ParallelSessionSummary, VerificationSource } from "../types";
+import { CreativitySlider } from "../components/CreativitySlider";
+import { useAppState } from "../state";
+import type { Answer, CreativityLevel, ParallelSession, ParallelSessionSummary, VerificationSource } from "../types";
 import {
   AnswerText,
   bestEvidenceIndex,
@@ -193,6 +195,7 @@ export function ParallelResearchPanel({
   onChange: (session: ParallelSession) => void;
   onOpenCitation: (source: VerificationSource, evidenceIndex: number) => void;
 }) {
+  const { creativityLevel, setCreativityLevel } = useAppState();
   const [busy, setBusy] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(true);
 
@@ -233,6 +236,15 @@ export function ParallelResearchPanel({
           <strong className="parallel-panel__question">{session.question}</strong>
         </div>
         <div className="parallel-panel__head-actions">
+          <div className="parallel-panel__creativity">
+            <CreativitySlider
+              value={creativityLevel}
+              onChange={setCreativityLevel}
+              compact
+              label="Kreativität"
+              id="parallel-creativity"
+            />
+          </div>
           <button
             type="button"
             className="button button-compact"

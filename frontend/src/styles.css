@@ -10971,6 +10971,734 @@ button.parallel-cite {
 }
 
 /* ----------------------------------------------------------------------- */
+/* CreativitySlider — 5-stufige Schiene (Task-Focused Mode + Parallel).     */
+/* ----------------------------------------------------------------------- */
+.creativity-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.creativity-slider--compact {
+  gap: 4px;
+}
+.creativity-slider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.creativity-slider-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.creativity-slider-value {
+  font-size: 0.85rem;
+}
+.creativity-slider-value strong {
+  font-size: 1rem;
+}
+.creativity-slider-track {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.creativity-slider-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.creativity-slider-step:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.creativity-slider-step.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--surface));
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  font-weight: 600;
+}
+.creativity-slider-step:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.creativity-slider-step-num {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.creativity-slider-step-hint {
+  font-size: 0.7rem;
+  line-height: 1.1;
+  opacity: 0.85;
+}
+.creativity-slider--compact .creativity-slider-step {
+  min-height: 26px;
+  padding: 2px 4px;
+}
+.creativity-slider--compact .creativity-slider-step-num {
+  font-size: 0.8rem;
+}
+
+/* ----------------------------------------------------------------------- */
+/* TaskIngestDialog — URL/PDF/Text-Aufnahme + Save-Mode-Umschalter.         */
+/* ----------------------------------------------------------------------- */
+.task-ingest-dialog-card {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.task-ingest-source-tabs {
+  width: fit-content;
+}
+.task-ingest-source-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-ingest-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-ingest-field label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.task-ingest-field textarea,
+.task-ingest-field input[type="url"],
+.task-ingest-field input[type="file"] {
+  width: 100%;
+}
+.task-ingest-field textarea {
+  font-family: inherit;
+  resize: vertical;
+}
+.task-ingest-hint {
+  font-size: 0.78rem;
+}
+.task-ingest-save-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.task-ingest-save-mode label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.task-ingest-save-mode label input[type="radio"] {
+  margin: 0;
+}
+
+/* ----------------------------------------------------------------------- */
+/* TaskSpecCard — collapsible + editable Spec-Karte.                        */
+/* ----------------------------------------------------------------------- */
+.task-spec-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.task-spec-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.task-spec-card-head:hover {
+  background: var(--surface-hover);
+}
+.task-spec-card-toggle {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+}
+.task-spec-card-title {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.task-spec-card-title strong {
+  font-size: 0.95rem;
+}
+.task-spec-card-meta {
+  font-size: 0.75rem;
+}
+.task-spec-card-body {
+  padding: 4px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+.task-spec-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-spec-section label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.task-spec-section-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.task-spec-section textarea {
+  width: 100%;
+  font-family: inherit;
+  resize: vertical;
+}
+.task-spec-dataset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-spec-dataset-list li {
+  font-size: 0.85rem;
+}
+.task-spec-timeline-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ----------------------------------------------------------------------- */
+/* TaskResearchSuggestions — Forschungsrichtungen-Liste.                   */
+/* ----------------------------------------------------------------------- */
+.task-research-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-research-suggestions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.task-research-suggestions-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+.task-research-suggestions-title strong {
+  font-weight: 600;
+}
+.task-research-empty {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+}
+.task-research-direction-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-research-direction {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+.task-research-direction:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+}
+.task-research-direction.selected {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.task-research-direction:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.task-research-direction-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.task-research-direction-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.task-research-direction-check {
+  color: var(--accent);
+  font-weight: 700;
+}
+.task-research-direction-rationale {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.task-research-direction-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.task-research-direction-keyword {
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+/* ----------------------------------------------------------------------- */
+/* KaggleLoginDialog — Popup-Flow für Kaggle-Authentifizierung.            */
+/* ----------------------------------------------------------------------- */
+.kaggle-login-dialog-card {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.kaggle-login-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.kaggle-login-head strong {
+  font-size: 1.05rem;
+}
+.kaggle-login-note {
+  font-size: 0.8rem;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.kaggle-login-mode-tabs {
+  width: fit-content;
+}
+.kaggle-login-mode-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kaggle-login-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kaggle-login-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.kaggle-login-fields input[type="text"],
+.kaggle-login-fields input[type="password"],
+.kaggle-login-fields input[type="file"] {
+  width: 100%;
+}
+.kaggle-login-fields textarea {
+  width: 100%;
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+.kaggle-login-fields details {
+  margin-top: 6px;
+}
+.kaggle-login-fields details summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task-Focused Mode — Pane, Spec-Veröffentlichung, Handoff                */
+/* ----------------------------------------------------------------------- */
+.task-focused-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+}
+.task-focused-pane__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.task-focused-pane__head-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.task-focused-pane__head-title strong {
+  display: block;
+  font-size: 1.05rem;
+}
+.task-focused-pane__eyebrow {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.task-focused-pane__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-focused-pane__creativity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.task-focused-pane__creativity-hint {
+  font-size: 0.78rem;
+}
+.task-focused-pane__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 40px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+.task-focused-pane__task-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.task-focused-pane__task-switcher label {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.task-focused-pane__task-switcher select {
+  flex: 1 1 240px;
+  min-width: 180px;
+}
+.task-focused-toast {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  margin-top: auto;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.task-implementation-plan {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-implementation-plan__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+.task-implementation-plan__markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  font-family: inherit;
+  background: transparent;
+}
+.task-implementation-plan__steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.88rem;
+}
+.task-implementation-plan__steps li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-implementation-plan__citation {
+  font-size: 0.75rem;
+}
+.task-grey-source,
+.task-handoff-parallel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-grey-source__head,
+.task-handoff-parallel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92rem;
+}
+.task-grey-source__done {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+.task-grey-source__done code {
+  font-size: 0.82rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-hover);
+}
+
+/* ----------------------------------------------------------------------- */
+/* Workspace-Modus-Toggle + Wie-umsetzen (parallele Steps)                  */
+/* ----------------------------------------------------------------------- */
+.workspace-mode-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 0.78rem;
+}
+.workspace-mode-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.workspace-mode-toggle button.active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--text);
+}
+.workspace-mode-toggle button:hover:not(.active) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* "Wie umsetzen"-Steps pro Variante (parallele Research). */
+.parallel-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.parallel-step {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.parallel-step--vorgeschlagen {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+.parallel-step--in_progress {
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+.parallel-step--done {
+  border-left: 3px solid var(--ok);
+  background: color-mix(in srgb, var(--ok) 4%, var(--surface));
+}
+.parallel-step--rejected {
+  border-left: 3px solid var(--text-muted);
+  opacity: 0.6;
+}
+.parallel-step__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.parallel-step__text {
+  flex: 1 1 auto;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+.parallel-step__meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.parallel-step__rationale {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+.parallel-step__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.parallel-step__actions .button {
+  font-size: 0.76rem;
+  padding: 3px 8px;
+}
+.parallel-step__result-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+.parallel-step__result-form textarea {
+  font-size: 0.85rem;
+}
+.parallel-step__result {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--ok) 6%, var(--surface));
+  border-radius: 4px;
+  font-size: 0.84rem;
+}
+.parallel-step__rejection {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.parallel-step-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.parallel-step-add input {
+  flex: 1 1 auto;
+  font-size: 0.85rem;
+}
+.parallel-ask-professor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
+.parallel-ask-professor textarea {
+  font-size: 0.85rem;
+}
+.parallel-implement-plan {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--surface);
+}
+.parallel-implement-plan__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+.parallel-implement-plan__markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.84rem;
+  font-family: inherit;
+}
+
+/* Wie-umsetzen-Block pro Variante */
+.parallel-steps-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.parallel-steps-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.88rem;
+}
+.parallel-steps-empty {
+  font-size: 0.82rem;
+}
+.parallel-step__feedback-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.parallel-panel__creativity {
+  display: inline-flex;
+}
+
+/* ----------------------------------------------------------------------- */
 /* Nacht-Modus Feinschliff: helle Tönungen, die mit Theme-Text kombiniert   */
 /* werden, für dunklen Untergrund neu einfärben (sonst hell-auf-hell).      */
 /* ----------------------------------------------------------------------- */
@@ -12313,4 +13041,48 @@ button.parallel-cite {
   font-size: 14px;
   line-height: 1;
   padding: 0 4px;
+}
+
+/* Task-Mode-Badge in der Tiefenanalyse (ResearchTreeView) */
+.research-tree-task-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.research-tree-toast {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  color: var(--text);
+}
+
+/* DatasetsPanel — needs_key-Badges + Download-Button */
+.dataset-source-chip--locked {
+  opacity: 0.7;
+  border-color: color-mix(in srgb, var(--warning, #a85d00) 40%, var(--line));
+}
+.dataset-source-chip__badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: color-mix(in srgb, var(--warning, #a85d00) 90%, var(--text));
+}
+.dataset-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  align-self: flex-start;
+  padding-top: 4px;
 }

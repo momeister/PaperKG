@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { CreativityLevel, WorkspaceMode } from "./types";
 
 export type LlmParams = {
   temperature?: number;
@@ -60,6 +61,16 @@ export type AppState = {
   /** Globaler UI-Zoom (1 = 100%); skaliert das gesamte Programm. */
   fontScale: number;
   setFontScale: (scale: number) => void;
+  /** Task-Focused Mode: Workspace-Modus pro aktiven Projekt
+   *  (``research`` = klassisch, ``task`` = Hackathon/Kaggle/Anweisung).
+   *  Persistiert per-projekt in localStorage
+   *  ``sciencekg.workspace.mode.{projectId}``. */
+  workspaceMode: WorkspaceMode;
+  setWorkspaceMode: (mode: WorkspaceMode) => void;
+  /** Task-Focused Mode: Kreativitätsstufe des aktiven Projekts (1–5, Default 3).
+   *  Persistiert via ``PATCH /projects/{id}`` in ``project_meta.json``. */
+  creativityLevel: CreativityLevel;
+  setCreativityLevel: (level: CreativityLevel) => void;
 };
 
 /** Grenzen + Schrittweite für den globalen UI-Zoom (siehe App.tsx / SettingsPage). */
@@ -77,6 +88,43 @@ export function clampFontScale(scale: number): number {
 }
 
 export const AppStateContext = createContext<AppState | null>(null);
+
+// --- Task-Focused Mode — per-projekt Persistenz -----------------------------
+
+/** Liest den Workspace-Modus für ein Projekt aus localStorage (Default "research"). */
+export function loadWorkspaceMode(projectId: string | undefined): WorkspaceMode {
+  if (!projectId) {
+    return "research";
+  }
+  const raw = localStorage.getItem(`sciencekg.workspace.mode.${projectId}`);
+  return raw === "task" ? "task" : "research";
+}
+
+function workspaceModeKey(projectId: string | undefined): string {
+  return `sciencekg.workspace.mode.${projectId ?? ""}`;
+}
+
+export function persistWorkspaceMode(projectId: string | undefined, mode: WorkspaceMode): void {
+  if (!projectId) {
+    return;
+  }
+  localStorage.setItem(workspaceModeKey(projectId), mode);
+}
+
+/** Erzeugt eine gültige CreativityLevel (1–5); Default 3 bei ungültig/fehlt. */
+export function clampCreativityLevel(value: number | null | undefined): CreativityLevel {
+  if (!Number.isFinite(Number(value))) {
+    return 3;
+  }
+  const n = Math.round(Number(value));
+  if (n < 1) {
+    return 1;
+  }
+  if (n > 5) {
+    return 5;
+  }
+  return n as CreativityLevel;
+}
 
 export function useAppState() {
   const state = useContext(AppStateContext);

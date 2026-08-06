@@ -51,6 +51,7 @@ import {
   Sparkles,
   Square,
   Star,
+  Target,
   Trash2,
   Upload,
   X,
@@ -120,6 +121,7 @@ import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { DatasetsPanel } from "./DatasetsPanel";
+import { TaskFocusedPane } from "./TaskFocusedPane";
 
 // Pure helpers/constants live in ./workspaceHelpers; re-export for back-compat and
 // import the ones this file uses directly.
@@ -205,7 +207,7 @@ export type WorkspaceActionEntry = {
 };
 
 export function WorkspacePage() {
-  const { activeProject, setActiveProject, provider, model, llmParams } = useAppState();
+  const { activeProject, setActiveProject, provider, model, llmParams, workspaceMode, setWorkspaceMode, creativityLevel, setCreativityLevel } = useAppState();
   const scopedProjectId = noteProjectId(activeProject);
   const scopeLabel = projectScopeLabel(activeProject);
   const queryClient = useQueryClient();
@@ -1831,8 +1833,11 @@ export function WorkspacePage() {
   }
 
   /** Start a Parallel-Research session: the backend proposes grounded variants. A draft
-   * turn appears immediately; it's reconciled to the server session id on success. */
-  function startParallelSession(q: string) {
+   * turn appears immediately; it's reconciled to the server session id on success.
+   *
+   * `taskId` ist optional gesetzt, wenn die Session aus dem Task-Focused Mode heraus
+   * gestartet wird — sie verknüpft die Varianten mit der Task-Spec (grey::task_{id}). */
+  function startParallelSession(q: string, taskId?: string | null) {
     const question = q.trim();
     if (!question) return;
     setParallelMode(true);
@@ -1867,6 +1872,8 @@ export function WorkspacePage() {
         paper_ids: info.scopedPaperIds.length ? info.scopedPaperIds : undefined,
         provider: provider || undefined,
         model: model || undefined,
+        task_id: taskId ?? undefined,
+        creativity_level: creativityLevel,
       })
       .then(({ session }) => {
         parallelSessionIdRef.current = session.id;
@@ -3402,7 +3409,20 @@ export function WorkspacePage() {
         >
           {navigatorOpen ? (
             <aside className="workspace-nav-pane">
-              <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => navPanelRef.current?.collapse()} collapseSide="left" />
+              <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => navPanelRef.current?.collapse()} collapseSide="left"
+                actions={
+                  <div className="segmented workspace-mode-toggle" aria-label="Workspace-Modus" title="Research-Modus (klassische Forschungsansicht) vs. Task-Focused Mode (Hackathon/Kaggle/Anweisung)">
+                    <button type="button" className={workspaceMode === "research" ? "active" : ""} onClick={() => setWorkspaceMode("research")}>
+                      <NotebookPen size={14} />
+                      <span>Research</span>
+                    </button>
+                    <button type="button" className={workspaceMode === "task" ? "active" : ""} onClick={() => setWorkspaceMode("task")}>
+                      <Target size={14} />
+                      <span>Task</span>
+                    </button>
+                  </div>
+                }
+              />
               <div className="segmented workspace-nav-tabs" aria-label="Arbeitsplatz Navigation">
                 <button type="button" className={centerView === "pdf" && navigatorTab === "notes" ? "active" : ""} onClick={() => { setNavigatorTab("notes"); setCenterView("pdf"); }}>
                   <NotebookPen size={15} />
@@ -3517,7 +3537,17 @@ export function WorkspacePage() {
           onCollapse={() => setPdfOpen(false)}
           onExpand={() => setPdfOpen(true)}
         >
-          {centerView === "analysis" ? (
+          {workspaceMode === "task" ? (
+            <TaskFocusedPane
+              projectId={scopedProjectId}
+              provider={provider}
+              model={model}
+              creativityLevel={creativityLevel}
+              setCreativityLevel={setCreativityLevel}
+              onStartParallelSession={(q, taskId) => startParallelSession(q, taskId)}
+              onClose={() => setWorkspaceMode("research")}
+            />
+          ) : centerView === "analysis" ? (
             <AnalysisPanel
               projectId={scopedProjectId}
               provider={provider}

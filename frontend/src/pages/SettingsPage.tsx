@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, RefreshCcw } from "lucide-react";
+import { CheckCircle2, Key, LogOut, RefreshCcw } from "lucide-react";
 
 import { api, API_BASE_URL } from "../api";
 import { LlmPicker } from "../components/LlmPicker";
 import { Status } from "../components/Status";
 import { ThemePicker } from "../components/ThemePicker";
+import { KaggleLoginDialog } from "./KaggleLoginDialog";
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP, useAppState } from "../state";
 
 export function SettingsPage() {
@@ -16,6 +18,16 @@ export function SettingsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] })
   });
   const check = useMutation({ mutationFn: ({ providerName, modelName }: { providerName: string; modelName?: string }) => api.checkProvider(providerName, modelName) });
+
+  // Kaggle-Login: Status aus dem Backend (KAGGLE_USERNAME/KAGGLE_KEY in .env).
+  // Der Login-Dialog schreibt die Credentials via POST /settings/kaggle direkt
+  // in die .env — sie werden nie im localStorage gespeichert.
+  const kaggleQuery = useQuery({ queryKey: ["kaggle-status"], queryFn: api.getKaggleStatus });
+  const kaggleLogout = useMutation({
+    mutationFn: api.logoutKaggle,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["kaggle-status"] })
+  });
+  const [kaggleDialogOpen, setKaggleDialogOpen] = useState(false);
 
   return (
     <section className="page">
@@ -112,6 +124,52 @@ export function SettingsPage() {
         ))}
       </div>
 
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <span>Datensatz-Quellen</span>
+            <strong>Kaggle</strong>
+          </div>
+          <Status value={kaggleQuery.data?.authenticated ? "success" : kaggleQuery.isLoading ? "loading" : "local"} />
+        </div>
+        <div className="settings-grid">
+          {kaggleQuery.data?.authenticated ? (
+            <>
+              <label>
+                Angemeldet als
+                <input value={kaggleQuery.data.username ?? "?"} readOnly />
+              </label>
+              <button
+                type="button"
+                className="button"
+                onClick={() => kaggleLogout.mutate()}
+                disabled={kaggleLogout.isPending}
+              >
+                <LogOut size={16} />
+                <span>Abmelden</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="muted">
+                Kaggle-Wettbewerbe und -Datensätze brauchen einen Login (kostenloser
+                Kaggle-Account). Die Credentials landen in der lokalen
+                <code>.env</code> (KAGGLE_USERNAME / KAGGLE_KEY) — nie im localStorage
+                oder in der Cloud.
+              </p>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => setKaggleDialogOpen(true)}
+              >
+                <Key size={16} />
+                <span>Kaggle verbinden</span>
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+
       {check.data ? (
         <section className="panel">
           <div className="panel-heading">
@@ -126,6 +184,15 @@ export function SettingsPage() {
           {check.data.error ? <div className="warning-row">{check.data.error}</div> : null}
         </section>
       ) : null}
+
+      <KaggleLoginDialog
+        open={kaggleDialogOpen}
+        onClose={() => setKaggleDialogOpen(false)}
+        onLoggedIn={() => {
+          setKaggleDialogOpen(false);
+          void queryClient.invalidateQueries({ queryKey: ["kaggle-status"] });
+        }}
+      />
     </section>
   );
 }

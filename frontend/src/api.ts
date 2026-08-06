@@ -22,10 +22,14 @@ import type {
   SandboxRunResult,
   AnalysisRun,
   ClaimCheckResult,
+  CreativityLevel,
   Dataset,
   DatasetDetails,
+  DatasetDownloadRequest,
+  DatasetDownloadResponse,
   DatasetHit,
   DatasetSource,
+  DatasetSourceStatus,
   BenchmarkReport,
   BenchmarkRun,
   Dashboard,
@@ -44,6 +48,9 @@ import type {
   HarvestSourceCatalog,
   HealthReport,
   Job,
+  KaggleLoginRequest,
+  KaggleLoginResponse,
+  KaggleStatus,
   Note,
   NoteAiEditResponse,
   NoteAiThread,
@@ -55,6 +62,7 @@ import type {
   ParallelSession,
   ParallelSessionSummary,
   ParallelStage,
+  ParallelStep,
   ParallelVariant,
   ParallelEntry,
   Project,
@@ -64,6 +72,12 @@ import type {
   ResearchSessionSummary,
   RewriteResponse,
   ReviewEntity,
+  Task,
+  TaskGreySourceResponse,
+  TaskImplementationPlan,
+  TaskResearchDirection,
+  TaskSuggestDirectionsResponse,
+  TaskSpec,
   VerificationSource,
   VocabularyEntry
 } from "./types";
@@ -157,7 +171,7 @@ export const api = {
   // Die Projekte stimmen dann, nur Jahresspannen fehlen — die UI weist darauf hin.
   getProjects: () => request<{ projects: Project[]; degraded?: string }>("/projects"),
   createProject: (name: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
-  patchProject: (projectId: string, payload: { name?: string; pinned?: boolean }) =>
+  patchProject: (projectId: string, payload: { name?: string; pinned?: boolean; creativity_level?: CreativityLevel }) =>
     request<{ project: Project }>(`/projects/${encodeURIComponent(projectId)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
@@ -529,7 +543,7 @@ export const api = {
   // --- Parallel Research mode ---
   createParallelSession: (
     projectId: string,
-    payload: { question: string; variant_count?: number; paper_ids?: string[]; provider?: string | null; model?: string | null },
+    payload: { question: string; variant_count?: number; paper_ids?: string[]; provider?: string | null; model?: string | null; task_id?: string | null; creativity_level?: CreativityLevel | null },
   ) =>
     request<{ session: ParallelSession }>(`/projects/${encodeURIComponent(projectId)}/parallel`, {
       method: "POST",
@@ -543,7 +557,7 @@ export const api = {
     request<{ deleted: boolean }>(`/parallel/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
   generateParallelVariants: (
     sessionId: string,
-    payload: { variant_count?: number; stage_id?: string | null; paper_ids?: string[]; provider?: string | null; model?: string | null },
+    payload: { variant_count?: number; stage_id?: string | null; paper_ids?: string[]; provider?: string | null; model?: string | null; task_id?: string | null; creativity_level?: CreativityLevel | null },
   ) =>
     request<{ session: ParallelSession }>(`/parallel/${encodeURIComponent(sessionId)}/generate`, {
       method: "POST",
@@ -559,7 +573,7 @@ export const api = {
     }),
   addParallelStage: (
     sessionId: string,
-    payload: { name?: string; goal?: string; propose?: boolean; paper_ids?: string[]; provider?: string | null; model?: string | null },
+    payload: { name?: string; goal?: string; propose?: boolean; paper_ids?: string[]; provider?: string | null; model?: string | null; task_id?: string | null; creativity_level?: CreativityLevel | null },
   ) =>
     request<{ session: ParallelSession }>(`/parallel/${encodeURIComponent(sessionId)}/stages`, {
       method: "POST",
@@ -585,7 +599,7 @@ export const api = {
     }),
   updateParallelVariant: (
     variantId: string,
-    payload: Partial<{ name: string; approach: string; rationale: string; suggested_prompt: string; status: string; position: number }>,
+    payload: Partial<{ name: string; approach: string; rationale: string; suggested_prompt: string; status: string; position: number; rejection_reason: string }>,
   ) =>
     request<{ variant: ParallelVariant }>(`/parallel/variants/${encodeURIComponent(variantId)}`, {
       method: "PATCH",
@@ -619,6 +633,8 @@ export const api = {
       paper_ids?: string[];
       provider?: string | null;
       model?: string | null;
+      task_id?: string | null;
+      creativity_level?: CreativityLevel | null;
     },
   ) =>
     request<{ session: ParallelSession; answer: Answer }>(`/parallel/${encodeURIComponent(sessionId)}/ask`, {
@@ -634,6 +650,59 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  // --- Parallel: "Wie umsetzen"-Steps + Professor-Interaktion ---
+  // Status-Übergänge pro Step: vorgeschlagen → in_progress → done|rejected.
+  addParallelStep: (
+    variantId: string,
+    payload: { text: string; rationale?: string; citation?: string; origin?: "user" | "ai" },
+  ) =>
+    request<{ variant: ParallelVariant }>(`/parallel/variants/${encodeURIComponent(variantId)}/steps`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateParallelStep: (
+    variantId: string,
+    stepId: string,
+    payload: Partial<{ text: string; status: "vorgeschlagen" | "in_progress" | "done" | "rejected" }>,
+  ) =>
+    request<{ variant: ParallelVariant }>(`/parallel/variants/${encodeURIComponent(variantId)}/steps/${encodeURIComponent(stepId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteParallelStep: (variantId: string, stepId: string) =>
+    request<{ deleted: boolean }>(`/parallel/variants/${encodeURIComponent(variantId)}/steps/${encodeURIComponent(stepId)}`, { method: "DELETE" }),
+  /** "Ergebnis zeigen" — Step auf done setzen, Ergebnis als parallel_entry posten,
+   *  optional Professor-Feedback anfordern. */
+  submitParallelStepResult: (
+    variantId: string,
+    stepId: string,
+    payload: { result: string; request_feedback?: boolean; paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ variant: ParallelVariant; answer: Answer | null }>(
+      `/parallel/variants/${encodeURIComponent(variantId)}/steps/${encodeURIComponent(stepId)}/result`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  /** "Frage an Professor" — Follow-up scoped to a variant (optional step_id). */
+  askParallelProfessor: (
+    variantId: string,
+    payload: { question: string; step_id?: string | null; paper_ids?: string[]; provider?: string | null; model?: string | null },
+  ) =>
+    request<{ variant: ParallelVariant; answer: Answer }>(`/parallel/variants/${encodeURIComponent(variantId)}/ask`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  /** "Weg nichts für mich" — Variante mit Begründung ablehnen. */
+  rejectParallelVariant: (variantId: string, payload: { reason?: string } = {}) =>
+    request<{ variant: ParallelVariant }>(`/parallel/variants/${encodeURIComponent(variantId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  /** Implementationsplan einer Session (Summe der akzeptierten Steps). */
+  getParallelImplementationPlan: (sessionId: string) =>
+    request<{ plan_markdown: string; steps: { text: string; rationale: string; citation: string }[] }>(
+      `/parallel/${encodeURIComponent(sessionId)}/implementation-plan`,
+    ),
 
   // --- Code-Werkstatt (coding projects, file tree, editor, git) ---
   werkstatt: {
@@ -1039,6 +1108,8 @@ export const api = {
   // --- Datensätze (freie Registries: Zenodo/Figshare/Dryad/ClinicalTrials/PWC) ---
   datasets: {
     sources: () => request<{ sources: DatasetSource[]; default: string[] }>("/datasets/sources"),
+    /** Login-Badges pro Quelle (Kaggle authenticated? username? hint?). */
+    sourcesStatus: () => request<{ sources: DatasetSourceStatus[] }>("/datasets/sources/status"),
     search: (payload: { query: string; sources?: string[]; per_source?: number }) =>
       request<{ results: DatasetHit[]; warnings: string[] }>("/datasets/search", {
         method: "POST",
@@ -1053,9 +1124,86 @@ export const api = {
       request<{ datasets: Dataset[] }>("/datasets", { query: { project_id: projectId ?? undefined } }),
     details: (source: string, externalId: string) =>
       request<DatasetDetails>("/datasets/details", { query: { source, external_id: externalId } }),
+    /** Download einer einzelnen Datei (Kaggle auth-pflichtig — schlägt ohne Login fehl). */
+    download: (payload: DatasetDownloadRequest) =>
+      request<DatasetDownloadResponse>("/datasets/download", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     remove: (id: string) =>
       request<{ deleted: boolean; id: string }>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
   },
+
+  // --- Task-Focused Mode: Task-Specs pro Projekt ---
+  tasks: {
+    list: (projectId: string) =>
+      request<{ project_id: string; tasks: Task[] }>(`/projects/${encodeURIComponent(projectId)}/tasks`),
+    get: (taskId: string) => request<Task>(`/tasks/${encodeURIComponent(taskId)}`),
+    create: (
+      projectId: string,
+      payload: { title?: string; task_json?: Partial<TaskSpec>; source_kind?: string; source_url?: string | null; source_pdf_path?: string | null },
+    ) =>
+      request<Task>(`/projects/${encodeURIComponent(projectId)}/tasks`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    update: (taskId: string, payload: { title?: string; task_json?: Partial<TaskSpec> }) =>
+      request<Task>(`/tasks/${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    remove: (taskId: string) =>
+      request<{ deleted: boolean; id: string }>(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
+    /** LLM-Extraktion ohne Speichern (Vorschau). */
+    extract: (payload: { source_kind: string; source_url?: string | null; source_text?: string | null; source_pdf_path?: string | null; title?: string | null; provider?: string | null; model?: string | null }) =>
+      request<TaskSpec>("/tasks/extract", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** LLM-Extraktion + sofortiges Speichern im Projekt. */
+    ingest: (
+      projectId: string,
+      payload: { source_kind: string; source_url?: string | null; source_text?: string | null; source_pdf_path?: string | null; title?: string | null; provider?: string | null; model?: string | null },
+    ) =>
+      request<Task>(`/projects/${encodeURIComponent(projectId)}/tasks/ingest`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** Forschungsrichtungen vorschlagen (Kreativitätsstufe 1–5). */
+    suggestDirections: (
+      taskId: string,
+      payload: { creativity_level?: CreativityLevel; provider?: string | null; model?: string | null },
+    ) =>
+      request<TaskSuggestDirectionsResponse>(`/tasks/${encodeURIComponent(taskId)}/suggest-directions`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** Implementationsplan für eine Richtung erzeugen. */
+    plan: (
+      taskId: string,
+      payload: { direction: TaskResearchDirection; kg_context?: string; creativity_level?: CreativityLevel; provider?: string | null; model?: string | null },
+    ) =>
+      request<TaskImplementationPlan>(`/tasks/${encodeURIComponent(taskId)}/plan`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** Task-Spec als zitierfähige Grey-Source veröffentlichen (``grey::task_{id}``). */
+    publishAsGreySource: (taskId: string) =>
+      request<TaskGreySourceResponse>(`/tasks/${encodeURIComponent(taskId)}/as-grey-source`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+  },
+
+  // --- Kaggle-Login (Credentials in .env, gitignored) ---
+  getKaggleStatus: () => request<KaggleStatus>("/settings/kaggle"),
+  loginKaggle: (payload: KaggleLoginRequest) =>
+    request<KaggleLoginResponse>("/settings/kaggle", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  logoutKaggle: () =>
+    request<{ ok: boolean; hint: string }>("/settings/kaggle", { method: "DELETE" }),
 
   // --- PDF-Notizen (an Textstelle/Punkt im PDF verankert, persistent pro Paper) ---
   pdfAnnotations: {
