@@ -1,3 +1,5 @@
+import { usePaneEnvironment } from "../workspace/PortablePane";
+import { GlossaryText, GlossaryTextarea, usePreviewGlossarySelection } from "../glossary/GlossaryText";
 // Standalone, prop-driven sub-components + markdown-render helpers extracted from
 // NotesPage.tsx. Re-imported by NotesPage; reference each other and notesHelpers.
 import { Fragment, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -154,6 +156,7 @@ export function ThreadAnchorMarker({
   onPreviewClear: () => void;
   onHideMessage: (messageId: string) => void;
 }) {
+  const { window, document } = usePaneEnvironment();
   const messages = threadDisplayMessages(thread);
   const context = shortThreadContext(thread.anchor_quote || thread.selected_text);
   const wrapRef = useRef<HTMLSpanElement | null>(null);
@@ -199,7 +202,7 @@ export function ThreadAnchorMarker({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open, placement]);
+  }, [window, open, placement]);
 
   const portalTarget = typeof document === "undefined" ? null : document.body;
   const popover =
@@ -700,6 +703,7 @@ export function MarkdownPreview({
   highlightBlockIndices?: Set<number>;
   className?: string;
 }) {
+  const glossarySelection = usePreviewGlossarySelection();
   const citationById = useMemo(() => new Map(citations.map((citation) => [citation.id, citation])), [citations]);
   const citationColorById = useMemo(() => new Map(citations.map((citation, index) => [citation.id, citationColorIndex(citation, index)])), [citations]);
   const blocks = useMemo(() => splitMarkdownBlocks(markdown), [markdown]);
@@ -714,7 +718,9 @@ export function MarkdownPreview({
     <article
       ref={previewRef}
       className={`markdown-preview ${editable ? "markdown-preview--editable" : ""} ${className}`.trim()}
-      onScroll={onScroll}
+      onMouseUp={glossarySelection.capture}
+      onKeyUp={glossarySelection.capture}
+      onScroll={event => { glossarySelection.clear(); onScroll?.(event); }}
       onPointerEnter={onActivate}
     >
       {blocks.map((block, index) => {
@@ -768,6 +774,7 @@ export function MarkdownPreview({
           </div>
         );
       })}
+      {glossarySelection.action}
     </article>
   );
 }
@@ -777,12 +784,14 @@ export function MarkdownPreview({
 // chips, toggle summaries) that has its own behaviour.
 function shouldStartBlockEdit(target: EventTarget): boolean {
   if (!(target instanceof Element)) return true;
-  return !target.closest("a, button, summary, input, textarea, select, label, .md-toggle__summary");
+  return !target.closest("a, button, summary, input, textarea, select, label, .glossary-term, .md-toggle__summary");
 }
 
 
 function PreviewBlockEditor({ raw, onCommit, onCancel }: { raw: string; onCommit: (next: string) => void; onCancel: () => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const [value, setValue] = useState(raw);
+  const [scroll, setScroll] = useState({ top: 0, left: 0 });
   const doneRef = useRef(false);
   const commit = (value: string) => {
     if (doneRef.current) return;
@@ -806,10 +815,14 @@ function PreviewBlockEditor({ raw, onCommit, onCancel }: { raw: string; onCommit
     autosize(node);
   }, []);
   return (
-    <textarea
+    <div className="glossary-block-editor">
+    <TextareaHighlightLayer glossary text={value} scrollTop={scroll.top} scrollLeft={scroll.left} />
+    <GlossaryTextarea
       ref={ref}
       className="preview-block-editor"
-      defaultValue={raw}
+      value={value}
+      onChange={event => setValue(event.currentTarget.value)}
+      onScroll={event => setScroll({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })}
       spellCheck={false}
       onInput={(event) => autosize(event.currentTarget)}
       onBlur={(event) => commit(event.currentTarget.value)}
@@ -823,6 +836,7 @@ function PreviewBlockEditor({ raw, onCommit, onCancel }: { raw: string; onCommit
         }
       }}
     />
+    </div>
   );
 }
 
@@ -911,6 +925,9 @@ export function renderBlock(
     const match = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed);
     // Resolve via the current API base at render time (relative or stale-port asset URL → live URL).
     return <img key={key} className="markdown-preview-image" alt={match?.[1] ?? ""} src={absoluteUrl(normalizeAssetUrl(match?.[2] ?? ""))} />;
+  }
+  if (/^(`{3,}|~{3,})/.test(trimmed)) {
+    return <pre key={key}><code>{trimmed.replace(/^(`{3,}|~{3,})[^\n]*\n?/, "").replace(/\n?(`{3,}|~{3,})$/, "")}</code></pre>;
   }
   const toggle = parseToggleBlock(trimmed);
   if (toggle) {
@@ -1060,6 +1077,7 @@ export function CitationGroupButton({
   groupRef: CitationMarkdownRef | null;
   activeCitationId: string;
 }) {
+  const { window, document } = usePaneEnvironment();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const resolved = ids.map((id) => citations.get(id)).filter((item): item is NoteCitation => Boolean(item));
@@ -1077,7 +1095,7 @@ export function CitationGroupButton({
     };
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [open]);
+  }, [window, open]);
 
   return (
     <span
@@ -1220,37 +1238,30 @@ export function renderInline(
       );
     }
     if (/^\*\*[^*]+\*\*$/.test(part)) {
-      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
+      return <strong key={`${part}-${index}`}><GlossaryText sourceText={text} sourceOffset={partStart + 2} text={part.slice(2, -2)} /></strong>;
     }
     if (/^\*[^*]+\*$/.test(part)) {
-      return <em key={`${part}-${index}`}>{part.slice(1, -1)}</em>;
+      return <em key={`${part}-${index}`}><GlossaryText sourceText={text} sourceOffset={partStart + 1} text={part.slice(1, -1)} /></em>;
     }
     if (/^`[^`]+`$/.test(part)) {
       return <code key={`${part}-${index}`}>{part.slice(1, -1)}</code>;
     }
     if (/^==[^=]+==$/.test(part)) {
-      return <mark key={`${part}-${index}`}>{part.slice(2, -2)}</mark>;
+      return <mark key={`${part}-${index}`}><GlossaryText sourceText={text} sourceOffset={partStart + 2} text={part.slice(2, -2)} /></mark>;
     }
     if (/^<mark(?:\s+[^>]*)?>/.test(part)) {
-      return <mark key={`${part}-${index}`}>{part.replace(/^<mark(?:\s+[^>]*)?>|<\/mark>$/g, "")}</mark>;
+      return <mark key={`${part}-${index}`}><GlossaryText sourceText={text} sourceOffset={partStart + part.indexOf(">") + 1} text={part.replace(/^<mark(?:\s+[^>]*)?>|<\/mark>$/g, "")} /></mark>;
     }
     const colorMatch = /^<span style="color:([^"]+)">(.*)<\/span>$/.exec(part);
     if (colorMatch) {
-      return <span key={`${part}-${index}`} style={{ color: colorMatch[1] }} data-color={colorMatch[1]}>{colorMatch[2]}</span>;
+      return <span key={`${part}-${index}`} style={{ color: colorMatch[1] }} data-color={colorMatch[1]}><GlossaryText sourceText={text} sourceOffset={partStart + part.indexOf(">") + 1} text={colorMatch[2]} /></span>;
     }
     // Einzelne Zeilenumbrüche sichtbar machen: eine neue Zeile im Editor ist auch in
     // der Preview eine neue Zeile (serializePreviewNode mappt <br> zurück auf \n).
-    const lines = part.split("\n");
-    return (
-      <span key={`${part}-${index}`}>
-        {lines.map((line, lineIndex) => (
-          <Fragment key={lineIndex}>
-            {highlightPreviewSearch(line, searchQuery)}
-            {lineIndex < lines.length - 1 ? <br /> : null}
-          </Fragment>
-        ))}
-      </span>
-    );
+    return <GlossaryText key={`${part}-${index}`} sourceText={text} sourceOffset={partStart} text={part} render={value => {
+      const lines = value.split("\n");
+      return lines.map((line, lineIndex) => <Fragment key={lineIndex}>{highlightPreviewSearch(line, searchQuery)}{lineIndex < lines.length - 1 ? <br /> : null}</Fragment>);
+    }} />;
   });
 }
 

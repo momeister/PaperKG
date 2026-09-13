@@ -35,6 +35,7 @@ type IndexedTextItem = {
   text: string;
   start: number;
   end: number;
+  offsets: { start: number; end: number }[];
 };
 
 const ANCHOR_STOPWORDS = new Set([
@@ -124,6 +125,12 @@ function textItemBox(item: IndexedTextItem, viewport: any, evidenceIndex: number
   if (!textItem.transform) {
     return null;
   }
+  if (viewport.textRangeRect) {
+    const start = item.offsets[rangeStart]?.start ?? 0;
+    const end = item.offsets[Math.max(rangeStart, rangeEnd - 1)]?.end ?? String(textItem.str ?? "").length;
+    const rect = viewport.textRangeRect(item.index, start, end);
+    return rect ? { id: `${evidenceIndex}-${item.index}-${start}-${end}`, evidenceIndex, colorIndex, ...rect } : null;
+  }
   const transform = pdfjs.Util.transform(viewport.transform, textItem.transform);
   const height = Math.max(8, Math.hypot(transform[2], transform[3]) || Number(textItem.height) || 10);
   const fullWidth = Math.max(10, Number(textItem.width || String(textItem.str ?? "").length * 5) * viewport.scale);
@@ -164,7 +171,20 @@ function indexTextItems(items: unknown[]): { items: IndexedTextItem[]; text: str
   const indexed: IndexedTextItem[] = [];
   let text = "";
   items.forEach((item, index) => {
-    const itemText = normalizeText((item as any).str ?? "");
+    const offsets: { start: number; end: number }[] = [];
+    let itemText = "", offset = 0;
+    for (const ch of String((item as any).str ?? "")) {
+      const end = offset + ch.length;
+      for (const normalized of ch.normalize("NFKC").toLowerCase()) {
+        const value = /[\p{L}\p{N}-]/u.test(normalized) ? normalized : " ";
+        if (value !== " " || (itemText && !itemText.endsWith(" "))) {
+          itemText += value;
+          for (let i = 0; i < value.length; i++) offsets.push({ start: offset, end });
+        }
+      }
+      offset = end;
+    }
+    if (itemText.endsWith(" ")) { itemText = itemText.slice(0, -1); offsets.pop(); }
     if (!itemText) {
       return;
     }
@@ -173,7 +193,7 @@ function indexTextItems(items: unknown[]): { items: IndexedTextItem[]; text: str
     }
     const start = text.length;
     text += itemText;
-    indexed.push({ item, index, text: itemText, start, end: text.length });
+    indexed.push({ item, index, text: itemText, start, end: text.length, offsets });
   });
   return { items: indexed, text };
 }
@@ -582,6 +602,7 @@ function compactText(text: string) {
 
 function normalizeText(text: string) {
   return text
+    .normalize("NFKC")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}-]+/gu, " ")
     .replace(/\s+/g, " ")

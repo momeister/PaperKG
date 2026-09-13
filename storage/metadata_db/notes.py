@@ -38,6 +38,42 @@ class NotesMixin(_Base):
             raise RuntimeError(f"Failed to create note: {note_id}")
         return note
 
+    def save_note_with_citations(
+        self,
+        *,
+        note_id: str | None = None,
+        project_id: str = "",
+        title: str | None = None,
+        markdown: str | None = None,
+        citations: list[dict[str, Any]] | None = None,
+        version_reason: str = "edit",
+    ) -> dict[str, Any] | None:
+        """Persist the text and its source anchors together, including new notes."""
+        with self._lock:
+            self._execute("BEGIN TRANSACTION")
+            try:
+                note = (
+                    self.update_note(
+                        note_id,
+                        title=title,
+                        markdown=markdown,
+                        version_reason=version_reason,
+                    )
+                    if note_id
+                    else self.create_note(
+                        project_id, title or "Neue Notiz", markdown or ""
+                    )
+                )
+                if note is not None:
+                    for citation in citations or []:
+                        self.add_note_citation(note["id"], citation)
+                    note = self.get_note(note["id"])
+                self._execute("COMMIT")
+                return note
+            except Exception:
+                self._execute("ROLLBACK")
+                raise
+
     def get_note(self, note_id: str) -> dict[str, Any] | None:
         row = self._execute("SELECT * FROM notes WHERE id = ?", [note_id]).fetchone()
         if row is None:
@@ -142,12 +178,13 @@ class NotesMixin(_Base):
             next_markdown = (
                 f"{next_markdown}\n\n{addition}".strip() if next_markdown else addition
             )
-        updated = self.update_note(
-            note_id, title=title, markdown=next_markdown, version_reason="append"
+        return self.save_note_with_citations(
+            note_id=note_id,
+            title=title,
+            markdown=next_markdown,
+            citations=citations,
+            version_reason="append",
         )
-        for citation in citations or []:
-            self.add_note_citation(note_id, citation)
-        return self.get_note(note_id) or updated
 
     def delete_note(self, note_id: str) -> bool:
         if self.get_note(note_id) is None:
@@ -180,8 +217,8 @@ class NotesMixin(_Base):
             """
             INSERT INTO note_citations
             (id, note_id, paper_id, title, kind, reference_text, pdf_excerpt, evidence_id, evidence_index,
-             source_kind, code_project_id, rel_path, start_line, end_line, content_hash, created_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source_kind, code_project_id, rel_path, start_line, end_line, content_hash, pdf_anchors, created_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 paper_id = EXCLUDED.paper_id,
                 title = EXCLUDED.title,
@@ -195,7 +232,8 @@ class NotesMixin(_Base):
                 rel_path = EXCLUDED.rel_path,
                 start_line = EXCLUDED.start_line,
                 end_line = EXCLUDED.end_line,
-                content_hash = EXCLUDED.content_hash
+                content_hash = EXCLUDED.content_hash,
+                pdf_anchors = COALESCE(EXCLUDED.pdf_anchors, note_citations.pdf_anchors)
         """,
             [
                 citation_id,
@@ -213,6 +251,9 @@ class NotesMixin(_Base):
                 self._coerce_line(citation.get("start_line")),
                 self._coerce_line(citation.get("end_line")),
                 citation.get("content_hash"),
+                json.dumps(citation["pdf_anchors"])
+                if citation.get("pdf_anchors")
+                else None,
                 datetime.now(),
             ],
         )
@@ -252,6 +293,8 @@ class NotesMixin(_Base):
         ]
         if any(code_span):
             parts.extend(code_span)
+        if citation.get("pdf_anchors"):
+            parts.append(json.dumps(citation["pdf_anchors"], sort_keys=True))
         return f"cite_{uuid.uuid5(uuid.NAMESPACE_URL, '|'.join(parts)).hex}"
 
     @staticmethod
@@ -265,7 +308,13 @@ class NotesMixin(_Base):
         if row is None:
             return None
         cols = [desc[0] for desc in self.conn.description]
-        return dict(zip(cols, row))
+        return self._decode_pdf_anchors(dict(zip(cols, row)))
+
+    @staticmethod
+    def _decode_pdf_anchors(citation: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(citation.get("pdf_anchors"), str):
+            citation["pdf_anchors"] = json.loads(citation["pdf_anchors"])
+        return citation
 
     def delete_note_citation(self, note_id: str, citation_id: str) -> bool:
         existing = self.get_note_citation(citation_id)
@@ -287,7 +336,7 @@ class NotesMixin(_Base):
             [note_id],
         ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
-        return [dict(zip(cols, row)) for row in rows]
+        return [self._decode_pdf_anchors(dict(zip(cols, row))) for row in rows]
 
     def add_note_asset(
         self, note_id: str, filename: str, content_type: str, asset_path: str

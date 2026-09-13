@@ -35,6 +35,9 @@ class ExtractionMixin(_Base):
         raw_response: str | None = None,
         error_message: str | None = None,
         duration_seconds: float | None = None,
+        provenance: dict[str, Any] | None = None,
+        study_quality: dict[str, Any] | None = None,
+        evidence_level: str | None = None,
     ) -> int:
         """
         Save extraction results to database. Returns the result ID.
@@ -49,8 +52,9 @@ class ExtractionMixin(_Base):
             (paper_id, llm_provider, llm_model, extraction_status, paper_type, concepts, methods,
              concept_candidates, method_candidates, relations, claims,
              cross_domain_hints, terminology_conflicts, temporal_coverage, mathematical_content,
+             provenance, study_quality, evidence_level,
              raw_response, error_message, extraction_duration_seconds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
         """,
             [
@@ -69,6 +73,9 @@ class ExtractionMixin(_Base):
                 json.dumps(terminology_conflicts or []),
                 json.dumps(temporal_coverage or {}),
                 json.dumps(mathematical_content or {}),
+                json.dumps(provenance or {}),
+                json.dumps(study_quality or {}),
+                evidence_level,
                 raw_response,
                 error_message,
                 duration_seconds,
@@ -83,8 +90,50 @@ class ExtractionMixin(_Base):
                 + list(concept_candidates or [])
                 + list(method_candidates or []),
             )
+            if study_quality:
+                self._upsert_study_quality(paper_id, study_quality)
 
         return int(result_id[0]) if result_id else 0
+
+    def _upsert_study_quality(
+        self,
+        paper_id: str,
+        study_quality: dict[str, Any],
+    ) -> None:
+        """Persist the computed study-quality summary to the ``study_quality``
+        table. The dict is expected to follow ``StudyQuality.to_dict()``.
+        Missing keys default to null/unknown.
+        """
+        if not isinstance(study_quality, dict):
+            return
+        sample_size_value = study_quality.get("sample_size_value")
+        try:
+            sample_size_int = (
+                int(sample_size_value) if sample_size_value is not None else None
+            )
+        except (TypeError, ValueError):
+            sample_size_int = None
+        self._execute(
+            """
+            INSERT OR REPLACE INTO study_quality
+            (paper_id, study_design, sample_size_value, sample_size_unit,
+             evidence_level, quality_score, flags, funding_sources,
+             coi_status, limitations, computed_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+            [
+                paper_id,
+                str(study_quality.get("study_design") or "unknown"),
+                sample_size_int,
+                str(study_quality.get("sample_size_unit") or "participants"),
+                str(study_quality.get("evidence_level") or "unknown"),
+                float(study_quality.get("quality_score") or 0.5),
+                json.dumps(study_quality.get("flags") or []),
+                json.dumps(study_quality.get("funding_sources") or []),
+                str(study_quality.get("coi_status") or "unknown"),
+                json.dumps(study_quality.get("limitations") or []),
+            ],
+        )
 
     @staticmethod
     def _infer_extraction_error_message(raw_response: str | None) -> str | None:
@@ -352,17 +401,22 @@ class ExtractionMixin(_Base):
 
         return data_list
 
-    def list_extraction_results(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_extraction_results(self, limit: int = 50, paper_ids=None, latest_successful: bool = False) -> list[dict[str, Any]]:
         """
         List recent extraction results across all papers.
         """
+        conditions = []
+        params = []
+        if paper_ids is not None:
+            conditions.append("paper_id IN (SELECT unnest(?))")
+            params.append(list(paper_ids))
+        if latest_successful:
+            conditions.append("extraction_status = 'success'")
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        latest = " QUALIFY row_number() OVER (PARTITION BY paper_id ORDER BY extraction_timestamp DESC, id DESC) = 1" if latest_successful else ""
         results = self._execute(
-            """
-            SELECT * FROM extraction_results
-            ORDER BY extraction_timestamp DESC
-            LIMIT ?
-        """,
-            [limit],
+            "SELECT * FROM extraction_results" + where + latest + " ORDER BY extraction_timestamp DESC, id DESC LIMIT ?",
+            [*params, limit],
         ).fetchall()
 
         cols = [desc[0] for desc in self.conn.description]
@@ -377,6 +431,54 @@ class ExtractionMixin(_Base):
                         pass
             data_list.append(data)
         return data_list
+
+    def get_study_quality_map(
+        self, paper_ids: list[str] | set[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Return a ``{paper_id: study_quality_dict}`` mapping for the given
+        paper IDs. Rows not present in the ``study_quality`` table are omitted.
+        JSON columns (flags, funding_sources, limitations) are parsed.
+        """
+        ids = [str(pid) for pid in (paper_ids or []) if str(pid or "").strip()]
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        rows = self._execute(
+            f"""
+            SELECT paper_id, study_design, sample_size_value, sample_size_unit,
+                   evidence_level, quality_score, flags, funding_sources,
+                   coi_status, limitations, computed_timestamp
+            FROM study_quality
+            WHERE paper_id IN ({placeholders})
+        """,
+            ids,
+        ).fetchall()
+        if not rows:
+            return {}
+        cols = [desc[0] for desc in self.conn.description]
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            data = dict(zip(cols, row))
+            for json_field in ("flags", "funding_sources", "limitations"):
+                raw = data.get(json_field)
+                if raw and isinstance(raw, str):
+                    try:
+                        data[json_field] = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            try:
+                quality_score = float(data.get("quality_score") or 0.5)
+            except (TypeError, ValueError):
+                quality_score = 0.5
+            data["quality_score"] = quality_score
+            try:
+                sample_size_value = data.get("sample_size_value")
+                if sample_size_value is not None:
+                    data["sample_size_value"] = int(sample_size_value)
+            except (TypeError, ValueError):
+                pass
+            out[str(data.get("paper_id") or "")] = data
+        return out
 
     def list_extraction_statuses(self, limit: int = 50000) -> list[dict[str, Any]]:
         """Newest-first (paper_id, extraction_status) pairs without the heavy JSON columns."""

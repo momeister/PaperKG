@@ -95,7 +95,11 @@ export function LlmPicker({
         <select
           value={provider ?? ""}
           disabled={disabled}
-          onChange={(event) => onProviderChange(event.target.value || undefined)}
+          onChange={(event) => {
+            const next = event.target.value || undefined;
+            onProviderChange(next);
+            onModelChange(next ? providers.find(item => item.name === next)?.default_model || undefined : undefined);
+          }}
         >
           {inheritLabel && <option value="">{inheritLabel}</option>}
           {isError && !inheritLabel && <option value="">⚠ Provider nicht ladbar</option>}

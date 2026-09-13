@@ -262,9 +262,25 @@ def _apply_thinking_control(
     ``chat_template_kwargs.enable_thinking=False`` into the top-level
     ``think: false`` field. The OpenAI-compatible path passes it through. A
     caller-supplied ``chat_template_kwargs`` always wins.
+
+    The model check must use the **effective** model — the explicit
+    ``overrides["model"]`` (what the caller actually asked for), not
+    the provider default. The default (e.g. ``qwen3.5:9b``) may be a reasoning
+    model while the effective model (e.g. ``glm-5.3-flash:cloud``) is not, and
+    a spurious ``enable_thinking=False`` makes cloud-managed Ollama models
+    return an empty payload.
     """
     try:
-        model = router.provider_default_model(provider) or ""
+        model = str(overrides.get("model") or "").strip()
+        if not model:
+            model = router.provider_default_model(provider) or ""
+        # Cloud-managed Ollama models (``:cloud``) return an empty payload
+        # when ``think: false`` is sent. Detecting "reasoning" via model name
+        # alone is not enough — glm-5.x-flash:cloud is not a thinking model.
+        # Exclude any cloud-hosted tag from thinking-control: the user picked
+        # the cloud variant for convenience, and disabling thinking breaks it.
+        if model.endswith(":cloud"):
+            return
     except Exception:
         return
     if not _is_reasoning_model(model):
@@ -341,7 +357,7 @@ class QueryRewriter:
         ``retrieval_query``.
         """
         original = question or ""
-        key = _cache_key(original, provider)
+        key = _cache_key(original, provider) + repr(sorted((overrides or {}).items()))
         cached = self._cache.get(key)
         if cached is not None:
             return cached

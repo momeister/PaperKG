@@ -230,7 +230,46 @@ export type Evidence = {
   metadata?: Record<string, unknown>;
 };
 
+export type StudyDesign =
+  | "meta_analysis"
+  | "systematic_review"
+  | "RCT"
+  | "randomized_controlled"
+  | "cohort"
+  | "case_control"
+  | "cross_sectional"
+  | "observational"
+  | "survey"
+  | "case_series"
+  | "case_report"
+  | "benchmark"
+  | "simulation"
+  | "qualitative"
+  | "theoretical"
+  | "unknown";
+
+export type EvidenceLevel = "high" | "moderate" | "low" | "very_low" | "unknown";
+
+export type StudyQualitySummary = {
+  evidence_level?: EvidenceLevel;
+  quality_score?: number;
+  flags?: string[];
+  funding_sources?: Array<Record<string, unknown>>;
+  coi_status?: "declared" | "undisclosed" | "none" | "unknown";
+  study_design?: StudyDesign;
+  sample_size_value?: number | null;
+};
+
+export type AnswerClaim = {
+  claim_id: string; text: string; evidence_ids: string[]; kind: string;
+  verification_status: "supported" | "partially_supported" | "not_supported" | "unknown" | "gap";
+  text_found: boolean; explanation: string; start: number; end: number;
+};
+
 export type CitationLink = {
+  claim_id?: string;
+  passage_id?: string;
+  verification_status?: string;
   citation: string;
   citation_start: number;
   citation_end: number;
@@ -249,6 +288,10 @@ export type CitationLink = {
 };
 
 export type Answer = {
+  model?: string | null;
+  claims_version?: number | null;
+  claims?: AnswerClaim[];
+  verification_status?: "complete" | "incomplete" | "legacy";
   question: string;
   answer: string;
   no_answer?: boolean;
@@ -260,6 +303,9 @@ export type Answer = {
   source_verification?: Record<string, unknown> | null;
   /** Structured professor critique (Parallel mode); absent on legacy free-text answers. */
   professor_review?: ProfessorReview;
+  /** Per-paper study-quality summaries surfaced from the backend for
+   *  evidence-level / flag badges in the UI. Keyed by paper_id. */
+  study_quality_summaries?: Record<string, StudyQualitySummary>;
 };
 
 /** Per-variant verdict inside a professor stage review. */
@@ -844,11 +890,18 @@ export type TaskGreySourceResponse = {
 /** Request-Body für ``POST /tasks/{task_id}/deep-search``. */
 export type TaskDeepSearchRequest = {
   direction: TaskResearchDirection;
+  /** Rekursionstiefe (1-6), analog Tiefenanalyse. 1 = nur Wurzel, sonst Baum. */
+  depth?: number;
+  /** Verzweigungsgrad (2-8) — Sub-Fragen pro Knoten bei depth>1. */
+  branches?: number;
   max_papers?: number;
   max_web_sources?: number;
   provider?: string | null;
   model?: string | null;
   creativity_level?: number | null;
+  /** Wenn gesetzt, werden geharvestete Papiere an dieses Projekt angehängt
+   *  (Bugfix: sonst No-Op im globalen __all_papers__-Modus). */
+  target_project_id?: string | null;
 };
 
 /** Ein SSE-Event vom deep-search-Stream (status-Feld diskriminiert). */
@@ -869,7 +922,41 @@ export type TaskDeepSearchEvent =
       sources: { id: string; title: string; url: string }[];
     }
   | { status: "synthesizing"; papers: number; grey_sources: number }
-  | { status: "done"; summary: Answer; papers_count: number; grey_count: number; paper_ids: string[]; grey_ids: string[]; direction: TaskResearchDirection }
+  | {
+      status: "node_running";
+      node_id: string;
+      parent_id: string | null;
+      depth: number;
+      question: string;
+      path: string[];
+    }
+  | {
+      status: "node_done";
+      node_id: string;
+      parent_id: string | null;
+      depth: number;
+      question: string;
+      path: string[];
+      papers_count: number;
+      grey_count: number;
+    }
+  | {
+      status: "sub_questions";
+      node_id: string;
+      depth: number;
+      questions: string[];
+      path: string[];
+    }
+  | {
+      status: "done";
+      summary: Answer;
+      papers_count: number;
+      grey_count: number;
+      paper_ids: string[];
+      grey_ids: string[];
+      node_count: number;
+      direction: TaskResearchDirection;
+    }
   | { status: "harvest_error"; phase: "papers" | "grey"; error: string }
   | { status: "error"; error: string; phase?: string };
 
@@ -881,6 +968,7 @@ export type TaskDeepSearchResult = {
   paper_ids: string[];
   grey_ids: string[];
   direction: TaskResearchDirection;
+  node_count?: number;
 };
 
 export type AgentHandoffResponse = {
@@ -1167,7 +1255,11 @@ export type SnipResultPayload = {
   height: number;
 };
 
+export type PdfAnchor = { page_number: number; rects: PdfAnnotationRect[] };
+export type PdfSelection = { paperId: string; originalText: string; anchors: PdfAnchor[] };
+
 export type NoteCitation = {
+  pdf_anchors?: PdfAnchor[] | null;
   id: string;
   note_id: string;
   paper_id: string;
@@ -2291,4 +2383,9 @@ export type CodePaperLink = {
   kind: string;
   note?: string | null;
   created_timestamp?: string;
+};
+
+export type GlossaryEntry = {
+  id: string; term: string; term_key: string; explanation: string;
+  created_at: string; updated_at: string;
 };

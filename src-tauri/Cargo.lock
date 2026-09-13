@@ -3823,6 +3823,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-log",
  "tauri-plugin-opener",
+ "webkit2gtk",
  "windows 0.61.3",
  "xcap",
 ]

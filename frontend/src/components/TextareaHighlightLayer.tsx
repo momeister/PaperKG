@@ -1,3 +1,6 @@
+import { useMemo } from "react";
+import { useGlossary } from "../glossary/GlossaryProvider";
+import { findGlossaryMatches } from "../glossary/matching";
 import type { CSSProperties, ReactNode } from "react";
 
 export type TextHighlightRange = {
@@ -14,6 +17,7 @@ export type TextHighlightInsertion = {
 };
 
 type TextareaHighlightLayerProps = {
+  glossary?: boolean;
   text: string;
   ranges?: TextHighlightRange[];
   insertions?: TextHighlightInsertion[];
@@ -22,8 +26,10 @@ type TextareaHighlightLayerProps = {
   interactive?: boolean;
 };
 
-export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scrollTop = 0, scrollLeft = 0, interactive = false }: TextareaHighlightLayerProps) {
-  const normalizedRanges = ranges
+export function TextareaHighlightLayer({ glossary = false, text, ranges = [], insertions = [], scrollTop = 0, scrollLeft = 0, interactive = false }: TextareaHighlightLayerProps) {
+  const { entries, enabled } = useGlossary();
+  const glossaryRanges = useMemo<TextHighlightRange[]>(() => glossary && enabled ? findGlossaryMatches(text, entries).map(hit => ({ start: hit.start, end: hit.end, className: "glossary-editor-hit" })) : [], [glossary, enabled, text, entries]);
+  const normalizedRanges = [...ranges, ...glossaryRanges]
     .map((range) => ({
       ...range,
       start: Math.max(0, Math.min(text.length, range.start)),
@@ -43,7 +49,9 @@ export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scr
         {points.map((point, index) => {
           const nextPoint = points[index + 1];
           const insertionsAtPoint = normalizedInsertions.filter((insertion) => insertion.index === point);
-          const range = normalizedRanges.find((item) => point >= item.start && point < item.end);
+          const range = normalizedRanges.find(item => point >= item.start && point < item.end);
+          const glossaryHit = glossaryRanges.some(item => point >= item.start && point < item.end);
+          const className = [range?.className, glossaryHit && range?.className !== "glossary-editor-hit" ? "glossary-editor-hit" : ""].filter(Boolean).join(" ");
           return (
             <span key={`${point}-${index}`}>
               {insertionsAtPoint.map((insertion, insertionIndex) => (
@@ -51,7 +59,7 @@ export function TextareaHighlightLayer({ text, ranges = [], insertions = [], scr
                   {insertion.content}
                 </span>
               ))}
-              {nextPoint !== undefined ? renderSegment(text.slice(point, nextPoint), range?.className, range?.style) : null}
+              {nextPoint !== undefined ? renderSegment(text.slice(point, nextPoint), className, range?.style) : null}
             </span>
           );
         })}

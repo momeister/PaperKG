@@ -220,6 +220,7 @@ llm:
         - "qwen3.5:4b"              # local
         - "deepseek-v4-flash:cloud" # runs on Ollama's servers
         - "glm-5.2:cloud"           # runs on Ollama's servers
+        - "glm-5.3-flash:cloud"     # runs on Ollama's servers
         - "kimi-k3:cloud"           # runs on Ollama's servers
 
       # Model and Generation Settings

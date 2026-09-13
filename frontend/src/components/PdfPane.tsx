@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { PaneHeader, usePaneEnvironment } from "../workspace/PortablePane";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { ChevronLeft, ChevronRight, ExternalLink, Languages, Layers, Loader2, MapPin, Maximize2, PanelRightClose, Plus, Search, StickyNote, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 
+import { ResizableSection } from "./ResizableSection";
+import { PdfSelectionActions } from "./PdfSelectionActions";
+import { findTextOccurrences, occurrenceRects, selectionRectsOnPage, type PdfSearchHit, type TextFragment } from "./pdfTextSearch";
 import { api } from "../api";
 import { colorVarsForPaperId } from "../citationColors";
 import { useAppState } from "../state";
-import type { PaperMeta, PdfAnnotation, PdfAnnotationRect, VerificationEvidence } from "../types";
+import type { PaperMeta, PdfAnnotation, PdfAnnotationRect, PdfAnchor, PdfSelection, VerificationEvidence } from "../types";
 
 import {
   bestMatchFor,
   buildHighlightQuery,
-  buildSearchQuery,
   clientRectsToPageRects,
   evidenceColorIndex,
   evidenceListSignature,
@@ -64,6 +67,12 @@ export type HighlightLayer = {
 };
 
 type PdfPaneProps = {
+  headerInPaneToolbar?: boolean;
+  selection?: PdfSelection | null;
+  onSelectionChange?: (selection: PdfSelection | null) => void;
+  onInsertSelection?: (selection: PdfSelection, text: string, language?: string) => Promise<void>;
+  anchors?: PdfAnchor[] | null;
+  anchorRequestKey?: unknown;
   url?: string | null;
   title?: string;
   unavailableMessage?: string;
@@ -81,6 +90,8 @@ type PdfPaneProps = {
 };
 
 export function PdfPane({
+  headerInPaneToolbar = false,
+  selection: controlledSelection, onSelectionChange, onInsertSelection, anchors, anchorRequestKey,
   url,
   title,
   unavailableMessage,
@@ -93,6 +104,20 @@ export function PdfPane({
   ingestPending,
   ingestStatus
 }: PdfPaneProps) {
+  const Header = headerInPaneToolbar ? PaneHeader : Fragment;
+  const { window } = usePaneEnvironment();
+  const [localSelection, setLocalSelection] = useState<PdfSelection | null>(null);
+  const selection = controlledSelection === undefined ? localSelection : controlledSelection;
+  const setSelection = useCallback((value: PdfSelection | null) => {
+    if (!value) {
+      const native = canvasWrapRef.current?.ownerDocument.getSelection();
+      if (native?.anchorNode && canvasWrapRef.current?.contains(native.anchorNode)) native.removeAllRanges();
+    }
+    setLocalSelection(value);
+    onSelectionChange?.(value);
+  }, [onSelectionChange]);
+  const [searchResults, setSearchResults] = useState<Record<number, { hits: PdfSearchHit[]; hasText: boolean; error?: string }>>({});
+  const [searchIndex, setSearchIndex] = useState(0);
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [pageCount, setPageCount] = useState<number>(0);
   const [error, setError] = useState<string>("");
@@ -104,17 +129,22 @@ export function PdfPane({
   const [zoom, setZoom] = useState(1);
   const [fitMode, setFitMode] = useState<"width" | "page">("width");
   const [searchTerm, setSearchTerm] = useState("");
+  const [searchOpen, setSearchOpen] = useState(!headerInPaneToolbar);
+  const [excerptRequest, setExcerptRequest] = useState(0);
   const [showAllEvidences, setShowAllEvidences] = useState(false);
   const { provider, model } = useAppState();
   const [translateLanguage, setTranslateLanguage] = useState("Deutsch");
   const [translation, setTranslation] = useState("");
   const [translateError, setTranslateError] = useState("");
   const [isTranslating, setIsTranslating] = useState(false);
+  const translateVersion = useRef(0);
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const resizeFrameRef = useRef<number | null>(null);
   const lastJumpKeyRef = useRef<string>("");
   // PDF-Notizen: persistent kleine Notizen an einer Textstelle/Punkt (nur mit paper_id).
+  const currentPaperRef = useRef(metaPaperId);
+  currentPaperRef.current = metaPaperId;
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
   const [pointMode, setPointMode] = useState(false);
   const annotationsEnabled = Boolean(metaPaperId);
@@ -165,7 +195,7 @@ export function PdfPane({
     async (payload: { page_number: number; kind: "highlight" | "point"; rects: PdfAnnotationRect[]; quote?: string; body: string }) => {
       if (!metaPaperId) return undefined;
       const created = await api.pdfAnnotations.create(metaPaperId, { ...payload, color: PDF_ANNOTATION_COLOR });
-      setAnnotations((current) => [...current, created.annotation]);
+      if (currentPaperRef.current === metaPaperId) setAnnotations((current) => [...current, created.annotation]);
       return created.annotation;
     },
     [metaPaperId]
@@ -225,12 +255,19 @@ export function PdfPane({
 
   const evidenceSignature = evidenceListSignature(evidences);
   const evidenceQueries = useMemo(() => evidences.map(buildHighlightQuery), [evidenceSignature]);
-  const searchQuery = useMemo(() => buildSearchQuery(searchTerm), [searchTerm]);
   const showingSearch = Boolean(searchTerm.trim());
   const activeEvidence = evidences[activeEvidenceIndex];
   const activeEvidenceColorIndex = evidenceColorIndex(activeEvidence, activeEvidenceIndex);
   const activeQuery = evidenceQueries[activeEvidenceIndex] ?? { phrases: [], terms: [] };
   const activeQuerySignature = highlightQuerySignature(activeQuery);
+  const previousExcerpt = useRef({ query: activeQuerySignature, index: activeEvidenceIndex, request: anchorRequestKey });
+  useEffect(() => {
+    const previous = previousExcerpt.current;
+    if (activeEvidence && (previous.query !== activeQuerySignature || previous.index !== activeEvidenceIndex || previous.request !== anchorRequestKey)) {
+      setExcerptRequest(value => value + 1);
+    }
+    previousExcerpt.current = { query: activeQuerySignature, index: activeEvidenceIndex, request: anchorRequestKey };
+  }, [activeQuerySignature, activeEvidenceIndex, anchorRequestKey]);
   // Highlight layers render in parallel: the active citation, optionally every other
   // citation ("Alle Zitate"), and the search — search no longer replaces the citation
   // highlight.
@@ -246,32 +283,72 @@ export function PdfPane({
         });
       }
     });
-    if (showingSearch) {
-      list.push({
-        index: SEARCH_LAYER_INDEX,
-        colorIndex: SEARCH_LAYER_INDEX,
-        query: searchQuery,
-        signature: highlightQuerySignature(searchQuery)
-      });
-    }
     return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evidenceQueries, evidenceSignature, activeEvidenceIndex, showAllEvidences, showingSearch, searchQuery]);
+  }, [evidenceQueries, evidenceSignature, activeEvidenceIndex, showAllEvidences]);
   const layersSignature = layers.map((layer) => `${layer.index}#${layer.signature}`).join("");
   // Scrolling follows the search while typing, otherwise the active citation.
-  const scrollLayerIndex = showingSearch ? SEARCH_LAYER_INDEX : activeEvidenceIndex;
-  const scrollSignature = showingSearch ? highlightQuerySignature(searchQuery) : activeQuerySignature;
+  const scrollLayerIndex = activeEvidenceIndex;
+  const scrollSignature = activeQuerySignature;
   const activeMatch = bestMatchFor(matches[scrollLayerIndex], scrollSignature);
   const evidenceMatch = bestMatchFor(matches[activeEvidenceIndex], activeQuerySignature);
-  const searchMatchPages = showingSearch ? pagesFor(matches[SEARCH_LAYER_INDEX], highlightQuerySignature(searchQuery)) : [];
+  const searchKey = `${url}|${searchTerm}|${zoom}|${viewportWidth}|${fitMode}`;
+  const searchKeyRef = useRef(searchKey);
+  searchKeyRef.current = searchKey;
+  const searchHits = Object.entries(searchResults).sort(([a], [b]) => Number(a) - Number(b)).flatMap(([, result]) => result.hits);
+  const searchScanned = Object.keys(searchResults).length;
+  const reportSearch = useCallback((key: string, page: number, hits: PdfSearchHit[], hasText: boolean, error?: string) => {
+    if (key !== searchKeyRef.current) return;
+    setSearchResults(current => ({ ...current, [page]: { hits, hasText, error } }));
+  }, []);
+  useEffect(() => { setSearchResults({}); setSearchIndex(0); }, [searchKey]);
+  useEffect(() => { setSelection(null); }, [url, metaPaperId, setSelection]);
+  useEffect(() => {
+    const clear = (event: KeyboardEvent) => { if (event.key === "Escape") setSelection(null); };
+    window.addEventListener("keydown", clear);
+    return () => window.removeEventListener("keydown", clear);
+  }, [window, setSelection]);
+  const activeSearchHit = searchHits[searchIndex];
+  useEffect(() => {
+    if (showingSearch && searchScanned === pageCount && activeSearchHit) {
+      const surface = pageRefs.current[activeSearchHit.page]?.querySelector<HTMLElement>(".pdf-page-surface");
+      jumpToPage(activeSearchHit.page, "start", (activeSearchHit.rects[0]?.y ?? 0) * (surface?.clientHeight ?? 0), (activeSearchHit.rects[0]?.x ?? 0) * (surface?.clientWidth ?? 0));
+    }
+  }, [searchIndex, searchScanned, pageCount, searchKey]);
+  const stepSearch = (direction: number) => setSearchIndex(i => searchHits.length ? (i + direction + searchHits.length) % searchHits.length : 0);
+  function capturePdfSelection(event: React.MouseEvent<HTMLDivElement>) {
+    if (pointMode || (event.target as HTMLElement).closest(".pdf-annotation-layer")) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) { setSelection(null); return; }
+    const range = sel.getRangeAt(0);
+    const root = canvasWrapRef.current;
+    if (!root || !root.contains(range.startContainer) || !root.contains(range.endContainer) || !metaPaperId) return;
+    const selectedAnchors: PdfAnchor[] = [];
+    for (const [page, node] of Object.entries(pageRefs.current)) {
+      const surface = node?.querySelector<HTMLElement>(".pdf-page-surface");
+      if (!surface) continue;
+      const rects = selectionRectsOnPage(range, surface);
+      if (rects.length) selectedAnchors.push({ page_number: Number(page), rects });
+    }
+    if (selectedAnchors.length) setSelection({ paperId: metaPaperId, originalText: sel.toString(), anchors: selectedAnchors });
+  }
+  const anchorSignature = JSON.stringify(anchors);
+  useEffect(() => {
+    const first = anchors?.[0];
+    if (!first || !pageCount || showingSearch) return;
+    const frame = window.requestAnimationFrame(() => {
+      const surface = pageRefs.current[first.page_number]?.querySelector<HTMLElement>(".pdf-page-surface");
+      if (surface?.clientHeight) jumpToPage(first.page_number, "start", (first.rects[0]?.y ?? 0) * surface.clientHeight);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [anchorSignature, anchorRequestKey, showingSearch, pageCount, searchScanned, zoom, viewportWidth, window]);
   const evidencePages = pagesFor(matches[activeEvidenceIndex], activeQuerySignature);
   const targetPages = useMemo(() => {
     const result: Record<number, number | null> = {};
     for (const layer of layers) {
-      result[layer.index] = bestMatchFor(matches[layer.index], layer.signature)?.pageNumber ?? null;
+      result[layer.index] = Number(evidences[layer.index]?.metadata?.page) || bestMatchFor(matches[layer.index], layer.signature)?.pageNumber || null;
     }
     return result;
-  }, [layers, matches]);
+  }, [layers, matches, evidences]);
   const targetPagesSignature = layers.map((layer) => `${layer.index}:${targetPages[layer.index] ?? ""}`).join(",");
   const activeEvidenceText = evidenceMatch?.matchedText ?? "";
   // The panel shows the backend's faithful pdf_excerpt; the pdf.js-reconstructed
@@ -294,18 +371,21 @@ export function PdfPane({
   useEffect(() => {
     setMatches({});
     setScannedPages({});
-  }, [evidenceSignature, searchTerm, url, showAllEvidences]);
+  }, [evidenceSignature, url, showAllEvidences]);
 
   useEffect(() => {
+    translateVersion.current++;
+    setIsTranslating(false);
     setTranslation("");
     setTranslateError("");
-  }, [activeEvidenceIndex, evidenceSignature, url]);
+  }, [translateLanguage, activeEvidenceIndex, evidenceSignature, url]);
 
   async function translateActiveExcerpt() {
     const text = (activeEvidence?.pdf_excerpt || activeEvidenceText || activeEvidence?.reference_text || "").trim();
     if (!text || isTranslating) {
       return;
     }
+    const version = ++translateVersion.current;
     setIsTranslating(true);
     setTranslateError("");
     try {
@@ -315,11 +395,11 @@ export function PdfPane({
         provider,
         model
       });
-      setTranslation(result.text);
+      if (version === translateVersion.current) setTranslation(result.text);
     } catch (error) {
-      setTranslateError(error instanceof Error ? error.message : "Übersetzung fehlgeschlagen");
+      if (version === translateVersion.current) setTranslateError(error instanceof Error ? error.message : "Übersetzung fehlgeschlagen");
     } finally {
-      setIsTranslating(false);
+      if (version === translateVersion.current) setIsTranslating(false);
     }
   }
 
@@ -330,10 +410,10 @@ export function PdfPane({
     }
     const updateWidth = () => setViewportWidth(Math.max(320, node.clientWidth));
     updateWidth();
-    if (typeof ResizeObserver === "undefined") {
+    if (typeof window.ResizeObserver === "undefined") {
       return;
     }
-    const observer = new ResizeObserver(() => {
+    const observer = new window.ResizeObserver(() => {
       if (resizeFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeFrameRef.current);
       }
@@ -349,26 +429,40 @@ export function PdfPane({
         window.cancelAnimationFrame(resizeFrameRef.current);
       }
     };
-  }, [document, url]);
+  }, [document, url, window]);
 
   useEffect(() => {
-    const targetPage = activeMatch?.pageNumber;
-    if (!targetPage) {
+    if (showingSearch || anchors?.length) return;
+    const indexedPage = !showingSearch ? Number(activeEvidence?.metadata?.page) : 0;
+    const targetPage = indexedPage || activeMatch?.pageNumber;
+    if (!targetPage || !pageCount || !pageRefs.current[targetPage]) {
+      return;
+    }
+    if (indexedPage && Array.from({ length: targetPage }, (_, i) => i + 1).some(page => !scannedPages[activeScanKey]?.[page])) {
       return;
     }
     // Jump once per query: either as soon as a confident (exact) match appears, or after
     // every page reported in. Jumping on every interim "best" match made the view hop
     // between pages while the document was still being scanned.
-    if (!scanComplete && !activeMatch?.exact) {
+    if (!indexedPage && !scanComplete && !activeMatch?.exact) {
       return;
     }
     const jumpKey = `${url ?? ""}|${activeScanKey}|${targetPage}`;
     if (lastJumpKeyRef.current === jumpKey) {
       return;
     }
-    lastJumpKeyRef.current = jumpKey;
-    jumpToPage(targetPage, "center", topmostHighlightTop(activeMatch?.boxes));
-  }, [activeEvidenceIndex, activeMatch?.pageNumber, activeMatch?.exact, scanComplete, activeScanKey, showingSearch, url]);
+    // The PDF pages mount before their asynchronous dimensions are known. A jump
+    // to those zero-height placeholders must not consume the once-per-claim jump.
+    const frame = window.requestAnimationFrame(() => {
+      for (let page = 1; page <= targetPage; page++) {
+        const surface = pageRefs.current[page]?.querySelector<HTMLElement>(".pdf-page-surface");
+        if (!surface || !parseFloat(surface.style.height)) return;
+      }
+      lastJumpKeyRef.current = jumpKey;
+      jumpToPage(targetPage, "center", activeMatch?.pageNumber === targetPage ? topmostHighlightTop(activeMatch.boxes) : null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeEvidence?.metadata?.page, activeEvidenceIndex, activeMatch?.pageNumber, activeMatch?.exact, scanComplete, scannedPages, pageCount, activeScanKey, showingSearch, url, window]);
 
   const updateMatch = useCallback((evidenceIndex: number, pageNumber: number, querySignature: string, match: Omit<PageMatch, "pageNumber" | "querySignature"> | null) => {
     setScannedPages((current) => {
@@ -397,8 +491,9 @@ export function PdfPane({
   function jumpToEvidence(index: number) {
     onActiveEvidenceChange?.(index);
     const match = bestMatchFor(matches[index], highlightQuerySignature(evidenceQueries[index] ?? { phrases: [], terms: [] }));
-    if (match) {
-      jumpToPage(match.pageNumber, "center", topmostHighlightTop(match.boxes));
+    const targetPage = Number(evidences[index]?.metadata?.page) || match?.pageNumber;
+    if (targetPage) {
+      jumpToPage(targetPage, "center", match?.pageNumber === targetPage ? topmostHighlightTop(match.boxes) : null);
     }
   }
 
@@ -410,7 +505,7 @@ export function PdfPane({
     jumpToEvidence(next);
   }
 
-  function jumpToPage(pageNumber: number, block: ScrollLogicalPosition = "start", highlightTop: number | null = null) {
+  function jumpToPage(pageNumber: number, block: ScrollLogicalPosition = "start", highlightTop: number | null = null, highlightLeft: number | null = null) {
     if (!pageCount) {
       return;
     }
@@ -423,14 +518,15 @@ export function PdfPane({
     }
     const rootRect = root.getBoundingClientRect();
     const pageRect = pageNode.getBoundingClientRect();
-    const relativeTop = pageRect.top - rootRect.top + root.scrollTop;
+    const uiScale = rootRect.width / Math.max(1, root.offsetWidth);
+    const relativeTop = (pageRect.top - rootRect.top) / uiScale + root.scrollTop;
     if (highlightTop != null) {
       // `HighlightBox.top` is relative to `.pdf-page-surface` (inside `.pdf-page`,
       // below the "Seite N" label) — account for that offset so the computed scroll
       // target lines up with where the highlight is actually rendered.
       const surface = pageNode.querySelector<HTMLElement>(".pdf-page-surface");
-      const surfaceOffset = surface ? surface.getBoundingClientRect().top - pageRect.top : 0;
-      root.scrollTo({ top: highlightScrollTop(relativeTop + surfaceOffset, highlightTop), behavior: "smooth" });
+      const surfaceOffset = surface ? (surface.getBoundingClientRect().top - pageRect.top) / uiScale : 0;
+      root.scrollTo({ top: highlightScrollTop(relativeTop + surfaceOffset, highlightTop), left: highlightLeft == null ? root.scrollLeft : Math.max(0, highlightLeft - 64), behavior: "smooth" });
       return;
     }
     const centeredTop = relativeTop - Math.max(0, (root.clientHeight - pageNode.clientHeight) / 2);
@@ -465,8 +561,8 @@ export function PdfPane({
   }, [currentPage]);
 
   return (
-    <aside className="pdf-pane">
-      <div className="pane-heading">
+    <aside className={`pdf-pane ${headerInPaneToolbar ? "pdf-pane--compact" : ""}`}>
+      <Header><div className="pane-heading">
         <div>
           <span>PDF</span>
           <strong>{title || "Keine Quelle ausgewählt"}</strong>
@@ -479,7 +575,7 @@ export function PdfPane({
             </button>
           ) : null}
         </div>
-      </div>
+      </div></Header>
 
       {evidences.length ? (
         <div className="pdf-evidence-nav" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
@@ -537,14 +633,6 @@ export function PdfPane({
               <ChevronRight size={18} />
             </button>
           </div>
-          <div className="pdf-search-row">
-            <Search size={17} />
-            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="In PDF suchen" />
-            <button className={`icon-button ${searchTerm ? "" : "pdf-search-clear--hidden"}`} type="button" aria-label="Suche leeren" onClick={() => setSearchTerm("")} disabled={!searchTerm}>
-              <X size={17} />
-            </button>
-            <span>{showingSearch ? (searchMatchPages.length ? `Treffer auf Seite ${searchMatchPages.join(", ")}` : "keine Treffer") : ""}</span>
-          </div>
           <div className="pdf-zoom-nav">
             <button className="icon-button" type="button" aria-label="Verkleinern" onClick={() => setZoom((current) => Math.max(0.65, current - 0.1))}>
               <ZoomOut size={18} />
@@ -562,6 +650,22 @@ export function PdfPane({
               <Maximize2 size={17} />
             </button>
           </div>
+          <button className="button button-compact pdf-search-toggle" type="button" aria-expanded={searchOpen || !!searchTerm} onClick={() => setSearchOpen(value => !value)}><Search size={16} /> Suche</button>
+          <div className="pdf-search-row" hidden={!searchOpen && !searchTerm}>
+            <Search size={17} />
+            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); stepSearch(event.shiftKey ? -1 : 1); } }} placeholder="In PDF suchen" />
+            <button className={`icon-button ${searchTerm ? "" : "pdf-search-clear--hidden"}`} type="button" aria-label="Suche leeren" onClick={() => setSearchTerm("")} disabled={!searchTerm}>
+              <X size={17} />
+            </button>
+            <button type="button" aria-label="Vorheriger Suchtreffer" disabled={!searchHits.length} onClick={() => stepSearch(-1)}>↑</button>
+            <button type="button" aria-label="Nächster Suchtreffer" disabled={!searchHits.length} onClick={() => stepSearch(1)}>↓</button>
+            <span role="status">{showingSearch ? `${searchHits.length ? searchIndex + 1 : 0} / ${searchHits.length} Treffer${searchScanned < pageCount ? ` · Suche ${searchScanned}/${pageCount} Seiten` : ""}` : ""}</span>
+          </div>
+          {showingSearch && <div className="pdf-search-results">
+            {searchHits.map((hit, i) => <button type="button" key={`${hit.page}-${i}`} aria-pressed={i === searchIndex} onClick={() => setSearchIndex(i)}>Seite {hit.page}: {hit.context}</button>)}
+            {searchScanned === pageCount && !Object.values(searchResults).some(r => r.hasText) && <p>Dieses PDF hat keine durchsuchbare Textschicht (Bild-PDF). OCR ist nicht verfügbar.</p>}
+            {Object.values(searchResults).some(r => r.error) && <p role="alert">Einige Seiten konnten nicht durchsucht werden.</p>}
+          </div>}
           {annotationsEnabled ? (
             <div className="pdf-annotate-row">
               <button
@@ -573,20 +677,31 @@ export function PdfPane({
               >
                 <MapPin size={14} /> {pointMode ? "Punkt setzen: klicke in die Seite" : "Punkt-Notiz"}
               </button>
-              <small>Text markieren → „Notiz hinzufügen"</small>
+              <small>Text markieren → PDF-Notiz, Übersetzung oder Zitat</small>
             </div>
           ) : null}
         </div>
       ) : null}
 
+      {selection && selection.paperId === metaPaperId && <PdfSelectionActions key={JSON.stringify(selection)} selection={selection} onClear={() => setSelection(null)} onInsert={onInsertSelection}
+        onAnnotate={async body => {
+          for (const anchor of selection.anchors) {
+            if (annotations.some(ann => ann.page_number === anchor.page_number && ann.quote === selection.originalText && ann.body === body && JSON.stringify(ann.rects) === JSON.stringify(anchor.rects))) continue;
+            await createAnnotation({ ...anchor, kind: "highlight", quote: selection.originalText, body });
+          }
+        }} />}
       {url && document ? (
         <div className="pdf-canvas-shell">
-          <div className="pdf-canvas-wrap" ref={canvasWrapRef} onScroll={updateCurrentPageFromScroll}>
+          <div className="pdf-canvas-wrap" ref={canvasWrapRef} onMouseUp={capturePdfSelection} onScroll={updateCurrentPageFromScroll}>
             {Array.from({ length: pageCount }, (_, index) => {
               const pageNumber = index + 1;
               return (
                 <PdfPage
                   key={`${url}-${pageNumber}`}
+                  activeSearchRects={activeSearchHit?.page === pageNumber ? activeSearchHit.rects : undefined}
+                  searchTerm={searchTerm} searchKey={searchKey} onSearch={reportSearch}
+                  selectionRects={selection && selection.paperId === metaPaperId ? selection.anchors.find(a => a.page_number === pageNumber)?.rects : undefined}
+                  anchorRects={anchors?.find(a => a.page_number === pageNumber)?.rects}
                   document={document}
                   pageNumber={pageNumber}
                   containerWidth={viewportWidth}
@@ -675,7 +790,7 @@ export function PdfPane({
 
       {error ? <div className="inline-error">{error}</div> : null}
       {activeEvidence ? (
-        <div className="excerpt-panel" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
+        <ResizableSection storageKey="sciencekg.pdf.excerpt" title="Aktive Textstelle" initialCollapsed={headerInPaneToolbar} openRequestKey={String(excerptRequest)}><div className="excerpt-panel" style={colorVarsForPaperId(activeEvidence?.paper_id, activeEvidenceColorIndex)}>
           <div className="excerpt-panel-topline">
             <span>Aktive Textstelle</span>
             <span className="excerpt-translate-controls">
@@ -715,7 +830,7 @@ export function PdfPane({
               <p>{translation}</p>
             </div>
           ) : null}
-        </div>
+        </div></ResizableSection>
       ) : null}
     </aside>
   );
@@ -727,6 +842,7 @@ const EXCERPT_TRANSLATE_LANGUAGES = ["Deutsch", "Englisch", "Französisch", "Spa
 const EMPTY_ANNOTATIONS: PdfAnnotation[] = [];
 
 function PdfPage({
+  searchTerm, searchKey, onSearch, selectionRects, anchorRects, activeSearchRects,
   document,
   pageNumber,
   containerWidth,
@@ -747,6 +863,9 @@ function PdfPage({
   onDeleteAnnotation,
   setPageRef
 }: {
+  searchTerm: string; searchKey: string;
+  onSearch: (key: string, page: number, hits: PdfSearchHit[], hasText: boolean, error?: string) => void;
+  selectionRects?: PdfAnnotationRect[]; anchorRects?: PdfAnnotationRect[]; activeSearchRects?: PdfAnnotationRect[];
   document: PdfDocument;
   pageNumber: number;
   containerWidth: number;
@@ -767,7 +886,19 @@ function PdfPage({
   onDeleteAnnotation: (id: string) => Promise<void>;
   setPageRef: (node: HTMLDivElement | null) => void;
 }) {
+  const { window } = usePaneEnvironment();
+  const [pixelRatio, setPixelRatio] = useState(() => window.devicePixelRatio || 1);
+  useEffect(() => {
+    const update = () => setPixelRatio(window.devicePixelRatio || 1);
+    update();
+    const media = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    media.addEventListener("change", update);
+    window.addEventListener("resize", update);
+    return () => { media.removeEventListener("change", update); window.removeEventListener("resize", update); };
+  }, [window, pixelRatio]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Serialize cancellation and redraw: pdf.js may still own this canvas until its task settles.
+  const renderQueue = useRef<Promise<unknown>>(Promise.resolve());
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const pageRef = useRef<HTMLDivElement | null>(null);
@@ -776,6 +907,7 @@ function PdfPage({
   layersRef.current = layers;
   targetPagesRef.current = targetPages;
   const [isNearViewport, setIsNearViewport] = useState(pageNumber <= 2);
+  const [searchBoxes, setSearchBoxes] = useState<PdfAnnotationRect[]>([]);
   const [boxes, setBoxes] = useState<HighlightBox[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const combinedPageRef = useCallback(
@@ -788,22 +920,23 @@ function PdfPage({
 
   useEffect(() => {
     const node = pageRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") {
+    if (!node || typeof window.IntersectionObserver === "undefined") {
       setIsNearViewport(true);
       return;
     }
-    const observer = new IntersectionObserver(
+    const observer = new window.IntersectionObserver(
       ([entry]) => {
         setIsNearViewport(entry.isIntersecting);
       },
-      { root: null, rootMargin: "900px 0px" }
+      { root: node.closest(".pdf-canvas-wrap"), rootMargin: "900px 0px" }
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [window]);
 
   useEffect(() => {
     let cancelled = false;
+    let textTask: { cancel: () => void } | null = null;
     let renderTask: { promise: Promise<unknown>; cancel?: () => void } | null = null;
 
     async function renderPage() {
@@ -828,8 +961,8 @@ function PdfPage({
       // Sub-Pixel-Überläufe (mit-)verantwortlich für die Phantom-Scrollbar.
       const pxWidth = Math.round(viewport.width);
       const pxHeight = Math.round(viewport.height);
-      canvas.width = pxWidth;
-      canvas.height = pxHeight;
+      canvas.width = Math.round(pxWidth * pixelRatio);
+      canvas.height = Math.round(pxHeight * pixelRatio);
       canvas.style.width = `${pxWidth}px`;
       canvas.style.height = `${pxHeight}px`;
       setSize({ width: pxWidth, height: pxHeight });
@@ -837,7 +970,7 @@ function PdfPage({
         return;
       }
       if (isNearViewport) {
-        const task = page.render({ canvasContext: context, viewport });
+        const task = page.render({ canvasContext: context, viewport, transform: [pixelRatio, 0, 0, pixelRatio, 0, 0] });
         renderTask = task;
         try {
           await task.promise;
@@ -856,55 +989,72 @@ function PdfPage({
         return;
       }
 
-      // Every highlight layer (active citation, parallel citations, search) scans the
-      // page independently; their boxes render side by side.
-      const collected: HighlightBox[] = [];
-      for (const layer of layersRef.current) {
-        const match = findPageMatch(textContent.items, layer.query, viewport, layer.index, layer.colorIndex);
-        onMatch(layer.index, pageNumber, layer.signature, match);
-        // Confident (exact) matches render on every page they appear on — an excerpt that
-        // crosses a page boundary stays fully marked; weak term-window matches render only
-        // on the single best page to avoid scattering noise across the document.
-        if (match && (targetPagesRef.current[layer.index] === pageNumber || match.exact)) {
-          collected.push(...match.boxes);
-        }
-      }
-      setBoxes(collected);
-
       // Selectable text layer: pdf.js positions transparent spans over the canvas so
       // normal text selection/copy works in the PDF view.
       const textLayerNode = textLayerRef.current;
       if (textLayerNode) {
         textLayerNode.replaceChildren();
-        if (isNearViewport) {
+        {
           textLayerNode.style.setProperty("--scale-factor", String(viewport.scale));
           textLayerNode.style.setProperty("--total-scale-factor", String(viewport.scale));
           try {
-            const TextLayerCtor = (pdfjs as unknown as { TextLayer?: new (options: Record<string, unknown>) => { render: () => Promise<void> } }).TextLayer;
+            const TextLayerCtor = (pdfjs as unknown as { TextLayer?: new (options: Record<string, unknown>) => { render: () => Promise<void>; cancel: () => void; textDivs: HTMLElement[] } }).TextLayer;
             if (TextLayerCtor) {
               const textLayer = new TextLayerCtor({
                 textContentSource: textContent,
                 container: textLayerNode,
                 viewport
               });
+              textTask = textLayer;
               await textLayer.render();
+              if (cancelled) return;
+              const surface = surfaceRef.current!;
+              const surfaceBox = surface.getBoundingClientRect();
+              const divByItem = new Map<number, HTMLElement>();
+              let textIndex = 0;
+              textContent.items.forEach((item: any, index: number) => { if (typeof item.str === "string") divByItem.set(index, textLayer.textDivs[textIndex++]); });
+              const matchingViewport = { ...viewport, textRangeRect: (item: number, start: number, end: number) => {
+                const node = divByItem.get(item)?.firstChild;
+                if (!node) return null;
+                const range = window.document.createRange();
+                range.setStart(node, start); range.setEnd(node, end);
+                const rect = range.getBoundingClientRect();
+                const scaleX = surface.clientWidth / Math.max(1, surfaceBox.width);
+                const scaleY = surface.clientHeight / Math.max(1, surfaceBox.height);
+                return rect.width && rect.height ? { left: (rect.left - surfaceBox.left) * scaleX, top: (rect.top - surfaceBox.top) * scaleY, width: rect.width * scaleX, height: rect.height * scaleY } : null;
+              } };
+              const collected: HighlightBox[] = [];
+              for (const layer of layersRef.current) {
+                const match = findPageMatch(textContent.items, layer.query, matchingViewport, layer.index, layer.colorIndex);
+                onMatch(layer.index, pageNumber, layer.signature, match);
+                if (match && (targetPagesRef.current[layer.index] === pageNumber || match.exact)) collected.push(...match.boxes);
+              }
+              setBoxes(collected);
+              const items = textContent.items.filter((item: any) => typeof item.str === "string") as TextFragment[];
+              const hits = findTextOccurrences(items, searchTerm).map(hit => ({ ...hit, page: pageNumber, rects: occurrenceRects(hit, textLayer.textDivs, surfaceRef.current!) }));
+              setSearchBoxes(hits.flatMap(hit => hit.rects));
+              onSearch(searchKey, pageNumber, hits, items.some(item => Boolean(item.str.trim())));
             }
-          } catch {
+          } catch (error) {
+            if (!cancelled) onSearch(searchKey, pageNumber, [], true, String(error));
             // Selection layer is an enhancement — rendering continues without it.
           }
         }
       }
     }
 
-    renderPage();
+    renderQueue.current = renderQueue.current.catch(() => {}).then(() => {
+      if (!cancelled) return renderPage();
+    }).catch(error => { if (!cancelled) onSearch(searchKey, pageNumber, [], true, String(error)); });
     return () => {
       cancelled = true;
       renderTask?.cancel?.();
+      textTask?.cancel();
     };
-  }, [document, pageNumber, containerWidth, zoom, fitMode, layersSignature, targetPagesSignature, onMatch, isNearViewport]);
+  }, [document, pageNumber, containerWidth, zoom, fitMode, layersSignature, targetPagesSignature, onMatch, isNearViewport, searchTerm, searchKey, onSearch, pixelRatio, window]);
 
   return (
-    <div className="pdf-page" ref={combinedPageRef} style={{ width: size.width || undefined }}>
+    <div className="pdf-page" data-page-number={pageNumber} ref={combinedPageRef} style={{ width: size.width || undefined }}>
       <div className="pdf-page-label">Seite {pageNumber}</div>
       <div className="pdf-page-surface" ref={surfaceRef} style={{ width: size.width || undefined, height: size.height || undefined }}>
         <canvas ref={canvasRef} />
@@ -928,6 +1078,9 @@ function PdfPage({
             />
           ))}
         </div>
+        <div className="pdf-highlight-layer">
+          {[...searchBoxes.map(rect => ({ rect, kind: "search" })), ...(activeSearchRects ?? []).map(rect => ({ rect, kind: "search-active" })), ...(selectionRects ?? []).map(rect => ({ rect, kind: "selection" })), ...(anchorRects ?? []).map(rect => ({ rect, kind: "anchor" }))].map(({ rect, kind }, i) => <span key={`${kind}-${i}`} className={`pdf-highlight pdf-highlight--${kind}`} style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }} />)}
+        </div>
         <div className="pdf-text-layer" ref={textLayerRef} />
         {annotationsEnabled ? (
           <PdfAnnotations
@@ -948,7 +1101,6 @@ function PdfPage({
 
 // --- PDF-Notizen (Highlight/Punkt an fester Stelle, persistent pro Paper) ---
 
-type PendingSelection = { rects: PdfAnnotationRect[]; quote: string; left: number; top: number };
 type AnnotationDraft = { kind: "highlight" | "point"; rects: PdfAnnotationRect[]; quote: string; left: number; top: number };
 
 function PdfAnnotations({
@@ -970,7 +1122,7 @@ function PdfAnnotations({
   onUpdate: (id: string, patch: { body?: string }) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
-  const [pending, setPending] = useState<PendingSelection | null>(null);
+  const { window, document } = usePaneEnvironment();
   const [draft, setDraft] = useState<AnnotationDraft | null>(null);
   const [draftBody, setDraftBody] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1063,7 +1215,6 @@ function PdfAnnotations({
       openSaveTimer.current = null;
     }
     draftIdRef.current = null;
-    setPending(null);
     setDraft(null);
     setDraftBody("");
     setOpenId(null);
@@ -1074,37 +1225,6 @@ function PdfAnnotations({
   useEffect(() => {
     const surface = surfaceRef.current;
     if (!surface) return;
-
-    function handleMouseUp(event: MouseEvent) {
-      // Marker/rect/popover/composer clicks are handled entirely by their own React
-      // handlers — this native listener must not treat them as an "empty page" click.
-      // (Native listeners fire before React's delegated synthetic ones, so a React
-      // stopPropagation() inside those handlers is already too late to stop this.)
-      if ((event.target as HTMLElement | null)?.closest(".pdf-annotation-layer")) return;
-      if (pointMode) return;
-      const surfaceEl = surfaceRef.current;
-      if (!surfaceEl) return;
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || !sel.rangeCount) {
-        setPending(null);
-        return;
-      }
-      const range = sel.getRangeAt(0);
-      if (!surfaceEl.contains(range.commonAncestorContainer)) return;
-      const rects = clientRectsToPageRects(range, surfaceEl);
-      if (!rects.length) {
-        setPending(null);
-        return;
-      }
-      const surfRect = surfaceEl.getBoundingClientRect();
-      setPending({
-        rects,
-        quote: (sel.toString() || "").replace(/\s+/g, " ").trim().slice(0, 500),
-        left: event.clientX - surfRect.left,
-        top: event.clientY - surfRect.top
-      });
-      setDraft(null);
-    }
 
     function handleClick(event: MouseEvent) {
       if ((event.target as HTMLElement | null)?.closest(".pdf-annotation-layer")) return;
@@ -1118,7 +1238,6 @@ function PdfAnnotations({
       draftIdRef.current = null;
       setDraft({ kind: "point", rects: [{ x, y, width: 0, height: 0 }], quote: "", left: event.clientX - surfRect.left, top: event.clientY - surfRect.top });
       setDraftBody("");
-      setPending(null);
     }
 
     // Rechtsklick auf die Seite → Kontextmenü mit „Punkt-Notiz hier hinzufügen".
@@ -1137,11 +1256,11 @@ function PdfAnnotations({
       setMenu({ x, y, left, top });
     }
 
-    surface.addEventListener("mouseup", handleMouseUp);
+    // Selection is owned by PdfPane, including cross-page ranges.
     surface.addEventListener("click", handleClick);
     surface.addEventListener("contextmenu", handleContextMenu);
     return () => {
-      surface.removeEventListener("mouseup", handleMouseUp);
+
       surface.removeEventListener("click", handleClick);
       surface.removeEventListener("contextmenu", handleContextMenu);
     };
@@ -1160,16 +1279,7 @@ function PdfAnnotations({
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", onKey);
     };
-  }, [menu]);
-
-  const startDraftFromPending = () => {
-    if (!pending) return;
-    draftIdRef.current = null;
-    setDraft({ kind: "highlight", rects: pending.rects, quote: pending.quote, left: pending.left, top: pending.top });
-    setDraftBody("");
-    setPending(null);
-    window.getSelection()?.removeAllRanges();
-  };
+  }, [window, menu]);
 
   const removeAnnotation = async (id: string) => {
     if (saving) return;
@@ -1248,17 +1358,6 @@ function PdfAnnotations({
         );
       })() : null}
 
-      {pending ? (
-        <button
-          type="button"
-          className="pdf-annotation-add"
-          style={{ left: Math.min(pending.left, Math.max(0, w - 150)), top: pending.top + 10 }}
-          onClick={(e) => { e.stopPropagation(); startDraftFromPending(); }}
-        >
-          <Plus size={13} /> Notiz hinzufügen
-        </button>
-      ) : null}
-
       {draft ? (
         <div
           className="pdf-annotation-popover pdf-annotation-composer"
@@ -1295,7 +1394,6 @@ function PdfAnnotations({
               draftIdRef.current = null;
               setDraft({ kind: "point", rects: [{ x: menu.x, y: menu.y, width: 0, height: 0 }], quote: "", left: menu.left, top: menu.top });
               setDraftBody("");
-              setPending(null);
               setMenu(null);
             }}
           >
@@ -1306,4 +1404,3 @@ function PdfAnnotations({
     </div>
   );
 }
-

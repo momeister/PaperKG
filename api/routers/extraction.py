@@ -91,6 +91,7 @@ class ExtractionBatchRequest(BaseModel):
     allow_context_fallback: bool = False
     link_concepts: bool = True
     resume: bool = True
+    force_reextract: bool = False
     job_id: str | None = Field(default=None, max_length=120)
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = DEFAULT_PDF_BASE_DIR
@@ -216,6 +217,11 @@ def parse_extraction_pdf(request: ExtractionParseRequest) -> dict[str, Any]:
             title=EntityExtractor._paper_title_from_text(parsed.text)[:240],
             pdf_path=str(pdf_path),
         )
+        from query.passages import index_document
+        try:
+            index_document(db, canonical_id, pdf_path, parsed)
+        except Exception as exc:
+            logger.warning("Passage index deferred for %s: %s", canonical_id, exc)
     return {
         "paper_id": canonical_id,
         "pdf_path": str(pdf_path),
@@ -363,6 +369,9 @@ def run_extraction(request: ExtractionRunRequest) -> dict[str, Any]:
                 raw_response=result.raw_response,
                 error_message=failure_reason,
                 duration_seconds=duration,
+                provenance=getattr(result, "provenance", None),
+                study_quality=getattr(result, "study_quality", None),
+                evidence_level=getattr(result, "evidence_level", None),
             )
     return {
         "result_id": result_id,
@@ -421,6 +430,22 @@ def run_extraction_batch(request: ExtractionBatchRequest) -> dict[str, Any]:
             )
             if abstract_text:
                 abstract_texts[item.paper_id] = abstract_text
+    # force_reextract: alle bisherigen Extraktionsdaten der ausgewählten Paper
+    # serverseitig löschen, bevor der Batch startet. So kann die UI einen
+    # "Alle Paper neu extrahieren"-Klick absetzen, ohne erst clientseitig jede
+    # einzelne Paper-ID per /extraction/delete zu schicken. Mit resume=False,
+    # damit der neue Batch nichts aus einem vorherigen Job übernimmt.
+    if request.force_reextract:
+        target_ids = [item.paper_id for item in request.items]
+        try:
+            with MetadataDB(request.metadata_db_path) as db:
+                db.delete_extractions_for_papers(target_ids)
+        except Exception:
+            logger.debug(
+                "force_reextract: Löschen alter Extraktionen fehlgeschlagen",
+                exc_info=True,
+            )
+        request = request.model_copy(update={"resume": False})
     processor = BatchProcessor(
         pm.llm_router,
         pm.parser_router,

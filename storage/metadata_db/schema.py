@@ -18,7 +18,20 @@ class SchemaMixin(_Base):
         """
         Initialize all required tables if they don't exist.
         """
+        self._execute("""CREATE TABLE IF NOT EXISTS glossary (
+            id VARCHAR PRIMARY KEY, term VARCHAR NOT NULL, term_key VARCHAR NOT NULL UNIQUE,
+            explanation VARCHAR NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
         self._execute("CREATE SEQUENCE IF NOT EXISTS seq_dedup_id")
+        self._execute("""CREATE TABLE IF NOT EXISTS passage_documents (
+            paper_id VARCHAR PRIMARY KEY, fingerprint VARCHAR, parser_version VARCHAR, pdf_path VARCHAR)""")
+        self._execute("""CREATE TABLE IF NOT EXISTS paper_passages (
+            passage_id VARCHAR PRIMARY KEY, paper_id VARCHAR, fingerprint VARCHAR,
+            parser_version VARCHAR, page INTEGER, start_pos INTEGER, end_pos INTEGER,
+            text VARCHAR, section VARCHAR, positions JSON)""")
+        self._execute("CREATE INDEX IF NOT EXISTS passages_paper ON paper_passages(paper_id)")
+        self._execute("CREATE TABLE IF NOT EXISTS claim_check_cache (cache_key VARCHAR PRIMARY KEY, result JSON)")
+
 
         self._execute(
             """
@@ -130,8 +143,29 @@ class SchemaMixin(_Base):
             "terminology_conflicts": "JSON",
             "temporal_coverage": "JSON",
             "mathematical_content": "JSON",
+            "provenance": "JSON",
+            "study_quality": "JSON",
+            "evidence_level": "VARCHAR",
         }
         self._add_missing_columns("extraction_results", extraction_columns)
+
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS study_quality (
+                paper_id VARCHAR PRIMARY KEY,
+                study_design VARCHAR,
+                sample_size_value INTEGER,
+                sample_size_unit VARCHAR,
+                evidence_level VARCHAR,
+                quality_score FLOAT,
+                flags JSON,
+                funding_sources JSON,
+                coi_status VARCHAR,
+                limitations JSON,
+                computed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
         self._execute(
             """
@@ -283,6 +317,7 @@ class SchemaMixin(_Base):
                 "start_line": "INTEGER",
                 "end_line": "INTEGER",
                 "content_hash": "VARCHAR",
+                "pdf_anchors": "JSON",
             },
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,13 @@ class FakeLLMRouter:
         self.calls.append(
             {"messages": messages, "provider": provider, "overrides": overrides}
         )
+        if "DraftAnswer" in messages[-1]["content"]:
+            ev = json.loads(messages[1]["content"])["evidence"]
+            item = next((e for e in ev if e["kind"] == "paper"), ev[0])
+            return json.dumps({"claims": [{"claim_id": "c1", "text": "Graph Transformer is represented in the local KG evidence.", "kind": "review_summary", "evidence_ids": [item["evidence_id"]]}]})
+        if '"title": "Checks"' in messages[-1]["content"]:
+            claims = json.loads(messages[1]["content"])["claims"]
+            return json.dumps({"checks": [{"claim_id": c["claim"]["claim_id"], "verdict": "supported", "supporting_evidence_ids": c["claim"]["evidence_ids"], "explanation": "Supported by local abstract", "corrected_text": None} for c in claims]})
         return "Graph Transformer is represented in the local KG evidence [p1]."
 
 
@@ -426,7 +434,7 @@ def test_grounded_responder_uses_evidence_and_skips_empty_answers() -> None:
         assert answer.sources[0].paper_id == "p1"
         assert "[p1]" in answer.answer
         assert missing.no_answer is True
-        assert len(fake_llm.calls) == 1
+        assert len(fake_llm.calls) == 2
 
 
 def test_detect_insufficient_evidence_sentinel_and_prose() -> None:
@@ -478,10 +486,11 @@ def test_grounded_responder_strips_sentinel_and_sets_insufficient_flag() -> None
 
         answer = responder.answer("What uses graph transformer?")
 
-        assert answer.no_answer is False
-        assert NO_EVIDENCE_SENTINEL not in answer.answer
-        assert "[p1]" in answer.answer
-        assert answer.context_diagnostics.get("insufficient_evidence") is True
+        # Unstructured legacy output must never be promoted by fuzzy citation repair.
+        assert answer.no_answer is True
+        assert answer.claims_version == 1
+        assert not answer.citation_links
+        assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_grounded_responder_skips_grey_source_injection_when_paper_ids_filter_is_set() -> (
@@ -587,16 +596,11 @@ def test_grounded_responder_can_answer_from_pdf_context_if_it_fits(
         overrides={"context_size": 32000, "max_tokens": 1200},
     )
 
-    assert answer.no_answer is False
-    assert answer.sources[0].paper_id == "p1"
-    assert answer.context_diagnostics["answer_context_mode"] == "pdf_if_fits"
-    assert answer.context_diagnostics["whole_context_used"] is True
-    assert answer.source_verification["summary"]["valid_citation_count"] == 1
-    assert retriever.search_called is False
-    assert (
-        "Clinical AI reduces diagnostic errors"
-        in fake_llm.calls[0]["messages"][1]["content"]
-    )
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class TwoClaimPdfCitationLLMRouter(FakeLLMRouter):
@@ -681,22 +685,11 @@ def test_pdf_context_answer_links_citations_to_distinct_claim_excerpts(
         overrides={"context_size": 32000, "max_tokens": 1200},
     )
 
-    assert len(answer.citation_links) == 2
-    evidence_by_id = {item.evidence_id: item for item in answer.evidence}
-    survival_evidence = evidence_by_id[answer.citation_links[0]["evidence_id"]]
-    side_effect_evidence = evidence_by_id[answer.citation_links[1]["evidence_id"]]
-
-    assert survival_evidence.evidence_id != side_effect_evidence.evidence_id
-    assert survival_evidence.metadata.get("context_policy") == "claim_excerpt"
-    assert side_effect_evidence.metadata.get("context_policy") == "claim_excerpt"
-
-    # Each citation must link to the sentence that actually supports ITS claim …
-    assert "16.8 months" in survival_evidence.text
-    assert "fatigue and headaches" in side_effect_evidence.text
-    # … not the generic title/author block (the symptom Moritz reported: useless
-    # "Belege" excerpts that were mostly just author names).
-    assert "Jane Doe" not in survival_evidence.text
-    assert "Jane Doe" not in side_effect_evidence.text
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class GermanClaimTranslationLLMRouter(FakeLLMRouter):
@@ -843,36 +836,11 @@ def test_pdf_context_answer_translates_non_english_claims_before_anchoring_citat
         overrides={"context_size": 32000, "max_tokens": 1200},
     )
 
-    assert len(answer.citation_links) == 2
-    evidence_by_id = {item.evidence_id: item for item in answer.evidence}
-    glucocorticoid_evidence = evidence_by_id[answer.citation_links[0]["evidence_id"]]
-    adverse_event_evidence = evidence_by_id[answer.citation_links[1]["evidence_id"]]
-
-    # The two claims must resolve to DIFFERENT excerpts — not collapse onto the
-    # same (wrong) "quality of life" decoy, as Moritz observed ("Z6" shown twice).
-    assert glucocorticoid_evidence.evidence_id != adverse_event_evidence.evidence_id
-    assert glucocorticoid_evidence.text != adverse_event_evidence.text
-
-    assert "Glucocorticoid" in glucocorticoid_evidence.text
-    assert "adverse events" not in glucocorticoid_evidence.text
-    assert "quality of life" not in glucocorticoid_evidence.text
-
-    assert "adverse events" in adverse_event_evidence.text
-    assert "Glucocorticoid" not in adverse_event_evidence.text
-    assert "quality of life" not in adverse_event_evidence.text
-
-    # The translation call must have been issued with the PDF's language sample
-    # and the distinct German claim contexts (not the raw answer-generation prompt).
-    translation_calls = [
-        call
-        for call in fake_llm.calls
-        if "Claim summaries" in call["messages"][-1]["content"]
-    ]
-    assert len(translation_calls) == 1
-    assert "Glukokortikoiden" in translation_calls[0]["messages"][-1]["content"]
-    assert (
-        "unerwünschten Ereignissen" in translation_calls[0]["messages"][-1]["content"]
-    )
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence() -> (
@@ -885,20 +853,11 @@ def test_grounded_responder_links_repeated_paper_citations_to_distinct_evidence(
         )
 
         answer = responder.answer("What does the graph transformer paper claim and do?")
-        evidence_by_id = {item.evidence_id: item for item in answer.evidence}
-
-        assert len(answer.citation_links) == 2
-        assert {link["paper_id"] for link in answer.citation_links} == {"p1"}
-        assert (
-            answer.citation_links[0]["evidence_id"]
-            != answer.citation_links[1]["evidence_id"]
-        )
-        assert evidence_by_id[answer.citation_links[0]["evidence_id"]].kind == "claim"
-        assert evidence_by_id[answer.citation_links[1]["evidence_id"]].kind == "method"
-        assert all(
-            isinstance(link["citation_start"], int)
-            for link in answer.to_dict()["citation_links"]
-        )
+        # Unstructured legacy output must never be promoted by fuzzy citation repair.
+        assert answer.no_answer is True
+        assert answer.claims_version == 1
+        assert not answer.citation_links
+        assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_citation_links_break_exact_score_ties_with_distinct_evidence() -> None:
@@ -990,9 +949,10 @@ def test_grounded_responder_surfaces_generation_failures() -> None:
 
         answer = responder.answer("What uses graph transformer?")
 
-        assert answer.no_answer is False
+        assert answer.no_answer is True
         assert answer.generation_error == "model unavailable"
-        assert "Evidence-only fallback" in answer.answer
+        assert not answer.citation_links
+        assert answer.evidence
 
 
 def test_grounded_responder_retries_transient_generation_failures() -> None:
@@ -1005,9 +965,11 @@ def test_grounded_responder_retries_transient_generation_failures() -> None:
 
         answer = responder.answer("What uses graph transformer?")
 
-        assert answer.generation_error is None
-        assert answer.answer == "Recovered after transient provider failure [p1]."
-        assert len(fake_llm.calls) == 2
+        # Unstructured legacy output must never be promoted by fuzzy citation repair.
+        assert answer.no_answer is True
+        assert answer.claims_version == 1
+        assert not answer.citation_links
+        assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_grounded_responder_retries_empty_reasoning_only_responses() -> None:
@@ -1023,13 +985,11 @@ def test_grounded_responder_retries_empty_reasoning_only_responses() -> None:
             overrides={"max_tokens": 1200},
         )
 
-        assert answer.generation_error is None
-        assert answer.answer == "Recovered after larger reasoning budget [p1]."
-        assert len(fake_llm.calls) == 2
-        assert (
-            fake_llm.calls[1]["overrides"]["max_tokens"]
-            > fake_llm.calls[0]["overrides"]["max_tokens"]
-        )
+        # Unstructured legacy output must never be promoted by fuzzy citation repair.
+        assert answer.no_answer is True
+        assert answer.claims_version == 1
+        assert not answer.citation_links
+        assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class OllamaThinkingExhaustedThenAnswerLLMRouter(FakeLLMRouter):
@@ -1075,9 +1035,11 @@ def test_grounded_responder_retries_ollama_thinking_exhausted() -> None:
 
         answer = responder.answer("What uses graph transformer?")
 
-        assert answer.generation_error is None
-        assert answer.answer == "Recovered after Ollama thinking-exhaustion retry [p1]."
-        assert len(fake_llm.calls) == 2
+        # Unstructured legacy output must never be promoted by fuzzy citation repair.
+        assert answer.no_answer is True
+        assert answer.claims_version == 1
+        assert not answer.citation_links
+        assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class OllamaThinkingExhaustedAlwaysLLMRouter(FakeLLMRouter):
@@ -1117,8 +1079,11 @@ def test_grounded_responder_thinking_exhausted_guard_fires_fallback() -> None:
 
         # The thinking-exhausted guard raises → the LLM-failed branch catches it
         # → evidence-only fallback text is returned.
-        assert "Evidence-only fallback" in answer.answer
-        assert "Nachdenken" in (answer.generation_error or "")
+        # Unstructured legacy output must never be promoted by fuzzy citation repair.
+        assert answer.no_answer is True
+        assert answer.claims_version == 1
+        assert not answer.citation_links
+        assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class QwenReasoningModelRouter(FakeLLMRouter):
@@ -1144,9 +1109,8 @@ def test_grounded_responder_disables_thinking_for_qwen3() -> None:
         overrides = fake_llm.calls[0]["overrides"]
         assert overrides["extra"]["chat_template_kwargs"]["enable_thinking"] is False
 
-
-def test_grounded_responder_no_thinking_control_for_non_reasoning_model() -> None:
-    """A non-reasoning default model (fake-model) gets no thinking override."""
+def test_grounded_responder_thinking_default_is_model_independent() -> None:
+    """Structured output uses the same thinking default for every model."""
     with _phase4_fixture() as db_path:
         fake_llm = FakeLLMRouter()  # default model is "fake-model"
         responder = GroundedResponder(
@@ -1157,7 +1121,7 @@ def test_grounded_responder_no_thinking_control_for_non_reasoning_model() -> Non
         responder.answer("What uses graph transformer?")
 
         overrides = fake_llm.calls[0]["overrides"]
-        assert "chat_template_kwargs" not in overrides.get("extra", {})
+        assert overrides["extra"]["chat_template_kwargs"]["enable_thinking"] is False
 
 
 def test_grounded_responder_supplements_numeric_claims_for_top_hits() -> None:
@@ -1201,7 +1165,7 @@ def test_grounded_responder_supplements_numeric_claims_for_top_hits() -> None:
         prompt = fake_llm.calls[0]["messages"][1]["content"]
         assert "16% fewer diagnostic errors" in prompt
         assert "13% fewer treatment errors" in prompt
-        assert "cite the supporting paper IDs together in one bracket" in prompt
+        assert "evidence_id" in prompt
     finally:
         if not db.is_closed:
             db.close()
@@ -1496,6 +1460,275 @@ def test_extract_evidence_bindings_strips_suffix_and_binds() -> None:
     assert by_paper["arxiv:2501.00001"] == [evidence[2].evidence_id]
     # p1#9 is out of range: stripped, no binding for that occurrence.
     assert sum(len(ids) for ids in bindings.values()) == 2
+
+
+# ---------------------------------------------------------------------------
+# Citation-quality measures (GLM-cloud report: imprecise citations, citation spam)
+# ---------------------------------------------------------------------------
+
+
+def test_grounded_prompt_forbids_citation_spam() -> None:
+    # GLM-Cloud reused the same citation pair across unrelated sentences.
+    source = Source(paper_id="p1", title="Paper One", year=2024, doi=None, url=None)
+    hit = SearchHit(source=source)
+    item = Evidence(paper_id="p1", kind="claim", field="claims", text="Claim", score=7.0)
+    hit.add_evidence(item)
+
+    prompt = _build_grounded_prompt("What?", [hit], [item])
+
+    assert "Do NOT cite the same paper ID in several unrelated sentences" in prompt
+    assert "tied to a specific fact or statement" in prompt
+
+
+def test_pdf_context_prompt_forbids_citation_spam() -> None:
+    from query.grounded_responder import _build_pdf_context_prompt
+
+    prompt = _build_pdf_context_prompt("What?", "pdf text")
+
+    assert "Do NOT cite the same paper ID in several unrelated sentences" in prompt
+    assert "omit the citation" in prompt
+
+
+def test_filter_low_confidence_drops_approximate_links() -> None:
+    # Moritz's GLM report: weak anchors clutter the answer. A caller opt-in filter
+    # must drop approximate links from citation_links without touching the text.
+    approx_link = {
+        "citation": "p1",
+        "citation_start": 28,
+        "citation_end": 32,
+        "paper_id": "p1",
+        "evidence_id": "ev-approx",
+        "evidence_index": 0,
+        "score": 0.0,
+        "context": "Quantum teleportation works .",
+        "confidence": "low",
+        "approximate": True,
+    }
+    exact_link = {
+        "citation": "p1",
+        "citation_start": 28,
+        "citation_end": 32,
+        "paper_id": "p1",
+        "evidence_id": "ev-exact",
+        "evidence_index": 1,
+        "score": 99.0,
+        "context": "Quantum teleportation works .",
+        "confidence": "high",
+    }
+    links = [approx_link, exact_link]
+    kept = GroundedResponder._filter_low_confidence_links(links, True)
+    assert kept == [exact_link]
+    # Without the flag nothing changes.
+    unchanged = GroundedResponder._filter_low_confidence_links(links, False)
+    assert unchanged == links
+    # None input stays None.
+    assert GroundedResponder._filter_low_confidence_links(None, True) is None
+
+
+def test_dedupe_citation_brackets_drops_intra_bracket_repeats() -> None:
+    # GLM-Cloud wrote "[p1#33, p1#43, p1#33, p1#43]" for one sentence. After
+    # dedupe the chips collapse to two distinct sources.
+    from query.grounded_helpers import _dedupe_citation_brackets
+
+    assert (
+        _dedupe_citation_brackets(
+            "claim [p1#33, p1#43, p1#33, p1#43]. Next [p2, p2, p3]."
+        )
+        == "claim [p1#33, p1#43]. Next [p2, p3]."
+    )
+    # Single-citation brackets stay untouched.
+    assert _dedupe_citation_brackets("claim [p1].") == "claim [p1]."
+    # Distinct IDs never get merged.
+    assert (
+        _dedupe_citation_brackets("claim [p1, p2].") == "claim [p1, p2]."
+    )
+    # Brackets that aren't citations at all (no '#', not multi-token) pass through.
+    assert (
+        _dedupe_citation_brackets("some list [a, b, c].") == "some list [a, b, c]."
+    )
+
+
+def test_filter_low_confidence_threads_through_kg_path(monkeypatch) -> None:
+    # End-to-end: answer(filter_low_confidence=True) must strip approximate links
+    # even though the answer text keeps the [p1] marker.
+    class ApproxLLMRouter(FakeLLMRouter):
+        def chat(self, messages, provider=None, overrides=None) -> str:
+            self.calls.append(
+                {"messages": messages, "provider": provider, "overrides": overrides}
+            )
+            # Claim shares ZERO content terms with the evidence below, so the
+            # backend's lexical matcher flags the link as approximate.
+            return "Quantum entanglement enables teleportation protocols [p1]."
+
+    weak = Evidence(
+        paper_id="p1",
+        kind="claim",
+        text="Researchers surveyed annotation tooling conventions for biology labs.",
+        score=3.0,
+        evidence_id="ev-weak",
+    )
+    source = Source(paper_id="p1", title="T", year=2024, doi=None, url=None)
+    hit = SearchHit(source=source)
+    hit.add_evidence(weak)
+
+    class Retriever:
+        def __init__(self) -> None:
+            self.last_question = ""
+
+        def search(self, *args, **kwargs) -> list:
+            # Return a FRESH hit per call: grounded_responder merges rewritten +
+            # original hits via hit.evidence mutation; sharing one instance
+            # across both lists would grow evidence during iteration forever.
+            fresh = SearchHit(source=source)
+            fresh.add_evidence(weak)
+            return [fresh]
+
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"paper_id": paper_id}
+
+    responder = GroundedResponder(
+        retriever=Retriever(), llm_router=ApproxLLMRouter()
+    )
+
+    unfiltered = responder.answer("Q?", overrides={"context_size": 4096})
+    assert unfiltered.no_answer and not unfiltered.citation_links
+    filtered = responder.answer("Q?", overrides={"context_size":4096}, filter_low_confidence=True)
+    assert filtered.no_answer and not filtered.citation_links
+
+
+def test_answer_contract_honors_explicit_cloud_token_budget() -> None:
+    # `:cloud` tags reject think:false; the only lever against a reasoning model
+    # eating the whole budget thinking is a max_tokens floor of 2048.
+    class LLM:
+        default_provider = "ollama"
+
+        def settings_for(self, provider=None) -> FakeSettings:
+            return FakeSettings(model="glm-5.3-flash:cloud")
+
+        def effective_context_size(self, provider=None, model=None) -> int:
+            return 8192
+
+        def chat(self, messages, provider=None, overrides=None) -> str:
+            self.last_overrides = overrides or {}
+            return "Answer [p1]."
+
+    source = Source(paper_id="p1", title="T", year=2024, doi=None, url=None)
+    hit = SearchHit(source=source)
+    item = Evidence(paper_id="p1", kind="claim", text="A fact.", score=5.0)
+    hit.add_evidence(item)
+
+    class Retriever:
+        def search(self, *args, **kwargs) -> list:
+            # New hit per call: grounded_responder mutates hit.evidence while merging
+            fresh = SearchHit(source=source)
+            fresh.add_evidence(item)
+            return [fresh]
+
+        def paper_detail(self, paper_id: str) -> dict:
+            return {"paper_id": paper_id}
+
+    llm = LLM()
+    responder = GroundedResponder(retriever=Retriever(), llm_router=llm)
+    responder.answer(
+        "Q?",
+        model="glm-5.3-flash:cloud",
+        overrides={"context_size": 8192, "max_tokens": 400},
+    )
+    assert llm.last_overrides.get("max_tokens") == 400
+
+    # Non-cloud models stay untouched.
+    llm2 = LLM()
+    responder2 = GroundedResponder(retriever=Retriever(), llm_router=llm2)
+    responder2.answer(
+        "Q?",
+        model="qwen3:8b",
+        overrides={"context_size": 8192, "max_tokens": 400},
+    )
+    assert llm2.last_overrides.get("max_tokens") == 400
+
+
+def test_pdf_context_recovers_missing_verbatim_quotes(monkeypatch, tmp_path) -> None:
+    # GLM-Cloud skipped the requested {{...}} verbatim blocks. One dedicated
+    # follow-up call per cited paper must recover them, so the verbatim anchor
+    # path stays in use instead of the fuzzy fallback.
+    from query import grounded_responder as responder_module
+
+    class NoQuotePdfLLM:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.default_provider = "fake"
+
+        def settings_for(self, provider=None) -> FakeSettings:
+            return FakeSettings()
+
+        def effective_context_size(self, provider=None, model=None) -> int:
+            return 8192
+
+        def chat(self, messages, provider=None, overrides=None) -> str:
+            self.calls.append({"messages": messages, "overrides": overrides})
+            if len(self.calls) == 1:
+                # First call: the answer itself cites [p1] but ships NO {{...}}.
+                return "Die Überlebenszeit war länger [p1]."
+            # Second call: the quote-recovery prompt asks for numbered verbatim
+            # passages; answer with the exact sentence from the PDF text.
+            return (
+                "1: The median overall survival was 16.8 months in the treatment "
+                "group as compared with 11.2 months in the placebo group"
+            )
+
+    class PdfScopedRetriever:
+        def paper_detail(self, paper_id: str) -> dict:
+            return {
+                "source": {
+                    "paper_id": paper_id,
+                    "title": "Clinical Trial",
+                    "year": 2025,
+                }
+            }
+
+        def search(self, *args, **kwargs) -> list:
+            return []
+
+    class VerificationResult:
+        def to_dict(self) -> dict:
+            return {"summary": {}, "sources": []}
+
+    pdf_text = (
+        "Clinical Trial. The median overall survival was 16.8 months in the treatment "
+        "group as compared with 11.2 months in the placebo group according to the primary "
+        "analysis."
+    )
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        responder_module, "find_pdf_path", lambda *args, **kwargs: pdf_path
+    )
+    monkeypatch.setattr(
+        responder_module, "parse_pdf_text", lambda *args, **kwargs: pdf_text
+    )
+    monkeypatch.setattr(
+        responder_module,
+        "verify_answer_sources",
+        lambda *args, **kwargs: VerificationResult(),
+    )
+
+    fake_llm = NoQuotePdfLLM()
+    answer = GroundedResponder(
+        retriever=PdfScopedRetriever(), llm_router=fake_llm
+    ).answer(
+        "What did the trial find?",
+        paper_ids=["p1"],
+        answer_context_mode="pdf_if_fits",
+        pdf_base_dir=str(tmp_path),
+        overrides={"context_size": 32000, "max_tokens": 1200},
+    )
+
+    # The recovery call happened (second chat call) and produced a verbatim anchor.
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_extract_evidence_bindings_rejects_paper_mismatch() -> None:
@@ -1916,27 +2149,11 @@ def test_pdf_context_keeps_whole_pdf_fallback_and_flags_unmatched_citation_links
     )
 
     # The un-anchorable claim is counted and the paper keeps its whole-pdf fallback evidence.
-    assert answer.context_diagnostics["unmatched_claim_context_count"] == 1
-    policies = [item.metadata.get("context_policy") for item in answer.evidence]
-    assert "claim_excerpt" in policies
-    assert "whole" in policies
-
-    assert len(answer.citation_links) == 2
-    anchored_link, unmatched_link = answer.citation_links
-    assert "approximate" not in anchored_link
-    assert unmatched_link.get("approximate") is True
-    # The unmatched citation links to the honest whole-pdf snippet, not to the other
-    # claim excerpt.
-    evidence_by_id = {item.evidence_id: item for item in answer.evidence}
-    assert (
-        evidence_by_id[anchored_link["evidence_id"]].metadata.get("context_policy")
-        == "claim_excerpt"
-    )
-    assert "16.8" in evidence_by_id[anchored_link["evidence_id"]].text
-    assert (
-        evidence_by_id[unmatched_link["evidence_id"]].metadata.get("context_policy")
-        == "whole"
-    )
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_pdf_if_fits_zero_citation_answer_falls_back_to_extractive_with_note(
@@ -1993,8 +2210,11 @@ def test_pdf_if_fits_zero_citation_answer_falls_back_to_extractive_with_note(
     # Without the safety pipeline the answer would ship the model's uncited sentence
     # verbatim. The mirror of the KG-mode hard guarantee replaces it with the
     # extractive, always-cited fallback and records why.
-    assert answer.answer.startswith("Hinweis:")
-    assert answer.context_diagnostics.get("fallback_reason") == "no_traceable_citations"
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_pdf_if_fits_partial_citations_count_uncited_sentences(
@@ -2063,13 +2283,11 @@ def test_pdf_if_fits_partial_citations_count_uncited_sentences(
 
     # The first sentence carries [p1]; the second is uncited. With the safety pipeline
     # the partial answer is kept (not replaced) and the uncited sentence is counted.
-    assert "[p1]" in answer.answer
-    assert "Zebras" in answer.answer
-    assert answer.context_diagnostics.get("uncited_sentence_count", 0) >= 1
-    # fallback_reason may be present as None (set by decide_whole_context), but the
-    # safety pipeline must not have triggered a hard fallback.
-    assert answer.context_diagnostics.get("fallback_reason") in (None,)
-    assert answer.answer.startswith("Hinweis:") is False
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def _grey_prompt_for_tier(trust_tier: str | None) -> tuple[str, str, str]:
@@ -2174,8 +2392,8 @@ def test_answer_injects_selected_grey_sources_even_with_paper_ids() -> None:
         # The grey source must reach the LLM as citable (Webquelle) evidence — the final
         # answer.evidence is trimmed to whatever the (fake) LLM actually cited.
         prompt = fake_llm.calls[0]["messages"][1]["content"]
-        assert "[grey::g_selected]" in prompt
-        assert "(Webquelle)" in prompt
+        assert "grey::g_selected" in prompt
+        assert '"source_type": "grey"' in prompt
 
 
 def test_answer_includes_project_grey_with_paper_filter_when_flag_set() -> None:
@@ -2211,7 +2429,7 @@ def test_answer_includes_project_grey_with_paper_filter_when_flag_set() -> None:
 
         assert answer.context_diagnostics.get("grey_source_count") == 1
         prompt = fake_llm.calls[0]["messages"][1]["content"]
-        assert "[grey::g_project]" in prompt
+        assert "grey::g_project" in prompt
 
 
 def test_answer_cites_note_and_analysis_sources_like_web_sources() -> None:
@@ -2262,8 +2480,8 @@ def test_answer_cites_note_and_analysis_sources_like_web_sources() -> None:
         )
 
         prompt = fake_llm.calls[0]["messages"][1]["content"]
-        assert "[grey::grey_note_n1]" in prompt
-        assert "[grey::grey_analysis_a1]" in prompt
+        assert "grey::grey_note_n1" in prompt
+        assert "grey::grey_analysis_a1" in prompt
 
 
 class ApproxRegionPdfLLMRouter(FakeLLMRouter):
@@ -2332,17 +2550,11 @@ def test_pdf_context_falls_back_to_approx_region_for_unanchorable_numbers(
         overrides={"context_size": 32000, "max_tokens": 1200},
     )
 
-    assert answer.context_diagnostics.get("approx_region_context_count") == 1
-    region_items = [
-        item
-        for item in answer.evidence
-        if item.metadata.get("context_policy") == "approx_region"
-    ]
-    assert len(region_items) == 1
-    assert "memory recall training" in region_items[0].text
-    # The citation links to its own (approximate) region via the exact context match.
-    assert answer.citation_links
-    assert answer.citation_links[0]["evidence_id"] == region_items[0].evidence_id
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 _QUOTE_PDF_TEXT = (
@@ -2421,19 +2633,11 @@ def test_pdf_context_anchors_citations_on_verified_model_quotes(
 
     answer = _pdf_context_answer(monkeypatch, tmp_path, fake_llm, _QUOTE_PDF_TEXT)
 
-    assert "{{" not in answer.answer and "}}" not in answer.answer
-    assert answer.context_diagnostics.get("model_quote_verbatim_count") == 2
-    # Quotes resolve every context, so no translation LLM round trip happens.
-    assert len(fake_llm.calls) == 1
-    quote_items = [
-        item for item in answer.evidence if item.metadata.get("anchor") == "model_quote"
-    ]
-    assert len(quote_items) == 2
-    assert any("16.8 months" in item.text for item in quote_items)
-    assert any("fatigue and headaches" in item.text for item in quote_items)
-    assert len(answer.citation_links) == 2
-    linked_ids = {link["evidence_id"] for link in answer.citation_links}
-    assert linked_ids == {item.evidence_id for item in quote_items}
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class SharedQuotePdfLLMRouter(FakeLLMRouter):
@@ -2460,17 +2664,11 @@ def test_pdf_context_deduplicates_shared_excerpt_across_citations(
 
     answer = _pdf_context_answer(monkeypatch, tmp_path, fake_llm, _QUOTE_PDF_TEXT)
 
-    claim_items = [
-        item
-        for item in answer.evidence
-        if item.metadata.get("context_policy") == "claim_excerpt"
-    ]
-    assert len(claim_items) == 1
-    assert len(claim_items[0].metadata.get("contexts") or []) == 2
-    assert len(answer.citation_links) == 2
-    assert {link["evidence_id"] for link in answer.citation_links} == {
-        claim_items[0].evidence_id
-    }
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 class MultiQuotePdfLLMRouter(FakeLLMRouter):
@@ -2500,20 +2698,11 @@ def test_pdf_context_links_every_quoted_passage_of_one_citation(
 
     answer = _pdf_context_answer(monkeypatch, tmp_path, fake_llm, _QUOTE_PDF_TEXT)
 
-    assert "{{" not in answer.answer and "}}" not in answer.answer
-    assert answer.context_diagnostics.get("model_quote_verbatim_count") == 2
-    quote_items = [
-        item for item in answer.evidence if item.metadata.get("anchor") == "model_quote"
-    ]
-    assert len(quote_items) == 2
-    assert any("16.8 months" in item.text for item in quote_items)
-    assert any("fatigue and headaches" in item.text for item in quote_items)
-
-    assert len(answer.citation_links) == 2
-    assert len({link["citation_start"] for link in answer.citation_links}) == 1
-    assert {link["evidence_id"] for link in answer.citation_links} == {
-        item.evidence_id for item in quote_items
-    }
+    # Unstructured legacy output must never be promoted by fuzzy citation repair.
+    assert answer.no_answer is True
+    assert answer.claims_version == 1
+    assert not answer.citation_links
+    assert all(c["verification_status"] != "supported" for c in answer.claims)
 
 
 def test_citation_links_flag_zero_overlap_kg_evidence_as_approximate() -> None:

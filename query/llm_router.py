@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import json
 import os
 import re
@@ -16,14 +18,20 @@ import yaml
 # extraction grabs the wrong braces). Strip them centrally so every caller is safe.
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
 
 
 def strip_reasoning_blocks(text: str, *, metadata: dict[str, Any] | None = None) -> str:
     cleaned = _THINK_BLOCK_RE.sub("", str(text or ""))
+    # Some server templates prefill the opening tag, so only the closing tag
+    # appears in content. The prefix is still reasoning, including any JSON in it.
+    closing = list(_THINK_CLOSE_RE.finditer(cleaned))
+    if closing:
+        cleaned = cleaned[closing[-1].end() :]
     open_match = _THINK_OPEN_RE.search(cleaned)
     if open_match:
         # Unterminated think block: the model hit its token limit while reasoning.
-        # Everything after </think> is reasoning, not answer.
+        # Everything after the unmatched opening tag is reasoning, not answer.
         cleaned = cleaned[: open_match.start()]
         if metadata is not None:
             # Reasoning models (deepseek-r1, o3) burn their whole budget thinking
@@ -110,7 +118,19 @@ class LLMRouter:
         self.providers = providers
         self.default_provider = default_provider
         self._client = client
-        self.last_response_metadata: dict[str, Any] = {}
+        self._response_metadata: ContextVar[dict[str, Any] | None] = ContextVar("llm_response_metadata", default=None)
+
+    @property
+    def last_response_metadata(self) -> dict[str, Any]:
+        metadata = self._response_metadata.get()
+        if metadata is None:
+            metadata = {}
+            self._response_metadata.set(metadata)
+        return metadata
+
+    @last_response_metadata.setter
+    def last_response_metadata(self, value: dict[str, Any]) -> None:
+        self._response_metadata.set(value)
 
     @classmethod
     def from_config_file(cls, config_path: str | Path = "config.yaml") -> "LLMRouter":
@@ -394,18 +414,21 @@ class LLMRouter:
             (overrides or {}).get("timeout_seconds", cfg.timeout_seconds)
         )
 
-        if cfg.provider_type == "ollama":
-            return self._chat_ollama(cfg, messages, settings, request_timeout_seconds)
-        if cfg.provider_type == "anthropic":
-            return self._chat_anthropic(
-                cfg, messages, settings, request_timeout_seconds
-            )
-        if cfg.provider_type in {"openai_compatible", "lm_studio", "openai", "nvidia"}:
-            return self._chat_openai_compatible(
-                cfg, messages, settings, request_timeout_seconds
-            )
-
-        raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
+        self.last_response_metadata = {}
+        try:
+            if cfg.provider_type == "ollama":
+                result = self._chat_ollama(cfg, messages, settings, request_timeout_seconds)
+            elif cfg.provider_type == "anthropic":
+                result = self._chat_anthropic(cfg, messages, settings, request_timeout_seconds)
+            elif cfg.provider_type in {"openai_compatible", "lm_studio", "openai", "nvidia"}:
+                result = self._chat_openai_compatible(cfg, messages, settings, request_timeout_seconds)
+            else:
+                raise ValueError(f"Unsupported provider type: {cfg.provider_type}")
+        except Exception:
+            self.last_response_metadata.update({"requested_provider": provider_name, "requested_model": settings.model, "request_failed": True})
+            raise
+        self.last_response_metadata.update({"provider": provider_name, "model": self.last_response_metadata.get("model") or settings.model})
+        return result
 
     def chat_with_tools(
         self,
@@ -668,34 +691,44 @@ class LLMRouter:
 
         client = self._client_for(request_timeout_seconds)
         endpoint = f"{cfg.base_url.rstrip('/')}/api/chat"
-        tool_calling_fallback = False
-        response = client.post(endpoint, json=payload)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            # Nicht jedes Ollama-Modell kann Werkzeuge; einige Versionen lehnen
-            # das Feld mit 400 ab, statt es zu ignorieren. Dann ohne wiederholen —
-            # der Aufrufer sieht den Vermerk und faellt auf Prompt-and-Parse zurueck.
-            if "tools" not in payload or exc.response.status_code not in {400, 422}:
-                raise self._http_status_runtime_error(exc) from exc
-            fallback_payload = {
-                key: value for key, value in payload.items() if key != "tools"
-            }
-            response = client.post(endpoint, json=fallback_payload)
+        flags = {
+            "tool_calling_fallback": False,
+            "response_format_fallback": False,
+            "thinking_control_fallback": False,
+        }
+        # Optional capabilities are negotiated from server errors, never model names.
+        # Each rejected field is removed at most once; authentication/quota errors
+        # retain their HTTP status and never enter this fallback.
+        while True:
+            response = client.post(endpoint, json=payload)
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError as fallback_exc:
-                raise self._http_status_runtime_error(fallback_exc) from fallback_exc
-            tool_calling_fallback = True
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in {400, 422}:
+                    raise self._http_status_runtime_error(exc) from exc
+                detail = exc.response.text.casefold()
+                field = None
+                if "think" in payload and "think" in detail:
+                    field, flag = "think", "thinking_control_fallback"
+                elif "format" in payload and ("format" in detail or "schema" in detail):
+                    field, flag = "format", "response_format_fallback"
+                elif "tools" in payload:
+                    field, flag = "tools", "tool_calling_fallback"
+                if field is None:
+                    raise self._http_status_runtime_error(exc) from exc
+                payload = {key: value for key, value in payload.items() if key != field}
+                flags[flag] = True
         data = response.json()
         self.last_response_metadata = {
+            "model": data.get("model"),
             "provider_type": "ollama",
             "eval_count": data.get("eval_count"),
             "prompt_eval_count": data.get("prompt_eval_count"),
             "total_duration": data.get("total_duration"),
             "load_duration": data.get("load_duration"),
             "done_reason": data.get("done_reason"),
-            "tool_calling_fallback": tool_calling_fallback,
+            **flags,
             "reasoning_fallback": False,
             "reasoning_truncated": False,
         }
@@ -796,10 +829,10 @@ class LLMRouter:
             raise self._http_status_runtime_error(exc) from exc
         data = response.json()
         self.last_response_metadata = {
+            "model": data.get("model"),
             "provider_type": "anthropic",
             "usage": data.get("usage") or {},
             "stop_reason": data.get("stop_reason"),
-            "model": data.get("model"),
             "tool_calling_fallback": False,
             "reasoning_truncated": False,
         }
@@ -1078,6 +1111,7 @@ class LLMRouter:
         data = response.json()
         choices = data.get("choices") or []
         self.last_response_metadata = {
+            "model": data.get("model"),
             "provider_type": cfg.provider_type,
             "usage": data.get("usage") or {},
             "finish_reason": choices[0].get("finish_reason") if choices else None,

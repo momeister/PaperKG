@@ -1,3 +1,7 @@
+import { checkpointEditor, undoEditor } from "../workspace/viewState";
+import { useNoteDraft, noteDrafts } from "../workspace/noteDrafts";
+import { usePaneEnvironment } from "../workspace/PortablePane";
+import { GlossaryTextarea } from "../glossary/GlossaryText";
 import { Fragment, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -122,6 +126,7 @@ import {
   toggleWrap,
   withPreservedCitationLinks,
 } from "./notesHelpers";
+import { useWritingAnchor } from "../components/useWritingAnchor";
 import type { Note, NoteAiMessage, NoteAiThread, NoteCitation, VerificationEvidence } from "../types";
 
 export type SelectionRange = {
@@ -259,6 +264,7 @@ export function NotesSurface({
   onStateChange,
   actionsRef
 }: NotesSurfaceProps = {}) {
+  const { document, window } = usePaneEnvironment();
   const { activeProject, provider, model } = useAppState();
   const embedded = variant !== "page";
   const scopedProjectId = noteProjectId(activeProject);
@@ -268,9 +274,7 @@ export function NotesSurface({
   const uiKeyPrefix = variant === "overlay" ? `${scopedProjectId}.overlay` : scopedProjectId;
   const queryClient = useQueryClient();
   const [activeNoteId, setActiveNoteId] = useState<string>("");
-  const [title, setTitle] = useState("");
-  const [markdown, setMarkdown] = useState("");
-  const [dirty, setDirty] = useState(false);
+  const { title, setTitle, markdown, setMarkdown, dirty, setDirty, saving: draftSaving, error: draftError } = useNoteDraft(activeNoteId);
   const [editorMode, setEditorMode] = useState<EditorMode>("edit");
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [selectionPinned, setSelectionPinned] = useState(false);
@@ -302,6 +306,7 @@ export function NotesSurface({
   const [translateLanguage, setTranslateLanguage] = useState("Deutsch");
   const [aiPopoverBottomPadding, setAiPopoverBottomPadding] = useState(0);
   const [undoStack, setUndoStack] = useState<string[]>([]);
+  const [citationOpenVersion, setCitationOpenVersion] = useState(0);
   const [selectedCitation, setSelectedCitation] = useState<NoteCitation | null>(null);
   const [selectedCitationRef, setSelectedCitationRef] = useState<CitationMarkdownRef | null>(null);
   const [activeEditorCitationId, setActiveEditorCitationId] = useState("");
@@ -331,6 +336,9 @@ export function NotesSurface({
     () => typeof localStorage !== "undefined" && localStorage.getItem(IMAGE_PREVIEW_HIDDEN_KEY) === "1"
   );
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [writingMode, setWritingMode] = useState(() => loadBooleanUiState("editor.writingMode", false));
+  useWritingAnchor(textareaRef, writingMode, editorMode);
+  useEffect(() => saveBooleanUiState("editor.writingMode", writingMode), [writingMode]);
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const selectionPopoverRef = useRef<HTMLDivElement | null>(null);
   const citationPanelRef = useRef<HTMLElement | null>(null);
@@ -350,7 +358,11 @@ export function NotesSurface({
   const pendingEditorViewportRestoreRef = useRef<{ snapshot: EditorViewportSnapshot; markdownLength: number } | null>(null);
   const contextResizeFrameRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  const [insertingCitation, setInsertingCitation] = useState(false);
+  const insertingCitationRef = useRef(false);
   const lastCursorRef = useRef<number | null>(null);
+  const editorInteractionRef = useRef(0);
   const threadsQueryKey = ["note-ai-threads", activeNoteId] as const;
 
   const notesQuery = useQuery({
@@ -371,10 +383,8 @@ export function NotesSurface({
   const createNote = useMutation({
     mutationFn: () => api.createNote(scopedProjectId, { title: "Neue Notiz", markdown: "# Neue Notiz\n\n" }),
     onSuccess: ({ note }) => {
+      noteDrafts.seed(note.id, note.title, note.markdown);
       setActiveNoteId(note.id);
-      setTitle(note.title);
-      setMarkdown(note.markdown);
-      setDirtyState(false);
       setUndoStack([]);
       setAiPreview("");
       setSelection(null);
@@ -387,27 +397,16 @@ export function NotesSurface({
       queryClient.invalidateQueries({ queryKey: ["notes"] });
     }
   });
-  const saveNote = useMutation({
-    mutationFn: (payload: { noteId: string; title: string; markdown: string }) =>
-      api.updateNote(payload.noteId, { title: payload.title, markdown: payload.markdown }),
-    onSuccess: ({ note }, variables) => {
-      const latest = latestDraftRef.current;
-      if (latest.noteId === note.id && latest.title === variables.title && latest.markdown === variables.markdown) {
-        setDirtyState(false);
-      }
-      loadedServerMarkdownRef.current = note.markdown;
-      queryClient.setQueryData(["note", note.id], { note });
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
-      persistLocalThreadRanges();
-    }
-  });
+  const saveNote = { isPending: draftSaving, isError: Boolean(draftError), error: draftError };
   const deleteNote = useMutation({
-    mutationFn: () => api.deleteNote(activeNoteId),
-    onSuccess: () => {
+    mutationFn: () => {
+      const id = activeNoteId;
+      return noteDrafts.exclusive(id, async () => { await api.deleteNote(id); noteDrafts.forget(id); return id; });
+    },
+    onSuccess: (id) => {
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      if (activeNoteId !== id) return;
       setActiveNoteId("");
-      setTitle("");
-      setMarkdown("");
-      setDirtyState(false);
       loadedNoteIdRef.current = "";
       localThreadRangesRef.current = {};
       setLocalThreadRanges({});
@@ -423,13 +422,12 @@ export function NotesSurface({
     }
   });
   const deleteNoteById = useMutation({
-    mutationFn: (noteId: string) => api.deleteNote(noteId),
+    mutationFn: (noteId: string) => noteDrafts.exclusive(noteId, async () => {
+      await api.deleteNote(noteId); noteDrafts.forget(noteId);
+    }),
     onSuccess: (_data, noteId) => {
       if (activeNoteId === noteId) {
         setActiveNoteId("");
-        setTitle("");
-        setMarkdown("");
-        setDirtyState(false);
         loadedNoteIdRef.current = "";
         localThreadRangesRef.current = {};
         setLocalThreadRanges({});
@@ -438,11 +436,19 @@ export function NotesSurface({
     }
   });
   const restoreVersion = useMutation({
-    mutationFn: () => api.restoreLatestNoteVersion(activeNoteId),
+    mutationFn: () => {
+      const id = activeNoteId;
+      return noteDrafts.exclusive(id, async () => {
+        const revision = noteDrafts.get(id).revision;
+        const result = await api.restoreLatestNoteVersion(id);
+        noteDrafts.replace(result.note, revision);
+        return result;
+      });
+    },
     onSuccess: ({ note }) => {
-      setMarkdown(note.markdown);
-      setTitle(note.title);
-      setDirtyState(false);
+      queryClient.setQueryData(["note", note.id], { note });
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      if (activeNoteId !== note.id || noteDrafts.get(note.id).dirty) return;
       setUndoStack([]);
       loadedNoteIdRef.current = note.id;
       localThreadRangesRef.current = {};
@@ -946,7 +952,7 @@ export function NotesSurface({
     }
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Node && editorWrapRef.current?.contains(target)) {
+      if (Boolean(target && editorWrapRef.current?.contains(target as Node))) {
         return;
       }
       setSelection(null);
@@ -956,7 +962,7 @@ export function NotesSurface({
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [selection]);
+  }, [window, selection]);
 
   // Überlauf-Menü der Toolbar schließt bei Klick daneben oder Escape.
   useEffect(() => {
@@ -980,7 +986,7 @@ export function NotesSurface({
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [moreMenuOpen]);
+  }, [window, moreMenuOpen]);
 
   // "Ganze Notiz fragen"-Popover schließt bei Klick daneben oder Escape.
   useEffect(() => {
@@ -1003,7 +1009,7 @@ export function NotesSurface({
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [noteQuestionOpen]);
+  }, [window, noteQuestionOpen]);
 
   useEffect(() => {
     if (!selection) {
@@ -1042,7 +1048,7 @@ export function NotesSurface({
       observer?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [aiEdit.isPending, aiInstruction, aiPreview, selection]);
+  }, [window, aiEdit.isPending, aiInstruction, aiPreview, selection]);
 
   useEffect(() => {
     if (!activeNoteId && notes[0]) {
@@ -1051,7 +1057,7 @@ export function NotesSurface({
   }, [activeNoteId, notes]);
 
   useEffect(() => {
-    if (!currentNote) {
+    if (!currentNote || noteDrafts.isStaleQuery(currentNote)) {
       return;
     }
     const switchedNote = loadedNoteIdRef.current !== currentNote.id;
@@ -1082,34 +1088,8 @@ export function NotesSurface({
     }
   }, [currentNote?.id, currentNote?.markdown, currentNote?.title, currentNote?.updated_timestamp, dirty, markdown, title]);
 
-  useEffect(() => {
-    if (!activeNoteId || !dirty || saveNote.isPending) {
-      return;
-    }
-    // Refuse to persist an empty note over a non-empty one unless the editor is focused (i.e. the
-    // user is actively clearing it). Guards against a background/programmatic empty state wiping
-    // content — the exact "section suddenly blank" symptom.
-    if (
-      markdown.trim() === "" &&
-      loadedServerMarkdownRef.current.trim() !== "" &&
-      document.activeElement !== textareaRef.current
-    ) {
-      return;
-    }
-    const nextTitle = noteTitleForSave(title, markdown);
-    // Der normalisierte Titel wird weiterhin in den State zurückgeschrieben (der Editor
-    // bleibt mit dem gespeicherten Titel synchron, sonst lädt der Reload-Effekt unten die
-    // Notiz neu). Ausnahme: Wenn sich beide NUR durch abschließende Leerzeichen
-    // unterscheiden, bleibt die Eingabe stehen — sonst verschluckt jeder Tastendruck das
-    // gerade getippte Leerzeichen und man kann keinen mehrteiligen Titel schreiben.
-    if (nextTitle !== title && nextTitle !== title.trim()) {
-      setTitle(nextTitle);
-    }
-    const handle = window.setTimeout(() => {
-      saveNote.mutate({ noteId: activeNoteId, title: nextTitle, markdown });
-    }, 1400);
-    return () => window.clearTimeout(handle);
-  }, [activeNoteId, dirty, markdown, saveNote.isPending, title]);
+  // Autosaves and their pending revisions belong to noteDrafts, independently
+  // of editor visibility, route changes and native window handoffs.
 
   useEffect(() => {
     if (!activeNoteId || dirty || !isUntitledNoteTitle(title)) {
@@ -1235,6 +1215,7 @@ export function NotesSurface({
   }
 
   function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    editorInteractionRef.current++;
     if (event.key === "Tab") {
       event.preventDefault();
       const node = textareaRef.current;
@@ -1309,6 +1290,7 @@ export function NotesSurface({
   }
 
   function pushUndo() {
+    checkpointEditor(textareaRef.current);
     setUndoStack((current) => [...current.slice(-14), markdown]);
   }
 
@@ -1801,6 +1783,8 @@ export function NotesSurface({
     if (!content) {
       return activeNoteId || null;
     }
+    if (insertingCitationRef.current || saveNote.isPending) throw new Error("Notiz wird noch gespeichert. Bitte erneut einfügen.");
+    const releaseDraft = noteDrafts.beginAtomic(activeNoteId);
     const currentMarkdown = markdownRef.current;
     const { start, end } = externalInsertRange();
     let insertText = markdownBlockInsertion(currentMarkdown, start, content);
@@ -1816,6 +1800,7 @@ export function NotesSurface({
     while (nextCursor < nextMarkdown.length && nextMarkdown[nextCursor] === "\n") {
       nextCursor += 1;
     }
+    const interactionAtInsert = editorInteractionRef.current;
     const viewportSnapshot = captureEditorViewport(nextCursor);
     pushUndo();
     applyMarkdownChange(nextMarkdown);
@@ -1823,38 +1808,60 @@ export function NotesSurface({
     restoreEditorViewport(viewportSnapshot, nextMarkdown.length);
 
     const nextTitle = noteTitleForSave(title, nextMarkdown);
-    if (!activeNoteId) {
-      const created = await api.createNote(scopedProjectId, { title: nextTitle, markdown: nextMarkdown });
-      const note = citations.length ? (await api.appendNote(created.note.id, { markdown: " ", citations })).note : created.note;
-      setActiveNoteId(note.id);
+    insertingCitationRef.current = true;
+    setInsertingCitation(true);
+    try {
+      if (!activeNoteId) {
+        const created = await api.createNote(scopedProjectId, { title: nextTitle, markdown: nextMarkdown, citations });
+        const note = created.note;
+        noteDrafts.seed(note.id, note.title, markdownRef.current === nextMarkdown ? note.markdown : markdownRef.current);
+        if (markdownRef.current !== nextMarkdown) noteDrafts.set(note.id, "dirty", true);
+        setActiveNoteId(note.id);
+        loadedNoteIdRef.current = note.id;
+        queryClient.setQueryData(["note", note.id], { note });
+        queryClient.invalidateQueries({ queryKey: ["notes"] });
+        queryClient.invalidateQueries({ queryKey: ["note", note.id] });
+        // No second restore here: re-forcing the caret after the async round-trip is what
+        // yanked it back into the citation even after the user clicked elsewhere.
+        return note.id;
+      }
+
+      if (nextTitle !== title) {
+        setTitle(nextTitle);
+      }
+      const saved = await api.updateNote(activeNoteId, { title: nextTitle, markdown: nextMarkdown, citations });
+      const note = saved.note;
+      noteDrafts.acknowledge(note);
       setTitle(note.title);
-      setMarkdown(note.markdown);
-      markdownRef.current = note.markdown;
-      setDirtyState(false);
+      if (markdownRef.current === nextMarkdown) {
+        applyMarkdownChange(note.markdown, { markDirty: false, clearPreview: false });
+        setDirtyState(false);
+      }
       loadedNoteIdRef.current = note.id;
       queryClient.setQueryData(["note", note.id], { note });
       queryClient.invalidateQueries({ queryKey: ["notes"] });
       queryClient.invalidateQueries({ queryKey: ["note", note.id] });
-      // No second restore here: re-forcing the caret after the async round-trip is what
-      // yanked it back into the citation even after the user clicked elsewhere.
+      persistLocalThreadRanges();
+      // Restore indices without focusing the editor. A controlled value update can
+      // reset an unfocused textarea's caret; later user interaction always wins.
+      if (editorInteractionRef.current === interactionAtInsert && markdownRef.current === note.markdown) {
+        restoreEditorViewport(viewportSnapshot, note.markdown.length);
+      }
       return note.id;
+    } catch (error) {
+      // A failed atomic save must not leave a dangling citation for autosave.
+      const latest = markdownRef.current;
+      if (latest.slice(start, start + insertText.length) === insertText) {
+        applyMarkdownChange(`${latest.slice(0, start)}${currentMarkdown.slice(start, end)}${latest.slice(start + insertText.length)}`);
+        lastCursorRef.current = start;
+      }
+      throw error;
+    } finally {
+      releaseDraft();
+      insertingCitationRef.current = false;
+      setInsertingCitation(false);
     }
 
-    if (nextTitle !== title) {
-      setTitle(nextTitle);
-    }
-    const saved = await api.updateNote(activeNoteId, { title: nextTitle, markdown: nextMarkdown });
-    const note = citations.length ? (await api.appendNote(activeNoteId, { markdown: " ", citations })).note : saved.note;
-    setTitle(note.title);
-    applyMarkdownChange(note.markdown, { markDirty: false, clearPreview: false });
-    setDirtyState(false);
-    loadedNoteIdRef.current = note.id;
-    queryClient.setQueryData(["note", note.id], { note });
-    queryClient.invalidateQueries({ queryKey: ["notes"] });
-    queryClient.invalidateQueries({ queryKey: ["note", note.id] });
-    persistLocalThreadRanges();
-    // No second restore here (see create branch): it re-stole the caret after the save.
-    return note.id;
   }
 
   function threadInsertionContent(answer: string) {
@@ -1901,14 +1908,10 @@ export function NotesSurface({
     if (!node) {
       return;
     }
-    // Only move the caret when the editor still owns focus. If the insert came from another
-    // panel (e.g. the Assistant) or the user has since clicked elsewhere, forcing focus +
-    // selection here would drag the caret back into the just-inserted citation.
-    const editorHasFocus = document.activeElement === node;
-    if (editorHasFocus) {
-      node.setSelectionRange(cursor, cursor);
-      lastCursorRef.current = cursor;
-    }
+    // setSelectionRange does not move focus. Preserve the insertion point even
+    // when the user invoked insertion from the Assistant or another window.
+    node.setSelectionRange(cursor, cursor);
+    lastCursorRef.current = cursor;
     node.scrollTop = Math.min(snapshot.scrollTop, Math.max(0, node.scrollHeight - node.clientHeight));
     node.scrollLeft = snapshot.scrollLeft;
     setEditorScrollTop(node.scrollTop);
@@ -2159,6 +2162,7 @@ export function NotesSurface({
   }
 
   function undo() {
+    if (undoEditor(textareaRef.current)) return;
     const previous = undoStack.length ? undoStack[undoStack.length - 1] : undefined;
     if (previous !== undefined) {
       setUndoStack((current) => current.slice(0, -1));
@@ -2171,6 +2175,7 @@ export function NotesSurface({
   }
 
   function openCitation(citation: NoteCitation, ref?: CitationMarkdownRef | null) {
+    setCitationOpenVersion(v => v + 1);
     // Ref nur übernehmen, wenn seine Offsets wirklich auf den Zitat-Link im Markdown
     // zeigen — sonst markiert der Edit-Modus später einen falschen Bereich.
     let safeRef = ref ?? null;
@@ -2555,7 +2560,7 @@ export function NotesSurface({
           {activeNoteId ? (
             <>
               <div className="note-editor-header">
-                <input className="note-title-input" value={title} onChange={(event) => updateTitle(event.target.value)} placeholder="Titel" />
+                <input className="note-title-input" data-editor-key={`${activeNoteId}:title`} value={title} onChange={(event) => updateTitle(event.target.value)} placeholder="Titel" />
                 <div className="button-row">
                   <button
                     className={`icon-button${publishNoteAsSource.isSuccess ? " icon-button--active" : ""}`}
@@ -2758,6 +2763,7 @@ export function NotesSurface({
                     </div>
                   ) : null}
                 </span>
+                <button type="button" className="button button-compact" aria-pressed={writingMode} onClick={() => setWritingMode(v => !v)} title="Hält die aktuelle Schreibzeile auf ihrer Bildschirmhöhe">Schreibmodus</button>
                 <div className="segmented markdown-mode-toggle">
                   <button type="button" className={editorMode === "edit" ? "active" : ""} onClick={() => switchEditorMode("edit")}>
                     Edit
@@ -2873,7 +2879,7 @@ export function NotesSurface({
                     onPointerEnter={() => { scrollLeaderRef.current = "editor"; }}
                     style={editorBottomStyle}
                   >
-                    <TextareaHighlightLayer
+                    <TextareaHighlightLayer glossary
                       text={markdown}
                       ranges={editorHighlightRanges}
                       insertions={editorGhostInsertions}
@@ -2881,13 +2887,16 @@ export function NotesSurface({
                       scrollLeft={editorScrollLeft}
                       interactive={threadAnchorInsertions.length > 0 || imageInsertions.length > 0}
                     />
-                    <textarea
+                    <GlossaryTextarea
                       ref={textareaRef}
-                      className="markdown-editor markdown-editor--highlighted"
+                      className={`markdown-editor markdown-editor--highlighted${writingMode ? " markdown-editor--writing" : ""}`}
                       value={markdown}
-                      onChange={(event) => updateMarkdown(event.target.value)}
+                      data-editor-key={activeNoteId}
+                      onChange={(event) => { editorInteractionRef.current++; updateMarkdown(event.target.value); }}
                       onSelect={captureSelection}
-                      onPointerDown={handleEditorPointerDown}
+                      onPointerUp={captureSelection}
+                      onKeyUp={captureSelection}
+                      onPointerDown={() => { editorInteractionRef.current++; handleEditorPointerDown(); }}
                       onPointerEnter={() => { scrollLeaderRef.current = "editor"; }}
                       onFocus={() => { scrollLeaderRef.current = "editor"; }}
                       onScroll={(event) => {
@@ -3175,6 +3184,8 @@ export function NotesSurface({
                 </section>
                 {notePdfOpen ? (
                   <PdfPane
+                    anchorRequestKey={citationOpenVersion}
+                    anchors={selectedCitation?.pdf_anchors}
                     url={selectedCitation ? api.paperPdfUrl(selectedCitation.paper_id, selectedCitation.title ?? "") : null}
                     title={selectedCitation?.title ?? selectedCitation?.paper_id}
                     evidences={activeEvidence}
@@ -3201,4 +3212,3 @@ export type MarkdownBlock = {
   start: number;
   end: number;
 };
-

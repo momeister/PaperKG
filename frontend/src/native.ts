@@ -7,6 +7,14 @@
 // default PDF viewer/browser. In a normal browser (pure web mode) none of this
 // is installed, so default behaviour is unchanged.
 
+// Keep the real opener for related workspace webviews. External-link routing
+// below must never intercept the private, same-origin view document.
+const linkedWindowOpen = window.open.bind(window);
+export function openLinkedWorkspaceWindow(url: URL, name: string): Window | null {
+  if (!isTauri() || url.origin !== window.location.origin || !url.pathname.endsWith("/workspace-pane.html")) return null;
+  return linkedWindowOpen(url.href, name, "popup,width=800,height=800");
+}
+
 /** True when the page runs inside the Tauri desktop shell. */
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

@@ -59,6 +59,8 @@ class MetadataDBBase:
         "terminology_conflicts",
         "temporal_coverage",
         "mathematical_content",
+        "provenance",
+        "study_quality",
     ]
 
     if TYPE_CHECKING:  # provided by SchemaMixin at composition time
@@ -68,6 +70,13 @@ class MetadataDBBase:
     def __init__(self, db_path: str = "data/metadata.duckdb") -> None:
         from storage.path_safety import ensure_safe_path
 
+        if db_path == ":memory:":
+            self.db_path = db_path
+            self._lock = threading.RLock()
+            self._closed = False
+            self.conn = duckdb.connect(":memory:")
+            self._init_schema()
+            return
         db_file = ensure_safe_path(db_path, what="metadata database path")
         self.db_path = str(db_file)
         self._lock = threading.RLock()
@@ -123,6 +132,9 @@ class MetadataDBBase:
         with self._lock:
             self._execute("BEGIN TRANSACTION")
             try:
+                self._execute("DELETE FROM paper_passages")
+                self._execute("DELETE FROM passage_documents")
+                self._execute("DELETE FROM claim_check_cache")
                 self._execute("DELETE FROM extraction_results")
                 self._execute("DELETE FROM extraction_quality")
                 self._execute("DELETE FROM entity_review_queue")

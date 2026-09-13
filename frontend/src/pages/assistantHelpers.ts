@@ -67,7 +67,7 @@ export async function verificationSourcesFor(payload: Answer): Promise<Verificat
   // the main reason highlighting the Textstellen felt slow.
   const embedded = payload.source_verification as { sources?: VerificationSource[] } | null | undefined;
   const embeddedSources = Array.isArray(embedded?.sources) ? embedded.sources : [];
-  if (embeddedSources.length && embeddedSources.every((source) => Array.isArray(source.evidence))) {
+  if ((payload.claims_version || embeddedSources.length) && embeddedSources.every((source) => Array.isArray(source.evidence))) {
     return embeddedSources;
   }
   const report = await api.verifyAnswer(payload, verificationLimits(payload));
@@ -661,7 +661,18 @@ export function meaningfulQuote(quote: string) {
 }
 
 
-export function citationIds(citation: string) {
+export function citationIds(citation: string, knownIds: string[] = []) {
+  if (knownIds.includes(citation.trim())) return [citation.trim()];
+  // Longest known IDs first: commas are legal inside an ID.
+  const known = [...knownIds].sort((a, b) => b.length - a.length);
+  const found: string[] = [];
+  let rest = citation.trim();
+  while (rest) {
+    const id = known.find(id => rest.startsWith(id) && (!rest.slice(id.length) || /^(?:[;,]|\s+(?:and|und)\s+)/.test(rest.slice(id.length))));
+    if (!id) break;
+    found.push(id); rest = rest.slice(id.length).replace(/^(?:\s*[,;]\s*|\s+(?:and|und)\s+)/, "");
+  }
+  if (!rest && found.length) return [...new Set(found)];
   return citation
     .replace(/\s+(?:and|und)\s+/gi, ",")
     .split(/[;,]/)
@@ -670,6 +681,28 @@ export function citationIds(citation: string) {
 }
 
 
+const citationIndexes = new WeakMap<VerificationSource[], WeakMap<CitationLink[], Map<string, CitationMeta[]>>>();
+function indexedClaimMetas(pool: VerificationSource[], links: CitationLink[]) {
+  let byLinks = citationIndexes.get(pool);
+  if (!byLinks) { byLinks = new WeakMap(); citationIndexes.set(pool, byLinks); }
+  let index = byLinks.get(links);
+  if (index) return index;
+  index = new Map(); byLinks.set(links, index);
+  const sources = new Map(pool.map(source => [source.paper_id, source]));
+  const evidence = new Map(pool.flatMap(source => source.evidence.map((ev, i) => [`${source.paper_id}\0${ev.evidence_id}`, i] as const)));
+  for (const link of links) {
+    if (!link.claim_id) continue;
+    const source = sources.get(link.paper_id);
+    const i = evidence.get(`${link.paper_id}\0${link.evidence_id}`);
+    if (!source || i === undefined) continue;
+    const key = `${link.citation_start}\0${link.citation}`;
+    const items = index.get(key) ?? [];
+    if (!items.some(item => item.evidenceId === link.evidence_id)) items.push({ source, evidenceIndex: i, evidenceId: link.evidence_id, confidence: confidenceForLink(link, source, source.evidence[i]), approximate: Boolean(link.approximate), verificationStatus: link.verification_status });
+    index.set(key, items);
+  }
+  return index;
+}
+
 export function citationMetasFor(
   pool: VerificationSource[],
   citation: string,
@@ -677,9 +710,12 @@ export function citationMetasFor(
   links: CitationLink[] = [],
   citationStart?: number
 ): CitationMeta[] {
+  if (links.some(link => link.claim_id) && citationStart !== undefined) {
+    return indexedClaimMetas(pool, links).get(`${citationStart}\0${citation}`) ?? [];
+  }
   const metas: CitationMeta[] = [];
   const seen = new Set<string>();
-  for (const candidate of citationIds(citation)) {
+  for (const candidate of citationIds(citation, pool.map(source => source.paper_id))) {
     const source = pool.find((item) => sameCitation(item.paper_id, candidate));
     if (!source || seen.has(source.paper_id)) {
       continue;

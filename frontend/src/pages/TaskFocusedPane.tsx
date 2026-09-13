@@ -20,6 +20,7 @@ import { api } from "../api";
 import type {
   CreativityLevel,
   Task,
+  TaskDeepSearchResult,
   TaskImplementationPlan,
   TaskResearchDirection,
   VerificationSource,
@@ -48,6 +49,8 @@ type Props = {
   setCreativityLevel: (level: CreativityLevel) => void;
   /** Startet eine parallele Research-Session mit der Task als Kontext. */
   onStartParallelSession: (question: string, taskId: string) => void;
+  /** Tiefensuche-Ergebnis als neuen Assistant-Turn einfügen (Bibliothek + Chat). */
+  onInsertAsTurn?: (result: TaskDeepSearchResult, direction: TaskResearchDirection) => void;
   /** Schaltet zurück in den Research-Modus. */
   onClose: () => void;
 };
@@ -61,6 +64,7 @@ export function TaskFocusedPane({
   creativityLevel,
   setCreativityLevel,
   onStartParallelSession,
+  onInsertAsTurn,
   onClose,
 }: Props) {
   const queryClient = useQueryClient();
@@ -385,9 +389,11 @@ export function TaskFocusedPane({
                 creativityLevel={creativityLevel}
                 provider={provider}
                 model={model}
+                projectId={projectId}
                 selectedLabel={selectedDirection?.label ?? null}
                 onSelect={handleSelectDirection}
                 onStartParallel={handleStartParallelFromDirection}
+                onInsertAsTurn={onInsertAsTurn}
                 initialDirections={activeTask.task_json?.suggested_directions ?? []}
               />
 

@@ -235,6 +235,20 @@ def filter_concepts(
             continue
         if EntityExtractor._is_candidate_noise_artifact(item, label, title=title):
             continue
+        # Concepts that re-state the paper title (or a near-identical variant) are
+        # bookkeeping junk, not domain concepts: the title is already attached to the
+        # paper node and adds no grounded evidence. Applies to LLM and deterministic
+        # concepts alike. Only fire when the detected title is a real compact paper
+        # title, not first-line prose ("The survey compares Q-learning, ...") — such
+        # prose headers poison the check and swallow core concepts.
+        title_word_count = len(title.split()) if title else 0
+        if (
+            normalized_title
+            and normalized == normalized_title
+            and len(label.split()) >= 2
+            and title_word_count <= 15
+        ):
+            continue
         if is_deterministic and normalized in blocked:
             continue
         if (
@@ -368,6 +382,9 @@ class ExtractionResult:
     extraction_diagnostics: dict[str, Any] = field(default_factory=dict)
     raw_response: str = ""
     extraction_mode: str = "quality"
+    provenance: dict[str, Any] = field(default_factory=dict)
+    study_quality: dict[str, Any] = field(default_factory=dict)
+    evidence_level: str = "unknown"
 
 
 def extraction_failure_reason(result: ExtractionResult | object) -> str | None:

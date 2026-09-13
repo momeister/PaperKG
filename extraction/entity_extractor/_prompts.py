@@ -66,8 +66,31 @@ Return only one complete valid JSON object with exactly these top-level keys:
   "paper_type": "research|survey|theoretical|benchmark",
   "paper_node": {"title": "paper title if clear", "paper_year": null, "reviewed_period": null},
   "claims": [
-    {"statement": "claim made by this paper", "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation", "evidence_type": "experimental|theoretical|review", "negated": false, "attributed_to": "this_paper"}
+    {
+      "statement": "claim made by this paper",
+      "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation",
+      "evidence_type": "experimental|theoretical|review",
+      "negated": false,
+      "attributed_to": "this_paper",
+      "study_design": "RCT|randomized_controlled|cohort|case_control|observational|cross_sectional|case_series|case_report|survey|meta_analysis|systematic_review|theoretical|simulation|benchmark|qualitative|unknown",
+      "sample_size": {"value": null, "unit": "participants|patients|studies|samples|papers|documents", "power_reported": false},
+      "statistical_confidence": {"p_value": null, "confidence_interval": null, "effect_size": null, "significance_reported": false},
+      "evidence_level": "high|moderate|low|very_low|unknown"
+    }
   ],
+  "provenance": {
+    "funding_sources": [
+      {"name": "funder name", "role": "primary|secondary|unknown", "industry_type": "pharma|tobacco|oil|food|tech|alcohol|firearms|other|academic|government|ngo|unknown"}
+    ],
+    "conflicts_of_interest": [
+      {"author": "author name if named, else null", "declaration": "none|declared|undisclosed|unknown", "description": "short text or empty"}
+    ],
+    "limitations": [
+      {"text": "limitation text", "kind": "methodology|sample|generalizability|data|conflict|other"}
+    ],
+    "study_design_primary": "RCT|randomized_controlled|cohort|case_control|observational|cross_sectional|case_series|case_report|survey|meta_analysis|systematic_review|theoretical|simulation|benchmark|qualitative|unknown",
+    "peer_reviewed_hint": null
+  },
   "cross_domain_hints": [
     {"field": "specific target field", "why_applicable": "method-level transfer reason"}
   ],
@@ -85,12 +108,25 @@ Rules:
 - For research papers, extract claims about this paper's own results only.
 - For survey papers, extract field-level meta-claims made by this survey. Do not attribute cited paper results to this paper.
 - Use claim_type="limitation" or "negative_result" for weak/null/insufficient results. Set "negated": true only for explicit logical negation such as "does not", "no evidence", or "fails to".
+- For each research claim with experimental evidence, fill the critical-evaluation fields:
+  - study_design: the design that produced the finding (RCT, cohort, observational, simulation, benchmark, meta_analysis, etc.). Use "unknown" only if the text truly does not say.
+  - sample_size: extract the actual N (participants, patients, studies, samples, papers, documents) when stated. Leave value null when not reported; the pipeline infers from text as a fallback. Set power_reported true only if the paper explicitly mentions a power calculation.
+  - statistical_confidence: report p_value, confidence_interval, and effect_size as strings exactly as written (e.g. "p<0.05", "95% CI 0.2-0.8", "d=0.42"). Set significance_reported true if the paper states significance (positive or null).
+  - evidence_level: your overall grading of this claim's evidence strength. high = RCT/meta-analysis/large replicated cohort; moderate = controlled/cohort/replicated observational; low = small observational/case-series/unreplicated simulation; very_low = case_report/anecdotal/undisclosed; unknown = not enough info.
+- For survey/theoretical papers, leave study_design="theoretical", sample_size null, evidence_level as judged from the survey depth.
+- Fill provenance from the Funding/Acknowledgments/Author Contributions/Conflict of Interest/Limitations sections:
+  - funding_sources: every named funder with role if stated. Set industry_type from the funder name (e.g. "Pfizer" → pharma, "Philip Morris" → tobacco, "Shell" → oil). Use "academic" for universities/foundations, "government" for agencies, "ngo" for non-profits, "unknown" when unclear.
+  - conflicts_of_interest: per author if named; declaration is "none" if the paper explicitly says "no conflict", "declared" if specific interests are listed, "undisclosed" if the section is absent and the topic is sensitive (medical/policy), "unknown" otherwise.
+  - limitations: each self-described limitation from the Limitations section, tagged by kind.
+  - study_design_primary: the overall study design of the paper (may differ from per-claim designs in a multi-study paper).
+  - peer_reviewed_hint: true if the venue is explicitly peer-reviewed (journal/conference with editorial review), false if preprint/workshop/working-paper, null if unclear.
 - Cross-domain hints must transfer methods, not just topics.
 - Return 3-8 cross-domain hints for survey or theoretical papers when methods could plausibly transfer.
 - Terminology conflicts prevent false graph links; include them when a term has materially different meanings across fields.
 - Return terminology conflicts for overloaded terms such as reward, value, drive, valence, policy, model, bias, or control when they appear in this paper.
 - Detect paper_year and reviewed_period when possible.
 - Mark mathematical_content.has_formulas true if the paper contains equations, formal objectives, value functions, reward functions, theorems, proofs, or substantial tables.
+- Never invent values. If a field is not in the paper, use null/unknown/empty — do not guess.
 
 Structural extraction context:
 {structural_json}
@@ -117,7 +153,17 @@ Paper text: {paper_text}"""
 Return only one complete valid JSON object with exactly these keys:
 {
   "claims": [
-    {"statement": "claim made by this paper", "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation", "evidence_type": "experimental|theoretical|review", "negated": false, "attributed_to": "this_paper"}
+    {
+      "statement": "claim made by this paper",
+      "claim_type": "contribution|finding|limitation|negative_result|comparison|recommendation",
+      "evidence_type": "experimental|theoretical|review",
+      "negated": false,
+      "attributed_to": "this_paper",
+      "study_design": "RCT|randomized_controlled|cohort|case_control|observational|cross_sectional|case_series|case_report|survey|meta_analysis|systematic_review|theoretical|simulation|benchmark|qualitative|unknown",
+      "sample_size": {"value": null, "unit": "participants|patients|studies|samples|papers|documents", "power_reported": false},
+      "statistical_confidence": {"p_value": null, "confidence_interval": null, "effect_size": null, "significance_reported": false},
+      "evidence_level": "high|moderate|low|very_low|unknown"
+    }
   ],
   "cross_domain_hints": [
     {"field": "specific target field", "why_applicable": "method-level transfer reason"}
@@ -128,8 +174,9 @@ Return only one complete valid JSON object with exactly these keys:
 }
 For survey papers, extract 4-8 field-level meta-claims made by the survey, not individual cited-paper results.
 Use claim_type="limitation" or "negative_result" for weak/null/insufficient results. Set "negated": true only for explicit logical negation such as "does not", "no evidence", or "fails to".
+Fill study_design, sample_size, statistical_confidence, and evidence_level for each research claim with experimental evidence; leave unknown/null when not reported — never invent values.
 Return 3-8 cross-domain hints when methods could plausibly transfer.
-Return terminology conflicts for overloaded terms such as reward, value, drive, valence, policy, model, bias, or control when they appear.
+Return terminology conflicts for overloaded terms such as reward, value, drive, valence, policy, model, bias, or control when they appear in this paper.
 Paper text: {paper_text}"""
 
     KNOWN_CONCEPT_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -357,6 +404,55 @@ Paper text: {paper_text}"""
         ("Satisfaction of Search", r"\bsatisfaction[-\s]?of[-\s]?search(?: effect)?\b"),
         ("McNemar's test", r"\bMcNemar[’']?s test\b"),
         ("Wilcoxon signed-rank test", r"\bWilcoxon signed[-\s]?rank tests?\b"),
+        # Provenance / critical-evaluation hints. Not KG concepts — only signals
+        # for the semantic extractor to look for funding, COI, sample size,
+        # p-values, CIs, effect sizes, and limitations sections. Prefixed
+        # "provenance_" so downstream code can filter them out of KG insertion.
+        (
+            "provenance_funding",
+            r"\bfunded by\b|\bfunding(?: source| agency| organization| body)?\b|\bsupported by\b|\bsponsored by\b|\bgrant(?:s)? (?:from|by)\b|\backnowledg(?:e|ment|ements)\b",
+        ),
+        (
+            "provenance_coi",
+            r"\bconflict(?:s)? of interest\b|\bcompeting interests?\b|\bCOI\b|\bdeclaration(?:s)? of interest\b|\bno competing\b|\bno conflict\b",
+        ),
+        (
+            "provenance_rct",
+            r"\brandomi[sz]ed controlled trial\b|\bRCT\b|\bcontrolled trial\b|\brandomi[sz]ed\b|\bdouble[-\s]?blind\b|\bplacebo[-\s]?controlled\b",
+        ),
+        (
+            "provenance_cohort",
+            r"\bcohort study\b|\bcohort\b|\bprospective study\b|\bretrospective study\b|\blongitudinal study\b",
+        ),
+        ("provenance_case_control", r"\bcase[-\s]?control\b|\bcase control study\b"),
+        (
+            "provenance_observational",
+            r"\bobservational study\b|\bcross[-\s]?sectional\b|\bsurvey study\b|\bquestionnaire study\b",
+        ),
+        (
+            "provenance_meta",
+            r"\bmeta[-\s]?analysis\b|\bsystematic review\b|\bPRISMA\b|\bpooled analysis\b",
+        ),
+        (
+            "provenance_sample_size",
+            r"\bsample size\b|\bN\s*=\s*\d+|\bn\s*=\s*\d+|\b\d+\s+(?:participants|patients|subjects|studies|samples|papers|documents)\b|\bpower (?:calculation|analysis)\b",
+        ),
+        (
+            "provenance_pvalue",
+            r"\bp\s*[=<>]\s*\d|\bp[\s-]?value\b|\bstatistically significant\b|\bsignificance level\b|\balpha\s*=\s*\d",
+        ),
+        (
+            "provenance_ci",
+            r"\bconfidence interval\b|\bCI\s*\d+%?\s*:?\s*[\d.-]+|\b95%\s*CI\b|\b99%\s*CI\b",
+        ),
+        (
+            "provenance_effect_size",
+            r"\beffect size\b|\bCohen'?s d\b|\bodds ratio\b|\bOR\s*=\s*\d|\bhazard ratio\b|\bHR\s*=\s*\d|\brisk ratio\b|\brelative risk\b",
+        ),
+        (
+            "provenance_limitations",
+            r"\blimitations?\b|\bLimitations?\s*:|\bstudy limitations\b|\bmethodological limitations\b|\bcaveats?\b",
+        ),
     )
 
     RL_EMOTION_LABELS = {

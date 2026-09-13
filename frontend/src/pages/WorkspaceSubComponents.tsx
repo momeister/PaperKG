@@ -1,3 +1,4 @@
+import { PaneHeader } from "../workspace/PortablePane";
 // Standalone, prop-driven sub-components extracted from WorkspacePage.tsx (they
 // close over no parent state). Kept together because they reference each other
 // (navigator uses PaneHeading/CollapsedPane).
@@ -781,8 +782,12 @@ export function WorkspaceNavigatorBody({
         {sessions.map((turn) => {
           const isTree = turn.type === "research_tree";
           const isParallel = turn.type === "parallel";
+          const isTaskDeep = turn.type === "task_deep_search";
           const doneNodes = isTree ? (turn.researchNodes ?? []).filter((n) => n.status === "done").length : 0;
           const hasSynthesis = isTree && (turn.researchNodes ?? []).some((n) => n.status === "synthesis");
+          const taskPapers = isTaskDeep ? turn.taskDeepSearchResult?.papers_count ?? 0 : 0;
+          const taskGrey = isTaskDeep ? turn.taskDeepSearchResult?.grey_count ?? 0 : 0;
+          const taskNodes = isTaskDeep ? turn.taskDeepSearchResult?.node_count ?? 0 : 0;
           return (
             <div
               className={`assistant-history-item workspace-session-item ${activeSessionId === turn.id ? "assistant-history-item--active" : ""}`}
@@ -796,6 +801,7 @@ export function WorkspaceNavigatorBody({
                 <span className="session-item__title">
                   {isTree ? <GitBranch size={12} style={{ flexShrink: 0, marginRight: "3px", verticalAlign: "middle" }} /> : null}
                   {isParallel ? <GitMerge size={12} style={{ flexShrink: 0, marginRight: "3px", verticalAlign: "middle" }} /> : null}
+                  {isTaskDeep ? <FileSearch size={12} style={{ flexShrink: 0, marginRight: "3px", verticalAlign: "middle" }} /> : null}
                   {turn.question}
                 </span>
                 <small>
@@ -804,7 +810,9 @@ export function WorkspaceNavigatorBody({
                     ? ` | ${doneNodes} Knoten${hasSynthesis ? " ✓" : ""}`
                     : isParallel
                       ? ` | ${turn.parallelVariantCount ?? 0} Varianten`
-                      : turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
+                      : isTaskDeep
+                        ? ` | ${taskPapers} Papiere, ${taskGrey} Web${taskNodes > 1 ? `, ${taskNodes} Knoten` : ""}`
+                        : turnBlocks(turn).length > 1 ? ` | ${turnBlocks(turn).length} Antworten` : ""}
                 </small>
               </button>
               <button
@@ -899,7 +907,7 @@ export function PaneHeading({
   actions?: ReactNode;
 }) {
   return (
-    <div className="pane-heading workspace-pane-heading">
+    <PaneHeader><div className="pane-heading workspace-pane-heading">
       <div>
         {eyebrow ? <span>{eyebrow}</span> : null}
         <strong>{title}</strong>
@@ -911,7 +919,7 @@ export function PaneHeading({
           {collapseSide === "left" ? <PanelLeftClose size={17} /> : <PanelRightClose size={17} />}
         </button>
       </div>
-    </div>
+    </div></PaneHeader>
   );
 }
 

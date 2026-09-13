@@ -1,6 +1,7 @@
 import { expect, test, type Locator } from "@playwright/test";
 
 test("project, upload, assistant evidence, quality, and settings flow", async ({ page }) => {
+  test.setTimeout(90_000); // Full product journey includes several independent workflows.
   const projectName = `e2e-${Date.now()}`;
   let globalNote: {
     id: string;
@@ -101,16 +102,16 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
-  await page.route("**/query/answer", async (route) => {
+  await page.route("**/query/answer{,/stream}", async (route) => {
     lastAnswerPayload = route.request().postDataJSON() as { paper_ids?: string[] };
     await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
+      contentType: route.request().url().endsWith("/stream") ? "text/event-stream" : "application/json",
+      body: (route.request().url().endsWith("/stream") ? 'data: {"type":"answer","answer":' : "") + JSON.stringify({
         question: "What connects graph transformers and citations?",
         answer: "Graph Transformer evidence is grounded in the local KG [p1].",
         sources: [{ paper_id: "p1", title: "Graph Transformer for Science", year: 2024 }],
         evidence: [{ paper_id: "p1", kind: "concept", text: "Graph Transformer", score: 1, field: "concepts" }]
-      })
+      }) + (route.request().url().endsWith("/stream") ? "}\n\n" : "")
     });
   });
 
@@ -131,7 +132,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
                 reference_text: "Graph Transformer evidence",
                 pdf_excerpt: "Graph Transformer evidence in the parsed PDF text.",
                 matched_terms: ["graph", "transformer"],
-                found_in_pdf_text: true
+                found_in_pdf_text: true,
+                metadata: { page: 2 }
               }
             ]
           }
@@ -359,8 +361,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
 
   await page.route("**/projects/__all_papers__/notes", async (route) => {
     if (route.request().method() === "POST") {
-      const payload = route.request().postDataJSON() as { title?: string; markdown?: string };
-      globalNote = { ...defaultGlobalNote, title: payload.title ?? defaultGlobalNote.title, markdown: payload.markdown ?? defaultGlobalNote.markdown };
+      const payload = route.request().postDataJSON() as { title?: string; markdown?: string; citations?: unknown[] };
+      globalNote = { ...defaultGlobalNote, title: payload.title ?? defaultGlobalNote.title, markdown: payload.markdown ?? defaultGlobalNote.markdown, citations: payload.citations ?? defaultGlobalNote.citations };
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ note: globalNote })
@@ -392,8 +394,8 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await page.route("**/notes/global-note", async (route) => {
     globalNote = globalNote ?? defaultGlobalNote;
     if (route.request().method() === "PATCH") {
-      const payload = route.request().postDataJSON() as { title?: string; markdown?: string };
-      globalNote = { ...globalNote, title: payload.title ?? globalNote.title, markdown: payload.markdown ?? globalNote.markdown };
+      const payload = route.request().postDataJSON() as { title?: string; markdown?: string; citations?: unknown[] };
+      globalNote = { ...globalNote, title: payload.title ?? globalNote.title, markdown: payload.markdown ?? globalNote.markdown, citations: [...globalNote.citations, ...(payload.citations ?? [])] };
     }
     await route.fulfill({
       contentType: "application/json",
@@ -406,7 +408,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
     const pdfText = paperId === "arxiv:2604.08226" ? "Clinical AI evidence in PDF text for citation navigation." : "Graph Transformer evidence in the parsed PDF text.";
     await route.fulfill({
       contentType: "application/pdf",
-      body: tinyPdf(pdfText)
+      body: tinyPdf(pdfText, paperId === "p1")
     });
   });
 
@@ -699,7 +701,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   const workspaceNav = page.locator(".workspace-nav-pane");
   const workspaceAssistant = page.locator(".workspace-assistant-pane");
   const workspaceNotes = page.locator(".workspace-notes-pane");
-  const workspacePdf = page.locator(".workspace-page > .pdf-pane");
+  const workspacePdf = page.locator('[data-panel-id="ws-pdf"] .pdf-pane');
   const workspaceEditor = workspaceNotes.getByPlaceholder("Markdown schreiben");
   await expect(workspace).toBeVisible();
   await expect(page.getByRole("link", { name: /Assistant/ })).toHaveCount(0);
@@ -762,6 +764,13 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   // Die "Aktive Textstelle"-Leiste rendert inzwischen immer bei aktiver Evidenz
   // (auch wenn das PDF selbst angezeigt wird) — frueher war sie nur ein Fallback.
   await expect(workspacePdf.locator(".excerpt-panel")).toContainText("Graph Transformer evidence");
+  // A delayed PDF load must not consume the citation jump at placeholder height.
+  await expect.poll(() => workspacePdf.locator(".pdf-page").nth(1).evaluate(node => {
+    const viewport = node.closest(".pdf-canvas-wrap")!.getBoundingClientRect();
+    const rect = node.getBoundingClientRect();
+    return rect.bottom > viewport.top && rect.top < viewport.bottom;
+  })).toBe(true);
+
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).hover();
   await expect(workspaceNotes.locator(".markdown-editor-wrap")).toHaveAttribute("data-insert-preview", "true");
   await workspaceAssistant.getByRole("button", { name: "Antwort in Notiz" }).click();
@@ -808,6 +817,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   expect(await evidenceColor(workspacePdf.locator(".excerpt-panel"))).toBe(workspaceCitationColor);
   await workspaceNav.locator(".workspace-paper-row", { hasText: "Graph Transformer for Science" }).click();
   await expect(workspacePdf).toContainText("Graph Transformer for Science");
+  await workspacePdf.getByRole("button", { name: "Suche", exact: true }).click();
   await workspacePdf.getByPlaceholder("In PDF suchen").fill("Graph");
   await workspacePdf.getByRole("button", { name: "Vergroessern" }).click();
 
@@ -932,6 +942,7 @@ test("project, upload, assistant evidence, quality, and settings flow", async ({
   await expect(workspaceNotes).toBeVisible();
   const workspaceThreadMessage = workspaceAssistant.locator(".ai-thread-message--assistant", { hasText: "Noch einfacher: Es ist eine Merkhilfe." }).last();
   await expect(workspaceThreadMessage.getByRole("button", { name: "Einfügen" })).toBeVisible();
+  expect(await workspaceAssistant.locator(".workspace-notes-chat-stream").evaluate(node => node.clientHeight)).toBeGreaterThanOrEqual(100);
   await workspaceThreadMessage.getByRole("button", { name: "KI-Antwort ausblenden" }).click();
   await expect(workspaceThreadMessage).not.toBeVisible();
   await workspaceAssistant.getByRole("button", { name: "Liste" }).first().click();
@@ -974,16 +985,23 @@ async function evidenceColor(locator: Locator) {
   return locator.evaluate((node) => window.getComputedStyle(node).getPropertyValue("--evidence-color").trim());
 }
 
-function tinyPdf(text: string) {
+function tinyPdf(text: string, secondPage = false) {
   const escaped = text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
   const stream = `BT /F1 12 Tf 24 120 Td (${escaped}) Tj ET`;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    secondPage ? "<< /Type /Pages /Kids [6 0 R 3 0 R] /Count 2 >>" : "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 180] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
   ];
+  if (secondPage) {
+    const cover = "BT /F1 12 Tf 24 720 Td (Cover without the cited evidence.) Tj ET";
+    objects.push(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 800] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>",
+      `<< /Length ${cover.length} >>\nstream\n${cover}\nendstream`
+    );
+  }
   let body = "%PDF-1.4\n";
   const offsets = objects.map((object, index) => {
     const offset = body.length;

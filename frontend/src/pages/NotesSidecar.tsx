@@ -1,3 +1,4 @@
+import { GlossaryTextarea } from "../glossary/GlossaryText";
 // NotesSidecar (Notiz-Seitenpanel des Assistenten) — aus AssistantPage.tsx extrahiert.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -567,8 +568,8 @@ export function NotesSidecar({
       >
       {editorMode === "edit" || editorMode === "split" ? (
         <div className="notes-editor-wrap notes-editor-wrap--highlighted" ref={editorWrapRef}>
-          <TextareaHighlightLayer text={notes} ranges={highlightRanges} insertions={ghostInsertions} scrollTop={editorScrollTop} scrollLeft={editorScrollLeft} />
-          <textarea
+          <TextareaHighlightLayer glossary text={notes} ranges={highlightRanges} insertions={ghostInsertions} scrollTop={editorScrollTop} scrollLeft={editorScrollLeft} />
+          <GlossaryTextarea
             ref={noteEditorRef}
             className="notes-editor notes-editor--highlighted"
             value={notes}

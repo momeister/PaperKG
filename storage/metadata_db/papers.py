@@ -88,6 +88,8 @@ class PapersMixin(_Base):
     def delete_paper(self, paper_id: str) -> bool:
         if self.get_paper(paper_id) is None:
             return False
+        self._execute("DELETE FROM paper_passages WHERE paper_id = ?", [paper_id])
+        self._execute("DELETE FROM passage_documents WHERE paper_id = ?", [paper_id])
         self._execute("DELETE FROM papers WHERE id = ?", [paper_id])
         self._execute("DELETE FROM paper_sources WHERE paper_id = ?", [paper_id])
         self._execute("DELETE FROM extraction_results WHERE paper_id = ?", [paper_id])
@@ -218,17 +220,15 @@ class PapersMixin(_Base):
         cols = [desc[0] for desc in self.conn.description]
         return [self._parse_paper_row(dict(zip(cols, row))) for row in results]
 
-    def list_papers(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
+    def list_papers(self, limit: int = 1000, offset: int = 0, paper_ids=None) -> list[dict[str, Any]]:
         """
         List all papers with pagination.
         """
+        where = " WHERE id IN (SELECT unnest(?))" if paper_ids is not None else ""
+        params = [list(paper_ids)] if paper_ids is not None else []
         results = self._execute(
-            """
-            SELECT * FROM papers
-            ORDER BY added_timestamp DESC
-            LIMIT ? OFFSET ?
-        """,
-            [limit, offset],
+            "SELECT * FROM papers" + where + " ORDER BY added_timestamp DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
         cols = [desc[0] for desc in self.conn.description]
         return [self._parse_paper_row(dict(zip(cols, row))) for row in results]

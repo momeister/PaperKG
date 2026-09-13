@@ -243,6 +243,9 @@ def _extract_pdf_into_db(
         mathematical_content=getattr(result, "mathematical_content", None),
         raw_response=result.raw_response,
         error_message=failure,
+        provenance=getattr(result, "provenance", None),
+        study_quality=getattr(result, "study_quality", None),
+        evidence_level=getattr(result, "evidence_level", None),
     )
     return failure is None
 
@@ -278,6 +281,7 @@ async def harvest_for_question(
     provider: str | None = None,
     model: str | None = None,
     progress_callback: "Callable[[dict[str, Any]], None] | None" = None,
+    target_project_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search for papers relevant to *question*, insert into DB, attach to project.
 
@@ -290,6 +294,14 @@ async def harvest_for_question(
     "paper": {...}}`` / ``{"phase": "ingested", "paper": {...}}``) so callers
     can stream per-paper progress for long-running harvests. Backward compatible:
     ``None`` means no callbacks, identical behavior as before.
+
+    ``target_project_id`` overrides the attach target when ``project_id`` is the
+    global ``__all_papers__`` mode: papers are downloaded + inserted regardless
+    (global visibility) but only attached to a project's membership list when a
+    concrete (non-global) project id is available. Passing a concrete
+    ``target_project_id`` lets a task that lives in global mode still attach its
+    harvested papers to a chosen real project. Backward compatible: ``None``
+    falls back to ``project_id`` for the attach decision.
 
     Returns list of dicts with at least ``{"id": str, "title": str}`` for each inserted paper.
     """
@@ -436,13 +448,16 @@ async def harvest_for_question(
 
     inserted_ids = [r["id"] for r in inserted]
     # Attach to the active project (creating its membership list if needed). Global mode
-    # (empty id / "__all_papers__") is a no-op since those papers are globally visible.
-    if project_id and project_id != "__all_papers__" and inserted_ids:
+    # (empty id / "__all_papers__") is a no-op for ``project_id`` since those papers are
+    # globally visible — BUT a caller may pass ``target_project_id`` to route the attach
+    # to a concrete project even when the task itself lives in global mode (Task-Tiefensuche).
+    attach_id = target_project_id or project_id
+    if attach_id and attach_id != "__all_papers__" and inserted_ids:
         proj_path = Path(projects_path)
         projects = _load_projects(proj_path)
-        existing_members = list(projects.get(project_id, []))
+        existing_members = list(projects.get(attach_id, []))
         existing_set = set(existing_members)
-        projects[project_id] = existing_members + [
+        projects[attach_id] = existing_members + [
             pid for pid in inserted_ids if pid not in existing_set
         ]
         _save_projects(projects, proj_path)

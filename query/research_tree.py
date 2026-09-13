@@ -8,24 +8,27 @@ from collections import defaultdict
 from typing import Any, AsyncIterator
 
 from query.auto_harvester import harvest_for_question, harvest_grey_sources_for_question
+from query.decompose import (
+    _DECOMPOSE_SYSTEM,
+    _DECOMPOSE_USER,
+    _extract_questions,
+    _normalize_question,
+    decompose_sync as _decompose_sync_impl,
+    dedup_subquestions as _dedup_subquestions_impl,
+)
 from query.grounded_responder import GroundedResponder
 from query.hybrid_retriever import HybridRetriever
 from query.llm_errors import classify_llm_error
 from query.llm_router import LLMRouter
 
+__all__ = [
+    "_DECOMPOSE_SYSTEM",
+    "_DECOMPOSE_USER",
+    "_extract_questions",
+    "_normalize_question",
+    "ResearchTreeRunner",
+]
 
-_DECOMPOSE_SYSTEM = (
-    "You are a research assistant. "
-    "You break complex questions into focused sub-questions that can each be answered from scientific literature."
-)
-
-_DECOMPOSE_USER = (
-    'Research question: "{question}"\n\n'
-    "Generate exactly {n} focused sub-questions that together give a comprehensive answer to the main question. "
-    "Each sub-question must be independently answerable from scientific papers.\n"
-    "Return ONLY a valid JSON array of strings, nothing else:\n"
-    '["sub-question 1", "sub-question 2", ...]'
-)
 
 # Shared citation contract for every synthesis LLM call: keep the source IDs from
 # the per-node answers verbatim, never invent new ones, write in German.
@@ -39,36 +42,6 @@ _CITE_INSTR = (
 # very wide/deep tree cannot explode into hundreds of generation calls. Chapters past
 # the budget are rendered as a single expanded chapter instead of per-subsection.
 _MAX_SYNTH_SUBSECTIONS = 60
-
-
-def _extract_questions(text: str, max_n: int) -> list[str]:
-    """Parse sub-questions from LLM output; falls back to newline splitting."""
-    match = re.search(r"\[.*?\]", text, re.DOTALL)
-    if match:
-        try:
-            items = json.loads(match.group())
-            if isinstance(items, list):
-                return [str(q).strip() for q in items[:max_n] if str(q).strip()]
-        except (json.JSONDecodeError, ValueError):
-            pass
-    lines = [
-        re.sub(r"^[\s\d.\-)\]]+", "", line).strip()
-        for line in text.splitlines()
-        if line.strip()
-    ]
-    return [line for line in lines if len(line) > 10][:max_n]
-
-
-def _normalize_question(question: str) -> str:
-    """Normalize a question for duplicate detection.
-
-    Lowercases, collapses whitespace and strips surrounding punctuation so that
-    re-phrasings that differ only in casing/spacing/trailing '?' collapse to the
-    same key. Kept deliberately conservative to avoid merging genuinely distinct
-    sub-questions.
-    """
-    norm = re.sub(r"\s+", " ", str(question or "")).strip().lower()
-    return norm.strip(" .,;:!?“”«»'\"")
 
 
 def _heading_level(line: str) -> int:
@@ -137,21 +110,7 @@ class ResearchTreeRunner:
         provider: str | None,
         model: str | None,
     ) -> list[str]:
-        overrides: dict[str, Any] = {"max_tokens": 512, "temperature": 0.3}
-        if model:
-            overrides["model"] = model
-        text = self.llm_router.chat(
-            messages=[
-                {"role": "system", "content": _DECOMPOSE_SYSTEM},
-                {
-                    "role": "user",
-                    "content": _DECOMPOSE_USER.format(question=question, n=n),
-                },
-            ],
-            provider=provider,
-            overrides=overrides,
-        )
-        return _extract_questions(text or "", n)
+        return _decompose_sync_impl(self.llm_router, question, n, provider, model)
 
     @staticmethod
     def _dedup_subquestions(
@@ -162,16 +121,7 @@ class ResearchTreeRunner:
         Prevents the same question from being branched/searched twice — both across
         sibling branches in one run and when resuming a previous run.
         """
-        if seen_questions is None:
-            return sub_questions
-        unique: list[str] = []
-        for sub_q in sub_questions:
-            key = _normalize_question(sub_q)
-            if not key or key in seen_questions:
-                continue
-            seen_questions.add(key)
-            unique.append(sub_q)
-        return unique
+        return _dedup_subquestions_impl(sub_questions, seen_questions)
 
     def _answer_sync(
         self,

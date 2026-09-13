@@ -123,6 +123,10 @@ def query_search(request: SearchRequest) -> dict[str, Any]:
 
 @app.post("/query/answer")
 def query_answer(request: AnswerRequest) -> dict[str, Any]:
+    return _query_answer(request)
+
+
+def _query_answer(request: AnswerRequest, progress=None) -> dict[str, Any]:
     retriever = _hybrid_retriever(request.metadata_db_path, request.graph_db_path)
     responder = GroundedResponder(retriever=retriever, llm_router=llm_router)
 
@@ -154,6 +158,7 @@ def query_answer(request: AnswerRequest) -> dict[str, Any]:
         grey_source_ids=grey_source_ids or None,
         include_project_grey=request.include_project_grey,
         critical=request.answer_style == "kritisch",
+        progress=progress,
     )
     return answer.to_dict()
 

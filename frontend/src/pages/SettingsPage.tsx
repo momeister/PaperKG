@@ -1,3 +1,5 @@
+import { RESTORE_LAYOUT_KEY } from "../workspace/windows";
+import { isTauri } from "../native";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Key, LogOut, RefreshCcw } from "lucide-react";
@@ -10,6 +12,7 @@ import { KaggleLoginDialog } from "./KaggleLoginDialog";
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP, useAppState } from "../state";
 
 export function SettingsPage() {
+  const [restoreWindows, setRestoreWindows] = useState(() => localStorage.getItem(RESTORE_LAYOUT_KEY) === "true");
   const { provider, setProvider, model, setModel, fontScale, setFontScale, theme, setTheme } = useAppState();
   const queryClient = useQueryClient();
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.getProviders });
@@ -84,6 +87,13 @@ export function SettingsPage() {
         </div>
         <ThemePicker variant="inline" theme={theme} onSelect={setTheme} />
       </section>
+
+      {isTauri() ? <section className="panel">
+        <label><input type="checkbox" checked={restoreWindows} onChange={event => {
+          localStorage.setItem(RESTORE_LAYOUT_KEY, String(event.target.checked)); setRestoreWindows(event.target.checked);
+        }} /> Fensteranordnung beim Start wiederherstellen</label>
+        <p className="muted">Ohne diese Einstellung startet der Arbeitsplatz vollständig angedockt.</p>
+      </section> : null}
 
       <div className="provider-grid">
         {(providersQuery.data?.providers ?? []).map((item) => (

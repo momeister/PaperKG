@@ -114,6 +114,7 @@ class Ontology:
             "System",
             "Phenomenon",
             "Task",
+            "FundingSource",
         }
         relation_types = {
             "IS_A",
@@ -147,6 +148,8 @@ class Ontology:
             "ALIAS_OF",
             "RELATED_TO",
             "CONTRADICTS",
+            "FUNDED_BY",
+            "CONFLICTS_WITH_INTEREST",
         }
         return cls(entity_types=entity_types, relation_types=relation_types)
 

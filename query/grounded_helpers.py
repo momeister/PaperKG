@@ -21,10 +21,40 @@ def _is_boilerplate(text: str) -> bool:
     return bool(_BOILERPLATE_RE.match(text.strip()))
 
 
+def _quality_flag_marker_text(flags: list[str] | Any) -> str:
+    """Build a short German quality-flag marker for the evidence list, e.g.
+    '(⚠ Industry-funded (pharma) · COI undeclared · Preprint)'. Empty string
+    when no flag applies."""
+    if not flags or not isinstance(flags, list):
+        return ""
+    markers = []
+    for flag in flags:
+        if not isinstance(flag, str):
+            continue
+        if flag == "retracted":
+            markers.append("Retracted")
+        elif flag == "non_peer_reviewed":
+            markers.append("Preprint")
+        elif flag == "coi_undeclared":
+            markers.append("COI undeclared")
+        elif flag == "coi_unknown":
+            markers.append("COI unknown")
+        elif flag in ("sample_size_not_reported", "sample_size_not_extracted"):
+            markers.append("Sample size not extracted")
+        elif flag.startswith("industry_funded:"):
+            industry = flag.split(":", 1)[1]
+            markers.append(f"Industry-funded ({industry})")
+    if not markers:
+        return ""
+    return "(⚠ " + " · ".join(markers) + ")"
+
+
 def _flatten_evidence(hits: list[SearchHit], max_items: int) -> list[Evidence]:
     evidence: list[Evidence] = []
     for hit in hits:
         evidence.extend(hit.evidence)
+    from query.answer_contract import dedupe_evidence
+    evidence = dedupe_evidence(evidence)
     evidence.sort(key=lambda item: item.score, reverse=True)
     return evidence[:max_items]
 
@@ -131,6 +161,14 @@ _CRITICAL_MODE_INSTRUCTIONS = [
     "erfinde keine.",
     "Schließe mit einem kurzen Abschnitt 'Kritische Einordnung' (2-5 Sätze) mit den wichtigsten "
     "Vorbehalten und was zur Absicherung noch geprüft werden müsste.",
+    "Gewichte Aussagen nach Studientyp: Meta-Analysen und RCTs haben mehr Gewicht als "
+    "Querschnitt- oder Fallstudien; nenne den Studientyp, wenn er in der Evidenz markiert ist.",
+    "Kennzeichen Industrieanbieter-finanzierte Studien oder nicht deklarierte Interessenkonflikte "
+    "explizit, wenn die Evidenz einen entsprechenden Marker trägt (z. B. '(⚠ Industry-funded …)').",
+    "Vergleiche Stichprobengrößen zwischen widersprüchlichen Befunden: eine kleine Stichprobe "
+    "allein rechtfertigt keinen starken Schluss; nenne die Größenordnung, wenn verfügbar.",
+    "Bei statistischen Aussagen gib an, ob ein p-Wert/Konfidenzintervall berichtet wurde und ob "
+    "die Wirkung signifikant, marginal oder nicht signifikant ist.",
 ]
 
 
@@ -193,8 +231,15 @@ def _build_grounded_prompt(
                 marker = "(Webquelle · ungeprüft) "
                 has_unverified_evidence = True
         has_grey_evidence = has_grey_evidence or is_grey
+        quality_marker = ""
+        if isinstance(item_metadata, dict):
+            flags = item_metadata.get("quality_flags")
+            if flags:
+                quality_marker = _quality_flag_marker_text(flags)
+                if quality_marker:
+                    quality_marker = quality_marker + " "
         lines.append(
-            f"{index}. [{item.paper_id}] {title} | {item.kind} | {marker}{_sanitize_evidence_text(item.text)}"
+            f"{index}. [{item.paper_id}] {title} | {item.kind} | {marker}{quality_marker}{_sanitize_evidence_text(item.text)}"
         )
     if has_grey_evidence:
         lines.append(
@@ -229,7 +274,10 @@ def _build_grounded_prompt(
             "Never copy the citation list of a neighboring sentence: two adjacent sentences usually "
             "have different supporting sources. Before adding a second ID to a bracket, check that "
             "this second paper's evidence really contains the same statement — if you are unsure, "
-            "cite only the single best-supporting paper for that sentence.",
+            "cite only the single best-supporting paper for that sentence. "
+            "IMPORTANT: Do NOT cite the same paper ID in several unrelated sentences just because it is a useful source. "
+            "Each citation must be tied to a specific fact or statement found in that paper's evidence. "
+            "If a sentence combines two facts from the same paper, cite it once — but make sure both facts are actually in the evidence.",
             "However, when a sentence combines findings that no single source fully covers, cite "
             "every source whose evidence is required, together in one bracket, so the citations "
             "fully support the sentence on their own.",
@@ -305,7 +353,9 @@ def _build_pdf_context_prompt(
             "When multiple papers support one claim, cite them together, for example [p1, p2].",
             "Cite per sentence ONLY the papers whose text actually contains that specific fact; never "
             "copy the citation list of a neighboring sentence. If only one paper supports a sentence, "
-            "cite exactly that one paper.",
+            "cite exactly that one paper. "
+            "IMPORTANT: Do NOT cite the same paper ID in several unrelated sentences just because it covers the topic. "
+            "Each citation must be tied to a specific passage you could quote. If a sentence is not backed by a clear passage, omit the citation.",
             "Do not copy reference or citation numbers from the source text (superscripts like [17-22] or [26, 29]); cite only the paper IDs shown above.",
             "If the PDF context is insufficient — fully or for part of the question — say that the "
             "local PDF context does not contain enough evidence for the missing part AND append the "
@@ -387,11 +437,9 @@ def _cited_paper_ids(
     answer_text: str, known_ids: frozenset[str] = frozenset()
 ) -> set[str]:
     ids: set[str] = set()
-    for bracketed in re.findall(r"\[([^\]]+)\]", answer_text or ""):
-        for value in re.split(r"[,;]\s*", bracketed):
-            value = value.strip()
-            if _is_allowed_citation_label(value, known_ids):
-                ids.add(value)
+    for match, raw_citation, _context in _citation_occurrences(answer_text):
+        for value in _citation_paper_ids(raw_citation, known_ids):
+            ids.add(value)
     return ids
 
 
@@ -573,11 +621,26 @@ def _confidence_for_score(
 def _citation_paper_ids(
     citation: str, known_ids: frozenset[str] = frozenset()
 ) -> list[str]:
+    _CITATION_SUFFIX_RE = re.compile(r"^(.+?)#\d+$")
+    _BARE_HASH_RE = re.compile(r"#\d+$")
+
     ids: list[str] = []
+    raw_citation = str(citation or "").strip()
+    # Paper IDs can contain commas (e.g. upload IDs == paper title). Try the
+    # whole bracket content (exact or with #N evidence suffix) before splitting.
+    if raw_citation and raw_citation in known_ids:
+        return [raw_citation]
+    suffix_match = _CITATION_SUFFIX_RE.match(raw_citation)
+    if suffix_match and suffix_match.group(1) in known_ids:
+        return [raw_citation]
+    stripped_suffix = _BARE_HASH_RE.sub("", raw_citation).strip()
+    if stripped_suffix and stripped_suffix in known_ids:
+        return [raw_citation]
     for value in re.split(r"[,;]\s*|\s+(?:and|und)\s+", citation or ""):
         value = value.strip()
         if value and _is_allowed_citation_label(value, known_ids):
-            ids.append(value)
+            if value not in ids:
+                ids.append(value)
     return ids
 
 
@@ -875,8 +938,13 @@ def _is_allowed_citation_label(
     if value.startswith("grey::"):
         return False
     # Accept any source:id format (e.g. arxiv:, crossref:, openalex:, semantic_scholar:, files:, local:, doi:)
-    # and legacy short p-prefixed IDs. Bare numbers or random tokens are rejected.
-    return bool(re.match(r"^[a-z][a-z0-9_]*:[^\s]", value)) or value.startswith("p")
+    # and legacy short p-prefixed IDs. Bare numbers or random tokens are rejected. The
+    # id part must not contain a comma — a comma inside a bracket separates multiple
+    # citations, so ``arxiv:1234, 17`` must NOT pass as one label (the ``17`` fragment
+    # is a bibliography number that has to be stripped).
+    return bool(
+        re.match(r"^[a-z][a-z0-9_]*:[^\s,;]+$", value)
+    ) or value.startswith("p")
 
 
 # Sentence matcher that treats bracketed citations as atomic, so paper IDs containing
@@ -1122,6 +1190,25 @@ def _extract_evidence_bindings(
     bracket_bindings: list[dict[str, list[str]]] = []
 
     def _replace(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        # Paper IDs from uploads are often the paper title and can contain commas
+        # (e.g. "Vibrotactile Display Perception, Technology, and Applications").
+        # Re-splitting on commas would shred the citation into fragments that no
+        # longer form a `{pid}#N` binding — so try the WHOLE bracket first.
+        whole = _EVIDENCE_BINDING_RE.fullmatch(inner)
+        if whole and inner not in known_ids and "#" not in whole.group("pid"):
+            whole_pid = whole.group("pid").strip()
+            whole_index = int(whole.group("num"))
+            if (
+                _is_allowed_citation_label(whole_pid, known_ids)
+                and 1 <= whole_index <= len(evidence)
+                and evidence[whole_index - 1].evidence_id
+                and _same_paper_id(evidence[whole_index - 1].paper_id, whole_pid)
+            ):
+                bracket_bindings.append(
+                    {whole_pid: [evidence[whole_index - 1].evidence_id]}
+                )
+                return f"[{whole_pid}]"
         parts = [
             part.strip()
             for part in re.split(r"[,;]\s*", match.group(1))
@@ -1134,11 +1221,16 @@ def _extract_evidence_bindings(
             suffixed = _EVIDENCE_BINDING_RE.fullmatch(part)
             # A real paper ID that happens to end in `#digits` must never be split.
             if not suffixed or part in known_ids:
-                cleaned.append(part)
+                if part not in cleaned:
+                    cleaned.append(part)
                 continue
             pid = suffixed.group("pid").strip()
             changed = True
-            cleaned.append(pid)
+            # Dedupe: a bracket like [p1#3, p1#33, p1#3] (GLM-Cloud citation spam)
+            # collapses to ONE chip per distinct paper id — repeated bindings of the
+            # same evidence item to the same sentence are noise, not signal.
+            if pid not in cleaned:
+                cleaned.append(pid)
             index = int(suffixed.group("num"))
             if (
                 _is_allowed_citation_label(pid, known_ids)
@@ -1147,7 +1239,10 @@ def _extract_evidence_bindings(
                 and _same_paper_id(evidence[index - 1].paper_id, pid)
             ):
                 bucket = bindings.setdefault(pid, [])
-                if evidence[index - 1].evidence_id not in bucket:
+                # Only keep the FIRST binding per paper inside one bracket:
+                # duplicates are the model failing to make up its mind, and
+                # merging them into one citation keeps the UI's chip count honest.
+                if not bucket:
                     bucket.append(evidence[index - 1].evidence_id)
         bracket_bindings.append(bindings)
         if not changed:
@@ -1171,6 +1266,60 @@ def _extract_evidence_bindings(
                 if evidence_id not in bucket:
                     bucket.append(evidence_id)
     return cleaned_text, result
+
+
+def _dedupe_citation_brackets(answer_text: str) -> str:
+    """Drop duplicate paper IDs INSIDE one citation bracket.
+
+    GLM-Cloud & friends write "[p1#33, p1#43, p1#33, p1#43]" when the evidence
+    supports a sentence twice; the resulting chips (Z33 Z43 Z33 Z43) read as if
+    four different sources backed the claim. Keeping only the first occurrence
+    per id preserves all distinct sources while removing the duplicates.
+    """
+    text = str(answer_text or "")
+    if "[" not in text:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        # A real paper ID can contain commas — only split when the bracket LOOKS
+        # like a multi-citation (contains "#" or several comma-separated tokens
+        # that parse as citations).
+        parts = [part.strip() for part in re.split(r"[,;]\s*", inner) if part.strip()]
+        if len(parts) <= 1:
+            return match.group(0)
+        seen: set[str] = set()
+        plain_seen: set[str] = set()
+        kept: list[str] = []
+        for part in parts:
+            # Two dup patterns matter:
+            #  - verbatim repeats        "[p1#33, p1#33]"
+            #  - pid repeats WITHOUT '#' "[p1, p1]"
+            # In contrast "[p1#33, p1#43]" names two DIFFERENT evidence items of
+            # the same paper and must keep both chips.
+            suffix_match = _EVIDENCE_BINDING_RE.fullmatch(part)
+            if suffix_match:
+                # Suffix parts compare verbatim, so #33 and #43 stay distinct.
+                key = f"ev::{part}"
+            else:
+                pid = suffix_match.group("pid") if suffix_match else part
+                pid = str(pid).strip()
+                # If we already kept a #-bound citation of this pid, a trailing
+                # plain [pid] adds no new information.
+                key = f"pid::{pid}"
+                if key in plain_seen:
+                    continue
+                plain_seen.add(key)
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(part)
+        if len(kept) == len(parts):
+            return match.group(0)
+        return f"[{', '.join(kept)}]"
+
+    text = re.sub(r"\[([^\]]+)\]", _replace, text)
+    return re.sub(r"(\[[^\]\n]+\])(?:[ \t]*\1)+", r"\1", text)
 
 
 def _attach_citations_to_sentences(
@@ -1253,11 +1402,22 @@ def _uncited_sentence_count(
 def _is_substantial_statement(
     sentence: str, min_chars: int = 30, min_words: int = 5
 ) -> bool:
-    """A sentence worth citing — long enough and wordy enough to be a substantive claim."""
+    """A sentence worth citing — long enough and wordy enough to be a substantive claim.
+
+    Markdown headings (`##`/`###`), bold/italic emphasis runs and pure punctuation
+    fragments are skipped: they are structural artifacts, not claims that can be
+    cited or contradicted.
+    """
     stripped = re.sub(r"\s+", " ", (sentence or "")).strip()
-    if len(stripped) < min_chars:
+    if not stripped:
         return False
-    word_count = sum(1 for _ in re.findall(r"\S+", stripped))
+    if stripped.startswith("#"):
+        return False
+    # Strip markdown emphasis/bold markers for the length check.
+    plain = re.sub(r"[*_`]+", "", stripped)
+    if len(plain) < min_chars:
+        return False
+    word_count = sum(1 for _ in re.findall(r"\S+", plain))
     return word_count >= min_words
 
 
@@ -1266,7 +1426,7 @@ def _per_sentence_citation_repair(
     evidence: list[Evidence],
     known_ids: frozenset[str] = frozenset(),
     min_score: float = 3.0,
-    unsourced_ratio_threshold: float = 0.5,
+    unsourced_ratio_threshold: float = 0.6,
 ) -> tuple[str, dict[str, Any]]:
     """Safety layer that runs on EVERY answer, not just the zero-citation case.
 
@@ -1609,7 +1769,24 @@ def _strip_invalid_citations(
     if not text:
         return text
 
+    _CITATION_SUFFIX_RE = re.compile(r"^(.+?)#\d+$")
+    _BARE_HASH_RE = re.compile(r"#\d+$")
+
     def _replace(match: re.Match[str]) -> str:
+        raw = match.group(1).strip()
+        # Paper IDs from local uploads are often the paper title verbatim and can
+        # contain commas (e.g. "Vibrotactile Display Perception, Technology, and
+        # Applications"). Naively splitting on commas would shred such citations.
+        # Try the whole bracket content (exact or with a #N evidence suffix) first
+        # before falling back to multi-citation splitting.
+        if _is_allowed_citation_label(raw, known_ids):
+            return f"[{raw}]"
+        suffix_match = _CITATION_SUFFIX_RE.match(raw)
+        if suffix_match and suffix_match.group(1) in known_ids:
+            return f"[{raw}]"
+        stripped_suffix = _BARE_HASH_RE.sub("", raw).strip()
+        if _is_allowed_citation_label(stripped_suffix, known_ids):
+            return f"[{raw}]"
         parts = [
             part.strip()
             for part in re.split(r"[,;]\s*", match.group(1))

@@ -50,6 +50,24 @@ _COT_PREAMBLE_STARTS: tuple[str, ...] = (
     "meine antwort",
     "die korrekte",
     "der korrekte",
+    # Cloud reasoning models (GLM, Kimi, ...) that can't take think=false leak
+    # their English analysis verbatim: whole paragraphs starting with these.
+    "let me analyze",
+    "the claim",
+    "the aussage",
+    "what the source",
+    "the task",
+    "the source",
+    "so the",
+    "the corrected",
+    "or more precisely",
+    "keep the structure",
+    "corrected sentence",
+    "corrected statement",
+    "the original",
+    "i should",
+    "i could",
+    "safer to",
 )
 # Preamble typically ends at the first ". " / "? " / ": " followed by a
 # capitalized sentence start. We keep the rest verbatim.
@@ -60,10 +78,49 @@ def _strip_cot_preamble(text: str) -> str:
     text = str(text or "").strip()
     if not text:
         return ""
-    # Iterate: while the leading sentence starts with a COT marker, drop it.
-    # Preambles like "Vielleicht ist die Quelle…? Die Quelle ist… . Ich kenne
-    # diese Quelle nicht. Die umformulierte Aussage lautet: …" need every
-    # COT-style sentence removed, not just the first.
+    # Pass 1 — paragraph level: cloud reasoning models (GLM-Cloud & friends, which
+    # cannot receive think:false) leak their analysis as WHOLE paragraphs before
+    # the actual rewrite ("Let me analyze this task.\n\nThe claim (Aussage) says:
+    # …\n\nWhat the source actually supports: …\n\n**Corrected sentence:** …").
+    # Sentence-boundary stripping (Pass 2) cannot catch that because these
+    # paragraphs end with ":" or "." mid-line. Drop every leading paragraph that
+    # starts with a COT marker; keep iterating until the first non-COT paragraph.
+    paragraphs = [p.strip() for p in text.split("\n\n")]
+    while paragraphs:
+        head = paragraphs[0].lower()
+        if any(head.startswith(p) for p in _COT_PREAMBLE_STARTS):
+            paragraphs.pop(0)
+            continue
+        # Also drop paragraphs that END WITH a COT-looking continuation like
+        # "… corrected statement should be something like:" — they are reasoning,
+        # not content. Detect via the trailing ":" and a COT marker inside.
+        if paragraphs[0].endswith(":") and any(
+            marker in head
+            for marker in (
+                "the claim",
+                "the source",
+                "the task",
+                "corrected",
+                "reformulat",
+                "so the",
+                "what the",
+            )
+        ):
+            paragraphs.pop(0)
+            continue
+        break
+    text = "\n\n".join(paragraphs).strip()
+    if not text:
+        return ""
+    # Markdown bold wrappers that a reasoning model put around the final answer
+    # ("**Corrected statement:** …") are part of the leak, not the content.
+    text = re.sub(
+        r"^\s*\*\*(corrected|umformulier|korrigier|final|answer|antwort)[^*]*\*\*\s*:?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Pass 2 — sentence level, the original behaviour.
     while text:
         lowered = text.lower()
         if not any(lowered.startswith(p) for p in _COT_PREAMBLE_STARTS):

@@ -35,6 +35,27 @@ export function loadAssistantSession(projectId: string): AssistantSession {
 
 const serverSessionSaveTimers = new Map<string, number>();
 
+type PendingSession = { payload: AssistantSession; allowEmpty: boolean };
+const pendingSessions = new Map<string, PendingSession>();
+const savingSessions = new Map<string, Promise<void>>();
+async function flushSession(projectId: string): Promise<void> {
+  if (savingSessions.has(projectId)) { await savingSessions.get(projectId); return flushSession(projectId); }
+  const pending = pendingSessions.get(projectId);
+  if (!pending) return;
+  const operation = api.saveWorkspaceSession(projectId, pending.payload, pending.allowEmpty).then(() => {
+    if (pendingSessions.get(projectId) === pending) pendingSessions.delete(projectId);
+  });
+  savingSessions.set(projectId, operation);
+  try { await operation; } finally { savingSessions.delete(projectId); }
+  if (pendingSessions.has(projectId)) await flushSession(projectId);
+}
+export async function flushAssistantSessions(): Promise<void> {
+  for (const timer of serverSessionSaveTimers.values()) window.clearTimeout(timer);
+  serverSessionSaveTimers.clear();
+  await Promise.all([...new Set([...pendingSessions.keys(), ...savingSessions.keys()])].map(flushSession));
+}
+
+
 /**
  * Research-tree turns carry the full per-node evidence, PDF excerpts and verification
  * payloads — easily many MB for a deep run. Persisting that verbatim blows the
@@ -44,6 +65,8 @@ const serverSessionSaveTimers = new Map<string, number>();
  */
 export function slimTurnForPersist(turn: AssistantTurn): AssistantTurn {
   if (turn.type !== "research_tree" || !turn.researchNodes?.length) {
+    // task_deep_search-Turns sind bereits kompakt (Summary + IDs + Metadaten) —
+    // nichts Heavy-Derivable zu droppen, unverändert persistieren.
     return turn;
   }
   const nodes = turn.researchNodes.map((node) => {
@@ -99,15 +122,11 @@ export function saveAssistantSession(
     // Nothing worth sending — and sending it would overwrite the server copy.
     return;
   }
-  serverSessionSaveTimers.set(
-    projectId,
-    window.setTimeout(() => {
-      serverSessionSaveTimers.delete(projectId);
-      api.saveWorkspaceSession(projectId, payload, options.allowEmpty === true).catch(() => {
-        // Offline backend: the localStorage cache above still covers reloads.
-      });
-    }, 1200)
-  );
+  pendingSessions.set(projectId, { payload, allowEmpty: options.allowEmpty === true });
+  serverSessionSaveTimers.set(projectId, window.setTimeout(() => {
+    serverSessionSaveTimers.delete(projectId);
+    void flushSession(projectId).catch(() => {});
+  }, 1200));
 }
 
 /**

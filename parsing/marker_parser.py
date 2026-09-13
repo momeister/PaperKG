@@ -17,6 +17,8 @@ except Exception:  # pragma: no cover - optional dependency
     PdfReader = None
 
 
+from parsing.layout import PARSER_VERSION, spatial_blocks, words_from_chars
+
 PAGE_BREAK = "\n\n---PAGE BREAK---\n\n"
 
 
@@ -39,13 +41,18 @@ def _find_column_gutter(
     tol: float = 1.0,
     min_band_width: float = 6.0,
     step: float = 1.0,
+    max_cross_frac: float = 0.02,
 ) -> float | None:
     """
-    Find a vertical x-band that no body word's bounding box touches, in the
-    central portion of the page width. A wide-enough such band is the gutter
+    Find a vertical x-band that almost no body word's bounding box touches, in
+    the central portion of the page width. A wide-enough such band is the gutter
     between two columns. Header/footer words (running heads, copyright lines)
     are excluded first since they often span the full page width and would
     otherwise hide a real gutter that only exists in the body rows.
+
+    Up to ``max_cross_frac`` of body words may cross the band: centered title
+    pages and author blocks often have a few centered lines inside the body
+    band, which used to veto the whole split and fall back to naive glued text.
 
     Returns the gutter's x-midpoint, or None if no reliable gutter is found
     (single-column page, or layout too irregular for one stable vertical split).
@@ -62,12 +69,16 @@ def _find_column_gutter(
 
     lo = page_width * band_lo_frac
     hi = page_width * band_hi_frac
+    max_crossings = max(1, int(len(body) * max_cross_frac))
     best_start: float | None = None
     best_width = 0.0
     run_start: float | None = None
     x = lo
     while x <= hi:
-        occupied = any(w["x0"] < x + tol and w["x1"] > x - tol for w in body)
+        crossings = sum(
+            1 for w in body if w["x0"] < x + tol and w["x1"] > x - tol
+        )
+        occupied = crossings > max_crossings
         if occupied:
             if run_start is not None:
                 width = x - run_start
@@ -85,7 +96,14 @@ def _find_column_gutter(
             best_start = run_start
 
     if best_start is not None and best_width >= min_band_width:
-        return best_start + best_width / 2
+        center = best_start + best_width / 2
+        # A genuine gutter separates two populated column bodies; a "gutter" at the
+        # very edge of the occupied band is just the page margin of a single-column
+        # layout and must be rejected.
+        left_words = sum(1 for w in body if (w["x0"] + w["x1"]) / 2 < center)
+        right_words = sum(1 for w in body if (w["x0"] + w["x1"]) / 2 >= center)
+        if min(left_words, right_words) >= max(1, int(0.15 * len(body))):
+            return center
     return None
 
 
@@ -149,7 +167,23 @@ def _words_to_text(words: list[dict[str, Any]]) -> str:
     return "\n".join(" ".join(line) for line in lines)
 
 
-def _chars_to_spaced_text(chars: list[dict[str, Any]], gap_ratio: float = 0.28) -> str:
+# Two different PDF families need two different gap ratios here. PDFs whose
+# content stream simply omits space glyphs (most of the corpus) need a high
+# threshold (0.28) so justified/kerne inter-letter gaps stay glued ("ass essing"
+# failure mode). PDFs whose spacing is encoded as TJ kerning adjustments (IEEE
+# Proceedings papers are typical) put real word boundaries at much smaller gaps,
+# so they need 0.18 — at 0.28 their text stays glued ("growthrateoftheperceived
+# magnitude"). The floor comes from the glyph-width floor (min 8pt) used in the
+# gap test, so the two families are separated by ~0.18*8=1.44pt vs ~0.28*10=2.8pt.
+# Callers try 0.28 first, then 0.18 as a repair pass, and adopt the result only
+# via _looks_better_spaced, which blocks over-splitting.
+_GAP_RATIO_DEFAULT = 0.28
+_GAP_RATIO_REPAIR = 0.18
+
+
+def _chars_to_spaced_text(
+    chars: list[dict[str, Any]], gap_ratio: float = _GAP_RATIO_DEFAULT
+) -> str:
     """Rebuild text from pdfplumber char data, inserting spaces based on inter-character gaps.
 
     Uses the gap between consecutive characters relative to font size to detect word boundaries.
@@ -237,13 +271,28 @@ def _looks_better_spaced(naive: str, recon: str) -> bool:
         return False
     naive_glue = len(re.findall(r"[A-Za-z]{16,}", naive))
     recon_glue = len(re.findall(r"[A-Za-z]{16,}", recon))
-    if recon_glue >= naive_glue:
+    naive_compact = len(re.findall(r"[A-Za-z]{24,}", naive))
+    recon_compact = len(re.findall(r"[A-Za-z]{24,}", recon))
+    # TJ-kerning-encoded PDFs (IEEE Proceedings family) keep a handful of 16+ runs
+    # even after a good reconstruction (font-metric italics, "fre-quency" style), while
+    # the true glue metric — 24+ letter compounds — drops sharply. Accept whenever the
+    # long-glue count falls, or the compact-run count collapses while long-glue stays
+    # at least stable.
+    if recon_glue >= naive_glue and not (
+        recon_compact <= max(1, int(0.6 * naive_compact))
+        and recon_glue <= max(naive_glue, 2)
+    ):
+        return False
+    if naive_glue == 0:
         return False
     singleton_re = re.compile(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])")
     naive_singletons = len(singleton_re.findall(naive))
     recon_singletons = len(singleton_re.findall(recon))
     token_count = max(1, len(re.findall(r"\S+", recon)))
-    if recon_singletons > naive_singletons + max(5, int(0.02 * token_count)):
+    # Reference pages are dense with "[31] A. B." initials, so the singleton budget
+    # must scale with the page's own single-letter noise, not a fixed 2%.
+    singleton_budget = max(8, int(0.08 * token_count), int(1.6 * naive_singletons))
+    if recon_singletons > naive_singletons + singleton_budget:
         return False
     return True
 
@@ -326,22 +375,45 @@ def _reconstruct_page_text(
     )
     if not left_w or not right_w:
         return None
-    parts = [
-        " ".join(str(w.get("text", "")) for w in group)
-        for group in (header_w, left_w, right_w, footer_w)
-        if group
-    ]
-    joined = "\n\n".join(p for p in parts if p)
+    blocks = spatial_blocks(words, page_width, page_height, gutter_x)
+    joined = "\n\n".join(block["text"] for block in blocks)
     # Word tokens inherit extract_text()'s glue problem (dropped space glyphs → words
     # concatenated inside one token). When the column-ordered text still lacks word
     # spacing, rebuild each region from char gaps — same guard as the single-column path.
     if chars and _text_needs_char_reconstruction(joined):
         regions = _classify_chars_by_region(chars, gutter_x, page_height)
-        rebuilt_parts = [_chars_to_spaced_text(group) for group in regions if group]
-        rebuilt = "\n\n".join(p for p in rebuilt_parts if p)
-        if rebuilt and _looks_better_spaced(joined, rebuilt):
+        rebuilt = _best_char_reconstruction(regions, joined)
+        if rebuilt is not None:
             return rebuilt
     return joined
+
+
+def _best_char_reconstruction(
+    regions: tuple[list[dict[str, Any]], ...] | list[list[dict[str, Any]]],
+    reference_text: str,
+) -> str | None:
+    """Rebuild region text from char gaps. Try the high-precision gap ratio first, then
+    the TJ-kerning repair ratio, and keep the variant that de-glues the text the hardest
+    — TJ-kerning-encoded PDFs (IEEE Proceedings family) stay glued at ratio 0.28 while
+    0.18 fixes them, and over-splitting is blocked by _looks_better_spaced anyway."""
+    candidates: list[str] = []
+    for ratio in (_GAP_RATIO_DEFAULT, _GAP_RATIO_REPAIR):
+        rebuilt = "\n\n".join(
+            _chars_to_spaced_text(group, gap_ratio=ratio)
+            for group in regions
+            if group
+        )
+        if rebuilt and _looks_better_spaced(reference_text, rebuilt):
+            candidates.append(rebuilt)
+    if not candidates:
+        return None
+
+    def _glue_count(text: str) -> int:
+        return len(re.findall(r"[A-Za-z]{24,}", text)) or len(
+            re.findall(r"[A-Za-z]{16,}", text)
+        )
+
+    return min(candidates, key=_glue_count)
 
 
 class MarkerParser:
@@ -391,7 +463,7 @@ class MarkerParser:
         path = Path(file_path)
         text = ""
         page_count = 0
-        metadata: dict[str, Any] = {"source_path": str(path)}
+        metadata: dict[str, Any] = {"source_path": str(path), "parser_version": PARSER_VERSION}
         progress_handle = None
         if progress_path:
             try:
@@ -456,6 +528,20 @@ class MarkerParser:
                                 )
                             except Exception:
                                 recon_text = None
+                            if words:
+                                try:
+                                    if chars and _text_needs_char_reconstruction(" ".join(w["text"] for w in words)):
+                                        candidates = words_from_chars(chars)
+                                        reconstructed_chars = sum(len(w["text"].strip()) for w in candidates)
+                                        original_chars = sum(len(c.get("text", "").strip()) for c in chars)
+                                        if reconstructed_chars == original_chars:
+                                            words = candidates
+                                    tables = [t.bbox for t in page.find_tables()] if len(getattr(page, "lines", [])) < 500 else []
+                                    blocks = spatial_blocks(words, float(page.width), float(page.height), _find_column_gutter(words, float(page.width), float(page.height)), tables)
+                                    recon_text = "\n\n".join(block["text"] for block in blocks)
+                                    metadata.setdefault("page_layout", {})[str(page_index + 1)] = blocks
+                                except Exception:
+                                    pass
                             if (
                                 recon_text is not None
                                 and naive_text
@@ -463,29 +549,27 @@ class MarkerParser:
                             ):
                                 recon_text = None
                             if recon_text is not None:
-                                rendered = _repair_glued_parens(
-                                    _join_hyphenated_linebreaks(recon_text)
-                                )
+                                rendered = recon_text if str(page_index + 1) in metadata.get("page_layout", {}) else _repair_glued_parens(_join_hyphenated_linebreaks(recon_text))
                                 page_texts.append(rendered)
                                 record_page(page_index, rendered)
-                                columns_used += 1
+                                layout = metadata.get("page_layout", {}).get(str(page_index + 1))
+                                if layout is None or any(b["kind"] == "right" for b in layout):
+                                    columns_used += 1
                             else:
                                 # Prefer pdfplumber's own text: the char-gap reconstruction
                                 # only helps when the naive text lacks word spacing, and it
                                 # injects spurious mid-word spaces otherwise — so adopt it only
                                 # when _looks_better_spaced confirms it fixes gluing.
                                 spaced = ""
-                                if not naive_text or _text_needs_char_reconstruction(
-                                    naive_text
+                                if chars and (
+                                    not naive_text
+                                    or _text_needs_char_reconstruction(naive_text)
                                 ):
-                                    candidate = (
-                                        _chars_to_spaced_text(chars) if chars else ""
+                                    adopted = _best_char_reconstruction(
+                                        [chars], naive_text
                                     )
-                                    if candidate and (
-                                        not naive_text
-                                        or _looks_better_spaced(naive_text, candidate)
-                                    ):
-                                        spaced = candidate
+                                    if adopted is not None:
+                                        spaced = adopted
                                         char_reconstructed += 1
                                 page_text = (
                                     spaced

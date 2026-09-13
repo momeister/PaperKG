@@ -126,6 +126,9 @@ app.include_router(_tasks_router.router)
 from api.routers import extraction as _extraction_router  # noqa: E402
 
 app.include_router(_extraction_router.router)
+from api.routers import answers as _answers_router
+
+app.include_router(_answers_router.router)
 from api.routers import models_meta as _models_meta_router  # noqa: E402
 
 app.include_router(_models_meta_router.router)
@@ -135,6 +138,9 @@ app.include_router(_tools_router.router)
 from api.routers import notes as _notes_router  # noqa: E402
 
 app.include_router(_notes_router.router)
+from api.routers import glossary as _glossary_router
+
+app.include_router(_glossary_router.router)
 from api.routers import settings as _settings_router  # noqa: E402
 
 app.include_router(_settings_router.router)

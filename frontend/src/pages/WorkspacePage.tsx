@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PaneHeader } from "../workspace/PortablePane";
+import { createPortal } from "react-dom";
+import { KeptView } from "../workspace/KeptView";
+import { registerWorkspaceShutdown } from "../workspace/ShutdownGuard";
+import { PortablePane, WorkspaceOwnerContext, useWorkspaceWindows } from "../workspace/PortablePane";
+import { streamAnswer } from "../api";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ChangeEvent,
   ClipboardEvent as ReactClipboardEvent,
@@ -11,7 +17,7 @@ import type {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import type { ImperativePanelHandle } from "react-resizable-panels";
+import type { ImperativePanelHandle, ImperativePanelGroupHandle } from "react-resizable-panels";
 import {
   AlertTriangle,
   Bot,
@@ -63,6 +69,8 @@ import { downloadBlob } from "../download";
 import { colorVarsForPaperId, evidenceColorVars, isGreySourcePaperId } from "../citationColors";
 import { EmptyState } from "../components/EmptyState";
 import { GreySourceView } from "../components/GreySourceView";
+import { LatestRequest } from "./latestRequest";
+import { pdfCitationPayload } from "../components/pdfCitation";
 import { PdfPane } from "../components/PdfPane";
 import { Status } from "../components/Status";
 import { isGarbledExcerpt } from "../excerptSanity";
@@ -77,10 +85,13 @@ import type {
   NoteAiMessage,
   NoteAiThread,
   NoteCitation,
+  PdfSelection,
   Paper,
   ParallelSession,
   ParallelSessionSummary,
   ResearchNode,
+  TaskDeepSearchResult,
+  TaskResearchDirection,
   VerificationEvidence,
   VerificationSource
 } from "../types";
@@ -91,6 +102,7 @@ import {
   answerLimitFor,
   bulletQuote,
   citationContext,
+  citationIds,
   citationMetasFor,
   citationSegmentFromParts,
   claimVerdictLabel,
@@ -115,6 +127,7 @@ import {
 } from "./AssistantPage";
 import type { AutoResearchProgress, AutoResearchStage, CitationInsertExtras, CitationMeta } from "./AssistantPage";
 import { ClarifyDialog } from "./ClarifyDialog";
+import { AssistantComposerHandle } from "./AssistantComposer";
 import { WorkspaceAssistantPane } from "./WorkspaceAssistantPane";
 import { NotesSurface } from "./NotesPage";
 import type { NotesSurfaceActions, NotesSurfaceSnapshot } from "./NotesPage";
@@ -206,8 +219,23 @@ export type WorkspaceActionEntry = {
 };
 
 export function WorkspacePage() {
+  const windows = useWorkspaceWindows();
+  const owner = useContext(WorkspaceOwnerContext);
+  const panelStorage = useMemo(() => ({
+    getItem: (name: string) => localStorage.getItem(name),
+    setItem: (name: string, value: string) => {
+      if (!windows || windows.canSaveDockedLayout()) localStorage.setItem(name, value);
+    }
+  }), [windows]);
+  const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
+  useLayoutEffect(() => windows?.registerLayout(owner, {
+    read: () => panelGroupRef.current?.getLayout() ?? [18, 32, 32, 18],
+    write: sizes => panelGroupRef.current?.setLayout(sizes)
+  }), [windows, owner]);
   const { activeProject, setActiveProject, provider, model, llmParams, workspaceMode, setWorkspaceMode, creativityLevel, setCreativityLevel } = useAppState();
   const scopedProjectId = noteProjectId(activeProject);
+  const currentProjectRef = useRef(scopedProjectId);
+  currentProjectRef.current = scopedProjectId;
   const scopeLabel = projectScopeLabel(activeProject);
   const queryClient = useQueryClient();
   const assistantScopeRef = useRef(scopedProjectId);
@@ -232,18 +260,21 @@ export function WorkspacePage() {
   const [navigatorTab, setNavigatorTab] = useState<WorkspaceNavigatorTab>("notes");
   const [notesSnapshot, setNotesSnapshot] = useState<NotesSurfaceSnapshot>(EMPTY_NOTES_SNAPSHOT);
   const [controlledNoteId, setControlledNoteId] = useState("");
+  const [pdfSelection, setPdfSelection] = useState<PdfSelection | null>(null);
+  const answerRequestRef = useRef(new LatestRequest());
+  const answerAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => answerRequestRef.current.invalidate(), [scopedProjectId]);
   const [requestedCitationId, setRequestedCitationId] = useState("");
   const [navigatorQuery, setNavigatorQuery] = useState("");
   const [noteStatus, setNoteStatus] = useState("");
 
-  const [question, setQuestion] = useState("");
-  const questionInputRef = useRef<HTMLInputElement | null>(null);
-  const [mentionState, setMentionState] = useState<{ query: string; start: number; end: number } | null>(null);
-  const [mentionHighlight, setMentionHighlight] = useState(0);
+  const [answerProgress, setAnswerProgress] = useState("");
+  const composerRef = useRef<AssistantComposerHandle | null>(null);
+  const setQuestion = (value: string) => composerRef.current?.setDraft(value);
+  const placeCursorAfter = (position: number) => composerRef.current?.focus(position);
+  const openMentionPicker = () => composerRef.current?.openMention();
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const [history, setHistory] = useState<AssistantTurn[]>(() => loadAssistantSession(scopedProjectId).history);
-  // Läuft der Vorab-Nachcheck unsicherer Zuordnungen (zwischen Generierung und Anzeige)?
-  const [citationVerifyPending, setCitationVerifyPending] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState(() => loadAssistantSession(scopedProjectId).activeTurnId);
   const [selectedSource, setSelectedSource] = useState<VerificationSource | null>(null);
   const [activeEvidenceIndex, setActiveEvidenceIndex] = useState(0);
@@ -273,14 +304,13 @@ export function WorkspacePage() {
   const [autoResearch, setAutoResearch] = useState(() => loadWorkspaceBoolean(scopedProjectId, "autoResearch", false));
   // Kritischer Modus (/kritisch): Antworten benennen Limitationen, Risiken und
   // Gegenbelege explizit (answer_style: "kritisch" im Backend).
-  const [criticalMode, setCriticalMode] = useState(() => loadWorkspaceBoolean(scopedProjectId, "criticalMode", false));
+  const [criticalMode, setCriticalMode] = useState(() => loadWorkspaceBoolean(scopedProjectId, "criticalMode", true));
   const [autoProgress, setAutoProgress] = useState<AutoResearchProgress | null>(null);
   /** Wenn eine Auto-Recherche als Platzhalter-Turn (``type: "research"``) läuft,
    *  merken wir uns dessen ID, um den Fortschritt in denselben Turn zu schreiben
    *  und ihn beim ``done``-Event in-place in einen Antwort-Turn umzuwandeln. */
   const autoResearchTurnRef = useRef<string | null>(null);
   const autoAbortRef = useRef<AbortController | null>(null);
-  const [paletteIndex, setPaletteIndex] = useState(0);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [actionLog, setActionLog] = useState<WorkspaceActionEntry[]>([]);
@@ -317,6 +347,12 @@ export function WorkspacePage() {
   // overlapping state setters in the dialog handlers can never reset it (see bug history).
   const pendingDeepRef = useRef<{ question: string; harvest: boolean } | null>(null);
   const researchAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => registerWorkspaceShutdown(() => {
+    answerRequestRef.current.invalidate();
+    answerAbortRef.current?.abort();
+    autoAbortRef.current?.abort();
+    researchAbortRef.current?.abort();
+  }, "stop"), []);
   const researchSessionIdRef = useRef<string>("");
   const researchNodesRef = useRef<ResearchNode[]>([]);
   const autoSavedTreeRef = useRef<string | null>(null);
@@ -456,16 +492,25 @@ export function WorkspacePage() {
   const { currentScopePaperId, currentScopeIsGrey } = scopeInfo;
   const questionBlockedByScope = scopeInfo.blocked;
 
-  type AskVariables = { value: string; scope: PaperQuestionScope; newTurn: boolean; extraGreyIds?: string[]; critical?: boolean };
+  type AskVariables = { commit?: (payload: Answer) => Promise<void>; requestId?: number; startedProvider?: string; startedModel?: string; projectKey?: string; value: string; scope: PaperQuestionScope; newTurn: boolean; extraGreyIds?: string[]; critical?: boolean };
 
   const answerMutation = useMutation({
     mutationFn: (vars: AskVariables) => {
+      answerAbortRef.current?.abort();
+      const abort = new AbortController(); answerAbortRef.current = abort;
+      vars.projectKey = scopedProjectId;
+      const ticket = answerRequestRef.current.start({ provider, model });
+      vars.requestId = ticket.id;
+      vars.startedProvider = ticket.settings.provider;
+      vars.startedModel = ticket.settings.model;
+      vars.commit = payload => commitAnswerTurn(payload, vars.newTurn, () => ticket.isCurrent() && currentProjectRef.current === vars.projectKey);
       const info = deriveScope(vars.scope);
       const greyIds = Array.from(new Set([...info.greySourceIds, ...(vars.extraGreyIds ?? [])]));
-      return api.answer({
+      setAnswerProgress("Belegsuche wird gestartet …");
+      return streamAnswer({
         question: vars.value,
-        provider,
-        model,
+        provider: vars.startedProvider,
+        model: vars.startedModel,
         limit: answerLimitFor(vars.value, evidenceMode, vars.scope === "all" ? 0 : Math.max(1, info.scopedPaperIds.length + (greyIds.length ? 1 : 0))),
         // "__none__" keeps the scope honest: without scoped papers the backend must not
         // fall back to the global KG — also when only grey sources are in scope.
@@ -478,40 +523,32 @@ export function WorkspacePage() {
         project_id: activeProject || undefined,
         llm_overrides: Object.values(llmParams).some((value) => value !== undefined) ? llmParams : undefined,
         answer_style: vars.critical || criticalMode ? "kritisch" : undefined
-      });
+      }, message => { if (currentProjectRef.current === vars.projectKey && vars.requestId === answerRequestRef.current.generation) setAnswerProgress(message); }, abort.signal);
     },
     onSuccess: async (payload, vars) => {
-      await commitAnswerTurn(payload, vars.newTurn);
+      const isCurrent = () => currentProjectRef.current === vars.projectKey && vars.requestId === answerRequestRef.current.generation;
+      if (!isCurrent()) return;
+      payload.context_diagnostics = { ...payload.context_diagnostics, requested_provider: vars.startedProvider ?? payload.context_diagnostics?.requested_provider, requested_model: vars.startedModel ?? payload.context_diagnostics?.requested_model };
+      await vars.commit?.(payload);
     }
   });
 
   /** Commit a grounded answer as a new turn (or append it to the active turn in
    * Weiterfragen mode). Shared by the normal answer mutation and the streaming
    * auto-research flow so both produce identical turn/block structures. */
-  async function commitAnswerTurn(payload: Answer, newTurn: boolean) {
+  async function commitAnswerTurn(payload: Answer, newTurn: boolean, isCurrent: () => boolean = () => true) {
+    const displayStarted = performance.now();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      performance.clearMeasures("sciencekg:answer-display");
+      performance.measure("sciencekg:answer-display", { start: displayStarted, end: performance.now() });
+    }));
     let sources: VerificationSource[] = [];
     try {
       sources = await verificationSourcesFor(payload);
     } catch {
       sources = [];
     }
-    // Unsichere Zuordnungen nachprüfen + korrigieren, BEVOR die Antwort angezeigt wird.
-    // Unsicher = vom Backend geflaggt (approximate) ODER die Belegstelle wurde im PDF
-    // nicht/nur ungefähr verortet — auch lexikalisch plausible Fehlzuordnungen laufen so
-    // durch den Nachcheck statt unmarkiert durchzurutschen.
-    const anyUncertain =
-      (payload.citation_links ?? []).some((link) => link.approximate) ||
-      sources.some((source) => source.evidence.some((evidence) => evidenceLocationUncertain(source, evidence)));
-    if (anyUncertain) {
-      setCitationVerifyPending(true);
-      try {
-        const verified = await verifyUncertainCitations(payload, sources);
-        payload = verified.payload;
-        sources = verified.sources;
-      } finally {
-        setCitationVerifyPending(false);
-      }
-    }
+    if (!isCurrent()) return;
     const block: AssistantAnswerBlock = {
       id: `block_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       question: payload.question,
@@ -610,6 +647,9 @@ export function WorkspacePage() {
       logAction("Auto-Recherche", opts.scope === "selected" ? "Keine Quellen ausgewählt." : "Kein aktives Paper geöffnet.", "error");
       return;
     }
+    const requestId = answerRequestRef.current.start({ provider, model }).id;
+    const projectKey = scopedProjectId;
+    const isCurrent = () => requestId === answerRequestRef.current.generation && currentProjectRef.current === projectKey;
     autoAbortRef.current?.abort();
     const controller = new AbortController();
     autoAbortRef.current = controller;
@@ -723,6 +763,7 @@ export function WorkspacePage() {
           force: opts.force || undefined
         },
         (event) => {
+          if (!isCurrent()) return;
           switch (event.status) {
             case "answer":
               applyProgress((p) => (p ? { ...p, currentPhase: "Lokale Antwort geprüft …" } : p));
@@ -841,7 +882,7 @@ export function WorkspacePage() {
                 return { ...p, phases, currentPhase: "Abgeschlossen" };
               });
               if (event.answer) {
-                void commitAnswerTurn(event.answer, opts.newTurn);
+                void commitAnswerTurn(event.answer, opts.newTurn, isCurrent);
               } else {
                 // done ohne Antwort: Platzhalter-Turn als Fehler markieren, damit er
                 // nicht als "Keine Antwort" verschwindet (Bug 3).
@@ -873,6 +914,7 @@ export function WorkspacePage() {
         controller.signal
       );
     } catch (error) {
+      if (!isCurrent()) return;
       const aborted = error instanceof DOMException && error.name === "AbortError";
       const message = aborted ? "Recherche abgebrochen." : error instanceof Error ? error.message : String(error);
       if (aborted) {
@@ -882,6 +924,7 @@ export function WorkspacePage() {
       }
       updateAction(actionId, { status: "error", detail: message });
     } finally {
+      if (!isCurrent()) return;
       // Live-State loeschen; der Platzhalter-Turn bleibt mit seinem researchStatus
       // in der History sichtbar (running bis done-Event umwandelt, sonst error).
       setAutoProgress(null);
@@ -1189,20 +1232,20 @@ export function WorkspacePage() {
   useEffect(() => saveWorkspaceBoolean(scopedProjectId, "criticalMode", criticalMode), [criticalMode, scopedProjectId]);
 
   useEffect(() => {
-    if (!chatSettingsOpen && !actionsMenuOpen) {
+    if (!actionsMenuOpen) {
       return;
     }
     const closeOnOutsideClick = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Element && target.closest(".chat-tool-wrap")) {
+      if ((target as Element | null)?.closest?.(".chat-tool-wrap")) {
         return;
       }
-      setChatSettingsOpen(false);
       setActionsMenuOpen(false);
     };
+    const document = composerRef.current?.getDocument() ?? globalThis.document;
     document.addEventListener("pointerdown", closeOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
-  }, [chatSettingsOpen, actionsMenuOpen]);
+  }, [chatSettingsOpen, actionsMenuOpen, windows?.snapshot()]);
 
   useEffect(() => {
     assistantScopeRef.current = scopedProjectId;
@@ -1211,7 +1254,6 @@ export function WorkspacePage() {
     const session = loadAssistantSession(scopedProjectId);
     setHistory(session.history);
     setActiveTurnId(session.activeTurnId);
-    setQuestion("");
     setSelectedSource(null);
     setActiveEvidenceIndex(0);
     setPdfTarget(null);
@@ -1398,153 +1440,6 @@ export function WorkspacePage() {
     if (v === "kurz") return " [Bitte antworte präzise in 1–2 Sätzen pro Punkt.]";
     if (v === "ausführlich") return " [Bitte antworte ausführlich mit konkreten Details, Beispielen und Hintergründen.]";
     return "";
-  }
-
-  function mentionMarkerLabel(paper: Paper): string {
-    const normalized = normalizeWorkspacePaper(paper);
-    const title = workspacePaperTitle(normalized);
-    const short = title.length > 42 ? `${title.slice(0, 39)}…` : title;
-    return `@[${short}]`;
-  }
-
-  function placeCursorAfter(position: number) {
-    const input = questionInputRef.current;
-    if (!input) {
-      return;
-    }
-    requestAnimationFrame(() => {
-      input.focus();
-      input.setSelectionRange(position, position);
-    });
-  }
-
-  function applyMention(paper: Paper) {
-    if (!mentionState) {
-      return;
-    }
-    const paperId = workspacePaperId(normalizeWorkspacePaper(paper));
-    const marker = `${mentionMarkerLabel(paper)} `;
-    const before = question.slice(0, mentionState.start);
-    const after = question.slice(mentionState.end);
-    setQuestion(`${before}${marker}${after}`);
-    if (paperId) {
-      setPaperScope("selected");
-      if (!selectedPaperIds.includes(paperId)) {
-        toggleScopedPaper(paperId);
-      }
-    }
-    setMentionState(null);
-    setMentionHighlight(0);
-    placeCursorAfter(before.length + marker.length);
-  }
-
-  function openMentionPicker() {
-    const input = questionInputRef.current;
-    const caret = input?.selectionStart ?? question.length;
-    const before = question.slice(0, caret);
-    const needsSpace = before.length > 0 && !/\s$/.test(before);
-    const prefix = needsSpace ? " @" : "@";
-    const start = before.length + (needsSpace ? 1 : 0);
-    setQuestion(`${before}${prefix}${question.slice(caret)}`);
-    setMentionState({ query: "", start, end: start + 1 });
-    setMentionHighlight(0);
-    placeCursorAfter(start + 1);
-  }
-
-  function handleQuestionChange(event: ChangeEvent<HTMLInputElement>) {
-    const value = event.target.value;
-    const caret = event.target.selectionStart ?? value.length;
-    setQuestion(value);
-    const before = value.slice(0, caret);
-    const match = before.match(/(?:^|\s)@([^\s@[\]]*)$/);
-    if (match) {
-      const query = match[1];
-      setMentionState({ query, start: caret - query.length - 1, end: caret });
-      setMentionHighlight(0);
-    } else if (mentionState) {
-      setMentionState(null);
-    }
-    if (showCommandHelp && !value.trim().toLowerCase().startsWith("/help")) {
-      setShowCommandHelp(false);
-    }
-  }
-
-  function applyPaletteCommand(command: WorkspaceCommandDef) {
-    if (command.args) {
-      const next = `/${command.name} `;
-      setQuestion(next);
-      placeCursorAfter(next.length);
-      return;
-    }
-    setQuestion("");
-    handleSlashCommand(`/${command.name}`);
-  }
-
-  function handleQuestionKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
-    if (paletteQuery !== null && paletteCandidates.length) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setPaletteIndex((current) => (current + 1) % paletteCandidates.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setPaletteIndex((current) => (current - 1 + paletteCandidates.length) % paletteCandidates.length);
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        const candidate = paletteCandidates[paletteIndex] ?? paletteCandidates[0];
-        const next = `/${candidate.name} `;
-        setQuestion(next);
-        placeCursorAfter(next.length);
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        applyPaletteCommand(paletteCandidates[paletteIndex] ?? paletteCandidates[0]);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setQuestion("");
-        return;
-      }
-    }
-    if (mentionState && mentionCandidates.length) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setMentionHighlight((current) => (current + 1) % mentionCandidates.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setMentionHighlight((current) => (current - 1 + mentionCandidates.length) % mentionCandidates.length);
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        if (mentionCandidates.length === 1) {
-          applyMention(mentionCandidates[0]);
-        } else {
-          setMentionHighlight((current) => (current + 1) % mentionCandidates.length);
-        }
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        applyMention(mentionCandidates[mentionHighlight] ?? mentionCandidates[0]);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setMentionState(null);
-        return;
-      }
-    }
-    if (event.key === "Escape" && showCommandHelp) {
-      setShowCommandHelp(false);
-    }
   }
 
   type SlashCommandResult = { handled: boolean; ask?: string; scope?: PaperQuestionScope; newTurn?: boolean; critical?: boolean };
@@ -1739,7 +1634,6 @@ export function WorkspacePage() {
     // neue Antwort noch generiert wird (statt die alte bis zum onSuccess stehen
     // zu lassen). Gilt für beide Pfade: normales answerMutation und runAutoResearch.
     if (newTurn) {
-      setHistory([]);
       setActiveTurnId("");
     }
     // Auto-Recherche übernimmt Antwort + (bei schwacher Antwort) Paper-/Web-Harvest in
@@ -1761,9 +1655,7 @@ export function WorkspacePage() {
     }
   }
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    const raw = question.trim();
+  function submit(raw: string) {
     if (!raw) {
       return;
     }
@@ -1888,8 +1780,8 @@ export function WorkspacePage() {
         creativity_level: creativityLevel,
       })
       .then(({ session }) => {
-        parallelSessionIdRef.current = session.id;
-        setParallelSession(session);
+        const stillSelected = parallelSessionIdRef.current === draftId;
+        if (stillSelected) { parallelSessionIdRef.current = session.id; setParallelSession(session); }
         setHistory((prev) =>
           prev.map((t) =>
             t.id === draftId
@@ -1897,12 +1789,39 @@ export function WorkspacePage() {
               : t,
           ),
         );
-        setActiveTurnId(session.id);
+        if (stillSelected) setActiveTurnId(session.id);
       })
       .catch((err: unknown) => {
         logAction("Parallel Research", err instanceof Error ? err.message : "Konnte Session nicht starten.", "error");
       })
       .finally(() => setParallelLoading(false));
+  }
+
+  /** Fügt das Ergebnis einer Task-Modus-Tiefensuche als neuen Turn in den
+   *  Assistant-Pane ein — analog zum research_tree-Flow, aber ohne Live-Node-
+   *  Updates (der Dialog hat den Fortschritt schon gezeigt). Der Turn landet
+   *  via des regulären debounced `saveAssistantSession` in `workspace_sessions`
+   *  und erscheint so in der Bibliothek-Session-Liste. */
+  function insertTaskDeepSearchTurn(result: TaskDeepSearchResult, direction: TaskResearchDirection) {
+    const turnId = crypto.randomUUID();
+    const question = direction.label;
+    const turn: AssistantTurn = {
+      id: turnId,
+      question,
+      answer: result.summary,
+      verification: [],
+      createdAt: new Date().toISOString(),
+      type: "task_deep_search",
+      taskDeepSearchResult: {
+        ...result,
+        node_count: result.node_count,
+      },
+    };
+    setHistory((prev) => [turn, ...prev]);
+    setActiveTurnId(turnId);
+    setDeepMode(false);
+    setParallelMode(false);
+    setWorkspaceMode("research");
   }
 
   /** Weiterfragen inside an open parallel session: grounded answer (threaded under the
@@ -1978,7 +1897,7 @@ export function WorkspacePage() {
   }
 
   function onParallelChange(session: ParallelSession) {
-    setParallelSession(session);
+    if (parallelSessionIdRef.current === session.id) setParallelSession(session);
     setHistory((prev) =>
       prev.map((t) => (t.id === session.id ? { ...t, parallelVariantCount: session.variants.length } : t)),
     );
@@ -1987,7 +1906,8 @@ export function WorkspacePage() {
   function launchResearchTree(q: string, useHarvest: boolean, clarificationContext: string, initialNodes?: ResearchNode[]) {
     const abort = new AbortController();
     researchAbortRef.current = abort;
-    researchNodesRef.current = initialNodes ?? [];
+    const run = { nodes: initialNodes ?? [] as ResearchNode[] };
+    researchNodesRef.current = run.nodes;
     setResearchNodes(initialNodes ?? []);
     setResearchLlmError(null);
     setResearchLoading(true);
@@ -2056,18 +1976,13 @@ export function WorkspacePage() {
             // verification optional
           }
         }
-        setResearchNodes((prev) => {
-          const idx = prev.findIndex((n) => n.id === node.id);
-          let next: ResearchNode[];
-          if (idx >= 0) {
-            next = [...prev];
-            next[idx] = node;
-          } else {
-            next = [...prev, node];
-          }
-          researchNodesRef.current = next;
-          return next;
-        });
+        const index = run.nodes.findIndex(n => n.id === node.id);
+        run.nodes = index >= 0 ? run.nodes.map((value, i) => i === index ? node : value) : [...run.nodes, node];
+        setHistory(history => history.map(turn => turn.id === sessionId ? { ...turn, researchNodes: run.nodes } : turn));
+        if (researchSessionIdRef.current === sessionId) {
+          researchNodesRef.current = run.nodes;
+          setResearchNodes(run.nodes);
+        }
       },
       abort.signal,
     )
@@ -2076,10 +1991,10 @@ export function WorkspacePage() {
         console.error("Research tree error:", err);
       })
       .finally(() => {
-        setResearchLoading(false);
+        if (researchAbortRef.current === abort) setResearchLoading(false);
         // Save final node state to session history (covers both completed and paused runs).
         // The useEffect at line ~775 auto-persists history changes to localStorage.
-        const finalNodes = researchNodesRef.current;
+        const finalNodes = run.nodes;
         if (finalNodes.length > 0) {
           const saved: AssistantTurn = {
             id: sessionId,
@@ -2469,12 +2384,14 @@ export function WorkspacePage() {
   function jumpToCitationIn(pool: VerificationSource[], citation: string, context = "", quote = "", links = answer?.citation_links ?? [], citationStart?: number) {
     const meta = citationMetaFor(pool, citation, context, links, citationStart);
     if (meta) {
-      openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { syncPdfTarget: pdfOpen });
+      setEvidenceOpen(true);
+      openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { openPdf: true });
     }
   }
 
   function jumpToCitationMeta(meta: CitationMeta, context = "", quote = "") {
-    openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { syncPdfTarget: pdfOpen });
+    setEvidenceOpen(true);
+    openAssistantSource(meta.source, meta.evidenceIndex, quote || context, { openPdf: true });
   }
 
   function handleUnresolvedCitationClick(citationId: string) {
@@ -2582,6 +2499,7 @@ export function WorkspacePage() {
   }
 
   function handleAnswerMouseUp() {
+    const window = answerBlocksRef.current?.ownerDocument.defaultView ?? globalThis.window;
     // getSelection erst nach dem Klick-Handling auslesen.
     window.setTimeout(() => {
       const selection = window.getSelection();
@@ -2591,7 +2509,7 @@ export function WorkspacePage() {
       }
       const text = selectionPlainText(selection);
       const anchor = selection.anchorNode;
-      const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+      const anchorElement = anchor?.nodeType === 1 ? anchor as Element : anchor?.parentElement ?? null;
       if (!text || text.length < 8 || !anchorElement || !container.contains(anchorElement)) {
         return;
       }
@@ -2626,10 +2544,11 @@ export function WorkspacePage() {
         closeAnswerSelection();
       }
     };
+    const document = answerBlocksRef.current?.ownerDocument ?? globalThis.document;
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answerSelection]);
+  }, [answerSelection, windows?.snapshot()]);
 
   const selectionBlock = answerSelection
     ? activeBlocks.find((block) => block.id === answerSelection.blockId) ?? activeBlocks[activeBlocks.length - 1]
@@ -2716,7 +2635,7 @@ export function WorkspacePage() {
     const quoted = answerSelection.text.length > 260 ? `${answerSelection.text.slice(0, 257)}…` : answerSelection.text;
     setQuestion(`Zu dieser Aussage aus deiner Antwort: „${quoted}" — `);
     closeAnswerSelection();
-    questionInputRef.current?.focus();
+    composerRef.current?.focus();
   }
 
   function selectionNotePayload(): { markdown: string; citations: Record<string, unknown>[] } | null {
@@ -2787,7 +2706,7 @@ export function WorkspacePage() {
           const nextAnswer = pattern.test(answerText)
             ? answerText.replace(pattern, replacement)
             : answerText;
-          return { ...block, answer: { ...block.answer, answer: nextAnswer } };
+          return { ...block, answer: { ...block.answer, answer: nextAnswer, claims_version: undefined, claims: [], verification_status: "legacy" as const, citation_links: [] } };
         });
         const last = nextBlocks[nextBlocks.length - 1];
         return { ...turn, blocks: nextBlocks, answer: last ? last.answer : turn.answer };
@@ -2819,7 +2738,7 @@ export function WorkspacePage() {
           }
           removed = true;
           const nextAnswer = block.answer.answer.replace(withTail, " ").replace(/ {2,}/g, " ").trim();
-          return { ...block, answer: { ...block.answer, answer: nextAnswer } };
+          return { ...block, answer: { ...block.answer, answer: nextAnswer, claims_version: undefined, claims: [], verification_status: "legacy" as const, citation_links: [] } };
         });
         const last = nextBlocks[nextBlocks.length - 1];
         return {
@@ -2868,7 +2787,7 @@ export function WorkspacePage() {
           // Innerhalb jedes Brackets nur die Referenz auf dieses Paper streichen; ein
           // Bracket, das dadurch leer wird, fällt weg.
           const rebuilt = brackets.map((bracket) => {
-            const tokens = bracket.slice(1, -1).split(",").map((token) => token.trim()).filter(Boolean);
+            const tokens = citationIds(bracket.slice(1, -1), block.verification.map(source => source.paper_id));
             const kept = tokens.filter((token) => !token.includes(paperId));
             if (kept.length === tokens.length) {
               return bracket;
@@ -2888,7 +2807,7 @@ export function WorkspacePage() {
             const withTail = new RegExp(`${base.source}(?:\\s*\\[[^\\]]+\\])*[.!?]?\\s*`);
             nextAnswer = answerText.replace(withTail, " ").replace(/ {2,}/g, " ").trim();
           }
-          return { ...block, answer: { ...block.answer, answer: nextAnswer } };
+          return { ...block, answer: { ...block.answer, answer: nextAnswer, claims_version: undefined, claims: [], verification_status: "legacy" as const, citation_links: [] } };
         });
         const last = nextBlocks[nextBlocks.length - 1];
         return {
@@ -3045,107 +2964,6 @@ export function WorkspacePage() {
    *  Antwort — VOR dem Anzeigen — und korrigiert Antworttext/Zitate entsprechend:
    *  nicht gestützt → Zitat/Aussage raus, teilweise → umformuliert, gestützt → Beleg fix.
    *  So sieht der Nutzer direkt die bereinigte Antwort statt nachträglicher Änderungen. */
-  async function verifyUncertainCitations(
-    payload: Answer,
-    sources: VerificationSource[]
-  ): Promise<{ payload: Answer; sources: VerificationSource[] }> {
-    const links = payload.citation_links ?? [];
-    // Kein Early-Return auf link.approximate: citationMetasFor markiert inzwischen auch
-    // verification-unsichere Belege (nicht im PDF verortet) als approximate — die Items-
-    // Sammlung unten entscheidet, ob es etwas zu prüfen gibt.
-    if (!sources.length) {
-      return { payload, sources };
-    }
-    const parts = payload.answer.split(/(\[[^\]]+\])/g);
-    const seen = new Set<string>();
-    const items: { paperId: string; source: VerificationSource; evidenceIndex: number; statement: string }[] = [];
-    for (let index = 0; index < parts.length; index += 1) {
-      const bracket = /^\[([^\]]+)\]$/.exec(parts[index]);
-      if (!bracket) {
-        continue;
-      }
-      const start = parts.slice(0, index).reduce((sum, item) => sum + item.length, 0);
-      const raw = citationMetasFor(sources, bracket[1], citationContext(parts, index), links, start);
-      const metas = Array.isArray(raw) ? raw : raw ? [raw] : [];
-      const segment = citationSegmentFromParts(parts, index);
-      const statement = meaningfulQuote(segment) || segment;
-      if (!statement || statement.length < 8) {
-        continue;
-      }
-      for (const meta of metas) {
-        if (!meta.approximate) {
-          continue;
-        }
-        const key = `${meta.source.paper_id}#${meta.evidenceIndex}`;
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        items.push({ paperId: meta.source.paper_id, source: meta.source, evidenceIndex: meta.evidenceIndex, statement });
-      }
-    }
-    if (!items.length) {
-      return { payload, sources };
-    }
-
-    let answerText = payload.answer;
-    let nextLinks = links.map((link) => ({ ...link }));
-    let nextSources = sources.map((source) => ({ ...source, evidence: source.evidence.map((entry) => ({ ...entry })) }));
-
-    for (const item of items.slice(0, MAX_PREVERIFY_CITATIONS)) {
-      const evidence = item.source.evidence[item.evidenceIndex];
-      // Bei claim_excerpt/approx_region ist reference_text der eigene Antwortsatz —
-      // als "Quellen-Auszug" an den Judge gefüttert würde er die Prüfung zirkulär
-      // Richtung "supported" biasen. Dann lieber gar kein Auszug (der Checker zieht
-      // sich PDF/Abstract selbst).
-      const evidenceMeta = (evidence?.metadata ?? {}) as Record<string, unknown>;
-      const selfReferential =
-        evidenceMeta.context_policy === "claim_excerpt" || evidenceMeta.context_policy === "approx_region";
-      let check: ClaimCheckResult | undefined;
-      try {
-        const res = await api.claimCheck({
-          statement: item.statement,
-          paper_ids: [item.paperId],
-          titles: { [item.paperId]: item.source.title || "" },
-          evidence_texts: { [item.paperId]: evidence?.pdf_excerpt || (selfReferential ? "" : evidence?.reference_text || "") },
-          provider: provider || undefined,
-          model: model || undefined
-        });
-        check = res.checks[0];
-      } catch {
-        continue; // fail-soft: Zuordnung bleibt (mit Warnzeichen) manuell prüfbar
-      }
-      if (!check) {
-        continue;
-      }
-      if (check.verdict === "not_supported") {
-        const stripped = stripCitationFromAnswerText(answerText, item.paperId, item.statement);
-        answerText = stripped.text;
-        nextLinks = clearApproximateOnLinks(nextLinks, item.paperId, item.evidenceIndex);
-        logAction(
-          "Zitat vorab geprüft",
-          stripped.outcome === "statement"
-            ? `Nicht gestützte Aussage entfernt ([${item.paperId}]).`
-            : `Nicht gestütztes Zitat [${item.paperId}] entfernt.`,
-          "ok"
-        );
-      } else if (check.verdict === "partially_supported") {
-        const replacement = await reformulateForSource(item.source, item.evidenceIndex, item.statement, check);
-        if (replacement) {
-          answerText = replaceStatementInAnswerText(answerText, item.statement, replacement);
-        }
-        nextLinks = clearApproximateOnLinks(nextLinks, item.paperId, item.evidenceIndex);
-        logAction("Zitat vorab geprüft", `Aussage an Quelle [${item.paperId}] angepasst (nur teilweise gestützt).`, "ok");
-      } else if (check.verdict === "supported") {
-        if (check.supporting_quotes.length) {
-          nextSources = updateEvidenceInSources(nextSources, item.paperId, item.evidenceIndex, check.supporting_quotes, item.statement);
-        }
-        nextLinks = clearApproximateOnLinks(nextLinks, item.paperId, item.evidenceIndex);
-      }
-      // insufficient_evidence: Warnzeichen bleibt — bleibt manuell nachprüfbar.
-    }
-    return { payload: { ...payload, answer: answerText, citation_links: nextLinks }, sources: nextSources };
-  }
 
   function insertCitationFromAnswer(source: VerificationSource, evidenceIndex: number, quote = "", extras?: CitationInsertExtras) {
     const payload = citationInsertPayload(source, evidenceIndex, quote, extras);
@@ -3190,7 +3008,7 @@ export function WorkspacePage() {
     setSelectedPaperIds((papers) => papers.filter((paperId) => !derived.includes(paperId) || stillClaimed.has(paperId)));
   }
 
-  async function appendToActiveNote(markdown: string, citations: Record<string, unknown>[] = []) {
+  async function appendToActiveNote(markdown: string, citations: Record<string, unknown>[] = [], propagateError = false) {
     const content = markdown.trim();
     if (!content) {
       return;
@@ -3218,6 +3036,7 @@ export function WorkspacePage() {
       setNoteStatus("In Notiz gespeichert");
     } catch (error) {
       setNoteStatus(error instanceof Error ? error.message : "Speichern fehlgeschlagen");
+      if (propagateError) throw error;
     }
   }
 
@@ -3321,6 +3140,8 @@ export function WorkspacePage() {
     min: number
   ) {
     event.preventDefault();
+    const document = event.currentTarget.ownerDocument;
+    const window = document.defaultView!;
     const startY = event.clientY;
     const startHeight = value;
     // Dynamischer Deckel statt fester Pixel: Liste darf fast die ganze Pane-Höhe einnehmen.
@@ -3356,36 +3177,10 @@ export function WorkspacePage() {
   }, [navigatorQuery, notesSnapshot.notes]);
 
   const pdfPapers = papersQuery.data?.items ?? [];
-  // Befehlspalette: sichtbar solange der erste Token noch getippt wird ("/su…").
-  const paletteQuery = /^\/\S*$/.test(question) ? question.slice(1) : null;
-  const paletteCandidates = useMemo(() => (paletteQuery !== null ? matchWorkspaceCommands(paletteQuery) : []), [paletteQuery]);
-  const activeCommandHint = useMemo(() => {
-    const match = question.match(/^\/([\wäöüß]+)\s/i);
-    if (!match) {
-      return null;
-    }
-    const name = match[1].toLowerCase();
-    return WORKSPACE_COMMANDS.find((command) => command.name === name || (command.aliases ?? []).includes(name)) ?? null;
-  }, [question]);
-  useEffect(() => setPaletteIndex(0), [paletteQuery]);
   const latestAnswerNeedsWeb = useMemo(
     () => Boolean(latestBlock && answerSuggestsWebSearch(latestBlock.answer)),
     [latestBlock]
   );
-  const mentionCandidates = useMemo(() => {
-    if (!mentionState) {
-      return [];
-    }
-    const needle = normalizeFilter(mentionState.query);
-    const pool = needle
-      ? pdfPapers.filter((paper) => {
-          const normalized = normalizeWorkspacePaper(paper);
-          const haystack = normalizeFilter(`${workspacePaperTitle(normalized)} ${workspacePaperId(normalized)}`);
-          return haystack.includes(needle);
-        })
-      : pdfPapers;
-    return pool.slice(0, 8);
-  }, [mentionState, pdfPapers]);
   const pdfView = pdfProps(pdfTarget);
   // When no local PDF is available, resolve the cited paper id so the PDF pane can show
   // its abstract + a link to the original source. Grey sources render elsewhere.
@@ -3412,7 +3207,7 @@ export function WorkspacePage() {
       ref={pageRef}
       className="workspace-page"
     >
-      <PanelGroup direction="horizontal" autoSaveId="ws-cols" className="wk-group">
+      <PanelGroup ref={panelGroupRef} storage={panelStorage} direction="horizontal" autoSaveId="ws-cols" className="wk-group">
         <Panel
           id="ws-nav"
           order={1}
@@ -3422,9 +3217,10 @@ export function WorkspacePage() {
           collapsible
           ref={navPanelRef}
           className="wk-pane-slot"
-          onCollapse={() => setNavigatorOpen(false)}
+          onCollapse={() => { if (!windows?.isDetached("navigator")) setNavigatorOpen(false); }}
           onExpand={() => setNavigatorOpen(true)}
         >
+          <PortablePane pane="navigator" panelRef={navPanelRef}>
           {navigatorOpen ? (
             <aside className="workspace-nav-pane">
               <PaneHeading eyebrow={scopeLabel} title="Arbeitsplatz" onCollapse={() => navPanelRef.current?.collapse()} collapseSide="left"
@@ -3524,6 +3320,7 @@ export function WorkspacePage() {
                   creativityLevel={creativityLevel}
                   setCreativityLevel={setCreativityLevel}
                   onStartParallelSession={(q, taskId) => startParallelSession(q, taskId)}
+                  onInsertAsTurn={(result, direction) => insertTaskDeepSearchTurn(result, direction)}
                   onClose={() => setWorkspaceMode("research")}
                 />
               ) : (
@@ -3596,8 +3393,10 @@ export function WorkspacePage() {
           ) : (
             <CollapsedPane label="Navigator" icon={<PanelLeftOpen size={17} />} onOpen={() => navPanelRef.current?.expand()} />
           )}
+
+          </PortablePane>
         </Panel>
-        <PanelResizeHandle className="wk-resize wk-resize--v" />
+        <PanelResizeHandle className="wk-resize wk-resize--v" aria-label="Navigator Breite anpassen" />
 
         <Panel
           id="ws-pdf"
@@ -3608,10 +3407,11 @@ export function WorkspacePage() {
           collapsible
           ref={pdfPanelRef}
           className="wk-pane-slot"
-          onCollapse={() => setPdfOpen(false)}
+          onCollapse={() => { if (!windows?.isDetached("center")) setPdfOpen(false); }}
           onExpand={() => setPdfOpen(true)}
         >
-          {centerView === "analysis" ? (
+          <PortablePane pane="center" panelRef={pdfPanelRef}>
+          <KeptView active={centerView === "analysis"}>
             <AnalysisPanel
               projectId={scopedProjectId}
               provider={provider}
@@ -3619,9 +3419,12 @@ export function WorkspacePage() {
               paperIds={selectedPaperIds}
               onCollapse={() => setCenterView("pdf")}
             />
-          ) : centerView === "datasets" ? (
+          </KeptView>
+          <KeptView active={centerView === "datasets"}>
             <DatasetsPanel projectId={scopedProjectId} onCollapse={() => setCenterView("pdf")} />
-          ) : pdfOpen ? (
+          </KeptView>
+          <KeptView active={centerView === "pdf"}>
+          {pdfOpen ? (
             pdfTarget?.kind === "grey" ? (
               <GreySourceView
                 source={pdfTarget.source}
@@ -3631,7 +3434,14 @@ export function WorkspacePage() {
                 onInsertPreviewClear={() => notesActionsRef.current?.clearInsertPreview()}
               />
             ) : (
-              <PdfPane
+              <PdfPane headerInPaneToolbar
+                selection={pdfSelection} onSelectionChange={setPdfSelection}
+                anchorRequestKey={pdfTarget}
+                anchors={pdfTarget?.kind === "noteCitation" ? pdfTarget.citation.pdf_anchors : undefined}
+                onInsertSelection={async (selection, text, language) => {
+                  const payload = pdfCitationPayload(selection, text, pdfView.title, language);
+                  await appendToActiveNote(payload.markdown, payload.citations, true);
+                }}
                 url={pdfView.url}
                 title={pdfView.title}
                 metaPaperId={pdfMetaPaperId}
@@ -3648,8 +3458,11 @@ export function WorkspacePage() {
           ) : (
             <CollapsedPane label="PDF" icon={<PanelRightOpen size={17} />} onOpen={() => pdfPanelRef.current?.expand()} />
           )}
+
+          </KeptView>
+          </PortablePane>
         </Panel>
-        <PanelResizeHandle className="wk-resize wk-resize--v" />
+        <PanelResizeHandle className="wk-resize wk-resize--v" aria-label="PDF Breite anpassen" />
 
         <Panel
           id="ws-assistant"
@@ -3660,16 +3473,17 @@ export function WorkspacePage() {
           collapsible
           ref={assistantPanelRef}
           className="wk-pane-slot"
-          onCollapse={() => setAssistantOpen(false)}
+          onCollapse={() => { if (!windows?.isDetached("assistant")) setAssistantOpen(false); }}
           onExpand={() => setAssistantOpen(true)}
         >
+          <PortablePane pane="assistant" panelRef={assistantPanelRef}>
           {assistantOpen ? (
         <section className={`workspace-assistant-pane ${assistantMode === "notes" ? "workspace-assistant-pane--notes" : ""}`}>
           <PaneHeading
             title="Assistant"
             onCollapse={() => assistantPanelRef.current?.collapse()}
             collapseSide="left"
-            status={answerMutation.isPending || citationVerifyPending ? "running" : answer?.generation_error ? "warning" : "idle"}
+            status={answerMutation.isPending ? "running" : answer?.generation_error ? "warning" : "idle"}
             actions={
               <div className="segmented workspace-assistant-mode-toggle" aria-label="Assistant-Modus">
                 <button
@@ -3699,7 +3513,7 @@ export function WorkspacePage() {
               </div>
             }
           />
-          {assistantMode === "notes" ? (
+          <KeptView active={assistantMode === "notes"}>
             <WorkspaceNotesAssistant
               threads={notesSnapshot.threads}
               activeThreadId={notesSnapshot.activeThreadId}
@@ -3741,14 +3555,14 @@ export function WorkspacePage() {
               }}
               onDeleteAllThreads={() => notesActionsRef.current?.deleteAllThreads()}
             />
-          ) : (
+          </KeptView>
+          <KeptView active={assistantMode === "pdf"}>
             <WorkspaceAssistantPane
               {...{
                 actionHistory,
                 actionLog,
                 actionsMenuOpen,
                 activeBlocks,
-                activeCommandHint,
                 activeEvidence,
                 activeEvidenceIndex,
                 activeProject,
@@ -3757,19 +3571,18 @@ export function WorkspacePage() {
                 answer,
                 answerBlocksRef,
                 answerMutation,
+                pendingQuestion: answerMutation.isPending ? answerMutation.variables?.value ?? "" : "",
+                answerProgress,
                 answerSelection,
                 appendActiveQuote,
                 appendAnswerToNote,
                 applyAnswerCorrection,
-                applyMention,
-                applyPaletteCommand,
                 askAboutSelection,
                 autoAbortRef,
                 autoProgress,
                 autoResearch,
                 chatSettingsOpen,
                 checkAnswerSelection,
-                citationVerifyPending,
                 clarifyLoading,
                 closeAnswerSelection,
                 commandSearch,
@@ -3791,8 +3604,6 @@ export function WorkspacePage() {
                 handleChatDragOver,
                 handleChatDrop,
                 handleChatPaste,
-                handleQuestionChange,
-                handleQuestionKeyDown,
                 handleUnresolvedCitationClick,
                 includeGlobalSources,
                 insertCitationFromAnswer,
@@ -3804,9 +3615,6 @@ export function WorkspacePage() {
                 latestAnswerNeedsWeb,
                 latestBlock,
                 launchResearchTree,
-                mentionCandidates,
-                mentionHighlight,
-                mentionState,
                 model,
                 noteStatus,
                 notesActionsRef,
@@ -3815,9 +3623,6 @@ export function WorkspacePage() {
                 openGreySource,
                 openParallelServerSession,
                 openSelectedAssistantPdf,
-                paletteCandidates,
-                paletteIndex,
-                paletteQuery,
                 paperScope,
                 paperSearchCommand,
                 parallelFollowupLoading,
@@ -3832,9 +3637,7 @@ export function WorkspacePage() {
                 previewCitationFromAnswer,
                 previewSelectionInNote,
                 provider,
-                question,
                 questionBlockedByScope,
-                questionInputRef,
                 removeCitationFromBlock,
                 removeStatementFromBlock,
                 researchLlmError,
@@ -3877,6 +3680,8 @@ export function WorkspacePage() {
                 sourceIngestStatus,
                 stopResearchTree,
                 submit,
+                composerRef,
+                onSelectMention: (paperId: string) => { setPaperScope("selected"); if (!selectedPaperIds.includes(paperId)) toggleScopedPaper(paperId); },
                 toggleScopedGrey,
                 toggleScopedPaper,
                 updateCitationEvidenceInBlock,
@@ -3889,13 +3694,15 @@ export function WorkspacePage() {
                 webResult,
               }}
             />
-          )}
+          </KeptView>
         </section>
       ) : (
         <CollapsedPane label="Assistant" icon={<PanelLeftOpen size={17} />} onOpen={() => assistantPanelRef.current?.expand()} />
       )}
+
+          </PortablePane>
         </Panel>
-        <PanelResizeHandle className="wk-resize wk-resize--v" />
+        <PanelResizeHandle className="wk-resize wk-resize--v" aria-label="Assistant Breite anpassen" />
 
         <Panel
           id="ws-notes"
@@ -3906,12 +3713,13 @@ export function WorkspacePage() {
           collapsible
           ref={notesPanelRef}
           className="wk-pane-slot"
-          onCollapse={() => setNotesOpen(false)}
+          onCollapse={() => { if (!windows?.isDetached("notes")) setNotesOpen(false); }}
           onExpand={() => setNotesOpen(true)}
         >
+          <PortablePane pane="notes" panelRef={notesPanelRef}>
       {notesOpen ? (
         <section className="workspace-notes-pane">
-          <div className="workspace-notes-topline">
+          <PaneHeader><div className="workspace-notes-topline">
             <div>
               <span>Notizen</span>
               <strong>{notesTab === "results" ? "Ergebnisse" : (notesSnapshot.title || "Keine Notiz gewaehlt")}</strong>
@@ -3932,6 +3740,7 @@ export function WorkspacePage() {
               </button>
             </div>
           </div>
+</PaneHeader>
           {/* The note editor stays mounted (so "In Notiz übernehmen" can insert) but is hidden
               while the Parallel-Research "Ergebnisse" view is active. */}
           <div
@@ -3967,8 +3776,11 @@ export function WorkspacePage() {
       ) : (
         <CollapsedPane label="Notizen" icon={<PanelRightOpen size={17} />} onOpen={() => notesPanelRef.current?.expand()} />
       )}
+
+          </PortablePane>
         </Panel>
       </PanelGroup>
+      {createPortal(<>
       {showHarvestDialog ? (
         <div className="harvest-dialog-overlay">
           <div className="harvest-dialog-card">
@@ -4006,6 +3818,7 @@ export function WorkspacePage() {
           onFinish={finishClarify}
         />
       ) : null}
+      </>, composerRef.current?.getDocument().body ?? document.body)}
     </section>
   );
 
@@ -4136,4 +3949,3 @@ function CollapsibleSidebarBlock({
     </div>
   );
 }
-

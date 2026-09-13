@@ -26,8 +26,16 @@ from storage.metadata_db.tasks import TasksMixin
 from storage.metadata_db.project_scope import ProjectScopeMixin
 
 
+from storage.metadata_db.passages import PassagesMixin
+
+
+from storage.metadata_db.glossary import GlossaryMixin
+
+
 class MetadataDB(
     SchemaMixin,
+    GlossaryMixin,
+    PassagesMixin,
     PapersMixin,
     ExtractionMixin,
     BatchMixin,

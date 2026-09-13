@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -27,6 +29,59 @@ from storage.metadata_db import MetadataDB
 DEFAULT_METADATA_DB_PATH = "data/metadata.duckdb"
 
 router = APIRouter()
+
+
+def _persist_deep_search_as_workspace_turn(
+    *,
+    db_path: str,
+    project_id: str | None,
+    direction: dict[str, Any],
+    label: str,
+    summary: dict[str, Any],
+    papers_count: int,
+    grey_count: int,
+    paper_ids: list[str],
+    grey_ids: list[str],
+    node_count: int,
+    depth: int,
+    branches: int,
+    task_id: str,
+) -> None:
+    """Append the finished deep search as a turn to the project's workspace session.
+
+    Mirrors how deep-research trees land in the Bibliothek: the turn carries
+    ``type='task_deep_search'`` so the navigator can render it with its own icon.
+    Global mode (``__all_papers__`` or empty id) is a no-op — there is no single
+    project whose session list this turn would belong to.
+    """
+    if not project_id or project_id == "__all_papers__":
+        return
+    turn: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "question": label,
+        "answer": summary,
+        "verification": [],
+        "createdAt": time.time(),
+        "type": "task_deep_search",
+        "taskDeepSearchResult": {
+            "summary": summary,
+            "papers_count": papers_count,
+            "grey_count": grey_count,
+            "paper_ids": paper_ids,
+            "grey_ids": grey_ids,
+            "direction": direction,
+            "node_count": node_count,
+            "depth": depth,
+            "branches": branches,
+            "task_id": task_id,
+        },
+    }
+    with MetadataDB(db_path) as db:
+        payload = db.get_workspace_session(project_id) or {"history": []}
+        history = list(payload.get("history") or [])
+        history.insert(0, turn)
+        payload["history"] = history
+        db.save_workspace_session(project_id, payload, force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +150,8 @@ class TaskDeepSearchRequest(BaseModel):
     """Per-research-direction deep search — see ``POST /tasks/{id}/deep-search``."""
 
     direction: dict[str, Any] = Field(default_factory=dict)
+    depth: int = Field(default=1, ge=1, le=6)
+    branches: int = Field(default=3, ge=2, le=8)
     max_papers: int = Field(default=20, ge=1, le=50)
     max_web_sources: int = Field(default=10, ge=0, le=30)
     provider: str | None = None
@@ -103,6 +160,7 @@ class TaskDeepSearchRequest(BaseModel):
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH
     pdf_base_dir: str = "data/pdfs"
     projects_path: str = "data/projects.json"
+    target_project_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +404,11 @@ async def task_deep_search(
     db_path = payload.metadata_db_path
     projects_path = payload.projects_path
     pdf_base_dir = payload.pdf_base_dir
+    # Effective project for the harvest attach: prefer an explicit target override so
+    # a task living in global __all_papers__ mode can still attach harvested papers
+    # to a concrete project's membership list.
+    target_project_id = payload.target_project_id
+    attach_project_id = target_project_id or project_id
 
     runner = DirectionDeepSearchRunner(pm.llm_router)
 
@@ -355,11 +418,14 @@ async def task_deep_search(
         grey_count = 0
         paper_ids: list[str] = []
         grey_ids: list[str] = []
+        node_count = 0
         try:
             async for event in runner.stream(
                 direction=direction,
                 project_id=project_id,
                 task_spec=task_spec,
+                depth=payload.depth,
+                branches=payload.branches,
                 max_papers=payload.max_papers,
                 max_web_sources=payload.max_web_sources,
                 provider=payload.provider,
@@ -368,6 +434,7 @@ async def task_deep_search(
                 metadata_db_path=db_path,
                 pdf_base_dir=pdf_base_dir,
                 projects_path=projects_path,
+                target_project_id=target_project_id,
             ):
                 yield event
                 # Parse our own events to capture the final summary for persistence.
@@ -382,6 +449,7 @@ async def task_deep_search(
                         grey_count = int(payload_evt.get("grey_count", 0))
                         paper_ids = list(payload_evt.get("paper_ids") or [])
                         grey_ids = list(payload_evt.get("grey_ids") or [])
+                        node_count = int(payload_evt.get("node_count", 0))
         except Exception as exc:  # noqa: BLE001 — terminal error event
             yield f"data: {json.dumps({'status': 'error', 'error': str(exc)}, ensure_ascii=False)}\n\n"
             return
@@ -400,11 +468,37 @@ async def task_deep_search(
                         "paper_ids": paper_ids,
                         "grey_ids": grey_ids,
                         "direction": direction,
+                        "depth": payload.depth,
+                        "branches": payload.branches,
+                        "node_count": node_count,
                     }
                     spec["deep_searches"] = deep
                     db.update_task(task_id, task_json=spec)
             except Exception:
                 # Persistence is best-effort; the client already has the result.
+                pass
+
+            # Best-effort persist as a Bibliothek session (workspace_sessions) so the
+            # deep search shows up in the left navigator list alongside normal
+            # assistant / Tiefenanalyse sessions. We append a new turn with type
+            # 'task_deep_search' to the project's existing session payload.
+            try:
+                _persist_deep_search_as_workspace_turn(
+                    db_path=db_path,
+                    project_id=attach_project_id,
+                    direction=direction,
+                    label=label,
+                    summary=final_summary,
+                    papers_count=papers_count,
+                    grey_count=grey_count,
+                    paper_ids=paper_ids,
+                    grey_ids=grey_ids,
+                    node_count=node_count,
+                    depth=payload.depth,
+                    branches=payload.branches,
+                    task_id=task_id,
+                )
+            except Exception:
                 pass
 
     return StreamingResponse(

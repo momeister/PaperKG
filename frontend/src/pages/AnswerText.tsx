@@ -1,3 +1,4 @@
+import { usePaneEnvironment } from "../workspace/PortablePane";
 // AnswerText + EvidenceVerificationBadge — aus AssistantPage.tsx extrahiert.
 // AssistantPage re-exportiert beide (Konsumenten unveraendert). Typ-Importe aus
 // der Page sind type-only (zyklusfrei).
@@ -130,23 +131,7 @@ export function EvidenceVerificationBadge({
  * overlap). Sources without a local PDF are excluded — there is nothing to check against,
  * and the badge already says so.
  */
-export function AnswerText({
-  answer,
-  onCitationClick,
-  onCitationMetaClick,
-  onUnresolvedCitationClick,
-  getCitationMeta,
-  activeCitation,
-  onCitationInsert,
-  onCitationInsertPreview,
-  onCitationInsertPreviewClear,
-  onClaimRemove,
-  onCitationRemove,
-  onClaimEvidenceUpdate,
-  onClaimReformulate,
-  autoVerifyUncertain = false,
-  markUncited = false
-}: {
+export function AnswerText(props: {
   answer: string;
   citationLinks?: CitationLink[];
   onCitationClick: (citation: string, context?: string, quote?: string, citationStart?: number) => void;
@@ -171,11 +156,27 @@ export function AnswerText({
   onClaimReformulate?: (source: VerificationSource, evidenceIndex: number, statement: string, result: ClaimCheckResult) => void;
   /** Unsichere Zuordnungen (approximate) sofort automatisch nachprüfen + Antwort ggf.
    *  korrigieren — statt auf einen Klick auf "Nachchecken" zu warten. */
-  autoVerifyUncertain?: boolean;
   /** Underline (dashed) sentences without an adjacent citation so the
    *  "N Aussage(n) ohne Quellenangabe" hint becomes locatable in the text. */
   markUncited?: boolean;
 }) {
+  const { window, document } = usePaneEnvironment();
+  const {
+    answer,
+    onCitationClick,
+    onCitationMetaClick,
+    onUnresolvedCitationClick,
+    getCitationMeta,
+    activeCitation,
+    onCitationInsert,
+    onCitationInsertPreview,
+    onCitationInsertPreviewClear,
+    onClaimRemove,
+    onCitationRemove,
+    onClaimEvidenceUpdate,
+    onClaimReformulate,
+    markUncited = false
+  } = props;
   const [pinnedCitation, setPinnedCitation] = useState<{
     key: string;
     paperId: string;
@@ -195,6 +196,7 @@ export function AnswerText({
     siblings: CitationMeta[];
     approximate: boolean;
     confidence: "high" | "medium" | "low";
+    verificationStatus?: string;
     left: number;
     top: number;
     width: number;
@@ -232,10 +234,18 @@ export function AnswerText({
     };
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [claimCard]);
-  const parts = answer.split(/(\[[^\]]+\])/g);
+  }, [window, claimCard]);
+  const parts = useMemo(() => answer.split(/(\[[^\]]+\])/g), [answer]);
+  const partOffsets = useMemo(() => { let offset = 0; return parts.map(part => { const start = offset; offset += part.length; return start; }); }, [parts]);
+  const linksByPosition = useMemo(() => new Map((props.citationLinks ?? []).filter(link => link.claim_id).map(link => [link.citation_start, link])), [props.citationLinks]);
   let renderedOffset = 0;
   const contextCitation = hoverCitation ?? pinnedCitation;
+  const contextPartIndex = contextCitation ? parts.findIndex((part, i) => contextCitation.key === `${part}-${i}` || contextCitation.key.startsWith(`${part}-${i}-`)) : -1;
+  const contextLink = linksByPosition.get(partOffsets[contextPartIndex]);
+  const claimFirstCitation = contextLink ? Math.min(...(props.citationLinks ?? []).filter(link => link.claim_id === contextLink.claim_id).map(link => link.citation_start)) : 0;
+  const claimTextEnd = claimFirstCitation - 1;
+  const claimTextStart = claimTextEnd - (contextLink?.context?.length ?? 0);
+
   const contextCitationPaperId = contextCitation
     ? "source" in contextCitation
       ? contextCitation.source.paper_id
@@ -298,6 +308,7 @@ export function AnswerText({
       segment,
       siblings,
       approximate: Boolean(meta.approximate),
+      verificationStatus: meta.verificationStatus,
       confidence: meta.confidence ?? (Boolean(meta.approximate) ? "low" : "high"),
       left,
       top,
@@ -354,97 +365,6 @@ export function AnswerText({
     }
   }
 
-  // Automatischer Nachcheck aller als unsicher markierten Zuordnungen — direkt beim
-  // Anzeigen, ohne dass der Nutzer "Nachchecken" drücken muss.
-  const uncertainCitations = useMemo(() => {
-    type Item = { key: string; source: VerificationSource; evidenceIndex: number; paperId: string; statement: string };
-    if (!autoVerifyUncertain) {
-      return [] as Item[];
-    }
-    const collected: Item[] = [];
-    const seen = new Set<string>();
-    const scanParts = answer.split(/(\[[^\]]+\])/g);
-    for (let index = 0; index < scanParts.length; index += 1) {
-      const bracket = /^\[([^\]]+)\]$/.exec(scanParts[index]);
-      if (!bracket) {
-        continue;
-      }
-      const partStart = scanParts.slice(0, index).reduce((sum, item) => sum + item.length, 0);
-      const rawMeta = getCitationMeta(bracket[1], citationContext(scanParts, index), partStart);
-      const metas = Array.isArray(rawMeta) ? rawMeta : rawMeta ? [rawMeta] : [];
-      const segment = citationSegmentFromParts(scanParts, index);
-      const statement = meaningfulQuote(segment) || segment;
-      if (!statement || statement.length < 8) {
-        continue;
-      }
-      for (const meta of metas) {
-        if (!meta.approximate) {
-          continue;
-        }
-        const key = `${meta.source.paper_id}#${meta.evidenceIndex}`;
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        collected.push({ key, source: meta.source, evidenceIndex: meta.evidenceIndex, paperId: meta.source.paper_id, statement });
-      }
-    }
-    return collected;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answer, autoVerifyUncertain]);
-
-  const autoVerifiedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!autoVerifyUncertain || !uncertainCitations.length) {
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      for (const item of uncertainCitations) {
-        if (cancelled) {
-          return;
-        }
-        if (autoVerifiedRef.current.has(item.key)) {
-          continue;
-        }
-        autoVerifiedRef.current.add(item.key);
-        const evidence = item.source.evidence[item.evidenceIndex];
-        // Bei claim_excerpt/approx_region ist reference_text der eigene Antwortsatz —
-        // ihn als Quellen-Auszug mitzugeben würde den Judge zirkulär biasen.
-        const evidenceMeta = (evidence?.metadata ?? {}) as Record<string, unknown>;
-        const selfReferential =
-          evidenceMeta.context_policy === "claim_excerpt" || evidenceMeta.context_policy === "approx_region";
-        try {
-          const res = await api.claimCheck({
-            statement: item.statement,
-            paper_ids: [item.paperId],
-            titles: { [item.paperId]: item.source.title || "" },
-            evidence_texts: { [item.paperId]: evidence?.pdf_excerpt || (selfReferential ? "" : evidence?.reference_text || "") },
-            provider: claimProvider || undefined,
-            model: claimModel || undefined
-          });
-          const check = res.checks[0];
-          if (cancelled || !check) {
-            continue;
-          }
-          if (check.verdict === "not_supported") {
-            onCitationRemove?.(item.paperId, item.statement);
-          } else if (check.verdict === "partially_supported") {
-            onClaimReformulate?.(item.source, item.evidenceIndex, item.statement, check);
-          } else if (check.verdict === "supported" && check.supporting_quotes.length) {
-            onClaimEvidenceUpdate?.(item.source, item.evidenceIndex, check.supporting_quotes, item.statement);
-          }
-        } catch {
-          // fail-soft: bleibt über die Hover-Karte manuell prüfbar
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uncertainCitations, autoVerifyUncertain]);
-
   return (
     <span className="answer-text-content" onClick={() => setPinnedCitation(null)}>
       {parts.map((part, index) => {
@@ -452,7 +372,11 @@ export function AnswerText({
         renderedOffset += part.length;
         const match = /^\[([^\]]+)\]$/.exec(part);
         if (!match) {
-          const highlightRange = contextCitation ? citationHoverTextRange(parts, index, contextCitation.key) : null;
+          const boundStart = Math.max(0, claimTextStart - partStart);
+          const boundEnd = Math.min(part.length, claimTextEnd - partStart);
+          const highlightRange = contextLink
+            ? (boundEnd > boundStart ? { start: boundStart, end: boundEnd } : null)
+            : contextCitation ? citationHoverTextRange(parts, index, contextCitation.key) : null;
           if (highlightRange && contextCitation) {
             // Strip ‹unsourced› markers before rendering so they never surface as
             // visible text — even on the hover-highlight path. Recompute the
@@ -484,16 +408,17 @@ export function AnswerText({
           }
           return <span key={`${part}-${index}`}>{part}</span>;
         }
-        const context = citationContext(parts, index);
-        const quote = citationQuoteFromParts(parts, index);
+        const boundLink = linksByPosition.get(partStart);
+        const context = boundLink?.context ?? citationContext(parts, index);
+        const quote = boundLink?.context ?? citationQuoteFromParts(parts, index);
         // Nur der Abschnitt, den DIESES Zitat belegt (seit dem vorigen Zitat/Satzanfang),
         // plus die Metas aller weiteren Zitate desselben Satzes — für die Notiz-Übernahme.
-        const segment = citationSegmentFromParts(parts, index);
+        const segment = boundLink?.context ?? citationSegmentFromParts(parts, index);
         const siblingMetas: CitationMeta[] = [];
-        for (const siblingIndex of sentenceSiblingCitationIndexes(parts, index)) {
+        for (const siblingIndex of (boundLink ? [] : sentenceSiblingCitationIndexes(parts, index))) {
           const siblingMatch = /^\[([^\]]+)\]$/.exec(parts[siblingIndex] ?? "");
           if (!siblingMatch) continue;
-          const siblingStart = parts.slice(0, siblingIndex).reduce((sum, item) => sum + item.length, 0);
+          const siblingStart = partOffsets[siblingIndex];
           const raw = getCitationMeta(siblingMatch[1], citationContext(parts, siblingIndex), siblingStart);
           for (const meta of Array.isArray(raw) ? raw : raw ? [raw] : []) {
             if (!siblingMetas.some((existing) => existing.source.paper_id === meta.source.paper_id && existing.evidenceIndex === meta.evidenceIndex)) {
@@ -627,7 +552,9 @@ export function AnswerText({
                 <span className="citation-hover-card__legacy" aria-hidden="true">
                   {hoverCitation.label} | {hoverCitation.source.evidence[hoverCitation.evidenceIndex]?.kind || "Evidence"} | {hoverCitation.source.paper_id}
                 </span>
-                {hoverCitation.confidence === "low" ? (
+                {hoverCitation.verificationStatus === "supported" ? (
+                  <span className="citation-hover-card__status"><ShieldCheck size={12} /> Aussage inhaltlich gestützt · {hoverCitation.source.evidence[hoverCitation.evidenceIndex]?.found_in_pdf_text ? "Textstelle im PDF gefunden" : "Beleg außerhalb des PDF-Textes"}</span>
+                ) : hoverCitation.confidence === "low" ? (
                   <span className="citation-hover-card__warn">
                     <AlertTriangle size={12} /> Unsichere Zuordnung — dieser Beleg passt womöglich nicht zur Aussage. Mit „Nachchecken" prüfen.
                   </span>

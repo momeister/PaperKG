@@ -221,6 +221,8 @@ class SearchHit:
     score: float = 0.0
 
     def add_evidence(self, evidence: Evidence) -> None:
+        if any(item.evidence_id == evidence.evidence_id for item in self.evidence):
+            return
         self.evidence.append(evidence)
         self.score += float(evidence.score)
 
@@ -310,12 +312,23 @@ class KGRetriever:
         allowed_ids = _normalized_paper_id_set(paper_ids)
 
         with MetadataDB(self.metadata_db_path) as db:
-            papers = db.list_papers(limit=self.max_papers)
+            scoped_ids = None
+            if paper_ids is not None:
+                scoped_ids = list(dict.fromkeys(str((db.resolve_paper(pid) or {}).get("id") or pid) for pid in paper_ids))
+            papers = db.list_papers(limit=self.max_papers, paper_ids=scoped_ids)
             extractions = (
-                db.list_extraction_results(limit=self.max_extractions)
+                db.list_extraction_results(limit=self.max_extractions, latest_successful=True)
                 if include_extractions
                 else []
             )
+            if scoped_ids is not None:
+                # Resolve historical PDF aliases before applying the extraction budget.
+                extractions = [row for row in db.list_extraction_results(limit=1_000_000, latest_successful=True) if str((db.resolve_paper(row["paper_id"]) or {}).get("id") or row["paper_id"]) in scoped_ids][:self.max_extractions]
+            canonical_latest = {}
+            for row in extractions:
+                canonical = str((db.resolve_paper(row["paper_id"]) or {}).get("id") or row["paper_id"])
+                canonical_latest.setdefault(canonical, row)
+            extractions = list(canonical_latest.values())
             token_weights = _query_token_weights(tokens, papers, extractions)
             # Papers with at least one extraction carrying real claim/concept/method
             # content. Used to suppress pure-stub papers (empty abstract AND no
@@ -750,27 +763,40 @@ def _iter_items(value: Any) -> Iterable[Any]:
     return []
 
 
+_ITEM_TEXT_ALLOWED_KEYS = {
+    "label",
+    "statement",
+    "context",
+    "description",
+    "domain",
+    "field",
+    "why_applicable",
+    "term",
+    "this_field",
+    "other_field",
+    "evidence_type",
+    "evidence_role",
+    "evidence_span",
+    "section",
+    "claim_type",
+    "entity_type",
+    "canonical_label",
+    "salience",
+    "study_design",
+}
+
+
 def _item_text(item: Any) -> str:
     if isinstance(item, dict):
-        preferred = [
-            "label",
-            "statement",
-            "context",
-            "description",
-            "domain",
-            "field",
-            "why_applicable",
-            "term",
-            "this_field",
-            "other_field",
-            "evidence_type",
+        # Build evidence text ONLY from semantically meaningful, human-readable
+        # fields. Bookkeeping keys (accepted / review_status / acceptance_reason /
+        # canonical_id / kg_block_reason / flags / ids / timestamps) end up in the
+        # fallback evidence dump otherwise and leak pipeline noise into answers.
+        parts = [
+            str(item.get(key) or "").strip()
+            for key in _ITEM_TEXT_ALLOWED_KEYS
+            if item.get(key) is not None
         ]
-        parts = [str(item.get(key) or "") for key in preferred]
-        parts.extend(
-            str(value)
-            for key, value in item.items()
-            if key not in preferred and isinstance(value, (str, int, float, bool))
-        )
         return " ".join(part for part in parts if part).strip()
     return str(item or "").strip()
 

@@ -18,6 +18,7 @@ entity_types:
   - System
   - Phenomenon
   - Task
+  - FundingSource
 
 relation_types:
   - IS_A
@@ -51,6 +52,8 @@ relation_types:
   - ALIAS_OF
   - RELATED_TO
   - CONTRADICTS
+  - FUNDED_BY
+  - CONFLICTS_WITH_INTEREST
 
 seed_concepts:
   - label: Machine Learning
@@ -841,3 +844,19 @@ seed_concepts:
     entity_type: Metric
     aliases: [FP rate, false positive rate]
     domain: Machine Learning
+  - label: Industry Funding
+    entity_type: FundingSource
+    aliases: [Industrial funding, Corporate funding, Private industry funding]
+    domain: Research Funding
+  - label: Government Funding
+    entity_type: FundingSource
+    aliases: [Public funding, Federal funding, State funding, National funding]
+    domain: Research Funding
+  - label: Academic Funding
+    entity_type: FundingSource
+    aliases: [University funding, Institutional funding, Internal academic funding]
+    domain: Research Funding
+  - label: Non-Governmental Organization Funding
+    entity_type: FundingSource
+    aliases: [NGO funding, Foundation funding, Philanthropic funding, Non-profit funding]
+    domain: Research Funding

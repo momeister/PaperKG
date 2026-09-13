@@ -1,3 +1,4 @@
+import { usePaneEnvironment } from "../workspace/PortablePane";
 // ResearchTreeView (Tiefenanalyse-Baum) — aus WorkspaceSubComponents.tsx extrahiert;
 // dort re-exportiert (Konsumenten unveraendert). Superset-Importe der Quelldatei.
 // Standalone, prop-driven sub-components extracted from WorkspacePage.tsx (they
@@ -192,6 +193,7 @@ export function ResearchTreeView({
    *  eine Aufgabe angestoßen wurde. */
   taskMode?: boolean;
 }) {
+  const { window, document } = usePaneEnvironment();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"tree" | "synthesis">("tree");
   const [exportOpen, setExportOpen] = useState(false);

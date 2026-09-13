@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ScienceKG</title></head>
+<body class="workspace-window"><div id="workspace-pane-root"></div>
+<script>
+// A view document only. React, queries, streams and autosaves live in the opener.
+(() => {
+  const params = new URLSearchParams(location.search);
+  const pane = params.get("pane"), actionId = params.get("actionId");
+  if (!["navigator", "center", "assistant", "notes"].includes(pane) || !actionId || !opener) {
+    document.body.textContent = "Dieses Fenster wird vom Arbeitsplatz geöffnet.";
+    return;
+  }
+  const protocol = "sciencekg.workspace.v1";
+  let revision = 0;
+  const send = type => opener.postMessage({ protocol, pane, actionId, revision, type }, location.origin);
+  addEventListener("message", event => {
+    const m = event.data;
+    if (event.source !== opener || event.origin !== location.origin || m?.protocol !== protocol
+      || m.pane !== pane || m.actionId !== actionId || !Number.isSafeInteger(m.revision) || m.revision < revision) return;
+    if (m.type === "commit") {
+      revision = m.revision;
+      // The controller only relinquishes the old slot after the target owns its view.
+      if (document.querySelector("#workspace-pane-root > .workspace-portable-view")) send("committed");
+    }
+  });
+  addEventListener("pageshow", () => send("resync"));
+  send("ready");
+})();
+</script></body></html>

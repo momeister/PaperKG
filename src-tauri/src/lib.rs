@@ -35,6 +35,7 @@ mod control;
 mod jupyter;
 mod overlay;
 mod terminal;
+mod workspace_windows;
 
 /// Open a URL in the OS default application (browser for web sources, the system
 /// PDF viewer/browser for PDF links). Called from the frontend when running in
@@ -206,7 +207,25 @@ fn kill_backend(app: &AppHandle) {
     if let Some(state) = app.try_state::<Backend>() {
         if let Ok(mut guard) = state.0.lock() {
             if let Some(child) = guard.as_mut() {
+                #[cfg(unix)]
+                {
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &child.id().to_string()])
+                        .status();
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                }
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    if child.try_wait().ok().flatten().is_some() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
                 let _ = child.kill();
+                let _ = child.wait();
             }
         }
     }
@@ -224,6 +243,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(workspace_windows::WorkspaceWindowState::default())
         .manage(terminal::TerminalState::default())
         .manage(jupyter::JupyterState::default())
         .manage(agent_bridge::AgentBridgeState::default())
@@ -234,6 +254,8 @@ pub fn run() {
         .manage(control::ControlState::default())
         .manage(click_watch::ClickWatchState::default())
         .invoke_handler(tauri::generate_handler![
+            workspace_windows::workspace_window_action,
+            workspace_windows::workspace_finish_exit,
             open_external,
             pick_folder,
             terminal::terminal_spawn,
@@ -269,6 +291,11 @@ pub fn run() {
             agent_bridge::agent_bridge_ensure,
             agent_bridge::agent_bridge_stop,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                workspace_windows::close_requested(window, api);
+            }
+        })
         .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -311,12 +338,20 @@ pub fn run() {
             // can never hang the launch forever.
             let _ = wait_until_ready(port, Duration::from_secs(40));
 
-            WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::App("index.html".into()))
-                .title("ScienceKG")
-                .inner_size(1440.0, 900.0)
-                .min_inner_size(960.0, 600.0)
-                .initialization_script(&init_script)
-                .build()?;
+            let main_builder = WebviewWindowBuilder::new(
+                app.handle(),
+                "main",
+                WebviewUrl::App("index.html".into()),
+            )
+            .disable_drag_drop_handler();
+            let main_window =
+                workspace_windows::install(main_builder, app.handle().clone(), init_script.clone())
+                    .title("ScienceKG")
+                    .inner_size(1440.0, 900.0)
+                    .min_inner_size(960.0, 600.0)
+                    .initialization_script(&init_script)
+                    .build()?;
+            workspace_windows::enable_related_windows(&main_window)?;
 
             // The four overlay-family windows (chat, control border, pointer, snip)
             // are NOT built here: each is a full WebView2 process, and five webviews
@@ -329,7 +364,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
+            if let RunEvent::ExitRequested { api, .. } = &event {
+                if !app_handle
+                    .state::<workspace_windows::WorkspaceWindowState>()
+                    .exiting
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    use tauri::Emitter;
+                    api.prevent_exit();
+                    let _ = app_handle.emit_to("main", "workspace-exit-request", ());
+                    return;
+                }
+            }
+            if let RunEvent::Exit = event {
                 terminal::kill_all(app_handle);
                 jupyter::kill(app_handle);
                 agent_bridge::kill(app_handle);

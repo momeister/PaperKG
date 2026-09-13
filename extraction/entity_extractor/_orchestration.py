@@ -18,6 +18,7 @@ from extraction.entity_extractor._shared import (
     enrich_method_domains,
     filter_concepts,
 )
+from quality.study_quality import compute_study_quality
 from query.context_budget import (
     ContextBudgetDecision,
     decide_whole_context,
@@ -279,6 +280,7 @@ class OrchestrationMixin(_Base):
             claims: list[dict[str, Any]] = []
             cross_domain_hints: list[dict[str, Any]] = []
             terminology_conflicts: list[dict[str, Any]] = []
+            provenance: dict[str, Any] = {}
         else:
             semantic = self._run_semantic_call(
                 text_summary=semantic_text,
@@ -296,6 +298,9 @@ class OrchestrationMixin(_Base):
             terminology_conflicts = self._coerce_list(
                 semantic_data.get("terminology_conflicts")
             )
+            provenance = semantic_data.get("provenance") if isinstance(
+                semantic_data.get("provenance"), dict
+            ) else {}
             if self._should_retry_semantic_lists(
                 semantic,
                 claims,
@@ -408,6 +413,14 @@ class OrchestrationMixin(_Base):
             paper_node=paper_node,
         )
 
+        study_quality_summary = compute_study_quality(
+            {
+                "provenance": provenance,
+                "claims": claims,
+                "evidence_level": "unknown",
+            }
+        )
+
         call_diagnostics = self._call_diagnostics(
             structural_calls,
             semantic,
@@ -437,6 +450,9 @@ class OrchestrationMixin(_Base):
             "temporal_coverage": temporal_coverage,
             "mathematical_content": mathematical_content,
             "language_detected": str(semantic_data.get("language_detected") or "en"),
+            "provenance": provenance,
+            "study_quality": study_quality_summary.to_dict(),
+            "evidence_level": study_quality_summary.evidence_level,
             "extraction_parse_quality": parse_quality,
             "auto_detected_concepts": regex_result.auto_detected_count,
             "deterministic_candidate_count": len(concept_candidates)
@@ -527,6 +543,9 @@ class OrchestrationMixin(_Base):
             },
             raw_response=json.dumps(result_payload, indent=2, ensure_ascii=False),
             extraction_mode=extraction_mode,
+            provenance=provenance,
+            study_quality=study_quality_summary.to_dict(),
+            evidence_level=study_quality_summary.evidence_level,
         )
 
     def _context_budget_failure_result(

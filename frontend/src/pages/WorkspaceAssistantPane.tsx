@@ -1,3 +1,6 @@
+import { CompactPopover } from "../components/CompactPopover";
+import { AssistantComposer } from "./AssistantComposer";
+import type { AssistantComposerHandle } from "./AssistantComposer";
 // WorkspaceAssistantPane — der Inline-PDF/Research-Assistent (rechte Spalte) aus
 // WorkspacePage.tsx extrahiert. Reine Praesentation: ALLER State/Handler bleibt in
 // der Page und kommt als flache Props. Superset-Importe der Quelldatei;
@@ -77,6 +80,7 @@ import type {
   ClaimCheckResult,
   DeepResearchFinding,
   DeepResearchResponse,
+  EvidenceLevel,
   GreySource,
   NoteAiMessage,
   NoteAiThread,
@@ -85,6 +89,7 @@ import type {
   ParallelSession,
   ParallelSessionSummary,
   ResearchNode,
+  StudyQualitySummary,
   VerificationEvidence,
   VerificationSource
 } from "../types";
@@ -183,6 +188,79 @@ const AUTO_STAGES: { id: string; label: string; hint: string }[] = [
   { id: "unverified", label: "Ungeprüft", hint: "Übriges Web — nur wenn die Stufen davor nicht reichen" }
 ];
 
+function evidenceLevelLetter(level: EvidenceLevel | undefined): string {
+  switch (level) {
+    case "high":
+      return "A";
+    case "moderate":
+      return "B";
+    case "low":
+      return "C";
+    case "very_low":
+      return "D";
+    default:
+      return "?";
+  }
+}
+
+function evidenceLevelClass(level: EvidenceLevel | undefined): string {
+  switch (level) {
+    case "high":
+      return "evidence-badge--high";
+    case "moderate":
+      return "evidence-badge--moderate";
+    case "low":
+      return "evidence-badge--low";
+    case "very_low":
+      return "evidence-badge--very-low";
+    default:
+      return "evidence-badge--unknown";
+  }
+}
+
+const FLAG_LABELS: Record<string, string> = {
+  retracted: "Retracted",
+  non_peer_reviewed: "Preprint",
+  coi_undeclared: "COI undeclared",
+  coi_unknown: "COI unknown",
+  sample_size_not_reported: "Stichprobengröße nicht erfasst",
+  sample_size_not_extracted: "Stichprobengröße nicht erfasst",
+};
+
+function flagBadgeLabel(flag: string): string {
+  if (flag.startsWith("industry_funded:")) {
+    const industry = flag.slice("industry_funded:".length);
+    return `Industry-funded (${industry})`;
+  }
+  return FLAG_LABELS[flag] ?? flag;
+}
+
+function StudyQualityBadges({ summary }: { summary: StudyQualitySummary | undefined }) {
+  if (!summary) return null;
+  const flags = summary.flags ?? [];
+  const hasLevel = summary.evidence_level && summary.evidence_level !== "unknown";
+  const hasFlags = flags.length > 0;
+  if (!hasLevel && !hasFlags) return null;
+  return (
+    <span className="study-quality-badges">
+      {hasLevel ? (
+        <span
+          className={`evidence-badge ${evidenceLevelClass(summary.evidence_level)}`}
+          title={`Evidenzniveau: ${summary.evidence_level}`}
+          aria-label={`Evidenzniveau ${summary.evidence_level}`}
+        >
+          {evidenceLevelLetter(summary.evidence_level)}
+        </span>
+      ) : null}
+      {flags.map((flag) => (
+        <span key={flag} className="quality-flag-pill" title={flagBadgeLabel(flag)}>
+          {flagBadgeLabel(flag)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 // Flache Props: der gesamte State/alle Handler leben weiter in WorkspacePage.
 // Mutations/Ableitungen sind strukturell auf die hier genutzte Oberflaeche typisiert.
 export interface WorkspaceAssistantPaneProps {
@@ -190,7 +268,6 @@ export interface WorkspaceAssistantPaneProps {
   actionLog: WorkspaceActionEntry[];
   actionsMenuOpen: boolean;
   activeBlocks: AssistantAnswerBlock[];
-  activeCommandHint: WorkspaceCommandDef | null;
   activeEvidence: VerificationEvidence | undefined;
   activeEvidenceIndex: number;
   activeProject: string | undefined;
@@ -199,19 +276,18 @@ export interface WorkspaceAssistantPaneProps {
   answer: Answer | null;
   answerBlocksRef: MutableRefObject<HTMLDivElement | null>;
   answerMutation: { isPending: boolean };
+  pendingQuestion: string;
+  answerProgress: string;
   answerSelection: { text: string; blockId: string; left: number; top: number } | null;
   appendActiveQuote: (sourceKind: "reference" | "pdf") => void;
   appendAnswerToNote: () => void;
   applyAnswerCorrection: () => void;
-  applyMention: (paper: Paper) => void;
-  applyPaletteCommand: (command: WorkspaceCommandDef) => void;
   askAboutSelection: () => void;
   autoAbortRef: MutableRefObject<AbortController | null>;
   autoProgress: AutoResearchProgress | null;
   autoResearch: boolean;
   chatSettingsOpen: boolean;
   checkAnswerSelection: () => void;
-  citationVerifyPending: boolean;
   clarifyLoading: boolean;
   closeAnswerSelection: () => void;
   commandSearch: { query: string; results: Paper[]; selected: string[] } | null;
@@ -233,8 +309,6 @@ export interface WorkspaceAssistantPaneProps {
   handleChatDragOver: (event: ReactDragEvent<HTMLFormElement>) => void;
   handleChatDrop: (event: ReactDragEvent<HTMLFormElement>) => void;
   handleChatPaste: (event: ReactClipboardEvent<HTMLFormElement>) => void;
-  handleQuestionChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  handleQuestionKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
   handleUnresolvedCitationClick: (citationId: string) => void;
   includeGlobalSources: boolean;
   insertCitationFromAnswer: (source: VerificationSource, evidenceIndex: number, quote?: string, extras?: CitationInsertExtras) => void;
@@ -246,9 +320,6 @@ export interface WorkspaceAssistantPaneProps {
   latestAnswerNeedsWeb: boolean;
   latestBlock: AssistantAnswerBlock | null;
   launchResearchTree: (q: string, useHarvest: boolean, clarificationContext: string, initialNodes?: ResearchNode[]) => void;
-  mentionCandidates: Paper[];
-  mentionHighlight: number;
-  mentionState: { query: string; start: number; end: number } | null;
   model: string | undefined;
   noteStatus: string;
   notesActionsRef: MutableRefObject<NotesSurfaceActions | null>;
@@ -257,9 +328,6 @@ export interface WorkspaceAssistantPaneProps {
   openGreySource: (source: GreySource) => void;
   openParallelServerSession: (summary: ParallelSessionSummary) => void;
   openSelectedAssistantPdf: () => void;
-  paletteCandidates: WorkspaceCommandDef[];
-  paletteIndex: number;
-  paletteQuery: string | null;
   paperScope: PaperQuestionScope;
   paperSearchCommand: { isPending: boolean };
   parallelFollowupLoading: boolean;
@@ -274,9 +342,7 @@ export interface WorkspaceAssistantPaneProps {
   previewCitationFromAnswer: (source: VerificationSource, evidenceIndex: number, quote?: string, extras?: CitationInsertExtras) => void;
   previewSelectionInNote: () => void;
   provider: string | undefined;
-  question: string;
   questionBlockedByScope: boolean;
-  questionInputRef: MutableRefObject<HTMLInputElement | null>;
   removeCitationFromBlock: (blockId: string, paperId: string, statement: string) => void;
   removeStatementFromBlock: (blockId: string, statement: string) => void;
   researchLlmError: { kind: string; message: string; error: string } | null;
@@ -310,7 +376,7 @@ export interface WorkspaceAssistantPaneProps {
   setPaperScope: Dispatch<SetStateAction<PaperQuestionScope>>;
   setParallelMode: Dispatch<SetStateAction<boolean>>;
   setPendingUrlSource: Dispatch<SetStateAction<{ url: string } | null>>;
-  setQuestion: Dispatch<SetStateAction<string>>;
+  setQuestion: (value: string) => void;
   setShowCommandHelp: Dispatch<SetStateAction<boolean>>;
   setUseInternet: Dispatch<SetStateAction<boolean>>;
   setVerbosity: Dispatch<SetStateAction<"kurz" | "standard" | "ausführlich">>;
@@ -318,7 +384,9 @@ export interface WorkspaceAssistantPaneProps {
   showCommandHelp: boolean;
   sourceIngestStatus: string;
   stopResearchTree: () => void;
-  submit: (event: FormEvent) => void;
+  submit: (value: string) => void;
+  composerRef: MutableRefObject<AssistantComposerHandle | null>;
+  onSelectMention: (paperId: string) => void;
   toggleScopedGrey: (greyId: string) => void;
   toggleScopedPaper: (paperId: string) => void;
   updateCitationEvidenceInBlock: (blockId: string, source: VerificationSource, evidenceIndex: number, quotes: string[], statement: string) => void;
@@ -337,7 +405,6 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     actionLog,
     actionsMenuOpen,
     activeBlocks,
-    activeCommandHint,
     activeEvidence,
     activeEvidenceIndex,
     activeProject,
@@ -350,15 +417,12 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     appendActiveQuote,
     appendAnswerToNote,
     applyAnswerCorrection,
-    applyMention,
-    applyPaletteCommand,
     askAboutSelection,
     autoAbortRef,
     autoProgress,
     autoResearch,
     chatSettingsOpen,
     checkAnswerSelection,
-    citationVerifyPending,
     clarifyLoading,
     closeAnswerSelection,
     commandSearch,
@@ -380,8 +444,6 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     handleChatDragOver,
     handleChatDrop,
     handleChatPaste,
-    handleQuestionChange,
-    handleQuestionKeyDown,
     handleUnresolvedCitationClick,
     includeGlobalSources,
     insertCitationFromAnswer,
@@ -393,9 +455,6 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     latestAnswerNeedsWeb,
     latestBlock,
     launchResearchTree,
-    mentionCandidates,
-    mentionHighlight,
-    mentionState,
     model,
     noteStatus,
     notesActionsRef,
@@ -404,9 +463,6 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     openGreySource,
     openParallelServerSession,
     openSelectedAssistantPdf,
-    paletteCandidates,
-    paletteIndex,
-    paletteQuery,
     paperScope,
     paperSearchCommand,
     parallelFollowupLoading,
@@ -421,9 +477,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
     previewCitationFromAnswer,
     previewSelectionInNote,
     provider,
-    question,
     questionBlockedByScope,
-    questionInputRef,
     removeCitationFromBlock,
     removeStatementFromBlock,
     researchLlmError,
@@ -479,59 +533,8 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
   } = props;
   return (
             <>
+          {props.pendingQuestion ? <div className="answer-block" role="status"><div className="answer-question">{props.pendingQuestion}</div><div className="scope-status"><Loader2 size={13} className="spin" /> {props.answerProgress}</div></div> : null}
           <div className="chat-input-area">
-          {mentionState && mentionCandidates.length > 0 ? (
-            <div className="mention-popover">
-              {mentionCandidates.map((paper, i) => {
-                const norm = normalizeWorkspacePaper(paper);
-                return (
-                  <button
-                    key={workspacePaperId(norm)}
-                    type="button"
-                    className={`mention-popover-row ${i === mentionHighlight ? "mention-popover-row--active" : ""}`}
-                    onMouseDown={(e) => { e.preventDefault(); applyMention(paper); }}
-                  >
-                    {workspacePaperTitle(norm)}
-                  </button>
-                );
-              })}
-              <span className="mention-popover-hint">Tab · Pfeiltasten · Enter zum Übernehmen</span>
-            </div>
-          ) : null}
-          {paletteQuery !== null && paletteCandidates.length > 0 ? (
-            <div className="command-palette-popover" role="listbox" aria-label="Befehle">
-              <div className="command-palette-head">
-                <Command size={13} />
-                <span>Befehle</span>
-              </div>
-              {paletteCandidates.map((command, index) => (
-                <button
-                  type="button"
-                  key={command.name}
-                  className={`command-palette-row ${index === paletteIndex ? "command-palette-row--active" : ""}`}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    applyPaletteCommand(command);
-                  }}
-                >
-                  <code>
-                    /{command.name}
-                    {command.args ? <em> {command.args}</em> : null}
-                  </code>
-                  <span>{command.description}</span>
-                  {command.group === "aktion" ? <small>Aktion</small> : null}
-                </button>
-              ))}
-              <span className="mention-popover-hint">↑↓ wählen · Tab vervollständigen · Enter ausführen</span>
-            </div>
-          ) : null}
-          {activeCommandHint ? (
-            <div className="command-arg-hint">
-              <code>/{activeCommandHint.name}</code>
-              {activeCommandHint.args ? <em>{activeCommandHint.args}</em> : null}
-              <span>{activeCommandHint.description}</span>
-            </div>
-          ) : null}
           {showCommandHelp ? (
             <div className="command-help-popover">
               <div className="command-help-head">
@@ -554,7 +557,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
           ) : null}
           <form
             className={`chat-composer ${isDraggingOverChat ? "chat-box--drag-over" : ""}`}
-            onSubmit={submit}
+            onSubmit={(event) => { event.preventDefault(); props.composerRef.current?.submit(); }}
             onDragOver={handleChatDragOver}
             onDragLeave={handleChatDragLeave}
             onDrop={handleChatDrop}
@@ -566,19 +569,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                 <span>PDF, Bild oder Link hier ablegen</span>
               </div>
             ) : null}
-            <div className="chat-composer-input">
-              <Bot size={18} />
-              <input
-                ref={questionInputRef}
-                value={question}
-                onChange={handleQuestionChange}
-                onKeyDown={handleQuestionKeyDown}
-                placeholder="Frage stellen — / für Befehle, @ für Papers"
-              />
-              <button className="icon-button chat-send-button" aria-label="Senden" disabled={answerMutation.isPending || citationVerifyPending || questionBlockedByScope}>
-                <Send size={17} />
-              </button>
-            </div>
+            <AssistantComposer sessionId={activeTurn?.id} ref={props.composerRef} papers={pdfPapers} disabled={answerMutation.isPending || questionBlockedByScope} onSubmit={submit} onSelectPaper={props.onSelectMention} />
             <div className="chat-composer-toolbar">
               <div className="segmented workspace-scope-segment" aria-label="Paper-Scope">
                 <button type="button" className={paperScope === "current" ? "active" : ""} onClick={() => setPaperScope("current")} title="Nur das gerade geöffnete Paper">
@@ -591,6 +582,32 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                   Alle
                 </button>
               </div>
+              <span className="chat-composer-spacer" />
+              <CompactPopover label="Optionen" open={chatSettingsOpen} onOpenChange={setChatSettingsOpen}>
+                    <label>
+                      Chatmodus
+                      <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
+                        <option value="followup">Weiterfragen</option>
+                        <option value="new">Neu starten</option>
+                      </select>
+                    </label>
+                    <label>
+                      Evidenzmenge
+                      <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
+                        <option value="auto">Auto</option>
+                        <option value="12">12</option>
+                        <option value="20">20</option>
+                        <option value="25">25</option>
+                      </select>
+                    </label>
+                    <label>
+                      Antwortlänge
+                      <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
+                        <option value="kurz">Kurz</option>
+                        <option value="standard">Standard</option>
+                        <option value="ausführlich">Ausführlich</option>
+                      </select>
+                    </label>
               {paperScope === "all" && isRealProject ? (
                 <div className="segmented workspace-scope-segment" aria-label="Quellenbasis">
                   <button
@@ -695,49 +712,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                   <Loader2 size={12} className="spin" /> Klärungsfragen…
                 </span>
               ) : null}
-              <span className="chat-composer-spacer" />
-              <span className="chat-tool-wrap">
-                <button
-                  type="button"
-                  className={`icon-button ${chatSettingsOpen ? "icon-button--active" : ""}`}
-                  aria-label="Antwort-Einstellungen"
-                  title="Antwort-Einstellungen (Chatmodus, Evidenz, Länge)"
-                  onClick={() => {
-                    setChatSettingsOpen((v) => !v);
-                    setActionsMenuOpen(false);
-                  }}
-                >
-                  <Settings2 size={16} />
-                </button>
-                {chatSettingsOpen ? (
-                  <div className="chat-tool-popover">
-                    <label>
-                      Chatmodus
-                      <select aria-label="Chatmodus" value={conversationMode} onChange={(event) => setConversationMode(event.target.value as "followup" | "new")}>
-                        <option value="followup">Weiterfragen</option>
-                        <option value="new">Neu starten</option>
-                      </select>
-                    </label>
-                    <label>
-                      Evidenzmenge
-                      <select aria-label="Evidenzmenge" value={evidenceMode} onChange={(event) => setEvidenceMode(event.target.value)}>
-                        <option value="auto">Auto</option>
-                        <option value="12">12</option>
-                        <option value="20">20</option>
-                        <option value="25">25</option>
-                      </select>
-                    </label>
-                    <label>
-                      Antwortlänge
-                      <select aria-label="Antwortlänge" value={verbosity} onChange={(event) => setVerbosity(event.target.value as typeof verbosity)}>
-                        <option value="kurz">Kurz</option>
-                        <option value="standard">Standard</option>
-                        <option value="ausführlich">Ausführlich</option>
-                      </select>
-                    </label>
-                  </div>
-                ) : null}
-              </span>
+              </CompactPopover>
               <span className="chat-tool-wrap">
                 <button
                   type="button"
@@ -1058,11 +1033,6 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                 </button>
               </div>
             ) : null}
-            {citationVerifyPending ? (
-              <div className="scope-status">
-                <Loader2 size={13} className="spin" /> Prüfe unsichere Zitate gegen die Quellen …
-              </div>
-            ) : null}
             {!parallelMode && !deepMode && !autoProgress && activeTurn && activeTurn.type === "research" ? (
               <div className="answer-blocks" ref={answerBlocksRef}>
                 {activeTurn.researchProgress && activeTurn.researchStatus !== "running" ? (
@@ -1112,6 +1082,7 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                 {activeBlocks.filter((block) => block.answer).map((block, index) => (
                   <article className={`answer-block ${index > 0 ? "answer-block--followup" : ""}`} key={block.id} data-block-id={block.id}>
                     <div className="answer-question">{block.question}</div>
+                    {!block.answer.claims_version ? <div className="muted">Ältere Antwort · Belegzuordnungen nicht nach dem aktuellen Verfahren geprüft.</div> : null}
                     <div className="answer-text">
                       <AnswerText
                         answer={block.answer.answer}
@@ -1137,9 +1108,8 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                       />
                     </div>
                     {block.answer.generation_error ? <div className="warning-row">{block.answer.generation_error}</div> : null}
-                    {block.answer.context_diagnostics?.fallback_reason === "no_traceable_citations" ? (
-                      <div className="warning-row">Keine verknüpfbaren Zitate – beleg-basierte Zusammenfassung angezeigt.</div>
-                    ) : null}
+                    {block.answer.context_diagnostics?.used_provider || block.answer.context_diagnostics?.used_model ? <div className="hint-row">Verwendet: {String(block.answer.context_diagnostics.used_provider ?? "")} · {String(block.answer.context_diagnostics.used_model ?? block.answer.model ?? "")}</div> : null}
+                    {block.answer.context_diagnostics?.fallback_reason ? <div className="warning-row">Ersatzantwort · {String(block.answer.context_diagnostics.fallback_reason)}</div> : null}
                     {Number(block.answer.context_diagnostics?.uncited_sentence_count ?? 0) > 0 ? (
                       <div className="hint-row">
                         {String(block.answer.context_diagnostics?.uncited_sentence_count)} Aussage(n) ohne Quellenangabe — im Text gestrichelt unterstrichen.
@@ -1452,7 +1422,10 @@ export function WorkspaceAssistantPane(props: WorkspaceAssistantPaneProps) {
                         key={source.paper_id}
                         onClick={() => openAssistantSource(source)}
                       >
-                        <strong>{source.title || source.paper_id}</strong>
+                        <span className="source-row-title">
+                          <strong>{source.title || source.paper_id}</strong>
+                          <StudyQualityBadges summary={answer?.study_quality_summaries?.[source.paper_id]} />
+                        </span>
                         <span>{source.paper_id}</span>
                         <Status value={source.pdf_available ? "true" : "false"} />
                       </button>

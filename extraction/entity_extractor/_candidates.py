@@ -269,12 +269,33 @@ class CandidatesMixin(_Base):
                 "auto_detected"
             ):
                 continue
+            title_norm = cls._normalize_label(title)
+            is_exact_title = bool(title_norm) and normalized == title_norm
+            title_word_count = len(title.split()) if title else 0
+            is_prefix_of_title = (
+                bool(title_norm)
+                and normalized in title_norm
+                and normalized != title_norm
+                # Only treat mid-title substrings as suspicious when the detected
+                # title is a real compact paper title (not first-line prose like
+                # "The survey compares Q-learning, SARSA, and Actor-Critic."). Such
+                # prose headers poison the title-prefix heuristic and swallow core
+                # concepts (Q-learning, SARSA) that merely appear in the sentence.
+                and title_word_count <= 12
+            )
+            if is_exact_title and len(label.split()) >= 2 and title_word_count <= 15:
+                # LLM echoing the paper title back as a concept is bookkeeping junk:
+                # filter_concepts would catch it, but _accept_concepts also sees
+                # concepts that bypass that filter path, so clamp here too.
+                continue
             if (
-                title
-                and normalized in cls._normalize_label(title)
-                and normalized != cls._normalize_label(title)
+                is_prefix_of_title
                 and len(label.split()) >= 3
+                and cls._starts_with_fragment_preposition(label)
             ):
+                # Only block fragments that look like a dangling suffix of the title
+                # ("Perception, Technology, and Applications"), not central short
+                # concepts that merely appear in the title ("Tactile Perception").
                 continue
             confidence = cls._coerce_float(item.get("confidence"), 0.75)
             salience = str(item.get("salience") or "background").lower()

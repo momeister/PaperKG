@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LlmPicker, isRemoteModel } from "./LlmPicker";
@@ -68,6 +68,16 @@ afterEach(() => {
 });
 
 describe("LlmPicker", () => {
+  it("resets GLM to the DeepSeek provider default in the same interaction", async () => {
+    vi.mocked(api.getProviders).mockResolvedValue({ default_provider: "glm", providers: [provider({ name: "glm", default_model: "glm-model" }), provider({ name: "deepseek", default_model: "deepseek-model" })] });
+    const onProviderChange = vi.fn(), onModelChange = vi.fn();
+    renderPicker({ provider: "glm", model: "glm-model", onProviderChange, onModelChange });
+    await screen.findByRole("option", { name: "deepseek" });
+    fireEvent.change(screen.getByLabelText("Provider", { selector: "select" }), { target: { value: "deepseek" } });
+    expect(onProviderChange).toHaveBeenCalledWith("deepseek");
+    expect(onModelChange).toHaveBeenCalledWith("deepseek-model");
+  });
+
   it("stellt erkannte Modelle vor die aus config.yaml und dedupliziert", async () => {
     renderPicker({ model: "handverlesen" });
 

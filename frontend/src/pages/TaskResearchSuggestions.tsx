@@ -1,17 +1,17 @@
-import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowRight, Compass, Loader2, Plus, RefreshCcw, Search, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ArrowRight, Compass, Loader2, Plus, RefreshCcw, Search } from "lucide-react";
 
 import { api } from "../api";
 import { CreativitySlider } from "../components/CreativitySlider";
 import type {
   CreativityLevel,
   Task,
-  TaskDeepSearchEvent,
   TaskDeepSearchResult,
   TaskResearchDirection,
   TaskSuggestDirectionsResponse,
 } from "../types";
 import { AnswerWithCitations } from "./ParallelResearchPanel";
+import { TaskDeepSearchDialog } from "./TaskDeepSearchDialog";
 
 /**
  * Forschungsrichtungen-Sektion (Task-Focused Mode).
@@ -32,62 +32,31 @@ type Props = {
   creativityLevel: CreativityLevel;
   provider?: string | null;
   model?: string | null;
+  /** Aktuelle Projekt-ID (für target_project_id beim Bugfix-Attach). */
+  projectId?: string | null;
   /** Wenn gesetzt, wird diese Richtung als "ausgewählt" markiert. */
   selectedLabel?: string | null;
   onSelect: (direction: TaskResearchDirection) => void;
   /** Tiefensuche abgeschlossen → Richtung in den Parallel-Modus überführen. */
   onStartParallel: (direction: TaskResearchDirection) => void;
+  /** Tiefensuche-Ergebnis als neuen Assistant-Turn einfügen (Bibliothek + Chat). */
+  onInsertAsTurn?: (result: TaskDeepSearchResult, direction: TaskResearchDirection) => void;
   /** Optional: schon vorhandene Richtungen aus task_json.suggested_directions. */
   initialDirections?: TaskResearchDirection[];
 };
 
 type DeepStatus = "idle" | "running" | "done" | "error";
 
-function progressTextFor(event: TaskDeepSearchEvent): string {
-  switch (event.status) {
-    case "planning":
-      return "Plane Suche…";
-    case "harvesting_papers":
-      return "Suche Papers…";
-    case "search_complete":
-      return `${event.found} Paper-Treffer`;
-    case "ingesting":
-      return `Extrahiere: ${event.paper?.title ?? "Paper"}…`;
-    case "ingested":
-      return `Extrahiert: ${event.paper?.title ?? "Paper"}`;
-    case "ingest_failed":
-      return `Fehlgeschlagen: ${event.paper?.title ?? "Paper"}`;
-    case "papers_harvested":
-      return `${event.count} Papers eingepflegt`;
-    case "harvesting_grey":
-      return "Suche Web-Quellen…";
-    case "grey_search_complete":
-      return `${event.found} Web-Treffer`;
-    case "fetched":
-      return `Web-Quelle: ${event.source?.title ?? event.source?.url ?? ""}`;
-    case "grey_harvested":
-      return `${event.count} Web-Quellen eingepflegt`;
-    case "synthesizing":
-      return "Synthese — Möglichkeitsprinzip…";
-    case "harvest_error":
-      return `Harvest-Fehler (${event.phase})`;
-    case "error":
-      return `Fehler: ${event.error ?? "unbekannt"}`;
-    case "done":
-      return "Fertig";
-    default:
-      return "";
-  }
-}
-
 export function TaskResearchSuggestions({
   task,
   creativityLevel,
   provider = null,
   model = null,
+  projectId = null,
   selectedLabel,
   onSelect,
   onStartParallel,
+  onInsertAsTurn,
   initialDirections = [],
 }: Props) {
   const [directions, setDirections] = useState<TaskResearchDirection[]>(initialDirections);
@@ -96,22 +65,34 @@ export function TaskResearchSuggestions({
   const [creativity, setCreativity] = useState<CreativityLevel>(creativityLevel);
   const [expanded, setExpanded] = useState(false);
 
-  // Per-Richtung Tiefensuche-Status.
+  // Per-Richtung Tiefensuche-Status (wird vom Dialog gesetzt).
   const [deepStatus, setDeepStatus] = useState<Record<string, DeepStatus>>({});
-  const [deepProgress, setDeepProgress] = useState<Record<string, string>>({});
   const [deepResult, setDeepResult] = useState<Record<string, TaskDeepSearchResult>>(
     () => task.task_json.deep_searches ?? {},
   );
   const [deepOpen, setDeepOpen] = useState<Record<string, boolean>>({});
-  const deepAbortRef = useRef<Record<string, AbortController | null>>({});
+  // Aktuell im Dialog geöffnete Richtung (null = Dialog zu).
+  const [dialogDirection, setDialogDirection] = useState<TaskResearchDirection | null>(null);
 
   // Wenn sich die Task ändert, die gespeicherten Tiefensuchen übernehmen.
   useEffect(() => {
     setDeepResult(task.task_json.deep_searches ?? {});
     setDeepStatus({});
-    setDeepProgress({});
     setDeepOpen({});
   }, [task.id]);
+
+  // Stabile Dialog-Callbacks — verhindern, dass der Dialog bei jedem Render
+  // neu gemountet wird und seinen State verliert.
+  const dialogProps = useMemo(
+    () => ({
+      task,
+      projectId: projectId ?? null,
+      creativityLevel: creativity,
+      provider,
+      model,
+    }),
+    [task, projectId, creativity, provider, model],
+  );
 
   async function loadDirections() {
     setBusy(true);
@@ -131,50 +112,12 @@ export function TaskResearchSuggestions({
     }
   }
 
-  async function runDeepSearch(dir: TaskResearchDirection) {
-    // Bereits laufende Suche für diese Richtung abbrechen (Toggle).
-    const existing = deepAbortRef.current[dir.label];
-    if (existing) {
-      existing.abort();
-      deepAbortRef.current[dir.label] = null;
-      setDeepStatus((s) => ({ ...s, [dir.label]: "idle" }));
-      return;
+  /** Vom Dialog nach Abschluss aufgerufen: Status + Ergebnis übernehmen. */
+  function handleDialogResult(dir: TaskResearchDirection, result: TaskDeepSearchResult | null, status: DeepStatus) {
+    if (result) {
+      setDeepResult((r) => ({ ...r, [dir.label]: result }));
     }
-
-    const controller = new AbortController();
-    deepAbortRef.current[dir.label] = controller;
-    setDeepStatus((s) => ({ ...s, [dir.label]: "running" }));
-    setDeepProgress((p) => ({ ...p, [dir.label]: "Starte Tiefensuche…" }));
-    setDeepOpen((o) => ({ ...o, [dir.label]: true }));
-
-    try {
-      await api.tasks.streamDeepSearch(
-        task.id,
-        { direction: dir, creativity_level: creativity, provider, model },
-        (event) => {
-          if (event.status === "done") {
-            setDeepResult((r) => ({ ...r, [dir.label]: event }));
-            setDeepStatus((s) => ({ ...s, [dir.label]: "done" }));
-            setDeepProgress((p) => ({ ...p, [dir.label]: "Fertig" }));
-          } else if (event.status === "error" || event.status === "harvest_error") {
-            setDeepStatus((s) => ({ ...s, [dir.label]: "error" }));
-            setDeepProgress((p) => ({
-              ...p,
-              [dir.label]: event.status === "error" ? `Fehler: ${event.error ?? ""}` : `Harvest-Fehler`,
-            }));
-          } else {
-            setDeepProgress((p) => ({ ...p, [dir.label]: progressTextFor(event) }));
-          }
-        },
-        controller.signal,
-      );
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      setDeepStatus((s) => ({ ...s, [dir.label]: "error" }));
-      setDeepProgress((p) => ({ ...p, [dir.label]: err instanceof Error ? err.message : String(err) }));
-    } finally {
-      deepAbortRef.current[dir.label] = null;
-    }
+    setDeepStatus((s) => ({ ...s, [dir.label]: status }));
   }
 
   return (
@@ -207,7 +150,6 @@ export function TaskResearchSuggestions({
           {directions.map((dir, i) => {
             const isSelected = selectedLabel === dir.label;
             const status = deepStatus[dir.label] ?? (deepResult[dir.label] ? "done" : "idle");
-            const progress = deepProgress[dir.label];
             const result = deepResult[dir.label];
             const isOpen = deepOpen[dir.label] ?? false;
             const running = status === "running";
@@ -241,13 +183,13 @@ export function TaskResearchSuggestions({
                   <button
                     type="button"
                     className="button button-compact task-deep-search-btn"
-                    onClick={() => runDeepSearch(dir)}
-                    disabled={busy && !running}
-                    title={running ? "Tiefensuche abbrechen" : "Tiefensuche: viele Paper + Web-Quellen extrahieren, Möglichkeitsprinzip erzeugen"}
+                    onClick={() => setDialogDirection(dir)}
+                    disabled={busy}
+                    title={running ? "Tiefensuche läuft im Dialog" : "Tiefensuche: viele Paper + Web-Quellen extrahieren, Möglichkeitsprinzip erzeugen"}
                   >
-                    {running ? <X size={13} /> : status === "done" ? <RefreshCcw size={13} /> : <Search size={13} />}
+                    {running ? <Loader2 size={13} className="spin" /> : status === "done" ? <RefreshCcw size={13} /> : <Search size={13} />}
                     <span>
-                      {running ? "Abbrechen" : status === "done" ? "Erneute Tiefensuche" : "Tiefensuche"}
+                      {running ? "Läuft …" : status === "done" ? "Erneute Tiefensuche" : "Tiefensuche"}
                     </span>
                   </button>
                   {status === "done" && result ? (
@@ -263,17 +205,17 @@ export function TaskResearchSuggestions({
                   ) : null}
                 </div>
 
-                {running && progress ? (
+                {running ? (
                   <div className="task-deep-search-progress">
                     <Loader2 size={12} className="spin" />
-                    <span>{progress}</span>
+                    <span>Tiefensuche läuft im Dialog …</span>
                   </div>
                 ) : null}
 
-                {status === "error" && progress ? (
+                {status === "error" ? (
                   <div className="task-deep-search-error">
                     <AlertTriangle size={12} />
-                    <span>{progress}</span>
+                    <span>Suche fehlgeschlagen — bitte im Dialog erneut versuchen.</span>
                   </div>
                 ) : null}
 
@@ -292,6 +234,17 @@ export function TaskResearchSuggestions({
                     {isOpen ? (
                       <div className="task-deep-search-summary">
                         {result.summary ? <AnswerWithCitations answer={result.summary} onOpenCitation={() => {}} /> : null}
+                        {onInsertAsTurn ? (
+                          <button
+                            type="button"
+                            className="button button-compact task-deep-search-insert-turn-btn"
+                            onClick={() => onInsertAsTurn(result, dir)}
+                            title="Dieses Ergebnis als neuen Turn in den Assistant einfügen"
+                          >
+                            <ArrowRight size={13} />
+                            <span>Als Turn einfügen</span>
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -305,6 +258,25 @@ export function TaskResearchSuggestions({
           Noch keine Vorschläge. Mit „Vorschlagen“ lässt der Assistant Forschungsrichtungen aus der Task-Spec ableiten —
           die Kreativitätsstufe steuert, wie konventionell (1) oder cross-domain (5) sie ausfallen.
         </p>
+      ) : null}
+
+      {dialogDirection ? (
+        <TaskDeepSearchDialog
+          {...dialogProps}
+          direction={dialogDirection}
+          open={dialogDirection !== null}
+          onClose={() => {
+            setDialogDirection(null);
+          }}
+          onDone={(result, dir) => {
+            handleDialogResult(dir, result, "done");
+          }}
+          onInsertAsTurn={(result, dir) => {
+            handleDialogResult(dir, result, "done");
+            if (onInsertAsTurn) onInsertAsTurn(result, dir);
+            setDialogDirection(null);
+          }}
+        />
       ) : null}
     </div>
   );

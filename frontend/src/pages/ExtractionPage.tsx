@@ -190,6 +190,39 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
     }
   });
 
+  // Re-Extraktion *aller* batchbaren Paper im aktuellen Scope (Projekt oder
+  // global). Setzt force_reextract=true, damit der Backend alle alten
+  // Extraktionsdaten serverseitig löscht, bevor der Batch startet — kein
+  // clientseitiges /extraction/delete nötig.resume=false, damit nichts aus
+  // vorherigen Jobs übernommen wird.
+  const reExtractAll = useMutation({
+    mutationFn: async () => {
+      const items = (libraryQueryResult.data?.items ?? [])
+        .filter((item) => isBatchable(item) && matchesScope(item, batchScope))
+        .map((item) => ({ paper_id: item.paper_id, pdf_path: item.pdf_path || undefined }));
+      if (!items.length) {
+        return null;
+      }
+      const jobId = crypto.randomUUID();
+      setPendingJobId(jobId);
+      return api.runExtractionBatch({
+        items,
+        job_id: jobId,
+        ...options,
+        resume: false,
+        force_reextract: true
+      });
+    },
+    onSettled: () => setPendingJobId(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-history"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-library"] });
+      queryClient.invalidateQueries({ queryKey: ["extraction-vocabulary"] });
+      queryClient.invalidateQueries({ queryKey: ["health"] });
+    }
+  });
+
   const addVocabulary = useMutation({
     mutationFn: () =>
       api.addExtractionVocabulary({
@@ -488,14 +521,14 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                   <ListChecks size={16} />
                   <span>{selectedBatchPaths.length === scopedAllCount && scopedAllCount > 0 ? "Leeren" : "Alle"}</span>
                 </button>
-                <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending || reExtract.isPending} onClick={() => batch.mutate()}>
+                <button className="button button-primary" type="button" disabled={!selectedBatchPaths.length || batch.isPending || reExtract.isPending || reExtractAll.isPending} onClick={() => batch.mutate()}>
                   <Play size={16} />
                   <span>Ausführen</span>
                 </button>
                 <button
                   className="button"
                   type="button"
-                  disabled={!selectedBatchPaths.length || batch.isPending || reExtract.isPending}
+                  disabled={!selectedBatchPaths.length || batch.isPending || reExtract.isPending || reExtractAll.isPending}
                   title="Alte Extraktionen der ausgewählten Paper löschen und neu extrahieren"
                   onClick={() => {
                     const count = selectedBatchPaths.length;
@@ -507,6 +540,20 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                   <RotateCw size={16} />
                   <span>Re-Extrahieren</span>
                 </button>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={scopedAllCount === 0 || batch.isPending || reExtract.isPending || reExtractAll.isPending}
+                  title={`Alle ${scopedAllCount} batchbaren Paper im Scope neu extrahieren (überschreibt vorhandene Extraktionen serverseitig)`}
+                  onClick={() => {
+                    if (window.confirm(`Alle ${scopedAllCount} Paper im Scope neu extrahieren? Alle bisherigen Extraktionen werden serverseitig gelöscht und neu aufgebaut.`)) {
+                      reExtractAll.mutate();
+                    }
+                  }}
+                >
+                  <RefreshCw size={16} />
+                  <span>Alle neu extrahieren ({scopedAllCount})</span>
+                </button>
               </div>
             </div>
             <DegradedNotice reason={libraryQueryResult.data?.degraded} onRetry={() => libraryQueryResult.refetch()} />
@@ -517,18 +564,19 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                 onRetry={() => libraryQueryResult.refetch()}
               />
             ) : null}
-            <ErrorBox error={batch.error || reExtract.error} />
+            <ErrorBox error={batch.error || reExtract.error || reExtractAll.error} />
             <LlmLimitBanner
               parsed={firstLlmError([
                 batch.data?.job.error_message,
                 reExtract.data?.job.error_message,
+                reExtractAll.data?.job.error_message,
                 runningJob?.error_message,
                 ...batchItems.map((item) => item.error_message)
               ])}
             />
 
             {/* Live status during batch */}
-            {((batch.isPending || reExtract.isPending) && pendingJobId) && (
+            {((batch.isPending || reExtract.isPending || reExtractAll.isPending) && pendingJobId) && (
               <div className="status-strip status-strip--active">
                 <Status value="running" />
                 {currentItem ? (
@@ -564,6 +612,34 @@ export function ExtractionPage({ embedded = false }: { embedded?: boolean }) {
                 {batch.data.job.error_message ? (
                   <span className="log-error" title={batch.data.job.error_message}>
                     {parseLlmError(batch.data.job.error_message).message || batch.data.job.error_message}
+                  </span>
+                ) : null}
+              </div>
+            )}
+            {reExtract.data && !reExtract.isPending && (
+              <div className={`status-strip ${reExtract.data.job.papers_failed > 0 ? "status-strip--error" : ""}`}>
+                <Status value={reExtract.data.job.status} />
+                <span>Re-Extraktion: {reExtract.data.job.papers_processed}/{reExtract.data.job.papers_total} verarbeitet</span>
+                {reExtract.data.job.papers_failed > 0 && (
+                  <span className="error-badge">{reExtract.data.job.papers_failed} Fehler</span>
+                )}
+                {reExtract.data.job.error_message ? (
+                  <span className="log-error" title={reExtract.data.job.error_message}>
+                    {parseLlmError(reExtract.data.job.error_message).message || reExtract.data.job.error_message}
+                  </span>
+                ) : null}
+              </div>
+            )}
+            {reExtractAll.data && !reExtractAll.isPending && (
+              <div className={`status-strip ${reExtractAll.data.job.papers_failed > 0 ? "status-strip--error" : ""}`}>
+                <Status value={reExtractAll.data.job.status} />
+                <span>Alle neu extrahiert: {reExtractAll.data.job.papers_processed}/{reExtractAll.data.job.papers_total} verarbeitet</span>
+                {reExtractAll.data.job.papers_failed > 0 && (
+                  <span className="error-badge">{reExtractAll.data.job.papers_failed} Fehler</span>
+                )}
+                {reExtractAll.data.job.error_message ? (
+                  <span className="log-error" title={reExtractAll.data.job.error_message}>
+                    {parseLlmError(reExtractAll.data.job.error_message).message || reExtractAll.data.job.error_message}
                   </span>
                 ) : null}
               </div>

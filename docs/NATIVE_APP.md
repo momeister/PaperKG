@@ -693,6 +693,160 @@ einem Modal, das den bestehenden `PdfPane` wiederverwendet (pdf.js-Canvas, Seite
 Browser. Kein neuer Viewer-Code: `PdfPane` rendert mit `url`+`title` und leerem `evidences` sauber ohne
 Evidenz-/Übersetzungs-UI. Schließen via Backdrop-Klick, Einklappen-Button oder Escape.
 
+## Loslösbare Arbeitsplatz-Fenster (2026-09-09)
+
+Navigator, Mitte (PDF/Daten/Analyse), Assistant und Notizen können am Bereichskopf
+einzeln in ein natives Fenster wechseln. Die Schaltfläche öffnet den Bereich; eine
+Ziehbewegung am Griff ab 12 CSS-Pixeln löst ihn ebenfalls ab. Im Zusatzfenster kann
+der Griff die native Fensterbewegung starten. Unter Wayland kann alternativ die
+Fenstertitelleiste verwendet werden, da der Compositor über die Platzierung entscheidet.
+Die Andock-Schaltfläche lässt sich auf die markierte Andockfläche im Hauptfenster
+ziehen. Schaltfläche, Platzhalter und natives Fensterschließen docken ebenfalls an.
+Datei-Drops verwenden einen anderen Datentyp und lösen keine Andockaktion aus.
+
+Pro Bereich existiert höchstens ein Fenster. Kompakte Platzhalter bieten „Fenster
+anzeigen“ und „Andocken“. Beim vollständigen Andocken wird die ursprüngliche
+Spaltenanordnung wiederhergestellt; vorübergehend eingeklappte Spalten werden nicht
+als reguläre Startanordnung gespeichert. Im Browser bleiben alle Bereiche angedockt.
+Die native Einstellung **„Fensteranordnung beim Start wiederherstellen“** ist
+standardmäßig ausgeschaltet. Bei eingeschalteter Option werden zuletzt losgelöste
+Bereiche nach dem Laden des Arbeitsplatzes erneut geöffnet.
+
+### Steuerung und Zustandsübergabe
+
+`WorkspaceHost` hält pro besuchtem Projekt eine dauerhafte Workspace-Steuerung.
+Seitenwechsel blenden deren Andockflächen aus; Anfragen, Streams, Entwürfe und
+Zusatzfenster bleiben aktiv. Beim Projektwechsel zeigt dasselbe Zusatzfenster die
+Ansicht des gewählten Projekts. Vorherige Projektsteuerungen behalten ihre laufende
+Arbeit; Research-Ergebnisse werden dem beim Start erfassten Projekt und der Sitzung
+zugeordnet. Provider und Modell laufender Anfragen ändern sich nicht nachträglich.
+
+Die Umsetzung verwendet bewusst eine gemeinsame JavaScript-Steuerung statt vier
+weiterer React-Apps mit replizierten Zustandsspeichern: Tauri erstellt über
+`on_new_window` und `window_features` verwandte Webviews mit einer echten
+Opener-Beziehung. Stabile React-Portal-Zielknoten werden zwischen den Dokumenten
+verschoben. Komponenten, Refs und laufende Promises bleiben dieselben Objekte.
+`workspace-pane.html` ist ausschließlich ein Ansichtsdokument und startet weder die
+App-Shell noch einen Backend-Prozess. Aktionen der portierten React-Komponenten
+laufen unmittelbar in der Hauptsteuerung; dafür ist keine zweite serialisierte
+Kopie des Workspace-Zustands erforderlich.
+
+Die Übergabe selbst verwendet typisierte Nachrichten mit Bereich, Aktionskennung,
+Revision und Bereitschafts-/Übernahmebestätigung. Ursprung und Absender werden
+geprüft. Gleichzeitige Öffnungsversuche werden zusammengefasst; Schließen während
+einer Übergabe wird eingereiht. Bei fehlender Bestätigung oder fehlgeschlagenem
+Fensterstart kehrt der unveränderte Ansichtsknoten in seinen ursprünglichen Bereich
+zurück. Während der eigentlichen Übernahme ist die Eingabe kurz gesperrt. Nach einem
+Neuladen des Ansichtsdokuments wird die aktuelle vollständige Ansicht erneut aus
+der Hauptsteuerung eingesetzt.
+
+DOM-Auswahl, Eingabecursor und Scrollpositionen werden zusätzlich explizit gesichert.
+Textauswahl speichert feste Knotengrenzen, da lebende DOM-Ranges beim Verschieben
+kollabieren würden. Undo/Redo folgt dem Editor und seiner Notiz-/Sitzungskennung.
+PDF-Zustand bleibt in der laufenden Komponente; der relative Seitenversatz wird
+während der Größenanpassung wiederhergestellt. Canvas-Auflösung folgt dem aktuellen
+`devicePixelRatio`. PDF-Suche, Notiz-Auswahl, Wörterbuchaktionen und schwebende
+Zitieraktionen verwenden das Dokument ihres jeweiligen Bereichs.
+
+### Speicherung, Rechte und Beenden
+
+Alle `NotesSurface`-Instanzen, einschließlich Werkstatt/Jupyter, teilen einen
+`NoteDraftStore`. Er besitzt Debounce-Timer, laufende Schreibvorgänge und Revisionen
+je Notiz. Ein später Abschluss darf neuere Eingaben nicht als gespeichert markieren.
+Zitateinfügen, Versionswiederherstellung und Löschen werden mit Autosaves koordiniert.
+Ungesicherte Notizen erhalten eine lokale Wiederherstellungskopie. Assistant-Entwürfe
+werden nach Projekt/Sitzung lokal gehalten; ausstehende Sitzungsspeicherungen werden
+vor dem Beenden abgearbeitet.
+
+Das Hauptfenster fängt Schließen ab, sichert Entwürfe/Sitzungen und beendet danach
+die laufenden Workspace-Streams. Währenddessen sind die Arbeitsplatz-Eingaben
+gesperrt. Abschließende Stream-Revisionen werden vor dem Beenden der nativen
+Prozesse nochmals gespeichert. Ein verspäteter Speicherabschluss nach einem
+Timeout darf laufende Arbeit nicht nachträglich abbrechen. Speicherfehler oder ein
+Speicher-Timeout halten die App offen und zeigen einen Fehler mit Wiederholungsaktion.
+Eine unlesbare Entwurfssicherung wird nicht still überschrieben. Zusatzfenster werden
+erst zerstört, nachdem ihre Ansicht wieder angedockt ist. Das Backend wird weiterhin
+ausschließlich beim App-Start erzeugt; unter Unix erhält es beim regulären App-Ende
+zunächst SIGTERM und eine begrenzte Wartezeit vor dem erzwungenen Beenden.
+
+Fensteraktionen sind eigene Rust-Commands mit Prüfung auf das Hauptfenster und die
+festen Kennungen `navigator | center | assistant | notes`. Zusatzfenster erhalten
+keine allgemeinen Tauri-Fensterberechtigungen. Die vorhandene API-Origin wird in die
+verwandten Webviews injiziert. Native Drop-Handler sind für die Arbeitsplatzfenster
+deaktiviert, damit HTML-Datei-Drops erreichbar bleiben.
+
+Lokale Einstellungen: `sciencekg.workspace.restoreWindows`,
+`sciencekg.workspace.detachedWindows`, `sciencekg.notes.unsavedDrafts.v1` und
+`sciencekg.workspace.composer.<Projekt>.<Sitzung>`. Fenstergrößen und Positionen liegen
+in `workspace-windows.json` im Tauri-Konfigurationsverzeichnis. Größen werden in
+logischen Pixeln gespeichert; Positionen werden an verfügbare Monitore angepasst.
+Unter Wayland wird keine absolute Position erzwungen. Technischer Bezug:
+[Tauri-Fenster-API](https://v2.tauri.app/reference/javascript/api/namespacewebviewwindow/)
+und [Tao-Plattformimplementierung](https://github.com/tauri-apps/tao/blob/dev/src/platform_impl/linux/window.rs).
+
+### Prüfung und offene native Abnahme
+
+Automatisiert geprüft am 2026-09-09:
+
+- Frontend-Typecheck und Produktionsbuild; bestehende Vite-Warnung zu großen Chunks.
+- 125 relevante Vitest-Tests in zehn Dateien, einschließlich Übergabefehlern,
+  Doppelklick/Schließen während Übergabe, Projektwechsel, Sitzungsentwürfen,
+  DOM-Auswahl, serialisierten Notizspeicherungen und fehlgeschlagenem/verspätetem
+  Speichern beim App-Ende (abschließende Prüfung am 2026-09-12).
+- 18 Playwright-Prüfungen aus `workspace-windows`, `workspace-reading`, `product`
+  und `glossary`, am 2026-09-12 erneut erfolgreich ausgeführt.
+- `cargo check` und drei Rust-Tests der Fensterverwaltung: feste Bereichskennungen,
+  URL-/Origin-Prüfung und das gebündelte `tauri://localhost`-Protokoll.
+- Native React-Prüfsonde mit vier echten verwandten Tauri-Webviews unter X11/Xvfb
+  und GNOME/Wayland: identischer Editor, Cursor/Textauswahl, React-Ereignisse,
+  Notiz-Autosave, eine während des Wechsels laufende asynchrone Arbeit sowie
+  native Anzeige, Zerstörung und bestätigtes Fensterschließen erfolgreich.
+- Zusätzliche X11-Prüfsonde mit `tauri/custom-protocol` und eingebauten Assets:
+  Opener-Beziehung, DOM-Übernahme/Rückgabe, Ereignisse und Auswahl erfolgreich.
+
+Native Umgebung: Ubuntu/GNOME (`XDG_CURRENT_DESKTOP=ubuntu:GNOME`), GNOME Shell
+46.0, Wayland-Sitzung (`wayland-0`), WebKitGTK 2.52.6; zusätzlich X11 in Xvfb.
+Die Monitor-Skalierung wurde bei diesen Funktionssonden nicht protokolliert;
+deren Ergebnisse gelten deshalb nicht als Skalierungsabnahme.
+Die Prüfsonde verwendet einen separaten App-Identifier und API-Doubles und startet
+keinen Backend-Prozess. Sie ist ein Funktionsnachweis der Fenster-/React-Integration,
+keine vollständige Abnahme aller LLM-Workflows oder eines installierten Pakets.
+
+Reproduktion aus dem Repository mit laufendem Vite auf Port 5173:
+
+```bash
+npm --prefix frontend run dev -- --port 5173
+# In einem zweiten Terminal:
+SCIENCEKG_PORTAL_PROBE_REACT=1 GDK_BACKEND=wayland cargo run --manifest-path src-tauri/Cargo.toml --example workspace_portal_probe
+SCIENCEKG_PORTAL_PROBE_REACT=1 GDK_BACKEND=x11 xvfb-run -a cargo run --manifest-path src-tauri/Cargo.toml --example workspace_portal_probe
+# Ohne Vite, nach dem Frontend-Build: gebündeltes Asset-Protokoll prüfen.
+GDK_BACKEND=x11 xvfb-run -a cargo run --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol --example workspace_portal_probe
+```
+
+**Offen, nicht als bestanden gewertet:** manuelles Ziehen und Andocken unter GNOME,
+PDF-/Bild-Drops aus einem echten Dateimanager, sämtliche vorhandenen Zitieraktionen
+zwischen nativen Fenstern, reale Chat-/Tiefenanalyse-/Parallelrecherche-/Notiz-KI-/
+Analyse-Läufe mit Projekt- und Providerwechsel sowie vollständiger App-Neustart mit
+beiden Anordnungsoptionen. Mehrmonitor-Prüfungen bei 100 %, 150 % und 200 % Skalierung
+(einschließlich Monitortrennung, PDF-Neurendern und Wiederherstellung) sind nicht
+durchgeführt; es liegt keine entsprechende Hardware-Abnahme vor. Windows, macOS,
+weitere Compositoren und ein neu gebautes Installationspaket sind ebenfalls offen.
+
+### Kompakter Arbeitsplatz und PDF-Neuzeichnen (2026-09-12)
+
+Die [zusätzliche Prüfung](WORKSPACE_COMPACT_VALIDATION.md) bestätigt echte
+PDF-Canvas-Pixel auf Seite 5 über drei Ab-/Andockzyklen unter X11/Xvfb und
+GNOME/Wayland, einschließlich ausgeblendetem Hauptarbeitsplatz. Der PDF-Renderer
+bindet seine Beobachter an das beherbergende Fenster und serialisiert abgebrochene
+Renderaufträge. Ein Fehler beim gleichzeitigen nativen Andocken ist behoben:
+Geometrieabfragen greifen nur auf das gerade geschlossene Fenster zu; die
+Schließbestätigung wartet auf die Freigabe seiner Kennung.
+
+Die kompakte Kopfzeile und die Scrollbereiche wurden in sechs Desktopgrößen-/
+Schriftgrößenkombinationen mit offenen Belegen und überhöhten gespeicherten
+Wunschhöhen geprüft. Dieser Nachweis ergänzt die oben genannten Funktionssonden;
+eine neue Paket- oder Mehrmonitor-Abnahme ist damit nicht verbunden.
+
 ## Bekannte Punkte / nächste Schritte
 
 - **Dev-Hot-Reload-Artefakt:** Beim automatischen Rebuild von `tauri dev` kann der alte Backend-Sidecar

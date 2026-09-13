@@ -42,7 +42,7 @@ import { TextareaHighlightLayer } from "../components/TextareaHighlightLayer";
 import { downloadMarkdownFile } from "../download";
 import { noteProjectId } from "../projectScope";
 import { useAppState, useOptionalAppState } from "../state";
-import type { Answer, CitationLink, ClaimCheckResult, DeepResearchFinding, Note, ResearchNode, VerificationSource } from "../types";
+import type { Answer, CitationLink, ClaimCheckResult, DeepResearchFinding, Note, ResearchNode, TaskDeepSearchResult, VerificationSource } from "../types";
 import {
   loadAssistantSession,
   slimTurnForPersist,
@@ -134,12 +134,21 @@ export type AssistantTurn = {
   verification: VerificationSource[];
   createdAt: string;
   blocks?: AssistantAnswerBlock[];
-  type?: "chat" | "research_tree" | "parallel" | "research";
+  type?: "chat" | "research_tree" | "parallel" | "research" | "task_deep_search";
   researchNodes?: ResearchNode[];
   /** For ``type === "parallel"``: the server-side parallel-research session id and a
    * cached variant count for the session-list label. */
   parallelSessionId?: string;
   parallelVariantCount?: number;
+  /** For ``type === "task_deep_search"``: das Ergebnis einer Task-Modus-Tiefensuche,
+   *  das als eigener Turn in die Bibliothek-Session-Liste eingefügt wurde. Enthält
+   *  Summary + Paper/Grey-IDs + Rekursions-Metadaten. */
+  taskDeepSearchResult?: TaskDeepSearchResult & {
+    node_count?: number;
+    depth?: number;
+    branches?: number;
+    task_id?: string;
+  };
   /** For ``type === "research"``: der Auto-Recherche-Platzhalter-Turn, der sofort
    * beim Start angelegt wird, damit eine fehlgeschlagene/abgebrochene Recherche
    * nicht als "Keine Antwort" verschwindet. Wird beim ``done``-Event in-place zu
@@ -155,6 +164,7 @@ export type CitationMeta = {
   evidenceId?: string;
   approximate?: boolean;
   confidence?: "high" | "medium" | "low";
+  verificationStatus?: string;
 };
 
 /** Zusatzinfos beim Übernehmen eines Zitats in die Notiz. */

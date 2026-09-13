@@ -13,7 +13,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from api.routers.pdf_annotations import PdfAnnotationRect
 
 import api.product_main as pm  # patchable llm_router + geteilte Helfer
 from research.sanitize import FULL_TEXT_MAX_LEN
@@ -27,20 +28,39 @@ DEFAULT_NOTE_ASSET_DIR = "data/note_assets"
 router = APIRouter()
 
 
-class NotePayload(BaseModel):
+class PdfCitationAnchor(BaseModel):
+    page_number: int = Field(ge=1)
+    rects: list[PdfAnnotationRect] = Field(min_length=1)
+
+
+class CitationPayload(BaseModel):
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("citations")
+    @classmethod
+    def validate_pdf_anchors(cls, citations):
+        for citation in citations:
+            if citation.get("pdf_anchors") is not None:
+                citation["pdf_anchors"] = [
+                    PdfCitationAnchor.model_validate(anchor).model_dump()
+                    for anchor in citation["pdf_anchors"]
+                ]
+        return citations
+
+
+class NotePayload(CitationPayload):
     title: str = Field(default="Neue Notiz", min_length=1, max_length=180)
     markdown: str = Field(default="", max_length=200000)
 
 
-class NotePatch(BaseModel):
+class NotePatch(CitationPayload):
     title: str | None = Field(default=None, min_length=1, max_length=180)
     markdown: str | None = Field(default=None, max_length=200000)
 
 
-class NoteAppendRequest(BaseModel):
+class NoteAppendRequest(CitationPayload):
     markdown: str = Field(min_length=1, max_length=80000)
     title: str | None = Field(default=None, max_length=180)
-    citations: list[dict[str, Any]] = []
 
 
 class NoteAiEditRequest(BaseModel):
@@ -106,8 +126,11 @@ def create_project_note(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
-        note = db.create_note(
-            project_id=project_id, title=payload.title, markdown=payload.markdown
+        note = db.save_note_with_citations(
+            project_id=project_id,
+            title=payload.title,
+            markdown=payload.markdown,
+            citations=payload.citations,
         )
     return {"note": _note_view(note)}
 
@@ -130,7 +153,12 @@ def patch_note(
     metadata_db_path: str = DEFAULT_METADATA_DB_PATH,
 ) -> dict[str, Any]:
     with MetadataDB(metadata_db_path) as db:
-        note = db.update_note(note_id, title=payload.title, markdown=payload.markdown)
+        note = db.save_note_with_citations(
+            note_id=note_id,
+            title=payload.title,
+            markdown=payload.markdown,
+            citations=payload.citations,
+        )
     if note is None:
         raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
     return {"note": _note_view(note)}

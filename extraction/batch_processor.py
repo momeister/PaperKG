@@ -240,6 +240,13 @@ class BatchProcessor:
                                 pdf_path, paper_id, force_parser=forced_parser
                             )
                             paper_text = parsed.text
+                            if metadata_db is not None:
+                                from query.passages import index_document
+                                try:
+                                    index_document(metadata_db, paper_id, pdf_path, parsed)
+                                except Exception:
+                                    logger.warning("Passage index deferred for %s", paper_id, exc_info=True)
+
                         else:
                             paper_text = inline_text
 
@@ -304,6 +311,9 @@ class BatchProcessor:
                                 mathematical_content=extraction.mathematical_content,
                                 raw_response=extraction.raw_response,
                                 error_message=failure_reason,
+                                provenance=extraction.provenance,
+                                study_quality=extraction.study_quality,
+                                evidence_level=extraction.evidence_level,
                             )
 
                         if failure_reason is not None:

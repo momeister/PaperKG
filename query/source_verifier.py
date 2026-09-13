@@ -8,7 +8,7 @@ from typing import Any
 
 from parsing.marker_parser import MarkerParser
 
-_PDF_TEXT_CACHE: dict[tuple[str, float, int], str] = {}
+_PDF_TEXT_CACHE: dict[tuple[str, int, int, str], str] = {}
 MAX_REFERENCE_CHARS = 220
 DEFAULT_EXCERPT_CHARS = 260
 # Window for the honest "approximate region" shown when a claim cannot be anchored to an
@@ -481,7 +481,8 @@ def pdf_lookup_tokens(paper_id: str, title: str = "") -> list[str]:
 def parse_pdf_text(pdf_path: str, paper_id: str) -> str:
     path = Path(pdf_path)
     stat = path.stat()
-    cache_key = (str(path.resolve()), stat.st_mtime, stat.st_size)
+    from parsing.layout import PARSER_VERSION
+    cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size, PARSER_VERSION)
     cached = _PDF_TEXT_CACHE.get(cache_key)
     if cached is not None:
         return cached

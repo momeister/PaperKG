@@ -1,4 +1,5 @@
 import type {
+  GlossaryEntry,
   AgentConfig,
   AgentHandoffResponse,
   Answer,
@@ -167,6 +168,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 }
 
 export const api = {
+  listGlossary: () => request<{ items: GlossaryEntry[] }>("/glossary"),
+  createGlossary: (payload: { term: string; explanation: string }) => request<GlossaryEntry>("/glossary", { method: "POST", body: JSON.stringify(payload) }),
+  updateGlossary: (id: string, payload: { term: string; explanation: string }) => request<GlossaryEntry>(`/glossary/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteGlossary: (id: string) => request<{ deleted: boolean }>(`/glossary/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  suggestGlossary: (payload: { term: string; selected_text: string; provider?: string; model?: string }) => request<{ suggestion: string }>("/glossary/suggest", { method: "POST", body: JSON.stringify(payload) }),
   getHealth: () => request<HealthReport>("/system/health-report"),
   // `degraded` ist gesetzt, wenn die Projektliste aus projects.json kommt, die
   // Metadaten-DB aber nicht lesbar war (z.B. zweites Backend haelt den Lock).
@@ -341,6 +347,7 @@ export const api = {
     allow_context_fallback?: boolean;
     link_concepts?: boolean;
     resume?: boolean;
+    force_reextract?: boolean;
   }) =>
     request<{ job: Job; items: Array<Record<string, unknown>> }>("/extraction/batch", {
       method: "POST",
@@ -409,13 +416,13 @@ export const api = {
   rewriteNote: (payload: { text: string; instruction: string; provider?: string; model?: string }) =>
     request<RewriteResponse>("/tools/rewrite", { method: "POST", body: JSON.stringify(payload) }),
   listNotes: (projectId: string) => request<{ items: Note[]; total: number }>(`/projects/${encodeURIComponent(projectId)}/notes`),
-  createNote: (projectId: string, payload: { title: string; markdown?: string }) =>
+  createNote: (projectId: string, payload: { title: string; markdown?: string; citations?: Record<string, unknown>[] }) =>
     request<{ note: Note }>(`/projects/${encodeURIComponent(projectId)}/notes`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
   getNote: (noteId: string) => request<{ note: Note }>(`/notes/${encodeURIComponent(noteId)}`),
-  updateNote: (noteId: string, payload: { title?: string; markdown?: string }) =>
+  updateNote: (noteId: string, payload: { title?: string; markdown?: string; citations?: Record<string, unknown>[] }) =>
     request<{ note: Note }>(`/notes/${encodeURIComponent(noteId)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
@@ -2046,4 +2053,41 @@ async function streamCodeGraphSse<T>(
       }
     }
   }
+}
+
+/** Receives progress and exactly one checked answer, never draft tokens. */
+export async function streamAnswer(
+  payload: Parameters<typeof api.answer>[0],
+  onProgress: (message: string) => void,
+  signal?: AbortSignal,
+): Promise<Answer> {
+  const response = await fetch(new URL("/query/answer/stream", API_BASE_URL), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal,
+  });
+  if (!response.ok) throw new ApiError(response.status, await response.text());
+  if (!response.body) throw new Error("Antwortstream fehlt");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer: Answer | undefined;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) >= 0) {
+        const event = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        const data = event.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        const parsed = JSON.parse(data);
+        if (parsed.type === "error") throw new Error(parsed.message);
+        if (parsed.type === "progress") onProgress(parsed.message);
+        if (parsed.type === "answer") answer = parsed.answer;
+      }
+      if (done) break;
+    }
+  } finally { reader.releaseLock(); }
+  if (!answer) throw new Error("Antwortstream endete ohne geprüfte Antwort");
+  return answer;
 }

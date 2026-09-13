@@ -45,6 +45,11 @@ base64 = "0.22"
 # border is visible whenever input synthesis is possible.
 enigo = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already used by Tauri/Wry. Enable related views during opt-in layout restore
+# (WebKit otherwise requires a user gesture for window.open).
+webkit2gtk = "2.0"
+
 [target.'cfg(windows)'.dependencies]
 # Hide the companion overlay windows from screen captures (WDA_EXCLUDEFROMCAPTURE).
 # Version matches tauri's, so `window.hwnd()` returns exactly this crate's HWND.

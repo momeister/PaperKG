@@ -1,4 +1,6 @@
-import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { WorkspaceHost } from "./workspace/WorkspaceHost";
+import { GlossaryProvider, GlossaryPanel } from "./glossary/GlossaryProvider";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -16,7 +18,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  SlidersHorizontal,
   Target,
   Telescope,
   Waypoints
@@ -37,7 +38,8 @@ import {
 import type { LlmParams, Theme } from "./state";
 import type { CreativityLevel, WorkspaceMode } from "./types";
 import { ConstellationMark } from "./components/ConstellationMark";
-import { LlmPicker } from "./components/LlmPicker";
+import { CompactPopover } from "./components/CompactPopover";
+import { isRemoteModel, LlmPicker } from "./components/LlmPicker";
 import { Status } from "./components/Status";
 import { ThemePicker } from "./components/ThemePicker";
 import { useLlmProviders } from "./hooks/useLlmProviders";
@@ -60,7 +62,6 @@ const LibraryPage = lazy(() => import("./pages/LibraryPage").then((m) => ({ defa
 const QualityPage = lazy(() => import("./pages/QualityPage").then((m) => ({ default: m.QualityPage })));
 const ResearchHubPage = lazy(() => import("./pages/ResearchHubPage").then((m) => ({ default: m.ResearchHubPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
-const WorkspacePage = lazy(() => import("./pages/WorkspacePage").then((m) => ({ default: m.WorkspacePage })));
 const WorkstationPage = lazy(() => import("./pages/WorkstationPage").then((m) => ({ default: m.WorkstationPage })));
 const JupyterPage = lazy(() => import("./pages/JupyterPage").then((m) => ({ default: m.JupyterPage })));
 const CodeGraphPage = lazy(() => import("./pages/codegraph/CodeGraphPage").then((m) => ({ default: m.CodeGraphPage })));
@@ -142,8 +143,9 @@ function loadStoredFontScale(): number {
 
 export default function App() {
   const [activeProject, setActiveProject] = useState<string | undefined>(() => localStorage.getItem("sciencekg.project") ?? undefined);
-  const [provider, setProvider] = useState<string | undefined>(() => localStorage.getItem("sciencekg.provider") ?? undefined);
-  const [model, setModel] = useState<string | undefined>(() => localStorage.getItem("sciencekg.model") ?? undefined);
+  const [{ provider, model }, setLlmChoice] = useState<{ provider?: string; model?: string }>(() => ({ provider: localStorage.getItem("sciencekg.provider") ?? undefined, model: localStorage.getItem("sciencekg.model") ?? undefined }));
+  const setProvider = useCallback((provider?: string) => setLlmChoice(current => current.provider === provider ? current : { provider, model: undefined }), []);
+  const setModel = useCallback((model?: string) => setLlmChoice(current => ({ ...current, model })), []);
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("sciencekg.sidebar.open") !== "false");
   // Task-Focused Mode: welche Sidebar-Gruppen ausgeklappt sind. Default: alle
   // Gruppen mit Sub-Einträgen (aktuell nur "Arbeitsplatz") offen, damit der
@@ -256,6 +258,7 @@ export default function App() {
   // 100vh-Panes). Der Boot-Script in index.html setzt denselben Wert flimmerfrei vorab.
   useEffect(() => {
     document.documentElement.style.zoom = String(fontScale);
+    document.documentElement.style.setProperty("--app-font-scale", String(fontScale));
     localStorage.setItem("sciencekg.fontScale", String(fontScale));
   }, [fontScale]);
 
@@ -317,7 +320,7 @@ export default function App() {
   if (isOverlay) {
     return (
       <AppStateContext.Provider value={state}>
-        <OverlayPage />
+        <GlossaryProvider><OverlayPage /></GlossaryProvider>
       </AppStateContext.Provider>
     );
   }
@@ -334,9 +337,42 @@ export default function App() {
     return <SnipOverlayPage />;
   }
 
+  const appearanceControls = <>
+    <span className="font-scale-controls" role="group" aria-label="Schriftgröße">
+      <button
+        className="icon-button font-scale-button"
+        type="button"
+        aria-label="Schrift verkleinern"
+        title="Schrift verkleinern"
+        onClick={() => adjustFontScale(-FONT_SCALE_STEP)}
+      >
+        <span className="font-scale-glyph font-scale-glyph--small">A</span>
+      </button>
+      <button
+        className="icon-button font-scale-button"
+        type="button"
+        aria-label="Schriftgröße zurücksetzen"
+        title={`Schriftgröße: ${Math.round(fontScale * 100)}% – auf 100% zurücksetzen`}
+        onClick={() => setFontScale(1)}
+      >
+        {Math.round(fontScale * 100)}%
+      </button>
+      <button
+        className="icon-button font-scale-button"
+        type="button"
+        aria-label="Schrift vergrößern"
+        title="Schrift vergrößern"
+        onClick={() => adjustFontScale(FONT_SCALE_STEP)}
+      >
+        <span className="font-scale-glyph font-scale-glyph--large">A</span>
+      </button>
+    </span>
+    <ThemePicker theme={theme} onSelect={setTheme} variant="inline" />
+  </>;
+
   return (
     <AppStateContext.Provider value={state}>
-      <MotionProvider>
+      <GlossaryProvider><MotionProvider>
       <div className={`app-shell ${sidebarOpen ? "" : "app-shell--sidebar-collapsed"}`}>
         <aside className={`sidebar ${sidebarOpen ? "" : "sidebar--collapsed"}`}>
           <div className="brand">
@@ -420,9 +456,8 @@ export default function App() {
         </aside>
 
         <main className="workspace">
-          <header className="topbar">
-            <div className="topbar-group">
-              <label>
+          <header className="topbar topbar--compact">
+              <label className="topbar-project">
                 Projekt
                 <select value={activeProject ?? ""} onChange={(event) => setActiveProject(event.target.value || undefined)}>
                   {/* Bei einem Ladefehler sonst nur "Alle Papers" — das sah aus, als
@@ -435,6 +470,7 @@ export default function App() {
                   ))}
                 </select>
               </label>
+            <CompactPopover className="topbar-model-choice" open={paramsOpen} onOpenChange={setParamsOpen} label={<><span className="topbar-model-label" title={`${provider ?? defaultProvider ?? "Provider"} · ${model ?? selectedProvider?.default_model ?? "Modell"}`}>{provider ?? defaultProvider ?? "Provider"} · {model ?? selectedProvider?.default_model ?? "Modell"}</span>{isRemoteModel(model ?? selectedProvider?.default_model) && <span className="llm-picker-remote">☁ nicht lokal</span>}</>}>
               <LlmPicker
                 variant="topbar"
                 provider={provider}
@@ -443,53 +479,6 @@ export default function App() {
                 onModelChange={setModel}
                 enabled={!skipHeavyQueries}
               />
-            </div>
-            <div className="topbar-health">
-              <Status value={healthQuery.data?.status ?? "loading"} />
-              <span>{healthQuery.data?.warnings?.length ?? 0} Warnungen</span>
-              <span>{API_BASE_URL}</span>
-              <span className="font-scale-controls" role="group" aria-label="Schriftgröße">
-                <button
-                  className="icon-button font-scale-button"
-                  type="button"
-                  aria-label="Schrift verkleinern"
-                  title="Schrift verkleinern"
-                  onClick={() => adjustFontScale(-FONT_SCALE_STEP)}
-                >
-                  <span className="font-scale-glyph font-scale-glyph--small">A</span>
-                </button>
-                <button
-                  className="icon-button font-scale-button"
-                  type="button"
-                  aria-label="Schriftgröße zurücksetzen"
-                  title={`Schriftgröße: ${Math.round(fontScale * 100)}% – auf 100% zurücksetzen`}
-                  onClick={() => setFontScale(1)}
-                >
-                  {Math.round(fontScale * 100)}%
-                </button>
-                <button
-                  className="icon-button font-scale-button"
-                  type="button"
-                  aria-label="Schrift vergrößern"
-                  title="Schrift vergrößern"
-                  onClick={() => adjustFontScale(FONT_SCALE_STEP)}
-                >
-                  <span className="font-scale-glyph font-scale-glyph--large">A</span>
-                </button>
-              </span>
-              <ThemePicker theme={theme} onSelect={setTheme} />
-              <span className="llm-params-wrap">
-                <button
-                  className={`icon-button ${paramsOpen || Object.values(llmParams).some((value) => value !== undefined) ? "icon-button--active" : ""}`}
-                  type="button"
-                  aria-label="LLM-Parameter anpassen"
-                  title="LLM-Parameter anpassen"
-                  onClick={() => setParamsOpen((current) => !current)}
-                >
-                  <SlidersHorizontal size={17} />
-                </button>
-                {paramsOpen ? (
-                  <div className="llm-params-popover">
                     <strong>LLM-Parameter</strong>
                     <p className="muted">Gelten für Assistant-Antworten; leer = Provider-Default.</p>
                     <label>
@@ -536,12 +525,24 @@ export default function App() {
                         Fertig
                       </button>
                     </div>
-                  </div>
-                ) : null}
-              </span>
+            </CompactPopover>
+            <CompactPopover label={<><Status value={healthQuery.data?.status ?? "loading"} /><span>{healthQuery.data?.warnings?.length ?? 0} Warnungen</span></>}>
+              <strong>Backend-Status</strong><p>{API_BASE_URL}</p>
+              {healthQuery.isError && <p role="alert">Backend nicht erreichbar</p>}
+              {(healthQuery.data?.warnings ?? []).map((warning, index) => <p key={index}>{warning}</p>)}
+            </CompactPopover>
+            <div className="topbar-secondary">
+              <CompactPopover label="Wörterbuch"><GlossaryPanel managementOnly /></CompactPopover>
+              <CompactPopover label="Darstellung">{appearanceControls}</CompactPopover>
             </div>
+            <CompactPopover className="topbar-overflow" label="Mehr">
+              <GlossaryPanel managementOnly />
+              <strong>Darstellung</strong>
+              {appearanceControls}
+            </CompactPopover>
           </header>
 
+          <WorkspaceHost />
           <Suspense fallback={<div className="page-loading">Lade…</div>}>
             <Routes>
               <Route path="/" element={<Navigate to="/forschung" replace />} />
@@ -554,7 +555,7 @@ export default function App() {
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/assistant" element={<Navigate to="/workspace" replace />} />
               <Route path="/notes" element={<Navigate to="/workspace" replace />} />
-              <Route path="/workspace" element={<WorkspacePage />} />
+              <Route path="/workspace" element={null} />
               <Route path="/werkstatt" element={<WorkstationPage />} />
               <Route path="/code" element={<CodeGraphPage />} />
               <Route path="/jupyter" element={<JupyterPage />} />
@@ -571,7 +572,7 @@ export default function App() {
           </Suspense>
         </main>
       </div>
-      </MotionProvider>
+      </MotionProvider></GlossaryProvider>
     </AppStateContext.Provider>
   );
 }

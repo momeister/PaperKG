@@ -1253,6 +1253,16 @@ export function splitMarkdownBlocks(value: string): MarkdownBlock[] {
       index += 1;
       continue;
     }
+    const codeFence = /^ {0,3}(`{3,}|~{3,})/.exec(lines[index]);
+    if (codeFence) {
+      let close = index + 1;
+      const closing = new RegExp(`^ {0,3}${codeFence[1][0]}{${codeFence[1].length},}\\s*$`);
+      while (close < lines.length && !closing.test(lines[close])) close++;
+      const endLine = Math.min(close, lines.length - 1);
+      pushBlock(index, endLine);
+      index = endLine + 1;
+      continue;
+    }
     if (isToggleOpenLine(lines[index])) {
       let close = index + 1;
       while (close < lines.length && !TOGGLE_CLOSE_PATTERN.test(lines[close].trim())) {
@@ -1264,7 +1274,7 @@ export function splitMarkdownBlocks(value: string): MarkdownBlock[] {
       continue;
     }
     let end = index;
-    while (end < lines.length && lines[end].trim() !== "") {
+    while (end < lines.length && lines[end].trim() !== "" && (end === index || !/^ {0,3}(`{3,}|~{3,})/.test(lines[end]))) {
       end += 1;
     }
     pushBlock(index, end - 1);

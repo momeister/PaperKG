@@ -415,3 +415,66 @@ def test_unterminated_think_block_sets_reasoning_truncated() -> None:
     text = router.chat([{"role": "user", "content": "frage"}])
     assert text == ""
     assert router.last_response_metadata["reasoning_truncated"] is True
+
+
+def test_ollama_optional_json_and_thinking_controls_fall_back_without_model_rules():
+    seen = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if "think" in payload:
+            return httpx.Response(
+                400, json={"error": "model does not support thinking"}
+            )
+        if "format" in payload:
+            return httpx.Response(422, json={"error": "JSON format is unsupported"})
+        return httpx.Response(200, json={"message": {"content": '{"ok":true}'}})
+
+    router = _router("ollama", handler)
+    result = router.chat(
+        [{"role": "user", "content": "Return JSON"}],
+        overrides={
+            "extra": {
+                "json_mode": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        },
+    )
+    assert result == '{"ok":true}'
+    assert len(seen) == 3
+    assert all(p["model"] == "test-model" for p in seen)
+    assert router.last_response_metadata["response_format_fallback"]
+    assert router.last_response_metadata["thinking_control_fallback"]
+
+
+def test_server_prefilled_thinking_tag_never_leaks_reasoning_or_its_json():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "content": 'Consider {"wrong":true} first.</think>{"status":"ready"}'
+                }
+            },
+        )
+
+    router = _router("ollama", handler)
+    assert (
+        router.chat([{"role": "user", "content": "Return JSON"}])
+        == '{"status":"ready"}'
+    )
+
+
+def test_prefilled_thinking_without_a_final_answer_stays_empty():
+    from query.llm_router import strip_reasoning_blocks
+
+    assert strip_reasoning_blocks('Draft {"wrong":true}</THINK>') == ""
+    metadata = {}
+    assert (
+        strip_reasoning_blocks(
+            "First thought.</think><think>Unfinished", metadata=metadata
+        )
+        == ""
+    )
+    assert metadata["reasoning_truncated"]
